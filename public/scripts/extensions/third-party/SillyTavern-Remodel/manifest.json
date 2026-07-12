@@ -1,0 +1,16 @@
+{
+    "display_name": "Remodel UI",
+    "description": "A docked, resizable SillyTavern UI remodel with story-style chat layout.",
+    "loading_order": 999,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Richard",
+    "version": "1.0.0",
+    "homePage": "https://github.com/SillyTavern/SillyTavern",
+    "auto_update": false,
+    "hooks": {
+        "activate": "init"
+    }
+}

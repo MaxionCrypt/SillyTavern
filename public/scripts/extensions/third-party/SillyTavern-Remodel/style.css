@@ -1,0 +1,2032 @@
+/*
+ * Remodel UI extension stylesheet.
+ * Scoped to body.st-remodel-active so vanilla UI returns on extension disable.
+ */
+
+/* 
+   SillyTavern Layout Remodel Stylesheet (Option B)
+   Phase 4: DOM-aligned sidebar, flush bottom chat, and modern input capsule.
+*/
+
+body.st-remodel-active {
+  --solid-color: rgba(20, 21, 26, 0.95);
+  --border-color: rgba(255, 255, 255, 0.08);
+  --card-radius: 12px;
+  --card-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+  --gap: 15px;
+  /* Margin/gap between columns */
+  --rail-width: 60px;
+  --remodel-left-width: 260px;
+  --remodel-right-width: 300px;
+  --remodel-chat-width: calc(100vw - var(--rail-width) - var(--remodel-left-width) - var(--remodel-right-width));
+  --remodel-chat-width: calc(100dvw - var(--rail-width) - var(--remodel-left-width) - var(--remodel-right-width));
+  --remodel-left-edge: calc(var(--rail-width) + var(--remodel-left-width));
+  --remodel-right-edge: calc(100vw - var(--remodel-right-width));
+  --remodel-right-edge: calc(100dvw - var(--remodel-right-width));
+  --remodel-splitter-hit-width: 14px;
+  --remodel-message-width: 900px;
+  --surface-dark: rgba(13, 14, 18, 0.78);
+  --surface-soft: rgba(31, 34, 43, 0.62);
+  --surface-gloss: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018) 42%, rgba(0, 0, 0, 0.13));
+  --obsidian-accent: #7f5af0;
+}
+
+/* Global body overlay adjustments */
+
+body.st-remodel-active {
+  background-color: transparent !important;
+}
+
+body.st-remodel-active #top-bar {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  box-shadow: none !important;
+}
+
+body.st-remodel-active #preloader {
+  display: none !important;
+}
+
+/* Ensure drag handles are disabled since panels are stationary */
+
+body.st-remodel-active .drag-grabber {
+  display: none !important;
+}
+
+/* Keep inactive sidebar drawers out of the remodel shell without disabling them entirely. */
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.closedDrawer:not(#left-nav-panel):not(#right-nav-panel) {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Open sidebar drawers in the full left lane between the icon rail and chat. */
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer:not(#left-nav-panel):not(#right-nav-panel):not(#remodel-timeline-panel) {
+  display: flex !important;
+  flex-direction: column !important;
+  position: fixed !important;
+  top: 0 !important;
+  right: auto !important;
+  bottom: 0 !important;
+  left: var(--rail-width) !important;
+  width: var(--remodel-left-width) !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: auto !important;
+  max-height: 100vh !important;
+  max-height: 100dvh !important;
+  margin: 0 !important;
+  overflow: auto !important;
+  z-index: 5200 !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  transition: none !important;
+  animation: none !important;
+  box-sizing: border-box !important;
+  background: rgba(22, 24, 31, 0.76) !important;
+  backdrop-filter: blur(14px) saturate(1.05) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.05) !important;
+  border-top: none !important;
+  border-right: 1px solid var(--border-color) !important;
+  border-bottom: none !important;
+  border-left: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+/* ==========================================
+   Far-Left Vertical Icon Sidebar
+   ========================================== */
+
+/* Main Settings Buttons Container (Starts at absolute top) */
+
+body.st-remodel-active #top-settings-holder {
+  display: flex !important;
+  position: fixed !important;
+  left: 0 !important;
+  top: 0 !important;
+  /* Touch top edge of viewport */
+  bottom: 0 !important;
+  width: var(--rail-width) !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  flex-direction: column !important;
+  justify-content: flex-start !important;
+  align-items: center !important;
+  margin: 0 !important;
+  padding: 15px 0 !important;
+  gap: 15px !important;
+  z-index: 5000 !important;
+  overflow: visible !important;
+  box-sizing: border-box !important;
+  /* Blurred Dark background style */
+  background: var(--surface-gloss), rgba(24, 26, 34, 0.88) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-right: 1px solid var(--border-color) !important;
+}
+
+/* Character List Toggle Button Area (Top Item of Sidebar Flex Stack) */
+
+body.st-remodel-active #top-settings-holder #unimportantYes {
+  display: flex !important;
+  width: 100% !important;
+  height: 32px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+body.st-remodel-active #top-settings-holder #unimportantYes .flexFlowColumn {
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+}
+
+/* Stylize Drawer items on Sidebar */
+
+body.st-remodel-active #top-settings-holder .drawer {
+  width: var(--rail-width) !important;
+  min-width: var(--rail-width) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+body.st-remodel-active #top-settings-holder .drawer.remodel-sidebar-hidden {
+  display: none !important;
+}
+
+body.st-remodel-active #top-settings-holder .drawer.remodel-sidebar-drawer {
+  flex: 0 0 var(--rail-width) !important;
+}
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content {
+  flex: none !important;
+  transition: none !important;
+  animation: none !important;
+  transform: none !important;
+}
+
+body.st-remodel-active #rightNavHolder {
+  order: -10 !important;
+}
+
+body.st-remodel-active #top-settings-holder .drawer-toggle {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  color: rgba(255, 255, 255, 0.6) !important;
+}
+
+/* Align and clean Icons on Sidebar */
+
+body.st-remodel-active #top-settings-holder .drawer-icon,
+body.st-remodel-active #rm_button_characters {
+  width: 32px !important;
+  height: 32px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 18px !important;
+  flex-shrink: 0 !important;
+  color: inherit !important;
+  opacity: 0.7 !important;
+  transition: opacity 0.2s, color 0.2s, background-color 0.2s !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 4px !important;
+}
+
+body.st-remodel-active #top-settings-holder .drawer-toggle:hover .drawer-icon,
+body.st-remodel-active #rm_button_characters:hover {
+  opacity: 1 !important;
+  color: #fff !important;
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+body.st-remodel-active #top-settings-holder .drawer-icon.openIcon {
+  opacity: 1 !important;
+  color: #fff !important;
+  background-color: rgba(255, 255, 255, 0.11) !important;
+  box-shadow: inset 2px 0 0 rgba(255, 255, 255, 0.7) !important;
+}
+
+/* ==========================================
+   Resizable Column Layout Setup
+   ========================================== */
+
+/* Column 1 (Left): Character List & Tabs */
+
+body.st-remodel-active #right-nav-panel {
+  display: flex !important;
+  position: fixed !important;
+  left: var(--rail-width) !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  height: auto !important;
+  max-height: none !important;
+  width: var(--remodel-left-width) !important;
+  transform: none !important;
+  pointer-events: auto !important;
+  z-index: 1000 !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  margin: 0 !important;
+  background: rgba(22, 24, 31, 0.72) !important;
+  backdrop-filter: blur(14px) saturate(1.05) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.05) !important;
+  border-right: 1px solid var(--border-color) !important;
+  border-left: none !important;
+  border-top: none !important;
+  border-bottom: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Style the internal headers and character list inside Left Column */
+
+body.st-remodel-active #CharListButtonAndHotSwaps {
+  background-color: rgba(0, 0, 0, 0.15) !important;
+  border-bottom: 1px solid var(--border-color) !important;
+  padding: 10px !important;
+}
+
+body.st-remodel-active #rm_PinAndTabs {
+  border-bottom: 1px solid var(--border-color) !important;
+}
+
+/* Column 2 (Center): Chat Canvas (Flush against bottom viewport edge) */
+
+body.st-remodel-active #sheld {
+  display: flex !important;
+  position: fixed !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  min-height: 100vh !important;
+  min-height: 100dvh !important;
+  max-height: 100vh !important;
+  max-height: 100dvh !important;
+  left: var(--remodel-left-edge) !important;
+  width: var(--remodel-chat-width) !important;
+  z-index: 1000 !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  /* Outlines and dark glossy transparency */
+  border: 1px solid var(--border-color) !important;
+  border-top: none !important;
+  border-bottom: none !important;
+  border-radius: 0 !important;
+  box-shadow: var(--card-shadow) !important;
+  background: var(--surface-gloss), rgba(12, 13, 17, 0.54) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Column 3 (Right): AI Settings / Slider Controls */
+
+body.st-remodel-active #left-nav-panel {
+  display: flex !important;
+  position: fixed !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  left: var(--remodel-right-edge) !important;
+  width: var(--remodel-right-width) !important;
+  transform: none !important;
+  pointer-events: auto !important;
+  z-index: 1000 !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  border-top: none !important;
+  border-right: none !important;
+  border-bottom: none !important;
+  border-left: 1px solid var(--border-color) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: rgba(22, 24, 31, 0.76) !important;
+  backdrop-filter: blur(14px) saturate(1.05) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.05) !important;
+}
+
+body.st-remodel-active .remodel-column-splitter {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: var(--remodel-splitter-hit-width);
+  z-index: 6100;
+  cursor: ew-resize;
+  touch-action: none;
+  background: transparent;
+}
+
+body.st-remodel-active .remodel-column-splitter::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.09);
+  opacity: 0.65;
+  transition: background-color 0.15s ease, opacity 0.15s ease, width 0.15s ease;
+}
+
+body.st-remodel-active .remodel-column-splitter:hover::after,
+body.st-remodel-active .remodel-column-splitter:focus-visible::after,
+body.st-remodel-active .remodel-column-splitter[data-active="true"]::after {
+  width: 2px;
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+body.st-remodel-active #remodel-left-splitter {
+  left: calc(var(--remodel-left-edge) - (var(--remodel-splitter-hit-width) / 2));
+}
+
+body.st-remodel-active #remodel-right-splitter {
+  left: calc(var(--remodel-right-edge) - (var(--remodel-splitter-hit-width) / 2));
+}
+
+body.st-remodel-active.remodel-resizing,
+body.st-remodel-active.remodel-resizing * {
+  cursor: ew-resize !important;
+  user-select: none !important;
+}
+
+body.st-remodel-active.remodel-left-collapsed #top-settings-holder > .drawer > .drawer-content.remodel-side-left {
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  padding-right: 0 !important;
+  padding-left: 0 !important;
+  border-right: none !important;
+}
+
+body.st-remodel-active.remodel-right-collapsed #top-settings-holder > .drawer > .drawer-content.remodel-side-right {
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  padding-right: 0 !important;
+  padding-left: 0 !important;
+  border-left: none !important;
+}
+
+body.st-remodel-active.remodel-left-collapsed #remodel-left-splitter::after,
+body.st-remodel-active.remodel-right-collapsed #remodel-right-splitter::after {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+/* ==========================================
+   Chat Layout & Dynamic Height Tuning
+   ========================================== */
+
+body.st-remodel-active #chat {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: auto !important;
+  max-height: none !important;
+  margin-top: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  padding: 15px !important;
+  box-sizing: border-box !important;
+}
+
+/* Input Area Panel (Remove all default solid backgrounds) */
+
+body.st-remodel-active #form_sheld,
+body.st-remodel-active #nonQRFormItems,
+body.st-remodel-active #leftSendForm,
+body.st-remodel-active #rightSendForm,
+body.st-remodel-active .drop_target {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+body.st-remodel-active #form_sheld {
+  border-top: 1px solid var(--border-color) !important;
+  margin: 0 !important;
+  padding: 12px 15px !important;
+  flex: 0 0 auto !important;
+  box-sizing: border-box !important;
+}
+
+/* Messaging Bar Input Capsule Style */
+
+body.st-remodel-active #send_form {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  width: 100% !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+  gap: 10px !important;
+  padding: 6px 12px !important;
+  background: var(--surface-gloss), rgba(255, 255, 255, 0.035) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+}
+
+/* Fully transparent inside text input area */
+
+body.st-remodel-active #send_textarea {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  outline: none !important;
+  color: #fff !important;
+  padding: 8px 0 !important;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+  font-size: 14px !important;
+  resize: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  flex: 1 !important;
+  text-shadow: none !important;
+  height: auto !important;
+  min-height: 24px !important;
+}
+
+body.st-remodel-active #send_textarea::placeholder {
+  color: rgba(255, 255, 255, 0.35) !important;
+}
+
+/* ==========================================
+   Remodeled Messaging Icons & Buttons
+   ========================================== */
+
+body.st-remodel-active #options_button,
+body.st-remodel-active #send_but,
+body.st-remodel-active #mes_continue,
+body.st-remodel-active #mes_impersonate,
+body.st-remodel-active #mes_stop,
+body.st-remodel-active #stscript_continue,
+body.st-remodel-active #stscript_pause,
+body.st-remodel-active #stscript_stop {
+  color: rgba(255, 255, 255, 0.5) !important;
+  font-size: 15px !important;
+  width: 30px !important;
+  height: 30px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 6px !important;
+  transition: all 0.2s ease !important;
+  cursor: pointer !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Hover dynamic accents */
+
+body.st-remodel-active #options_button:hover,
+body.st-remodel-active #send_but:hover,
+body.st-remodel-active #mes_continue:hover,
+body.st-remodel-active #mes_impersonate:hover,
+body.st-remodel-active #mes_stop:hover,
+body.st-remodel-active #stscript_continue:hover,
+body.st-remodel-active #stscript_pause:hover,
+body.st-remodel-active #stscript_stop:hover {
+  color: #fff !important;
+  background: var(--obsidian-accent) !important;
+  box-shadow: 0 0 10px rgba(127, 90, 240, 0.4) !important;
+}
+
+/* ==========================================
+   Dark glossy highlights for UI elements
+   ========================================== */
+
+body.st-remodel-active .menu_button,
+body.st-remodel-active .character_select,
+body.st-remodel-active .right_menu_button,
+body.st-remodel-active input[type="text"],
+body.st-remodel-active input[type="number"],
+body.st-remodel-active input[type="password"],
+body.st-remodel-active select {
+  background: var(--surface-gloss), rgba(255, 255, 255, 0.045) !important;
+  background-color: rgba(255, 255, 255, 0.045) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid var(--border-color) !important;
+  color: #e2e8f0 !important;
+  border-radius: 6px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+  text-shadow: none !important;
+}
+
+/* Hover and focus states */
+
+body.st-remodel-active .menu_button:hover,
+body.st-remodel-active .character_select:hover,
+body.st-remodel-active select:focus,
+body.st-remodel-active input[type="text"]:focus {
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  outline: none !important;
+}
+
+/* ==========================================
+   Centered Message Rows
+   ========================================== */
+
+body.st-remodel-active #chat {
+  gap: 20px !important;
+  padding: 18px 22px 24px !important;
+}
+
+body.st-remodel-active #chat .mes {
+  --message-accent: rgba(176, 126, 255, 0.82);
+  --message-accent-soft: rgba(176, 126, 255, 0.13);
+  width: min(var(--remodel-message-width), calc(100% - 44px)) !important;
+  max-width: calc(100% - 44px) !important;
+  align-self: center !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  border-left: 2px solid var(--message-accent) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  overflow: visible !important;
+  color: rgba(245, 247, 255, 0.92) !important;
+}
+
+body.st-remodel-active #chat .mes[is_user="true"] {
+  --message-accent: rgba(255, 255, 255, 0.92);
+  --message-accent-soft: rgba(255, 255, 255, 0.13);
+  color: #fff !important;
+}
+
+body.st-remodel-active #chat .mes[is_user="false"]:not([is_system="true"]) {
+  --message-accent: rgba(176, 126, 255, 0.86);
+  --message-accent-soft: rgba(176, 126, 255, 0.13);
+}
+
+body.st-remodel-active #chat .mes[is_system="true"] {
+  --message-accent: rgba(255, 196, 87, 0.84);
+  --message-accent-soft: rgba(255, 196, 87, 0.12);
+}
+
+body.st-remodel-active #chat .mes::before {
+  content: "";
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  width: min(58%, 520px);
+  height: 1px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--message-accent-soft), rgba(255, 255, 255, 0.42), var(--message-accent-soft), transparent);
+}
+
+body.st-remodel-active #chat .mes:first-of-type::before {
+  opacity: 0;
+}
+
+body.st-remodel-active #chat .mesAvatarWrapper,
+body.st-remodel-active #chat .mes .avatar,
+body.st-remodel-active #chat .mes_block .ch_name {
+  display: none !important;
+}
+
+body.st-remodel-active #chat .mes_block {
+  width: 100% !important;
+  padding: 24px 26px !important;
+  overflow: visible !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+
+body.st-remodel-active #chat .mes_text,
+body.st-remodel-active #chat .mes_reasoning {
+  padding: 0 !important;
+  text-shadow: none !important;
+  color: inherit !important;
+}
+
+body.st-remodel-active #chat .mes_buttons,
+body.st-remodel-active #chat .extraMesButtons {
+  position: absolute !important;
+  top: 8px !important;
+  right: 10px !important;
+  opacity: 0 !important;
+  max-width: calc(100% - 20px) !important;
+  padding: 4px !important;
+  border-radius: 999px !important;
+  background: rgba(0, 0, 0, 0.22) !important;
+  box-shadow: inset 0 0 14px var(--message-accent-soft) !important;
+}
+
+body.st-remodel-active #chat .mes:hover .mes_buttons,
+body.st-remodel-active #chat .mes:hover .extraMesButtons,
+body.st-remodel-active #chat .mes:focus-within .mes_buttons,
+body.st-remodel-active #chat .mes:focus-within .extraMesButtons {
+  opacity: 1 !important;
+}
+
+body.st-remodel-active #chat .swipe_left {
+  left: -11px !important;
+}
+
+body.st-remodel-active #chat .swipe_right {
+  right: -11px !important;
+}
+
+body.st-remodel-active #form_sheld {
+  position: relative !important;
+  border-top: none !important;
+  padding: 26px 22px 18px !important;
+}
+
+body.st-remodel-active #form_sheld::before {
+  content: "";
+  position: absolute;
+  top: 9px;
+  left: 50%;
+  width: min(58%, 520px);
+  height: 1px;
+  transform: translateX(-50%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.12), transparent);
+}
+
+body.st-remodel-active #form_sheld::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  transform: translateX(-50%) rotate(45deg);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+body.st-remodel-active #send_form {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+body.st-remodel-active #nonQRFormItems {
+  display: grid !important;
+  grid-template-columns: minmax(0, 900px) !important;
+  grid-template-rows: auto auto !important;
+  justify-content: center !important;
+  align-items: center !important;
+  gap: 10px !important;
+  width: 100% !important;
+}
+
+body.st-remodel-active #leftSendForm,
+body.st-remodel-active #rightSendForm {
+  grid-row: 2 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding-top: 0 !important;
+  opacity: 0.68 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+body.st-remodel-active #leftSendForm {
+  grid-column: 1 !important;
+  justify-self: center !important;
+  transform: translateX(-74px) !important;
+}
+
+body.st-remodel-active #rightSendForm {
+  grid-column: 1 !important;
+  justify-self: center !important;
+  gap: 14px !important;
+  transform: translateX(28px) !important;
+}
+
+body.st-remodel-active #send_textarea {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  flex: none !important;
+  width: 100% !important;
+  min-height: 92px !important;
+  margin: 0 auto !important;
+  padding: 16px 18px !important;
+  background: rgba(0, 0, 0, 0.18) !important;
+  border: none !important;
+  border-radius: 14px !important;
+  box-shadow: inset 0 0 34px rgba(0, 0, 0, 0.18) !important;
+  color: #fff !important;
+  caret-color: #fff !important;
+  font-size: 16px !important;
+  line-height: 1.75 !important;
+}
+
+body.st-remodel-active #leftSendForm > div,
+body.st-remodel-active #rightSendForm > div {
+  width: 34px !important;
+  height: 34px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: rgba(255, 255, 255, 0.62) !important;
+  font-size: 18px !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  text-shadow: 0 0 14px rgba(255, 255, 255, 0.16) !important;
+  transition: color 0.18s ease, opacity 0.18s ease, transform 0.18s ease !important;
+}
+
+body.st-remodel-active #leftSendForm > div:hover,
+body.st-remodel-active #rightSendForm > div:hover {
+  color: #fff !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  transform: translateY(-1px) !important;
+}
+
+body.st-remodel-active #send_textarea::placeholder {
+  color: rgba(255, 255, 255, 0.42) !important;
+}
+
+/* ==========================================
+   Composer Hard Reset
+   ========================================== */
+
+body.st-remodel-active #nonQRFormItems {
+  position: relative !important;
+  display: grid !important;
+  grid-template-columns: auto auto !important;
+  grid-template-rows: auto auto !important;
+  column-gap: 18px !important;
+  row-gap: 8px !important;
+  justify-content: center !important;
+  align-items: center !important;
+  width: min(900px, calc(100% - 44px)) !important;
+  margin: 0 auto !important;
+  padding: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+}
+
+body.st-remodel-active #send_form,
+body.st-remodel-active #send_form.compact {
+  display: block !important;
+  flex-wrap: nowrap !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+body.st-remodel-active #send_form.compact #nonQRFormItems {
+  display: grid !important;
+  grid-template-columns: auto auto !important;
+  grid-template-rows: auto auto !important;
+  width: min(900px, calc(100% - 44px)) !important;
+}
+
+body.st-remodel-active #send_textarea,
+body.st-remodel-active #send_textarea:hover,
+body.st-remodel-active #send_textarea:focus,
+body.st-remodel-active #send_textarea:focus-visible {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  grid-column: 1 / -1 !important;
+  grid-row: 1 !important;
+  display: block !important;
+  width: 100% !important;
+  max-width: none !important;
+  min-height: 96px !important;
+  margin: 0 !important;
+  padding: 18px 20px !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  border-radius: 14px !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+  caret-color: #fff !important;
+  font-size: 16px !important;
+  line-height: 1.75 !important;
+  resize: vertical !important;
+}
+
+body.st-remodel-active #send_textarea::placeholder {
+  color: rgba(255, 255, 255, 0.42) !important;
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.42) !important;
+}
+
+body.st-remodel-active #leftSendForm,
+body.st-remodel-active #rightSendForm {
+  position: static !important;
+  bottom: auto !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 16px !important;
+  width: auto !important;
+  height: 38px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+body.st-remodel-active #leftSendForm {
+  grid-column: 1 !important;
+  grid-row: 2 !important;
+  justify-self: end !important;
+  left: auto !important;
+  transform: none !important;
+}
+
+body.st-remodel-active #rightSendForm {
+  grid-column: 2 !important;
+  grid-row: 2 !important;
+  justify-self: start !important;
+  left: auto !important;
+  transform: none !important;
+}
+
+body.st-remodel-active #send_form.compact #leftSendForm,
+body.st-remodel-active #send_form.compact #rightSendForm {
+  flex-wrap: nowrap !important;
+  width: auto !important;
+  min-width: 0 !important;
+}
+
+body.st-remodel-active #options_button,
+body.st-remodel-active #send_but,
+body.st-remodel-active #mes_continue,
+body.st-remodel-active #mes_impersonate,
+body.st-remodel-active #mes_stop,
+body.st-remodel-active #stscript_continue,
+body.st-remodel-active #stscript_pause,
+body.st-remodel-active #stscript_stop,
+body.st-remodel-active #options_button:hover,
+body.st-remodel-active #send_but:hover,
+body.st-remodel-active #mes_continue:hover,
+body.st-remodel-active #mes_impersonate:hover,
+body.st-remodel-active #mes_stop:hover,
+body.st-remodel-active #stscript_continue:hover,
+body.st-remodel-active #stscript_pause:hover,
+body.st-remodel-active #stscript_stop:hover,
+body.st-remodel-active #options_button:focus-visible,
+body.st-remodel-active #send_but:focus-visible,
+body.st-remodel-active #mes_continue:focus-visible,
+body.st-remodel-active #mes_impersonate:focus-visible,
+body.st-remodel-active #mes_stop:focus-visible,
+body.st-remodel-active #stscript_continue:focus-visible,
+body.st-remodel-active #stscript_pause:focus-visible,
+body.st-remodel-active #stscript_stop:focus-visible {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  width: 38px !important;
+  height: 38px !important;
+  min-width: 38px !important;
+  min-height: 38px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+  color: rgba(255, 255, 255, 0.62) !important;
+  opacity: 1 !important;
+  font-size: 21px !important;
+  line-height: 1 !important;
+  transform: none !important;
+}
+
+body.st-remodel-active #options_button:hover,
+body.st-remodel-active #send_but:hover,
+body.st-remodel-active #mes_continue:hover,
+body.st-remodel-active #mes_impersonate:hover,
+body.st-remodel-active #mes_stop:hover,
+body.st-remodel-active #stscript_continue:hover,
+body.st-remodel-active #stscript_pause:hover,
+body.st-remodel-active #stscript_stop:hover,
+body.st-remodel-active #options_button:focus-visible,
+body.st-remodel-active #send_but:focus-visible,
+body.st-remodel-active #mes_continue:focus-visible,
+body.st-remodel-active #mes_impersonate:focus-visible,
+body.st-remodel-active #mes_stop:focus-visible,
+body.st-remodel-active #stscript_continue:focus-visible,
+body.st-remodel-active #stscript_pause:focus-visible,
+body.st-remodel-active #stscript_stop:focus-visible {
+  color: #fff !important;
+  transform: translateY(-1px) !important;
+}
+
+body.st-remodel-active #options_button > i,
+body.st-remodel-active #send_but > i,
+body.st-remodel-active #mes_continue > i,
+body.st-remodel-active #mes_impersonate > i,
+body.st-remodel-active #mes_stop > i,
+body.st-remodel-active #stscript_continue > i,
+body.st-remodel-active #stscript_pause > i,
+body.st-remodel-active #stscript_stop > i {
+  display: block !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+  color: inherit !important;
+  font-size: inherit !important;
+  line-height: 1 !important;
+}
+
+body.st-remodel-active #options_button.displayNone,
+body.st-remodel-active #send_but.displayNone,
+body.st-remodel-active #mes_continue.displayNone,
+body.st-remodel-active #mes_impersonate.displayNone,
+body.st-remodel-active #mes_stop.displayNone,
+body.st-remodel-active #stscript_continue.displayNone,
+body.st-remodel-active #stscript_pause.displayNone,
+body.st-remodel-active #stscript_stop.displayNone {
+  display: none !important;
+}
+
+/* Final composer geometry pass */
+
+body.st-remodel-active #form_sheld,
+body.st-remodel-active #send_form,
+body.st-remodel-active #send_form.compact,
+body.st-remodel-active #nonQRFormItems {
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+body.st-remodel-active #nonQRFormItems {
+  width: min(900px, calc(100% - 44px)) !important;
+  grid-template-columns: 1fr 1fr !important;
+}
+
+body.st-remodel-active #send_textarea,
+body.st-remodel-active #send_textarea:hover,
+body.st-remodel-active #send_textarea:focus,
+body.st-remodel-active #send_textarea:focus-visible {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 100% !important;
+  box-sizing: border-box !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+body.st-remodel-active #leftSendForm,
+body.st-remodel-active #rightSendForm,
+body.st-remodel-active #send_form.compact #leftSendForm,
+body.st-remodel-active #send_form.compact #rightSendForm {
+  grid-row: 2 !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  align-self: center !important;
+  align-items: center !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  transform: none !important;
+}
+
+body.st-remodel-active #leftSendForm {
+  justify-self: end !important;
+}
+
+body.st-remodel-active #rightSendForm {
+  justify-self: start !important;
+}
+
+/* ==========================================
+   Remodel Composer Class Reset
+   ========================================== */
+
+body.st-remodel-active #send_form.remodel-composer,
+body.st-remodel-active #send_form.remodel-composer.compact,
+body.st-remodel-active #send_form.remodel-composer.no-connection {
+  all: unset !important;
+  display: block !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+body.st-remodel-active #send_form.remodel-composer .remodel-composer-items {
+  all: unset !important;
+  display: grid !important;
+  grid-template-columns: auto auto !important;
+  grid-template-rows: auto auto !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  gap: 10px !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+body.st-remodel-active #send_form.remodel-composer .remodel-story-input,
+body.st-remodel-active #send_form.remodel-composer .remodel-story-input:hover,
+body.st-remodel-active #send_form.remodel-composer .remodel-story-input:focus,
+body.st-remodel-active #send_form.remodel-composer .remodel-story-input:focus-visible {
+  all: unset !important;
+  display: block !important;
+  grid-row: 1 !important;
+  grid-column: 1 / -1 !important;
+  width: 100% !important;
+  min-width: 100% !important;
+  max-width: 100% !important;
+  min-height: 112px !important;
+  box-sizing: border-box !important;
+  padding: 18px 20px !important;
+  resize: vertical !important;
+  overflow-y: auto !important;
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  border-radius: 14px !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+  caret-color: #fff !important;
+  font-family: inherit !important;
+  font-size: 16px !important;
+  line-height: 1.75 !important;
+}
+
+body.st-remodel-active #send_form.remodel-composer .remodel-story-input::placeholder {
+  color: rgba(255, 255, 255, 0.42) !important;
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.42) !important;
+}
+
+body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar {
+  all: unset !important;
+  display: flex !important;
+  grid-row: 2 !important;
+  grid-column: 1 !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 16px !important;
+  min-height: 40px !important;
+  width: max-content !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar-left {
+  grid-column: 1 !important;
+  justify-self: end !important;
+  transform: none !important;
+}
+
+body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar-right {
+  grid-column: 2 !important;
+  justify-self: start !important;
+  transform: none !important;
+}
+
+body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar > div,
+body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar > div:hover,
+body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar > div:focus,
+body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar > div:focus-visible {
+  all: unset !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 40px !important;
+  height: 40px !important;
+  box-sizing: border-box !important;
+  cursor: pointer !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+  color: rgba(255, 255, 255, 0.64) !important;
+  font-family: "Font Awesome 6 Free" !important;
+  font-weight: 900 !important;
+  font-size: 22px !important;
+  line-height: 1 !important;
+}
+
+body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar > div:hover,
+body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar > div:focus-visible {
+  color: #fff !important;
+  transform: translateY(-1px) !important;
+}
+
+body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar > div.displayNone {
+  display: none !important;
+}
+
+/* ==========================================
+   Docked Menu Surface Reset
+   ========================================== */
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer:not(#remodel-timeline-panel),
+body.st-remodel-active #left-nav-panel,
+body.st-remodel-active #right-nav-panel {
+  min-width: 0 !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  max-height: 100vh !important;
+  max-height: 100dvh !important;
+  padding: 12px !important;
+  margin: 0 !important;
+}
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .scrollableInner,
+body.st-remodel-active #left-nav-panel .scrollableInner,
+body.st-remodel-active #right-nav-panel .scrollableInner {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow: auto !important;
+}
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer :is(.menu_button, .right_menu_button, .character_select, .group_select, button),
+body.st-remodel-active #left-nav-panel :is(.menu_button, .right_menu_button, .character_select, .group_select, button),
+body.st-remodel-active #right-nav-panel :is(.menu_button, .right_menu_button, .character_select, .group_select, button) {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+  color: rgba(245, 247, 255, 0.78) !important;
+  border-radius: 10px !important;
+}
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer :is(.menu_button, .right_menu_button, .character_select, .group_select, button):hover,
+body.st-remodel-active #left-nav-panel :is(.menu_button, .right_menu_button, .character_select, .group_select, button):hover,
+body.st-remodel-active #right-nav-panel :is(.menu_button, .right_menu_button, .character_select, .group_select, button):hover {
+  background: rgba(255, 255, 255, 0.055) !important;
+  background-color: rgba(255, 255, 255, 0.055) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  color: #fff !important;
+}
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer :is(input[type="text"], input[type="number"], input[type="password"], textarea, select),
+body.st-remodel-active #left-nav-panel :is(input[type="text"], input[type="number"], input[type="password"], textarea, select),
+body.st-remodel-active #right-nav-panel :is(input[type="text"], input[type="number"], input[type="password"], textarea, select) {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  outline: 0 !important;
+  border-radius: 10px !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09) !important;
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+}
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer :is(input[type="text"], input[type="number"], input[type="password"], textarea, select):focus,
+body.st-remodel-active #left-nav-panel :is(input[type="text"], input[type="number"], input[type="password"], textarea, select):focus,
+body.st-remodel-active #right-nav-panel :is(input[type="text"], input[type="number"], input[type="password"], textarea, select):focus {
+  background: rgba(255, 255, 255, 0.035) !important;
+  background-color: rgba(255, 255, 255, 0.035) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2) !important;
+}
+
+/* ==========================================
+   Assignable Sidebar Menu Sides
+   ========================================== */
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.remodel-side-left:not(#remodel-timeline-panel),
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer.remodel-side-left:not(#remodel-timeline-panel),
+body.st-remodel-active #left-nav-panel.remodel-side-left,
+body.st-remodel-active #right-nav-panel.remodel-side-left {
+  left: var(--rail-width) !important;
+  right: auto !important;
+  width: var(--remodel-left-width) !important;
+  border-right: 1px solid var(--border-color) !important;
+  border-left: none !important;
+}
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.remodel-side-right:not(#remodel-timeline-panel),
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer.remodel-side-right:not(#remodel-timeline-panel),
+body.st-remodel-active #left-nav-panel.remodel-side-right,
+body.st-remodel-active #right-nav-panel.remodel-side-right {
+  left: var(--remodel-right-edge) !important;
+  right: auto !important;
+  width: var(--remodel-right-width) !important;
+  border-right: none !important;
+  border-left: 1px solid var(--border-color) !important;
+}
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer.remodel-side-left:not(#remodel-timeline-panel),
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer.remodel-side-right:not(#remodel-timeline-panel) {
+  display: flex !important;
+  flex-direction: column !important;
+  position: fixed !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  margin: 0 !important;
+  overflow: auto !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+body.st-remodel-active #remodel-menu-side-context {
+  position: fixed;
+  display: none;
+  z-index: 9000;
+  min-width: 132px;
+  padding: 6px;
+  background: rgba(18, 20, 27, 0.92);
+  backdrop-filter: blur(14px) saturate(1.08);
+  -webkit-backdrop-filter: blur(14px) saturate(1.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.38);
+}
+
+body.st-remodel-active #remodel-menu-side-context[data-open="true"] {
+  display: grid;
+  gap: 4px;
+}
+
+body.st-remodel-active #remodel-menu-side-context button {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: rgba(245, 247, 255, 0.78);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+body.st-remodel-active #remodel-menu-side-context button:hover,
+body.st-remodel-active #remodel-menu-side-context button[aria-current] {
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
+}
+
+/* ==========================================
+   AI Settings Panel Cleanup
+   ========================================== */
+
+body.st-remodel-active #left-nav-panel.remodel-side-right #ai_response_configuration,
+body.st-remodel-active #left-nav-panel.remodel-side-left #ai_response_configuration {
+  gap: 10px !important;
+}
+
+body.st-remodel-active #left-nav-panel #respective-presets-block,
+body.st-remodel-active #left-nav-panel .range-block,
+body.st-remodel-active #left-nav-panel .title_restorable,
+body.st-remodel-active #left-nav-panel .standoutHeader {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+body.st-remodel-active #left-nav-panel .range-block {
+  display: grid !important;
+  grid-template-columns: minmax(112px, 0.8fr) minmax(0, 1.4fr) !important;
+  align-items: center !important;
+  gap: 8px 12px !important;
+  padding: 8px 0 !important;
+  margin: 0 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055) !important;
+}
+
+body.st-remodel-active #left-nav-panel .range-block-title {
+  min-width: 0 !important;
+  margin: 0 !important;
+  color: rgba(245, 247, 255, 0.74) !important;
+  font-size: 0.88rem !important;
+  line-height: 1.25 !important;
+}
+
+body.st-remodel-active #left-nav-panel .range-block-range-and-counter {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 72px !important;
+  align-items: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+}
+
+body.st-remodel-active #left-nav-panel .range-block-range,
+body.st-remodel-active #left-nav-panel .range-block-counter {
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+body.st-remodel-active #left-nav-panel .neo-range-slider {
+  width: 100% !important;
+}
+
+body.st-remodel-active #left-nav-panel .neo-range-input,
+body.st-remodel-active #left-nav-panel .range-block-counter input {
+  width: 100% !important;
+  min-width: 0 !important;
+  text-align: right !important;
+}
+
+body.st-remodel-active #left-nav-panel .title_restorable,
+body.st-remodel-active #left-nav-panel .standoutHeader {
+  padding: 10px 0 6px !important;
+  margin: 0 !important;
+  color: rgba(255, 255, 255, 0.86) !important;
+}
+
+/* ==========================================
+   Backgrounds Panel Dock Repair
+   ========================================== */
+
+body.st-remodel-active #Backgrounds.drawer-content.openDrawer.bg-drawer-layout {
+  display: flex !important;
+  flex-direction: column !important;
+  position: fixed !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  contain: layout paint !important;
+  isolation: isolate !important;
+}
+
+body.st-remodel-active #Backgrounds #bg-header-fixed {
+  flex: 0 0 auto !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  padding: 10px 12px !important;
+  background: rgba(12, 13, 18, 0.34) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.075) !important;
+}
+
+body.st-remodel-active #Backgrounds .bg-header-row-1,
+body.st-remodel-active #Backgrounds .bg-header-row-2 {
+  align-items: center !important;
+  flex-wrap: wrap !important;
+  min-width: 0 !important;
+  gap: 7px !important;
+}
+
+body.st-remodel-active #Backgrounds .bg-header-row-1 h3 {
+  flex: 1 1 100% !important;
+  min-width: 0 !important;
+}
+
+body.st-remodel-active #Backgrounds .bg-header-row-1 .expander,
+body.st-remodel-active #Backgrounds .bg-header-row-2 .expander {
+  display: none !important;
+}
+
+body.st-remodel-active #Backgrounds #background_fitting,
+body.st-remodel-active #Backgrounds #bg-filter,
+body.st-remodel-active #Backgrounds #bg-sort {
+  flex: 1 1 112px !important;
+  min-width: 0 !important;
+}
+
+body.st-remodel-active #Backgrounds #bg_tabs {
+  display: flex !important;
+  flex: 1 1 auto !important;
+  flex-direction: column !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  gap: 0 !important;
+}
+
+body.st-remodel-active #Backgrounds #bg_tabs .bg_tabs_list {
+  flex: 0 0 auto !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  padding: 8px 12px !important;
+  margin: 0 !important;
+  gap: 6px !important;
+}
+
+body.st-remodel-active #Backgrounds #bg_tabs .bg_tabs_list .bg_tab_button {
+  flex: 1 1 84px !important;
+  min-width: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 10px !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.075) !important;
+}
+
+body.st-remodel-active #Backgrounds #bg_tabs .bg_tabs_list .bg_tab_button.ui-tabs-active {
+  background: rgba(255, 255, 255, 0.07) !important;
+}
+
+body.st-remodel-active #Backgrounds #bg_tabs .bg_tabs_list .bg_tab_button a {
+  color: rgba(245, 247, 255, 0.82) !important;
+  padding: 6px 8px !important;
+}
+
+body.st-remodel-active #Backgrounds #bg_tabs .heading-controls {
+  position: static !important;
+  transform: none !important;
+  display: flex !important;
+  flex: 1 1 100% !important;
+  justify-content: center !important;
+  min-width: 0 !important;
+  gap: 4px !important;
+}
+
+body.st-remodel-active #Backgrounds #bg_tabs .bg_tab_panel {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  box-sizing: border-box !important;
+  padding: 10px 12px 18px !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+}
+
+body.st-remodel-active #Backgrounds :is(#bg_folder_grid, #bg_menu_content, #bg_custom_content) {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)) !important;
+  align-items: start !important;
+}
+
+body.st-remodel-active #Backgrounds #bg_folder_grid {
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)) !important;
+}
+
+body.st-remodel-active #Backgrounds :is(.bg_example, .bg_folder_tile) {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  background: rgba(255, 255, 255, 0.035) !important;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08) !important;
+}
+
+body.st-remodel-active #Backgrounds :is(.thumbnail-clipper, .bg_folder_tile_cover) {
+  background-color: rgba(7, 8, 12, 0.62) !important;
+}
+
+body.st-remodel-active #Backgrounds :is(.bg_example .jg-menu, .bg_folder_tile .bg_folder_tile_menu) {
+  background: rgba(8, 9, 13, 0.58) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+body.st-remodel-active #Backgrounds :is(.bg_example .jg-button, .bg_folder_tile .jg-button, #bg-scroll-top) {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  min-height: 28px !important;
+  padding: 0 !important;
+  background: transparent !important;
+  color: rgba(255, 255, 255, 0.84) !important;
+}
+
+body.st-remodel-active #Backgrounds #bg-scroll-top {
+  right: 14px !important;
+  bottom: 14px !important;
+  border-radius: 999px !important;
+  background: rgba(8, 9, 13, 0.5) !important;
+}
+
+/* ==========================================
+   Timeline Spine Navigator
+   ========================================== */
+
+body.st-remodel-active #remodel-timeline-content {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 14px !important;
+  min-height: 100% !important;
+  padding: 18px !important;
+  color: var(--SmartThemeBodyColor) !important;
+}
+
+body.st-remodel-active .remodel-timeline-header,
+body.st-remodel-active .remodel-scene-inspector-heading,
+body.st-remodel-active .remodel-timeline-arc-heading,
+body.st-remodel-active .remodel-timeline-actions,
+body.st-remodel-active .remodel-two-column-fields {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+body.st-remodel-active .remodel-timeline-header,
+body.st-remodel-active .remodel-scene-inspector-heading,
+body.st-remodel-active .remodel-timeline-arc-heading {
+  justify-content: space-between !important;
+}
+
+body.st-remodel-active .remodel-timeline-header h3 {
+  margin: 0 !important;
+  font-size: 1.25rem !important;
+  letter-spacing: 0.02em !important;
+}
+
+body.st-remodel-active .remodel-timeline-kicker {
+  color: rgba(255, 255, 255, 0.48) !important;
+  font-size: 0.72rem !important;
+  letter-spacing: 0.16em !important;
+  text-transform: uppercase !important;
+}
+
+body.st-remodel-active .remodel-timeline-tabs {
+  display: flex !important;
+  gap: 6px !important;
+  overflow-x: auto !important;
+  padding-bottom: 4px !important;
+}
+
+body.st-remodel-active .remodel-timeline-tab,
+body.st-remodel-active .remodel-icon-button,
+body.st-remodel-active .remodel-scene-main {
+  appearance: none !important;
+  border: 0 !important;
+  color: inherit !important;
+  background: transparent !important;
+  cursor: pointer !important;
+  font: inherit !important;
+}
+
+body.st-remodel-active .remodel-timeline-tab {
+  flex: 0 0 auto !important;
+  padding: 7px 10px !important;
+  border-radius: 999px !important;
+  color: rgba(255, 255, 255, 0.68) !important;
+}
+
+body.st-remodel-active .remodel-timeline-tab:hover,
+body.st-remodel-active .remodel-timeline-tab.is-active {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: rgba(255, 255, 255, 0.94) !important;
+}
+
+body.st-remodel-active .remodel-timeline-editor,
+body.st-remodel-active .remodel-timeline-arc,
+body.st-remodel-active .remodel-scene-inspector,
+body.st-remodel-active .remodel-timeline-empty {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 10px !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.16) !important;
+  padding: 12px 0 12px 14px !important;
+}
+
+body.st-remodel-active .remodel-timeline-arc.is-active,
+body.st-remodel-active .remodel-scene-inspector {
+  border-left-color: rgba(255, 255, 255, 0.48) !important;
+}
+
+body.st-remodel-active .remodel-timeline-editor label,
+body.st-remodel-active .remodel-timeline-arc label,
+body.st-remodel-active .remodel-scene-inspector label {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 5px !important;
+  min-width: 0 !important;
+}
+
+body.st-remodel-active .remodel-timeline-editor label > span,
+body.st-remodel-active .remodel-scene-inspector label > span {
+  color: rgba(255, 255, 255, 0.52) !important;
+  font-size: 0.78rem !important;
+}
+
+body.st-remodel-active .remodel-timeline-arc-heading input {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  font-weight: 700 !important;
+}
+
+body.st-remodel-active .remodel-scene-list {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+}
+
+body.st-remodel-active .remodel-scene-row {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: stretch !important;
+  gap: 4px !important;
+  border-radius: 12px !important;
+}
+
+body.st-remodel-active .remodel-scene-row:hover,
+body.st-remodel-active .remodel-scene-row.is-active {
+  background: rgba(255, 255, 255, 0.055) !important;
+}
+
+body.st-remodel-active .remodel-scene-row.is-active {
+  box-shadow: inset 2px 0 0 rgba(255, 255, 255, 0.72) !important;
+}
+
+body.st-remodel-active .remodel-scene-row.is-missing {
+  box-shadow: inset 2px 0 0 rgba(255, 150, 120, 0.82) !important;
+}
+
+body.st-remodel-active .remodel-scene-main {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  gap: 4px !important;
+  min-width: 0 !important;
+  padding: 9px 10px !important;
+  text-align: left !important;
+}
+
+body.st-remodel-active .remodel-scene-title {
+  max-width: 100% !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+body.st-remodel-active .remodel-scene-meta {
+  display: flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  max-width: 100% !important;
+  color: rgba(255, 255, 255, 0.5) !important;
+  font-size: 0.78rem !important;
+}
+
+body.st-remodel-active .remodel-mode-pill {
+  border-radius: 999px !important;
+  padding: 2px 7px !important;
+  color: rgba(255, 255, 255, 0.82) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  text-transform: capitalize !important;
+}
+
+body.st-remodel-active .remodel-mode-pill.story {
+  background: rgba(145, 180, 255, 0.16) !important;
+}
+
+body.st-remodel-active .remodel-mode-pill.roleplay {
+  background: rgba(255, 255, 255, 0.11) !important;
+}
+
+body.st-remodel-active .remodel-icon-button {
+  display: inline-grid !important;
+  place-items: center !important;
+  width: 32px !important;
+  min-width: 32px !important;
+  height: 32px !important;
+  border-radius: 10px !important;
+  color: rgba(255, 255, 255, 0.62) !important;
+}
+
+body.st-remodel-active .remodel-icon-button:hover,
+body.st-remodel-active .remodel-icon-button:focus-visible {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: rgba(255, 255, 255, 0.95) !important;
+}
+
+body.st-remodel-active .remodel-two-column-fields > label {
+  flex: 1 1 0 !important;
+}
+
+body.st-remodel-active .remodel-linked-chat-card,
+body.st-remodel-active .remodel-timeline-warning {
+  border-radius: 12px !important;
+  padding: 10px 12px !important;
+  color: rgba(255, 255, 255, 0.62) !important;
+  background: rgba(255, 255, 255, 0.045) !important;
+}
+
+body.st-remodel-active .remodel-timeline-warning {
+  color: rgba(255, 210, 190, 0.95) !important;
+  background: rgba(255, 120, 80, 0.12) !important;
+}
+
+body.st-remodel-active .remodel-timeline-actions {
+  flex-wrap: wrap !important;
+}
+
+body.st-remodel-active .remodel-timeline-actions .danger {
+  color: rgba(255, 180, 180, 0.9) !important;
+}
+
+body.st-remodel-active .remodel-timeline-muted,
+body.st-remodel-active .remodel-timeline-empty {
+  color: rgba(255, 255, 255, 0.52) !important;
+}
+
+body.st-remodel-active .remodel-timeline-empty.compact {
+  padding-top: 6px !important;
+  padding-bottom: 6px !important;
+}
+
+/* ==========================================
+   Full Workspace Viewports
+   ========================================== */
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.remodel-workspace-panel.openDrawer {
+  display: flex !important;
+  position: fixed !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  left: var(--rail-width) !important;
+  right: 0 !important;
+  inset: 0 0 0 var(--rail-width) !important;
+  width: calc(100vw - var(--rail-width)) !important;
+  width: calc(100dvw - var(--rail-width)) !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  min-height: 100vh !important;
+  min-height: 100dvh !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 0 !important;
+  outline: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  transform: none !important;
+  background: rgba(0, 0, 0, 0.34) !important;
+  background-color: rgba(0, 0, 0, 0.34) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  z-index: 7800 !important;
+}
+
+body.st-remodel-active.remodel-workspace-active #sheld,
+body.st-remodel-active.remodel-workspace-active .remodel-column-splitter {
+  display: none !important;
+}
+
+body.st-remodel-active.remodel-workspace-active #top-settings-holder > .drawer:not(.remodel-sidebar-drawer) > .drawer-content {
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+body.st-remodel-active.remodel-tavern-active #sheld,
+body.st-remodel-active.remodel-tavern-active .remodel-column-splitter,
+body.st-remodel-active.remodel-tavern-active #top-settings-holder > .drawer:not(#remodel-timeline-drawer) > .drawer-content.openDrawer {
+  display: none !important;
+}
+
+body.st-remodel-active.remodel-tavern-active #top-settings-holder > .drawer:not(#remodel-timeline-drawer) > .drawer-content {
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+body.st-remodel-active #remodel-timeline-panel.openDrawer #remodel-timeline-content {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+body.st-remodel-active .remodel-tavern-viewport {
+  display: grid !important;
+  grid-template-rows: auto auto minmax(0, 1fr) !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+body.st-remodel-active .remodel-tavern-header {
+  display: flex !important;
+  align-items: end !important;
+  width: 100% !important;
+  min-height: 104px !important;
+  padding: 34px 44px 18px !important;
+  box-sizing: border-box !important;
+}
+
+body.st-remodel-active .remodel-tavern-header h1 {
+  margin: 0 !important;
+  color: rgba(255, 255, 255, 0.95) !important;
+  font-size: clamp(2rem, 4vw, 4.5rem) !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.06em !important;
+  line-height: 0.95 !important;
+}
+
+body.st-remodel-active .remodel-tavern-tabs {
+  display: flex !important;
+  align-items: center !important;
+  gap: 2px !important;
+  width: 100% !important;
+  min-height: 48px !important;
+  padding: 0 36px !important;
+  box-sizing: border-box !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.18) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  background: rgba(0, 0, 0, 0.12) !important;
+  overflow-x: auto !important;
+}
+
+body.st-remodel-active .remodel-tavern-tab {
+  appearance: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  align-self: stretch !important;
+  min-width: max-content !important;
+  padding: 0 15px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  color: rgba(255, 255, 255, 0.58) !important;
+  background: transparent !important;
+  font: inherit !important;
+  font-size: 0.86rem !important;
+  letter-spacing: 0.02em !important;
+  cursor: pointer !important;
+}
+
+body.st-remodel-active .remodel-tavern-tab:hover,
+body.st-remodel-active .remodel-tavern-tab:focus-visible,
+body.st-remodel-active .remodel-tavern-tab.is-active {
+  color: rgba(255, 255, 255, 0.96) !important;
+  background: rgba(255, 255, 255, 0.055) !important;
+}
+
+body.st-remodel-active .remodel-tavern-tab.is-active {
+  box-shadow: inset 0 -2px 0 rgba(255, 255, 255, 0.72) !important;
+}
+
+body.st-remodel-active .remodel-tavern-body {
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow: auto !important;
+}
+
+body.st-remodel-active .remodel-tavern-section {
+  width: min(1180px, calc(100% - 72px)) !important;
+  margin: 0 auto !important;
+  padding: 28px 0 56px !important;
+  box-sizing: border-box !important;
+}
+
+body.st-remodel-active .remodel-tavern-legacy-section {
+  width: min(1420px, calc(100% - 72px)) !important;
+}
+
+body.st-remodel-active .remodel-tavern-legacy-outlet {
+  display: flex !important;
+  flex-direction: column !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+}
+
+body.st-remodel-active .remodel-tavern-adopted-panel,
+body.st-remodel-active .remodel-tavern-adopted-panel.openDrawer,
+body.st-remodel-active #right-nav-panel.remodel-tavern-adopted-panel,
+body.st-remodel-active #PersonaManagement.remodel-tavern-adopted-panel,
+body.st-remodel-active #WorldInfo.remodel-tavern-adopted-panel {
+  display: flex !important;
+  position: static !important;
+  inset: auto !important;
+  width: 100% !important;
+  max-width: none !important;
+  height: auto !important;
+  min-height: calc(100dvh - 240px) !important;
+  margin: 0 !important;
+  padding: 18px !important;
+  box-sizing: border-box !important;
+  overflow: auto !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  border: 0 !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.16) !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
