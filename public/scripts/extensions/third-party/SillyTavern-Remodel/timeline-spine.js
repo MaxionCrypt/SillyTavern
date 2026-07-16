@@ -26,6 +26,18 @@ import {
     updateScene,
     updateTimeline,
 } from './timeline-state.js';
+import {
+    armGenerationWatchdog,
+    beginOwnedGenerationRun,
+    clearGenerationWatchdog,
+    endOwnedGenerationRun,
+    getGenerationState,
+    isGenerationRunOurs,
+    resetAllChatScopedState,
+    setAutoContinueStatus,
+    setAutoContinueTurnIsFirst,
+    setGenerating,
+} from './session-state.js';
 
 const DRAWER_ID = 'remodel-timeline-drawer';
 const PANEL_ID = 'remodel-timeline-panel';
@@ -99,14 +111,10 @@ let viewedCharacterIdForPastChats = null;
 // active chat's real this_chid.
 let weSetThisChidForPastChats = false;
 
-// Auto-continue-the-manuscript loop state, story workspace only.
-//   'idle' | 'playing' | 'paused'
-let storyAutoContinue = { status: 'idle' };
-
-// True only for the very first turn of a Play run (see startStoryAutoContinue);
-// every subsequent turn in that same run extends the prior message instead of
-// starting a new one.
-let storyAutoContinueTurnIsFirst = true;
+// Story auto-continue loop state and story-generation tracking (isGenerating,
+// runIsOurs, watchdog, autoContinue, autoContinueTurnIsFirst) now live in
+// session-state.js's generation domain — see getGenerationState() and the
+// action functions imported above.
 
 export function initTimelineSpine({ onDrawerReady } = {}) {
     if (initialized) {
@@ -803,45 +811,45 @@ function hideGuidedPrompt() {
 // --- Story auto-continue loop --------------------------------------------
 
 function startStoryAutoContinue() {
-    if (storyAutoContinue.status === 'playing') {
+    if (getGenerationState().autoContinue.status === 'playing') {
         return;
     }
 
-    storyAutoContinue = { status: 'playing' };
+    setAutoContinueStatus('playing');
     // The FIRST turn of a Play run is a genuinely new AI turn (responding to
     // whatever the user just added) and uses 'normal'. Every turn after that,
     // within the same uninterrupted run, extends that same message via
     // 'continue' instead of starting a new one — so a Play run reads as one
     // continuously-growing block of prose rather than being chopped into a
     // new .mes every time the model hits its token limit mid-sentence.
-    storyAutoContinueTurnIsFirst = true;
+    setAutoContinueTurnIsFirst(true);
     updateStoryActionBarState();
     triggerNextAutoContinueTurn();
 }
 
 function pauseStoryAutoContinue() {
-    if (storyAutoContinue.status !== 'playing') {
+    if (getGenerationState().autoContinue.status !== 'playing') {
         return;
     }
 
-    storyAutoContinue = { status: 'paused' }; // in-flight generation finishes naturally
+    setAutoContinueStatus('paused'); // in-flight generation finishes naturally
     updateStoryActionBarState();
 }
 
 function stopStoryAutoContinue() {
-    storyAutoContinue = { status: 'idle' };
-    storyAutoContinueTurnIsFirst = true; // Stop ends the run — the next Play starts a fresh block
+    setAutoContinueStatus('idle');
+    setAutoContinueTurnIsFirst(true); // Stop ends the run — the next Play starts a fresh block
     updateStoryActionBarState();
     getContext().stopGeneration(); // aborts an in-flight generation immediately
 }
 
 async function triggerNextAutoContinueTurn() {
-    if (storyAutoContinue.status !== 'playing') {
+    if (getGenerationState().autoContinue.status !== 'playing') {
         return;
     }
 
     if (!document.body.classList.contains('remodel-story-workspace-active')) {
-        storyAutoContinue = { status: 'idle' }; // safety: never loop outside the story workspace
+        setAutoContinueStatus('idle'); // safety: never loop outside the story workspace
         return;
     }
 
@@ -850,22 +858,22 @@ async function triggerNextAutoContinueTurn() {
     // (an exception thrown during prompt/world-info setup, before the request
     // even starts, skips it entirely). A try/finally here guarantees the flag
     // — and the loop itself — can't get stuck if a request fails.
-    storyIsGenerating = true;
+    setGenerating(true);
     updateStoryActionBarState();
 
     // Only the first turn of a run starts a new message; every later turn in
     // the same run extends it via 'continue' (see startStoryAutoContinue).
-    const generateType = storyAutoContinueTurnIsFirst ? 'normal' : 'continue';
-    storyAutoContinueTurnIsFirst = false;
+    const generateType = getGenerationState().autoContinueTurnIsFirst ? 'normal' : 'continue';
+    setAutoContinueTurnIsFirst(false);
 
     try {
         await getContext().generate(generateType);
     } catch (error) {
         console.error('Remodel UI: story auto-continue turn failed', error);
-        storyAutoContinue = { status: 'idle' }; // don't keep looping against a failing request
-        storyAutoContinueTurnIsFirst = true; // a failed run shouldn't poison the next Play's first turn
+        setAutoContinueStatus('idle'); // don't keep looping against a failing request
+        setAutoContinueTurnIsFirst(true); // a failed run shouldn't poison the next Play's first turn
     } finally {
-        storyIsGenerating = false;
+        setGenerating(false);
         updateStoryActionBarState();
     }
 }
@@ -874,14 +882,14 @@ function bindStoryAutoContinueEvents() {
     const context = getContext();
 
     context.eventSource.on(context.eventTypes.GENERATION_ENDED, () => {
-        if (storyAutoContinue.status === 'playing') {
+        if (getGenerationState().autoContinue.status === 'playing') {
             triggerNextAutoContinueTurn();
         }
     });
 
     context.eventSource.on(context.eventTypes.GENERATION_STOPPED, () => {
-        if (storyAutoContinue.status !== 'idle') {
-            storyAutoContinue = { status: 'idle' };
+        if (getGenerationState().autoContinue.status !== 'idle') {
+            setAutoContinueStatus('idle');
         }
     });
 }
@@ -913,7 +921,7 @@ async function handleStoryRegenerateClick(button) {
     // Same reasoning as triggerNextAutoContinueTurn: don't trust
     // GENERATION_ENDED alone to clear the busy flag, since a failed request
     // can skip it entirely and leave every story-workspace control disabled.
-    storyIsGenerating = true;
+    setGenerating(true);
     updateStoryActionBarState();
 
     try {
@@ -922,7 +930,7 @@ async function handleStoryRegenerateClick(button) {
     } catch (error) {
         console.error('Remodel UI: story regenerate failed', error);
     } finally {
-        storyIsGenerating = false;
+        setGenerating(false);
         updateStoryActionBarState();
     }
 }
@@ -935,7 +943,7 @@ function handleStoryUserMessageRendered() {
     // A new user Scene Beat means the next AI turn (whether typed, Regenerated,
     // or the first turn of a subsequent Play run) is responding to genuinely
     // new input — it should start its own message, not extend a prior one.
-    storyAutoContinueTurnIsFirst = true;
+    setAutoContinueTurnIsFirst(true);
 }
 
 // Re-applies Scene Beat headers + the Regenerate button placement to
@@ -2143,10 +2151,11 @@ function closeStoryComposer() {
 }
 
 // --- Generation state (drives disabled buttons + the loading spinner) ------
-
-let storyIsGenerating = false;
-
-let storyGenerationWatchdog = null;
+//
+// State itself (isGenerating/runIsOurs/watchdog) now lives in session-state.js's
+// generation domain — see getGenerationState() and the action functions
+// imported above. STORY_GENERATION_TYPES stays here since it's a static
+// filter table, not mutable state.
 
 // GENERATION_STARTED/ENDED/STOPPED fire for EVERY generation on the page,
 // not just user-facing story turns — core's Generate() (script.js) emits
@@ -2159,12 +2168,11 @@ let storyGenerationWatchdog = null;
 // GENERATION_STARTED carries the type argument (ENDED/STOPPED don't), so we
 // gate on start and remember whether THIS run is one we care about.
 const STORY_GENERATION_TYPES = new Set(['normal', 'continue', 'regenerate', 'swipe', undefined]);
-let storyGenerationRunIsOurs = false;
 
 // SillyTavern's Generate() isn't guaranteed to emit GENERATION_ENDED on every
 // error path (an exception thrown before the request even starts skips it
 // entirely) — a request that fails that way would otherwise leave
-// storyIsGenerating stuck true forever, permanently disabling every
+// isGenerating stuck true forever, permanently disabling every
 // story-workspace control. This watchdog is the safety net for generations
 // we didn't trigger ourselves (typing + Enter); ones we DO trigger
 // (Regenerate, auto-continue) also guard themselves directly with try/finally.
@@ -2188,59 +2196,59 @@ function bindStoryGenerationStateEvents() {
             return;
         }
 
-        storyGenerationRunIsOurs = true;
-        storyIsGenerating = true;
+        beginOwnedGenerationRun();
         updateStoryActionBarState();
 
-        clearTimeout(storyGenerationWatchdog);
-        storyGenerationWatchdog = setTimeout(() => {
-            if (storyIsGenerating) {
+        armGenerationWatchdog(() => {
+            if (getGenerationState().isGenerating) {
                 console.warn('Remodel UI: generation state watchdog fired — no GENERATION_ENDED/STOPPED arrived, resetting.');
-                storyIsGenerating = false;
+                // Matches original behavior exactly: only clears the isGenerating
+                // flag, NOT run ownership (setGenerating, not endOwnedGenerationRun) —
+                // preserved as-is rather than changed as part of this refactor.
+                setGenerating(false);
                 updateStoryActionBarState();
             }
         }, 90000);
     });
 
     context.eventSource.on(context.eventTypes.GENERATION_ENDED, () => {
-        if (!storyGenerationRunIsOurs) {
+        if (!isGenerationRunOurs()) {
             return; // a quiet/background generation elsewhere on the page ended — not ours
         }
-        storyGenerationRunIsOurs = false;
 
-        clearTimeout(storyGenerationWatchdog);
-        storyIsGenerating = false;
+        clearGenerationWatchdog();
+        endOwnedGenerationRun();
         updateStoryActionBarState();
     });
 
     context.eventSource.on(context.eventTypes.GENERATION_STOPPED, () => {
-        if (!storyGenerationRunIsOurs) {
+        if (!isGenerationRunOurs()) {
             return;
         }
-        storyGenerationRunIsOurs = false;
 
-        clearTimeout(storyGenerationWatchdog);
-        storyIsGenerating = false;
+        clearGenerationWatchdog();
+        endOwnedGenerationRun();
         updateStoryActionBarState();
     });
 }
 
 function updateStoryActionBarState() {
-    document.body.classList.toggle('remodel-story-generating', storyIsGenerating);
+    const { isGenerating, autoContinue } = getGenerationState();
+    document.body.classList.toggle('remodel-story-generating', isGenerating);
 
     if (!document.body.classList.contains('remodel-story-workspace-active')) {
         return;
     }
 
-    const playing = storyAutoContinue.status === 'playing';
+    const playing = autoContinue.status === 'playing';
 
-    setStoryButtonDisabled('stscript_continue', storyIsGenerating || playing);
+    setStoryButtonDisabled('stscript_continue', isGenerating || playing);
     setStoryButtonDisabled('stscript_pause', !playing);
-    setStoryButtonDisabled('stscript_stop', !storyIsGenerating && storyAutoContinue.status === 'idle');
-    setStoryButtonDisabled('remodel-add-user-message', storyIsGenerating);
+    setStoryButtonDisabled('stscript_stop', !isGenerating && autoContinue.status === 'idle');
+    setStoryButtonDisabled('remodel-add-user-message', isGenerating);
 
     document.querySelectorAll('.remodel-beat-regenerate').forEach((button) => {
-        button.classList.toggle('remodel-story-disabled', storyIsGenerating);
+        button.classList.toggle('remodel-story-disabled', isGenerating);
     });
 }
 
@@ -3394,13 +3402,12 @@ function syncActiveSceneFromChatMetadata() {
 // bindStoryGenerationStateEvents, not guessed.
 function reconcileStateOnCoreChange() {
     // --- Generation state — the actual bug this reconciliation was built to
-    // fix (see comment above). All three siblings reset together now.
-    storyIsGenerating = false;
-    storyAutoContinue = { status: 'idle' };
-    storyAutoContinueTurnIsFirst = true;
-    storyGenerationRunIsOurs = false;
-    clearTimeout(storyGenerationWatchdog);
-    storyGenerationWatchdog = null;
+    // fix (see comment above). Now owned by session-state.js's generation
+    // domain; resetAllChatScopedState() currently resets that domain only
+    // (wizard/pastChatsBridge/panels domains join it in later increments of
+    // the state-backbone refactor, at which point their manual resets below
+    // will be removed from this function too).
+    resetAllChatScopedState();
     closeStoryComposer();
     updateStoryActionBarState();
 
