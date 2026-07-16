@@ -37,14 +37,29 @@ import {
     consumeWizardFlow,
     endOwnedGenerationRun,
     getGenerationState,
+    getOriginalPanelHomes,
+    getSessionState,
     getWizardState,
     isGenerationRunOurs,
     noteViewingCharacterForPastChats,
     resetAllChatScopedState,
     resetWizardState,
+    setActiveTavernTab,
+    setAdoptedPanel,
     setAutoContinueStatus,
     setAutoContinueTurnIsFirst,
+    setCharacterSearchQuery,
+    setCharacterSortMode,
+    setCreateModalDraft,
+    setCreateModalOpen,
+    setCurrentWindow,
+    setFocusedTimelineId,
     setGenerating,
+    setInitialized,
+    setRenamingSceneId,
+    setRenderQueued,
+    setSuppressDrawerObserver,
+    setTavernPanelObserver,
 } from './session-state.js';
 
 const DRAWER_ID = 'remodel-timeline-drawer';
@@ -76,24 +91,14 @@ const TAVERN_TABS = [
     },
 ];
 
-let initialized = false;
-let renderQueued = false;
-let activeTavernTab = 'timeline';
-let focusedTimelineId = null;
-let createModalOpen = false;
-let createModalDraft = { title: '', description: '', thumbnail: null };
-let characterSearchQuery = '';
-let characterSortMode = 'name-asc';
-let renamingSceneId = null;
-let adoptedPanel = null;
-let tavernPanelObserver = null;
-const originalPanelHomes = new Map();
-
-// Single source of truth for what's on screen. Only transitionToWindow() may assign to this.
-//   { kind: 'native' }             -- plain ST chat, Tavern drawer closed
-//   { kind: 'tavern', tab }        -- Tavern open, showing Tab `tab`
-let currentWindow = { kind: 'native' };
-let suppressDrawerObserver = false; // true while WE are driving doNavbarIconClick
+// Session / UI-navigation state (initialized, renderQueued, activeTavernTab,
+// focusedTimelineId, createModalOpen/Draft, characterSearchQuery/SortMode,
+// renamingSceneId, adoptedPanel, tavernPanelObserver, originalPanelHomes,
+// currentWindow, suppressDrawerObserver) now lives in session-state.js's
+// session domain — see getSessionState()/getOriginalPanelHomes() and the
+// action functions imported above. currentWindow: { kind: 'native' } (plain
+// ST chat, Tavern drawer closed) or { kind: 'tavern', tab } (Tavern open,
+// showing Tab `tab`) — only transitionToWindow() may call setCurrentWindow().
 
 // Guided Story-Scene creation wizard state now lives in session-state.js's
 // wizard domain — see getWizardState()/beginWizard()/advanceWizardToPersonaStep()/
@@ -109,7 +114,7 @@ let suppressDrawerObserver = false; // true while WE are driving doNavbarIconCli
 // action functions imported above.
 
 export function initTimelineSpine({ onDrawerReady } = {}) {
-    if (initialized) {
+    if (getSessionState().initialized) {
         return;
     }
 
@@ -134,7 +139,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     registerAllInsertedTextSlotMacros();
     ensurePromptPreviewPanel();
     ensureCharacterEditorCancelButton();
-    initialized = true;
+    setInitialized(true);
 
     onDrawerReady?.(drawer);
     renderTimelinePanel();
@@ -176,7 +181,7 @@ function bindDrawerToggle(drawer) {
 
     const handleToggle = async (event) => {
         event.preventDefault();
-        await transitionToWindow(currentWindow.kind === 'native' ? { kind: 'tavern' } : { kind: 'native' });
+        await transitionToWindow(getSessionState().currentWindow.kind === 'native' ? { kind: 'tavern' } : { kind: 'native' });
     };
 
     toggle?.addEventListener('click', handleToggle);
@@ -196,7 +201,7 @@ function bindDrawerToggle(drawer) {
 // Scene open/close) goes through one place instead of each hand-rolling it.
 async function transitionToWindow(next) {
     if (next.kind === 'tavern' && !next.tab) {
-        next = { ...next, tab: activeTavernTab }; // omitted tab = keep whatever was active
+        next = { ...next, tab: getSessionState().activeTavernTab }; // omitted tab = keep whatever was active
     }
 
     if (next.kind !== 'tavern') {
@@ -209,10 +214,10 @@ async function transitionToWindow(next) {
     document.body.classList.toggle('remodel-tavern-active', next.kind !== 'native');
 
     if (next.kind === 'tavern') {
-        activeTavernTab = next.tab;
+        setActiveTavernTab(next.tab);
     }
 
-    currentWindow = next;
+    setCurrentWindow(next);
     queueRender();
 
     const desiredDrawerOpen = next.kind !== 'native';
@@ -223,12 +228,12 @@ async function transitionToWindow(next) {
         const toggle = document.querySelector(`#${DRAWER_ID} > .drawer-toggle`);
 
         if (toggle) {
-            suppressDrawerObserver = true;
+            setSuppressDrawerObserver(true);
 
             try {
                 await doNavbarIconClick.call(toggle);
             } finally {
-                suppressDrawerObserver = false;
+                setSuppressDrawerObserver(false);
             }
         }
     }
@@ -239,20 +244,20 @@ async function transitionToWindow(next) {
 // icon while Tavern/Story is open closes ours natively, with no involvement
 // from our own code. This reconciles currentWindow when that happens.
 function reconcileExternalDrawerClose() {
-    if (suppressDrawerObserver) {
+    if (getSessionState().suppressDrawerObserver) {
         return; // this mutation is ours — transitionToWindow is mid-flight
     }
 
     const panel = document.getElementById(PANEL_ID);
     const isOpen = panel?.classList.contains('openDrawer') ?? false;
 
-    if (!isOpen && currentWindow.kind !== 'native') {
+    if (!isOpen && getSessionState().currentWindow.kind !== 'native') {
         transitionToWindow({ kind: 'native' });
     }
 }
 
 function observeTavernPanelState() {
-    if (tavernPanelObserver) {
+    if (getSessionState().tavernPanelObserver) {
         return;
     }
 
@@ -262,11 +267,12 @@ function observeTavernPanelState() {
         return;
     }
 
-    tavernPanelObserver = new MutationObserver(reconcileExternalDrawerClose);
-    tavernPanelObserver.observe(panel, {
+    const observer = new MutationObserver(reconcileExternalDrawerClose);
+    observer.observe(panel, {
         attributes: true,
         attributeFilter: ['class'],
     });
+    setTavernPanelObserver(observer);
     reconcileExternalDrawerClose();
 }
 
@@ -324,7 +330,7 @@ function bindTimelineEvents(drawer) {
             return;
         }
 
-        characterSearchQuery = field.value || '';
+        setCharacterSearchQuery(field.value || '');
         queueRender();
     });
 
@@ -369,7 +375,7 @@ function bindTimelineEvents(drawer) {
 
         const sceneId = input.dataset.sceneId;
 
-        if (renamingSceneId !== sceneId) {
+        if (getSessionState().renamingSceneId !== sceneId) {
             return;
         }
 
@@ -379,7 +385,7 @@ function bindTimelineEvents(drawer) {
             updateScene(sceneId, { title: value });
         }
 
-        renamingSceneId = null;
+        setRenamingSceneId(null);
         queueRender();
     });
 
@@ -392,8 +398,8 @@ function bindTimelineEvents(drawer) {
             return;
         }
 
-        if (event.key === 'Escape' && createModalOpen) {
-            createModalOpen = false;
+        if (event.key === 'Escape' && getSessionState().createModalOpen) {
+            setCreateModalOpen(false);
             queueRender();
             return;
         }
@@ -2244,14 +2250,15 @@ function isStoryButtonDisabled(element) {
 
 async function handleAction(element) {
     const action = element.dataset.remodelTimelineAction;
+    const { createModalDraft, focusedTimelineId } = getSessionState();
 
     switch (action) {
         case 'open-create-timeline':
-            createModalDraft = { title: '', description: '', thumbnail: null };
-            createModalOpen = true;
+            setCreateModalDraft({ title: '', description: '', thumbnail: null });
+            setCreateModalOpen(true);
             break;
         case 'cancel-create-timeline':
-            createModalOpen = false;
+            setCreateModalOpen(false);
             break;
         case 'submit-create-timeline': {
             const created = createTimeline(createModalDraft.title.trim() || 'New Timeline');
@@ -2259,8 +2266,8 @@ async function handleAction(element) {
                 description: createModalDraft.description,
                 thumbnail: createModalDraft.thumbnail,
             });
-            createModalOpen = false;
-            focusedTimelineId = created.id;
+            setCreateModalOpen(false);
+            setFocusedTimelineId(created.id);
             break;
         }
         case 'select-timeline':
@@ -2268,15 +2275,15 @@ async function handleAction(element) {
             break;
         case 'open-timeline':
             setActiveTimeline(element.dataset.timelineId);
-            focusedTimelineId = element.dataset.timelineId;
+            setFocusedTimelineId(element.dataset.timelineId);
             break;
         case 'close-timeline':
-            focusedTimelineId = null;
+            setFocusedTimelineId(null);
             break;
         case 'delete-timeline':
             if (confirm('Delete this Timeline and all of its Arcs and Scenes?')) {
                 if (focusedTimelineId === element.dataset.timelineId) {
-                    focusedTimelineId = null;
+                    setFocusedTimelineId(null);
                 }
                 deleteTimeline(element.dataset.timelineId);
             }
@@ -2297,7 +2304,7 @@ async function handleAction(element) {
             const fallback = element.dataset.mode === 'story' ? 'New Story Scene' : 'New Roleplay Scene';
             const created = createScene(element.dataset.arcId, element.dataset.mode, fallback);
             if (created) {
-                renamingSceneId = created.id;
+                setRenamingSceneId(created.id);
             }
             break;
         }
@@ -2388,10 +2395,10 @@ async function handleCharacterAction(element) {
 function handleCharacterFieldChange(field) {
     switch (field.dataset.remodelCharacterField) {
         case 'search':
-            characterSearchQuery = field.value || '';
+            setCharacterSearchQuery(field.value || '');
             break;
         case 'sort':
-            characterSortMode = field.value || 'name-asc';
+            setCharacterSortMode(field.value || 'name-asc');
             break;
         default:
             break;
@@ -2453,10 +2460,10 @@ async function handleFieldChange(field) {
 
     switch (fieldName) {
         case 'draft-title':
-            createModalDraft.title = value;
+            setCreateModalDraft({ ...getSessionState().createModalDraft, title: value });
             break;
         case 'draft-description':
-            createModalDraft.description = value;
+            setCreateModalDraft({ ...getSessionState().createModalDraft, description: value });
             break;
         case 'timeline-title':
             updateTimeline(field.dataset.timelineId, { title: value });
@@ -2487,7 +2494,7 @@ async function handlePhotoChange(input) {
     const dataUrl = await readFileAsDataUrl(file);
 
     if (input.dataset.remodelPhotoTarget === 'draft') {
-        createModalDraft.thumbnail = dataUrl;
+        setCreateModalDraft({ ...getSessionState().createModalDraft, thumbnail: dataUrl });
     } else if (input.dataset.timelineId) {
         updateTimeline(input.dataset.timelineId, { thumbnail: dataUrl });
     }
@@ -2516,6 +2523,8 @@ function renderTimelinePanel() {
     const viewport = ensureViewportShell(content);
 
     ensureFocusedTimelineIsValid(store);
+
+    const { activeTavernTab, focusedTimelineId, renamingSceneId } = getSessionState();
 
     const isTimelineFocused = activeTavernTab === 'timeline' && Boolean(focusedTimelineId);
     const isHeaderCollapsed = isTimelineFocused
@@ -2568,6 +2577,8 @@ function ensureViewportShell(content) {
 }
 
 function renderTavernTabs() {
+    const { activeTavernTab } = getSessionState();
+
     return TAVERN_TABS.map((tab) => `
         <button
             type="button"
@@ -2581,6 +2592,8 @@ function renderTavernTabs() {
 }
 
 function renderActiveWorkspace(store) {
+    const { activeTavernTab } = getSessionState();
+
     if (activeTavernTab === 'timeline') {
         return renderTimelineWorkspace(store);
     }
@@ -2593,13 +2606,17 @@ function renderActiveWorkspace(store) {
 }
 
 function ensureFocusedTimelineIsValid(store) {
+    const { focusedTimelineId } = getSessionState();
+
     if (focusedTimelineId && !store.timelines[focusedTimelineId]) {
-        focusedTimelineId = null;
+        setFocusedTimelineId(null);
     }
 }
 
 function renderTimelineWorkspace(store) {
     ensureFocusedTimelineIsValid(store);
+
+    const { focusedTimelineId } = getSessionState();
 
     if (focusedTimelineId) {
         return renderTimelineFocus(store.timelines[focusedTimelineId], store);
@@ -2609,6 +2626,8 @@ function renderTimelineWorkspace(store) {
 }
 
 function renderTimelineDeck(store) {
+    const { createModalOpen } = getSessionState();
+
     return `
         <section class="remodel-tavern-section remodel-tavern-timeline-section">
             <div class="remodel-timeline-deck" role="list" aria-label="Timelines">
@@ -2688,6 +2707,8 @@ function renderAddTimelineCard() {
 }
 
 function renderCreateTimelineModal() {
+    const { createModalDraft } = getSessionState();
+
     return `
         <div class="remodel-modal-scrim" data-remodel-timeline-action="cancel-create-timeline">
             <div class="remodel-floating-card is-modal" data-remodel-modal-stop>
@@ -2707,6 +2728,7 @@ function renderCreateTimelineModal() {
 }
 
 function renderCharactersWorkspace() {
+    const { characterSearchQuery } = getSessionState();
     const context = getContext();
     const characters = getSortedCharacters(context.characters || []);
     const favorites = getFavoriteCharacters(context.characters || []);
@@ -2792,11 +2814,12 @@ function renderFavoriteAvatar(character, index, context) {
 }
 
 function renderCharacterSortOption(value, label) {
+    const { characterSortMode } = getSessionState();
     return `<option value="${escapeAttribute(value)}" ${characterSortMode === value ? 'selected' : ''}>${escapeHtml(label)}</option>`;
 }
 
 function getSortedCharacters(characters) {
-    const query = characterSearchQuery.trim().toLowerCase();
+    const query = getSessionState().characterSearchQuery.trim().toLowerCase();
     const entries = characters
         .map((character, index) => ({ character, index }))
         .filter(({ character }) => {
@@ -2825,7 +2848,7 @@ function compareCharacterEntries(left, right) {
     const leftName = String(left.character?.name || '').toLocaleLowerCase();
     const rightName = String(right.character?.name || '').toLocaleLowerCase();
 
-    switch (characterSortMode) {
+    switch (getSessionState().characterSortMode) {
         case 'name-desc':
             return rightName.localeCompare(leftName);
         case 'recent-desc':
@@ -3052,7 +3075,7 @@ function renderAddArcCol(timeline) {
 }
 
 function renderLegacyWorkspace() {
-    const tab = TAVERN_TABS.find((item) => item.id === activeTavernTab);
+    const tab = TAVERN_TABS.find((item) => item.id === getSessionState().activeTavernTab);
 
     return `
         <section class="remodel-tavern-section remodel-tavern-legacy-section">
@@ -3078,9 +3101,13 @@ function adoptLegacyPanel(tabId) {
         return;
     }
 
+    const { adoptedPanel } = getSessionState();
+
     if (adoptedPanel && adoptedPanel !== panel) {
         restoreAdoptedPanel();
     }
+
+    const originalPanelHomes = getOriginalPanelHomes();
 
     if (!originalPanelHomes.has(panel)) {
         originalPanelHomes.set(panel, {
@@ -3089,19 +3116,21 @@ function adoptLegacyPanel(tabId) {
         });
     }
 
-    adoptedPanel = panel;
+    setAdoptedPanel(panel);
     panel.classList.add('remodel-tavern-adopted-panel', 'openDrawer');
     panel.classList.remove('closedDrawer', 'remodel-side-left', 'remodel-side-right');
     outlet.append(panel);
 }
 
 function restoreAdoptedPanel() {
+    const { adoptedPanel } = getSessionState();
+
     if (!adoptedPanel) {
         return;
     }
 
     const panel = adoptedPanel;
-    const home = originalPanelHomes.get(panel);
+    const home = getOriginalPanelHomes().get(panel);
 
     panel.classList.remove('remodel-tavern-adopted-panel', 'openDrawer');
     panel.classList.add('closedDrawer');
@@ -3110,7 +3139,7 @@ function restoreAdoptedPanel() {
         home.parent.insertBefore(panel, home.nextSibling);
     }
 
-    adoptedPanel = null;
+    setAdoptedPanel(null);
 }
 
 function renderMissingLegacyPanel(label) {
@@ -3127,7 +3156,7 @@ function renderSceneRow(scene, timeline) {
 
     const isActive = timeline.activeSceneId === scene.id;
     const bindingLabel = getLinkedChatLabel(scene);
-    const isRenaming = scene.id === renamingSceneId;
+    const isRenaming = scene.id === getSessionState().renamingSceneId;
 
     const main = isRenaming
         ? `
@@ -3616,13 +3645,13 @@ function getLinkedChatLabel(scene) {
 }
 
 function queueRender() {
-    if (renderQueued) {
+    if (getSessionState().renderQueued) {
         return;
     }
 
-    renderQueued = true;
+    setRenderQueued(true);
     requestAnimationFrame(() => {
-        renderQueued = false;
+        setRenderQueued(false);
         renderTimelinePanel();
     });
 }

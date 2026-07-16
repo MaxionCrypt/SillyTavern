@@ -4,12 +4,13 @@
 // but for state that must NOT survive a reload and must NOT go through
 // context.saveSettingsDebounced().
 //
-// Every domain below is chat-scoped: its resetX() is called unconditionally
-// on every CHAT_CHANGED/CHAT_LOADED via resetAllChatScopedState(), so a
-// future field has nowhere to go except inside a domain that already gets
-// reset. UI-nav state that must NOT reset on chat change (currentWindow,
-// activeTavernTab, etc.) does not belong in this file's chat-scoped domains
-// — see the plan for where it lands in a later increment.
+// Every domain below except `session` is chat-scoped: its resetX() is
+// called unconditionally on every CHAT_CHANGED/CHAT_LOADED via
+// resetAllChatScopedState(), so a future field has nowhere to go except
+// inside a domain that already gets reset. UI-nav state that must NOT reset
+// on chat change (currentWindow, activeTavernTab, etc.) lives in the
+// `session` domain below instead, which resetAllChatScopedState()
+// deliberately never touches.
 //
 // Nothing outside this file can reach the raw state objects below — they
 // are never exported. Getters return frozen shallow copies, so a caller
@@ -200,10 +201,158 @@ export function resetPastChatsBridge(setCharacterId) {
     clearPastChatsBridge(setCharacterId);
 }
 
+// --- Session / UI-navigation domain -----------------------------------------
+//
+// Ephemeral on-screen-UI state that is explicitly NOT chat-scoped — this is
+// the one domain resetAllChatScopedState() below deliberately never touches,
+// because switching chats should not force-close an open Timeline drawer,
+// collapse an open Tab, or discard an in-progress "create timeline" draft.
+// Mirrors reconcileStateOnCoreChange()'s field-by-field "EXEMPT" comments in
+// timeline-spine.js.
+//
+// initialized: guards initTimelineSpine() against double-init.
+//
+// renderQueued: rAF-batches queueRender() calls so a burst of state changes
+// collapses into a single render.
+//
+// activeTavernTab: which Tavern-drawer tab ('timeline' | 'characters' | ...)
+// is currently showing.
+//
+// focusedTimelineId: which Timeline is expanded/focused within the Timeline
+// tab, null when showing the deck view.
+//
+// createModalOpen / createModalDraft: whether the "create timeline" modal is
+// open, and its in-progress {title, description, thumbnail} draft.
+//
+// characterSearchQuery / characterSortMode: Characters-tab search filter
+// text and sort mode.
+//
+// renamingSceneId: which scene row is mid-inline-rename, null otherwise.
+//
+// adoptedPanel: which native panel (Personas/WorldInfo) has been DOM-adopted
+// into the Tavern drawer, null when nothing is adopted.
+//
+// tavernPanelObserver: MutationObserver watching the drawer's open/closed
+// class, so external drawer closes (via SillyTavern's own doNavbarIconClick)
+// can be reconciled back into currentWindow.
+//
+// currentWindow: single source of truth for what's on screen —
+// { kind: 'native' } or { kind: 'tavern', tab }. Only transitionToWindow()
+// (in timeline-spine.js) may assign to this; setCurrentWindow exists only
+// for that one call site, not as a general-purpose setter.
+//
+// suppressDrawerObserver: reentrancy guard set true only while our own code
+// is driving doNavbarIconClick, so tavernPanelObserver's mutation callback
+// doesn't mistake our own drawer toggle for an externally-triggered close.
+//
+// originalPanelHomes is deliberately kept OUTSIDE this object — see the
+// comment above its declaration below.
+const session = {
+    initialized: false,
+    renderQueued: false,
+    activeTavernTab: 'timeline',
+    focusedTimelineId: null,
+    createModalOpen: false,
+    createModalDraft: { title: '', description: '', thumbnail: null },
+    characterSearchQuery: '',
+    characterSortMode: 'name-asc',
+    renamingSceneId: null,
+    adoptedPanel: null,
+    tavernPanelObserver: null,
+    currentWindow: { kind: 'native' },
+    suppressDrawerObserver: false,
+};
+
+// originalPanelHomes: maps an adopted panel back to its original DOM
+// {parent, nextSibling}, so restoreAdoptedPanel() can put it back where it
+// came from. Deliberately NOT a field on `session` above and deliberately
+// NOT covered by getSessionState()'s frozen-copy pattern: it's a Map, and
+// Object.freeze is shallow, so freezing a copy of an object that merely
+// *holds a reference* to this Map would freeze the reference, not the Map's
+// contents — callers would still be able to .set()/.get()/.delete() on it
+// through that "frozen" copy. Rather than ship a getter whose "frozen"
+// guarantee is fake for this one field, this is a documented, deliberate
+// exception: getOriginalPanelHomes() hands back the live Map on purpose.
+const originalPanelHomes = new Map();
+
+export function getSessionState() {
+    return Object.freeze({ ...session });
+}
+
+// Deliberate exception to the frozen-copy pattern — see the comment above
+// originalPanelHomes' declaration. Returns the live, mutable Map itself
+// (not frozen, not copied) because call sites need to .set()/.get()/.has()/
+// .delete() on it directly.
+export function getOriginalPanelHomes() {
+    return originalPanelHomes;
+}
+
+export function setInitialized(value) {
+    session.initialized = value;
+}
+
+export function setRenderQueued(value) {
+    session.renderQueued = value;
+}
+
+export function setActiveTavernTab(value) {
+    session.activeTavernTab = value;
+}
+
+export function setFocusedTimelineId(value) {
+    session.focusedTimelineId = value;
+}
+
+export function setCreateModalOpen(value) {
+    session.createModalOpen = value;
+}
+
+export function setCreateModalDraft(value) {
+    session.createModalDraft = value;
+}
+
+export function setCharacterSearchQuery(value) {
+    session.characterSearchQuery = value;
+}
+
+export function setCharacterSortMode(value) {
+    session.characterSortMode = value;
+}
+
+export function setRenamingSceneId(value) {
+    session.renamingSceneId = value;
+}
+
+export function setAdoptedPanel(value) {
+    session.adoptedPanel = value;
+}
+
+export function setTavernPanelObserver(value) {
+    session.tavernPanelObserver = value;
+}
+
+// Only transitionToWindow() (timeline-spine.js) may call this — see the
+// currentWindow field comment in the session domain doc block above.
+export function setCurrentWindow(value) {
+    session.currentWindow = value;
+}
+
+export function setSuppressDrawerObserver(value) {
+    session.suppressDrawerObserver = value;
+}
+
 // --- Chat-scoped reconciliation ---------------------------------------------
 //
 // setCharacterId is threaded through here only because resetPastChatsBridge
 // needs it — every other domain's reset is a pure state operation.
+//
+// The `session` domain above is intentionally NOT reset here. It holds
+// on-screen-UI state (currentWindow, activeTavernTab, focusedTimelineId,
+// etc.) that is orthogonal to which chat is loaded — e.g. switching chats
+// while the Tavern drawer is open should not force-close it, and switching
+// chats mid-rename shouldn't kick a scene out of its rename input. See the
+// `session` domain's own doc comment above, and reconcileStateOnCoreChange()'s
+// field-by-field "EXEMPT" comments in timeline-spine.js, for the reasoning.
 export function resetAllChatScopedState(setCharacterId) {
     resetGenerationState();
     resetWizardState();
