@@ -30,9 +30,15 @@ export function createTimeline(title = 'New Timeline') {
         id: createId('timeline'),
         title: normalizeText(title, 'New Timeline'),
         description: '',
+        thumbnail: null,
         arcIds: [],
         activeArcId: null,
         activeSceneId: null,
+        // { [slotName]: { text, sourceSceneId, sourceSceneTitle, wordMode, wordCount, savedAt } } —
+        // named prior-scene-text snippets a user has explicitly fetched and
+        // saved (see the Prior Text drawer in timeline-spine.js), each exposed
+        // as a synchronous {{inserted_text_<slotName>}} macro.
+        insertedTextSlots: {},
         createdAt: now(),
         updatedAt: now(),
     };
@@ -42,6 +48,37 @@ export function createTimeline(title = 'New Timeline') {
     store.activeTimelineId = timeline.id;
     saveTimelineStore();
     return timeline;
+}
+
+// Slot names are dynamic keys (not a fixed field), so they're managed via
+// dedicated functions rather than folded into sanitizeTimelinePatch's
+// fixed-field allowlist.
+export function setInsertedTextSlot(timelineId, slotName, slotData) {
+    const store = getTimelineStore();
+    const timeline = store.timelines[timelineId];
+
+    if (!timeline) {
+        return null;
+    }
+
+    timeline.insertedTextSlots ??= {};
+    timeline.insertedTextSlots[slotName] = { ...slotData, savedAt: now() };
+    touchTimeline(timelineId);
+    saveTimelineStore();
+    return timeline.insertedTextSlots[slotName];
+}
+
+export function deleteInsertedTextSlot(timelineId, slotName) {
+    const store = getTimelineStore();
+    const timeline = store.timelines[timelineId];
+
+    if (!timeline?.insertedTextSlots) {
+        return;
+    }
+
+    delete timeline.insertedTextSlots[slotName];
+    touchTimeline(timelineId);
+    saveTimelineStore();
 }
 
 export function updateTimeline(timelineId, patch) {
@@ -160,6 +197,7 @@ export function createScene(arcId, mode = 'roleplay', title = 'New Scene') {
         linkedChat: null,
         status: 'unbound',
         summary: '',
+        summaryUpdatedAt: null,
         createdAt: now(),
         updatedAt: now(),
     };
@@ -168,7 +206,8 @@ export function createScene(arcId, mode = 'roleplay', title = 'New Scene') {
     arc.sceneIds.push(scene.id);
     arc.updatedAt = now();
     timeline.activeArcId = arcId;
-    timeline.activeSceneId = scene.id;
+    // Do NOT auto-activate the new scene: the row should appear in the arc column,
+    // not immediately pop the scene inspector open below (which hid the arcs).
     touchTimeline(timeline.id);
     saveTimelineStore();
     return scene;
@@ -285,6 +324,7 @@ function normalizeStore(store) {
         timeline.arcIds = (timeline.arcIds || []).filter((id) => store.arcs[id]?.timelineId === timeline.id);
         timeline.activeArcId = timeline.arcIds.includes(timeline.activeArcId) ? timeline.activeArcId : timeline.arcIds[0] || null;
         timeline.activeSceneId = store.scenes[timeline.activeSceneId]?.timelineId === timeline.id ? timeline.activeSceneId : null;
+        timeline.insertedTextSlots ??= {}; // backward-compat for Timelines saved before this field existed
     }
 
     for (const arc of Object.values(store.arcs)) {
@@ -296,6 +336,7 @@ function sanitizeTimelinePatch(patch) {
     return {
         ...(patch.title !== undefined ? { title: normalizeText(patch.title, 'Untitled Timeline') } : {}),
         ...(patch.description !== undefined ? { description: String(patch.description) } : {}),
+        ...(patch.thumbnail !== undefined ? { thumbnail: patch.thumbnail ? String(patch.thumbnail) : null } : {}),
     };
 }
 
@@ -312,6 +353,7 @@ function sanitizeScenePatch(patch) {
         ...(patch.mode !== undefined ? { mode: patch.mode === 'story' ? 'story' : 'roleplay' } : {}),
         ...(patch.status !== undefined ? { status: String(patch.status) } : {}),
         ...(patch.summary !== undefined ? { summary: String(patch.summary) } : {}),
+        ...(patch.summaryUpdatedAt !== undefined ? { summaryUpdatedAt: patch.summaryUpdatedAt ? String(patch.summaryUpdatedAt) : null } : {}),
         ...(patch.linkedChat !== undefined ? { linkedChat: patch.linkedChat || null } : {}),
     };
 }
