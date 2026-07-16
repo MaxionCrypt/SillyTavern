@@ -27,13 +27,18 @@ import {
     updateTimeline,
 } from './timeline-state.js';
 import {
+    advanceWizardToPersonaStep,
     armGenerationWatchdog,
     beginOwnedGenerationRun,
+    beginWizard,
     clearGenerationWatchdog,
+    consumeWizardFlow,
     endOwnedGenerationRun,
     getGenerationState,
+    getWizardState,
     isGenerationRunOurs,
     resetAllChatScopedState,
+    resetWizardState,
     setAutoContinueStatus,
     setAutoContinueTurnIsFirst,
     setGenerating,
@@ -87,10 +92,9 @@ const originalPanelHomes = new Map();
 let currentWindow = { kind: 'native' };
 let suppressDrawerObserver = false; // true while WE are driving doNavbarIconClick
 
-// Guided Story-Scene creation wizard. Separate from currentWindow — this tracks
-// wizard progress, which drives transitionToWindow calls as a side effect but
-// isn't itself a Window kind.
-let sceneCreationFlow = null; // { sceneId, step: 'choose-character' | 'choose-persona', chosenCharacterId }
+// Guided Story-Scene creation wizard state now lives in session-state.js's
+// wizard domain — see getWizardState()/beginWizard()/advanceWizardToPersonaStep()/
+// consumeWizardFlow() imported above.
 
 // Which character's editor panel is open, set the moment selectCharacterForEditingOnly()
 // is called (see handleCharacterAction's 'select-character' case). NOT the
@@ -522,7 +526,7 @@ function bindStoryLockInterceptor() {
         // confirmed as a real reported bug. Detected directly here (the
         // avatar already carries core's own 'selected' class,
         // personas.js:1463) since we can't rely on any event for this case.
-        if (sceneCreationFlow?.step === 'choose-persona') {
+        if (getWizardState().sceneCreationFlow?.step === 'choose-persona') {
             const clickedAvatar = target?.closest('#user_avatar_block .avatar-container');
             if (clickedAvatar?.classList.contains('selected')) {
                 event.preventDefault();
@@ -684,7 +688,7 @@ function bindStoryLockInterceptor() {
         // the brand-new Scene being created — confirmed as a real reported
         // bug. The wizard's own explicit state takes priority over stale
         // leftover chat metadata from whatever was open before it started.
-        if (sceneCreationFlow) {
+        if (getWizardState().sceneCreationFlow) {
             return;
         }
 
@@ -744,7 +748,7 @@ function bindStoryComposerContinueOnEmptySend() {
 // --- Guided Story Scene creation -----------------------------------------
 
 async function beginStoryGuidedCreation(sceneId) {
-    sceneCreationFlow = { sceneId, step: 'choose-character', chosenCharacterId: null };
+    beginWizard(sceneId);
     await transitionToWindow({ kind: 'tavern', tab: 'characters' });
     showGuidedPrompt('choose-character');
 }
@@ -754,14 +758,13 @@ async function beginStoryGuidedCreation(sceneId) {
 // and can't be called/gated directly — we let the native click apply the
 // persona for real, then react to it here.
 function handlePersonaChangedDuringCreation() {
-    if (sceneCreationFlow?.step === 'choose-persona') {
+    if (getWizardState().sceneCreationFlow?.step === 'choose-persona') {
         finishStoryGuidedCreation();
     }
 }
 
 async function finishStoryGuidedCreation() {
-    const { sceneId, chosenCharacterId } = sceneCreationFlow;
-    sceneCreationFlow = null;
+    const { sceneId, chosenCharacterId } = consumeWizardFlow();
     hideGuidedPrompt();
 
     await getContext().selectCharacterById(chosenCharacterId, { switchMenu: false });
@@ -770,7 +773,7 @@ async function finishStoryGuidedCreation() {
 }
 
 function cancelStoryGuidedCreation() {
-    sceneCreationFlow = null;
+    resetWizardState();
     hideGuidedPrompt();
     transitionToWindow({ kind: 'native' });
 }
@@ -2351,9 +2354,8 @@ async function handleCharacterAction(element) {
                 break;
             }
 
-            if (sceneCreationFlow?.step === 'choose-character') {
-                sceneCreationFlow.chosenCharacterId = characterId;
-                sceneCreationFlow.step = 'choose-persona';
+            if (getWizardState().sceneCreationFlow?.step === 'choose-character') {
+                advanceWizardToPersonaStep(characterId);
                 await transitionToWindow({ kind: 'tavern', tab: 'personas' });
                 showGuidedPrompt('choose-persona');
                 break;
@@ -3403,10 +3405,17 @@ function syncActiveSceneFromChatMetadata() {
 function reconcileStateOnCoreChange() {
     // --- Generation state — the actual bug this reconciliation was built to
     // fix (see comment above). Now owned by session-state.js's generation
-    // domain; resetAllChatScopedState() currently resets that domain only
-    // (wizard/pastChatsBridge/panels domains join it in later increments of
-    // the state-backbone refactor, at which point their manual resets below
-    // will be removed from this function too).
+    // domain; resetAllChatScopedState() below resets both that domain and
+    // the wizard domain (pastChatsBridge/panels domains join in later
+    // increments of the state-backbone refactor, at which point their manual
+    // resets further down will be removed from this function too).
+    //
+    // Captured BEFORE resetAllChatScopedState() clears wizard.sceneCreationFlow
+    // below — resetAllChatScopedState() only clears the state itself, not the
+    // wizard's DOM-side cancellation effects (hideGuidedPrompt/transitionToWindow),
+    // which still need to run further down if the wizard was actually active.
+    const wizardWasActive = getWizardState().sceneCreationFlow !== null;
+
     resetAllChatScopedState();
     closeStoryComposer();
     updateStoryActionBarState();
@@ -3427,19 +3436,21 @@ function reconcileStateOnCoreChange() {
     // on screen, which is orthogonal to which chat is loaded. Switching
     // chats while Tavern is open should not force-close Tavern.
 
-    // --- sceneCreationFlow: reconciled unconditionally — confirmed SAFE.
-    // finishStoryGuidedCreation() already sets sceneCreationFlow = null
-    // itself BEFORE triggering the chat switch that completes the wizard,
-    // so by the time CHAT_CHANGED fires from the wizard's own expected
-    // completion, sceneCreationFlow is already null and this branch is a
-    // no-op for that case — no special-casing needed. What this DOES fix:
-    // an UNRELATED chat switch happening mid-wizard, before completion
-    // (e.g. the user manually opens a different chat via native UI while
-    // still on the "choose persona" step) previously left sceneCreationFlow
-    // dangling against a chat it no longer matches, with the guided-prompt
-    // UI still showing. Now it's cleanly cancelled instead.
-    if (sceneCreationFlow) {
-        cancelStoryGuidedCreation();
+    // --- sceneCreationFlow: state already reset unconditionally above via
+    // resetAllChatScopedState() — confirmed SAFE. finishStoryGuidedCreation()
+    // already consumes (clears) the wizard flow itself BEFORE triggering the
+    // chat switch that completes the wizard, so by the time CHAT_CHANGED
+    // fires from the wizard's own expected completion, wizardWasActive is
+    // already false and this branch is a no-op for that case — no special-
+    // casing needed. What this DOES fix: an UNRELATED chat switch happening
+    // mid-wizard, before completion (e.g. the user manually opens a
+    // different chat via native UI while still on the "choose persona" step)
+    // previously left the wizard flow dangling against a chat it no longer
+    // matches, with the guided-prompt UI still showing. Now the DOM side of
+    // cancellation (hiding the prompt, returning to native) runs too.
+    if (wizardWasActive) {
+        hideGuidedPrompt();
+        transitionToWindow({ kind: 'native' });
     }
 
     // --- viewedCharacterIdForPastChats / weSetThisChidForPastChats: the

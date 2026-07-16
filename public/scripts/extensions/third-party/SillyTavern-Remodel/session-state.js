@@ -106,9 +106,50 @@ export function resetGenerationState() {
     generation.autoContinueTurnIsFirst = true;
 }
 
+// --- Guided Story-Scene creation wizard domain ------------------------------
+//
+// sceneCreationFlow: { sceneId, step: 'choose-character' | 'choose-persona',
+// chosenCharacterId } while the wizard is active, null otherwise. Separate
+// from currentWindow (a later increment's session domain) — this tracks
+// wizard progress, which drives transitionToWindow calls as a side effect
+// but isn't itself a Window kind.
+const wizard = { sceneCreationFlow: null };
+
+export function getWizardState() {
+    return Object.freeze({
+        sceneCreationFlow: wizard.sceneCreationFlow ? { ...wizard.sceneCreationFlow } : null,
+    });
+}
+
+export function beginWizard(sceneId) {
+    wizard.sceneCreationFlow = { sceneId, step: 'choose-character', chosenCharacterId: null };
+}
+
+// Replaces (never mutates in place) — the wizard's flow object moves from
+// 'choose-character' to 'choose-persona' as a new object, not a patched one.
+export function advanceWizardToPersonaStep(chosenCharacterId) {
+    if (!wizard.sceneCreationFlow) {
+        return;
+    }
+    wizard.sceneCreationFlow = { ...wizard.sceneCreationFlow, chosenCharacterId, step: 'choose-persona' };
+}
+
+// Returns the flow's {sceneId, chosenCharacterId} and clears it in the same
+// step — mirrors the original finishStoryGuidedCreation's destructure-then-
+// null pattern so completing the wizard can't leave a stale flow behind.
+export function consumeWizardFlow() {
+    const flow = wizard.sceneCreationFlow;
+    wizard.sceneCreationFlow = null;
+    return flow;
+}
+
+export function resetWizardState() {
+    wizard.sceneCreationFlow = null;
+}
+
 // --- Chat-scoped reconciliation ---------------------------------------------
 
-const CHAT_SCOPED_DOMAIN_RESETS = [resetGenerationState];
+const CHAT_SCOPED_DOMAIN_RESETS = [resetGenerationState, resetWizardState];
 
 export function resetAllChatScopedState() {
     CHAT_SCOPED_DOMAIN_RESETS.forEach((reset) => reset());
