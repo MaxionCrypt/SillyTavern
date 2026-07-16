@@ -30,6 +30,7 @@ import {
     advanceWizardToPersonaStep,
     armGenerationWatchdog,
     armSceneSummarySaveDebounce,
+    beginManuscriptEdit,
     beginOwnedGenerationRun,
     beginWizard,
     clearGenerationWatchdog,
@@ -37,6 +38,7 @@ import {
     consumeWizardFlow,
     endOwnedGenerationRun,
     getGenerationState,
+    getManuscriptEditState,
     getOriginalPanelHomes,
     getPanelsState,
     getSessionState,
@@ -127,7 +129,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindTimelineEvents(drawer);
     bindSillyTavernEvents();
     observeTavernPanelState();
-    bindStoryWorkspaceEditing();
+    bindStoryManuscriptEditing();
     bindStoryWorkspaceEditCommit();
     bindStoryLockInterceptor();
     bindStoryComposerContinueOnEmptySend();
@@ -3472,55 +3474,94 @@ function syncStoryWorkspaceClass(scene) {
     document.body.classList.toggle('remodel-story-workspace-active', scene?.mode === 'story');
 }
 
-// Click anywhere in a message's text to start editing it in place — drives
-// SillyTavern's real .mes_edit button (hidden by CSS in the story workspace)
-// rather than reimplementing its bookkeeping (delete-mode checks, committing
-// any other message's in-progress edit first).
-function bindStoryWorkspaceEditing() {
+// Click anywhere in the visible manuscript to enter unified cross-message
+// editing: every visible message's .mes_text swaps from rendered HTML to
+// raw text and becomes directly contenteditable, with no seam between what
+// are still, underneath, N separate chat[] messages — see the
+// manuscriptEdit domain in session-state.js. This stage only handles entry;
+// boundary protection and commit/cancel land in later commits, so typing
+// right now is unprotected and (until the commit stage exists) not yet
+// saved back to chat[] — expected at this point in the rollout.
+function bindStoryManuscriptEditing() {
     document.getElementById('chat')?.addEventListener('click', (event) => {
         if (!document.body.classList.contains('remodel-story-workspace-active')) {
             return;
         }
 
-        const textEl = event.target instanceof Element ? event.target.closest('.mes_text') : null;
-
-        if (!textEl || textEl.querySelector('#curEditTextarea')) {
-            return; // not a click into prose, or already editing this message
+        if (getGenerationState().isGenerating) {
+            return; // never enter edit mode while a generation is in flight
         }
 
-        // Capture the click's approximate position in the RENDERED text before
-        // .mes_edit empties it and swaps in the raw-source textarea — there's
-        // no source-mapping between rendered HTML and raw markdown, so this is
-        // deliberately best-effort (exact for plain prose, approximate right
-        // next to markdown formatting characters), not pixel-perfect.
+        const textEl = event.target instanceof Element ? event.target.closest('.mes_text') : null;
+
+        if (!textEl) {
+            return; // not a click into prose (e.g. a beat header/regenerate button)
+        }
+
+        if (getManuscriptEditState().active) {
+            return; // already editing — let the click place a caret natively
+        }
+
+        // Capture the click's approximate position in the RENDERED text of
+        // the CLICKED block before ANY block swaps to raw text — same
+        // deliberate best-effort estimation as the single-message flow this
+        // replaces, unchanged, since the click necessarily lands on
+        // still-rendered HTML. Re-clicks AFTER entry (already raw-text mode)
+        // place the caret exactly, for free, via native browser
+        // caret-from-point on a plain-text node — no estimation needed there.
         const approxOffset = estimateRawTextOffsetFromClick(textEl, event.clientX, event.clientY);
 
-        // Native messageEdit() (public/script.js) only restores the chat's
-        // pre-edit scroll position when the edited message happens to be the
-        // LAST one in the chat — for any earlier message (which is the whole
-        // point of clicking back into prior prose in a manuscript), it does
-        // nothing, and emptying .mes_text mid-page plus focusing the new
-        // textarea makes the browser jump the scroll position toward the
-        // bottom. Capture and restore it ourselves, unconditionally, since
-        // there's no way to patch that native early-return.
         const chatEl = document.getElementById('chat');
         const scrollTopBeforeEdit = chatEl?.scrollTop;
 
-        textEl.closest('.mes')?.querySelector('.mes_edit')?.click();
+        // Skip collapsed Scene Beats (display:none) — a click can't reach
+        // them anyway, and there's nothing to usefully edit while hidden.
+        const blocks = Array.from(document.querySelectorAll('#chat > .mes .mes_text'))
+            .filter((el) => el.offsetParent !== null);
 
-        // messageEdit() (native) builds #curEditTextarea synchronously within
-        // the click handler above, but sets its own end-of-text selection
-        // AFTER that — queue our override for the next microtask so it wins.
+        const context = getContext();
+        const readRaw = (mesText) => {
+            const mesId = Number(mesText.closest('.mes')?.getAttribute('mesid'));
+            return { mesId, raw: context.chat[mesId]?.mes ?? '' };
+        };
+
+        const snapshot = blocks.map((mesText) => {
+            const { mesId, raw } = readRaw(mesText);
+            return { mesId, originalRaw: raw };
+        });
+
+        beginManuscriptEdit(snapshot);
+        document.body.classList.add('remodel-manuscript-editing');
+
+        blocks.forEach((mesText) => {
+            const { raw } = readRaw(mesText);
+            mesText.textContent = raw;
+            mesText.setAttribute('contenteditable', 'true');
+            mesText.dataset.remodelManuscriptBlock = '';
+        });
+
+        // Place the caret in the clicked block, now holding raw text as a
+        // single Text node, at the offset estimated above.
         if (approxOffset !== null) {
-            queueMicrotask(() => {
-                const textarea = textEl.querySelector('#curEditTextarea');
-                if (textarea instanceof HTMLTextAreaElement) {
-                    const clampedOffset = Math.min(approxOffset, textarea.value.length);
-                    textarea.setSelectionRange(clampedOffset, clampedOffset);
-                }
-            });
+            const targetNode = textEl.firstChild;
+            const maxOffset = targetNode?.nodeType === Node.TEXT_NODE ? targetNode.textContent.length : 0;
+            const clampedOffset = Math.min(approxOffset, maxOffset);
+            const range = document.createRange();
+            range.setStart(targetNode ?? textEl, clampedOffset);
+            range.collapse(true);
+            const selection = window.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
         }
 
+        textEl.focus();
+
+        // Same reasoning as the single-message flow this replaces: native
+        // messageEdit()/messageEditDone() (driven later, during commit) only
+        // restore scroll position for the LAST message in chat. This entry
+        // step doesn't touch that native path at all (pure local DOM
+        // manipulation), so a jump shouldn't occur here — kept as cheap,
+        // defensive insurance regardless, pending empirical verification.
         if (chatEl && scrollTopBeforeEdit !== undefined) {
             requestAnimationFrame(() => {
                 chatEl.scrollTop = scrollTopBeforeEdit;
