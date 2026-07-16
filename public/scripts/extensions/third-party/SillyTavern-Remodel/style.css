@@ -487,6 +487,20 @@ body.st-remodel-active #chat:has(.welcomePanel) ~ #form_sheld {
   display: none !important;
 }
 
+/* Same intent as the rule above, but keyed on Remodel's own synchronous
+   remodel-no-chat-active body class (timeline-spine.js: syncNoChatComposerVisibility)
+   instead of .welcomePanel's presence in the DOM. Core's openWelcomeScreen()
+   is async and inserts .welcomePanel only after an awaited fetch completes,
+   so the rule above alone leaves a window where #form_sheld (and the
+   #options_button hamburger inside it) briefly renders, squeezed toward the
+   top of the fixed #sheld panel. This rule fires the instant CHAT_CHANGED/
+   CHAT_LOADED/APP_READY do, well before that race window even opens. The
+   rule above stays too, as harmless defense-in-depth once .welcomePanel
+   does land. */
+body.st-remodel-active.remodel-no-chat-active #form_sheld {
+  display: none !important;
+}
+
 /* Input Area Panel — #form_sheld is the only element here NOT also covered by
    the .remodel-composer class scheme below, so it keeps its own rule. */
 

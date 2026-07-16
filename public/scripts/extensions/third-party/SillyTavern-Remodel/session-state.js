@@ -150,55 +150,85 @@ export function resetWizardState() {
 
 // --- Character-viewing / past-chats bridge domain ---------------------------
 //
-// viewedCharacterId: which character's editor panel is open, set the moment
-// a character card is clicked for viewing/editing only — never activates a
-// chat with them (see selectCharacterForEditingOnly's call site in
-// timeline-spine.js). weSetThisChid: true only while THIS bridge is the one
-// that temporarily set this_chid, so clearing it can never clobber a
-// genuinely active chat's real this_chid. Exists to bridge the gap between
-// "viewing a character's sheet" (which never touches this_chid here) and
-// core's native "Manage chat files" delete/rename flow, which assumes
-// this_chid is already set by the time it runs. setCharacterId is core's
-// own function, passed in by the caller rather than imported here — this
-// module stays a pure state container with no core/DOM dependencies, same
-// as timeline-state.js.
-const pastChatsBridge = { viewedCharacterId: null, weSetThisChid: false };
+// selectCharacterForEditingOnly (timeline-spine.js) deliberately never sets
+// core's this_chid when a character's editor opens for viewing only — a
+// previous fix to stop viewing a character from silently activating a chat
+// with them. But stock SillyTavern always has "editor open" imply "this_chid
+// set," and a majority of the native buttons INSIDE that same editor panel
+// (Delete, Duplicate, Rename, chat-settings overrides, Export) read this_chid
+// directly and fail/misbehave without it. This domain eagerly keeps this_chid
+// in sync with whichever character's editor is currently shown, for as long
+// as it's shown, so those native buttons always act on the right character —
+// then restores whatever this_chid held before browsing started when the
+// editor closes, rather than just clearing to undefined. That distinction
+// matters: this_chid is read throughout core's own chat/generation pipeline,
+// not just by editor buttons, so if a REAL chat is active in the background
+// while a different character is merely browsed, simply clearing to undefined
+// (or worse, leaving it pointed at the browsed character) would corrupt that
+// real chat's behavior once browsing ends. setCharacterId is core's own
+// function, passed in by the caller rather than imported here — this module
+// stays a pure state container with no core/DOM dependencies, same as
+// timeline-state.js.
+//
+// active: true for the full duration a viewing-only bridge session is live
+// (from the first character viewed until the editor closes or a real chat
+// change happens) — not just during a single popup interaction.
+//
+// previousChid: this_chid's real value at the moment the bridge FIRST
+// engaged. Captured only once per session (see noteViewingCharacterForPastChats)
+// — undefined is itself a valid captured value, meaning "nothing was really
+// active before browsing started," not "not yet captured."
+const pastChatsBridge = { viewedCharacterId: null, active: false, previousChid: undefined };
 
 export function getPastChatsBridgeState() {
     return Object.freeze({ ...pastChatsBridge });
 }
 
-// Called the instant a character sheet is opened for viewing only.
-export function noteViewingCharacterForPastChats(characterId) {
+// True only while this_chid is currently owned by the viewing-only bridge
+// rather than reflecting a genuinely active chat. Any call site that reads
+// context.characterId and needs to know "is this real?" should gate on
+// !isPastChatsBridgeActive() instead of re-deriving this distinction itself.
+export function isPastChatsBridgeActive() {
+    return pastChatsBridge.active;
+}
+
+// Called the instant a character's editor is opened/switched for viewing
+// only. currentChid is context.characterId AT THE CALL SITE, read before
+// this call — only used (captured into previousChid) on the first call of a
+// browsing session; ignored on every subsequent call while already active,
+// so switching between several viewed characters without closing the editor
+// can never overwrite the real original value with "whichever character was
+// viewed one click ago."
+export function noteViewingCharacterForPastChats(characterId, currentChid, setCharacterId) {
+    if (!pastChatsBridge.active) {
+        pastChatsBridge.previousChid = currentChid;
+        pastChatsBridge.active = true;
+    }
     pastChatsBridge.viewedCharacterId = characterId;
+    setCharacterId(characterId);
 }
 
-// Called by the #option_select_chat capture hook right before letting the
-// native handler run, only when there's no genuinely active chat yet.
-// Returns whether it actually bridged anything, so the call site doesn't
-// need to re-derive the guard.
-export function bridgeThisChidForPastChats(setCharacterId) {
-    if (pastChatsBridge.viewedCharacterId === null) {
-        return false;
+// The primary teardown: restores this_chid to whatever it held before
+// browsing started (which may itself be undefined) — not just a blind clear.
+// Idempotent, safe to call redundantly.
+export function restorePastChatsBridge(setCharacterId) {
+    if (pastChatsBridge.active) {
+        setCharacterId(pastChatsBridge.previousChid);
     }
-    setCharacterId(pastChatsBridge.viewedCharacterId);
-    pastChatsBridge.weSetThisChid = true;
-    return true;
-}
-
-// The ONE function every backstop site calls to tear the bridge down —
-// idempotent, safe to call redundantly. Only clears this_chid if THIS
-// bridge is the one that set it.
-export function clearPastChatsBridge(setCharacterId) {
-    if (pastChatsBridge.weSetThisChid) {
-        setCharacterId(undefined);
-    }
-    pastChatsBridge.weSetThisChid = false;
+    pastChatsBridge.active = false;
     pastChatsBridge.viewedCharacterId = null;
+    pastChatsBridge.previousChid = undefined;
 }
 
-export function resetPastChatsBridge(setCharacterId) {
-    clearPastChatsBridge(setCharacterId);
+// Called only from resetAllChatScopedState on a REAL CHAT_CHANGED/CHAT_LOADED.
+// Deliberately does NOT touch this_chid, unlike restorePastChatsBridge: by
+// the time this fires, core has ALREADY set this_chid to reflect the chat
+// that genuinely just loaded — restoring the bridge's stale previousChid
+// here would clobber that correct, real value with a stale one.
+export function resetPastChatsBridge() {
+    pastChatsBridge.active = false;
+    pastChatsBridge.viewedCharacterId = null;
+    pastChatsBridge.previousChid = undefined;
 }
 
 // --- Panel-specific ephemeral state domain -----------------------------------
@@ -374,8 +404,10 @@ export function setSuppressDrawerObserver(value) {
 
 // --- Chat-scoped reconciliation ---------------------------------------------
 //
-// setCharacterId is threaded through here only because resetPastChatsBridge
-// needs it — every other domain's reset is a pure state operation.
+// Every domain's reset here is a pure state operation — resetPastChatsBridge()
+// deliberately does NOT touch this_chid (see its own comment above); the
+// caller that owns the real, intentional this_chid write is core itself,
+// having already set it correctly by the time a real CHAT_CHANGED fires.
 //
 // The `session` domain above is intentionally NOT reset here. It holds
 // on-screen-UI state (currentWindow, activeTavernTab, focusedTimelineId,
@@ -383,9 +415,9 @@ export function setSuppressDrawerObserver(value) {
 // while the Tavern drawer is open should not force-close it, and switching
 // chats mid-rename shouldn't kick a scene out of its rename input. See the
 // `session` domain's own doc comment above for the full reasoning.
-export function resetAllChatScopedState(setCharacterId) {
+export function resetAllChatScopedState() {
     resetGenerationState();
     resetWizardState();
-    resetPastChatsBridge(setCharacterId);
+    resetPastChatsBridge();
     resetPanelsState();
 }

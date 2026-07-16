@@ -32,9 +32,7 @@ import {
     armSceneSummarySaveDebounce,
     beginOwnedGenerationRun,
     beginWizard,
-    bridgeThisChidForPastChats,
     clearGenerationWatchdog,
-    clearPastChatsBridge,
     clearSceneSummarySaveDebounce,
     consumeWizardFlow,
     endOwnedGenerationRun,
@@ -44,9 +42,11 @@ import {
     getSessionState,
     getWizardState,
     isGenerationRunOurs,
+    isPastChatsBridgeActive,
     noteViewingCharacterForPastChats,
     resetAllChatScopedState,
     resetWizardState,
+    restorePastChatsBridge,
     setActiveTavernTab,
     setAdoptedPanel,
     setAutoContinueStatus,
@@ -109,8 +109,8 @@ const TAVERN_TABS = [
 // consumeWizardFlow() imported above.
 
 // Character-viewing / past-chats bridge state now lives in session-state.js's
-// pastChatsBridge domain — see getPastChatsBridgeState()/noteViewingCharacterForPastChats()/
-// bridgeThisChidForPastChats()/clearPastChatsBridge() imported above.
+// pastChatsBridge domain — see getPastChatsBridgeState()/isPastChatsBridgeActive()/
+// noteViewingCharacterForPastChats()/restorePastChatsBridge() imported above.
 
 // Story auto-continue loop state and story-generation tracking (isGenerating,
 // runIsOurs, watchdog, autoContinue, autoContinueTurnIsFirst) now live in
@@ -144,6 +144,11 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     ensurePromptPreviewPanel();
     ensureCharacterEditorCancelButton();
     setInitialized(true);
+
+    // Belt-and-suspenders: Remodel's own init isn't guaranteed to run before
+    // core's one-shot APP_READY event fires, so establish the correct state
+    // synchronously here too rather than relying solely on the next event.
+    syncNoChatComposerVisibility();
 
     onDrawerReady?.(drawer);
     renderTimelinePanel();
@@ -432,6 +437,25 @@ function bindSillyTavernEvents() {
     context.eventSource.on(context.eventTypes.CHAT_LOADED, syncActiveSceneFromChatMetadata);
     context.eventSource.on(context.eventTypes.PERSONA_CHANGED, handlePersonaChangedDuringCreation);
     context.eventSource.on(context.eventTypes.USER_MESSAGE_RENDERED, handleStoryUserMessageRendered);
+    context.eventSource.on(context.eventTypes.CHAT_CHANGED, syncNoChatComposerVisibility);
+    context.eventSource.on(context.eventTypes.CHAT_LOADED, syncNoChatComposerVisibility);
+    context.eventSource.on(context.eventTypes.APP_READY, syncNoChatComposerVisibility);
+}
+
+// Core's own #form_sheld (composer bar, including the #options_button
+// hamburger) is supposed to stay hidden whenever no chat is loaded — normally
+// via a CSS rule keyed on core's .welcomePanel already existing inside #chat.
+// But core's openWelcomeScreen() (welcome-screen.js) is async and awaits a
+// network/storage fetch BEFORE inserting .welcomePanel, so during that gap
+// the CSS rule doesn't match yet and the composer (hamburger included) briefly
+// renders, squeezed toward the top of the fixed #sheld panel since #chat is
+// still empty/collapsed. context.chatId is derived synchronously the same
+// way core's own getCurrentChatId() is, with no dependency on that awaited
+// fetch or on .welcomePanel's DOM insertion — sidesteps the race entirely
+// rather than trying to win it.
+function syncNoChatComposerVisibility() {
+    const hasChat = Boolean(getContext().chatId);
+    document.body.classList.toggle('remodel-no-chat-active', !hasChat);
 }
 
 // --- Story Scene locking -----------------------------------------------
@@ -461,44 +485,20 @@ function bindStoryLockInterceptor() {
 
         if (target?.closest('#remodel-character-editor-cancel')) {
             event.preventDefault();
-            // Defensive backstop: normally #select_chat_cross (below) is what
-            // clears this_chid back out, but if the user closes the character
-            // editor without ever opening "Manage chat files," there's no
-            // other path that resets the past-chats bridge — leaving it
-            // stale would let a LATER, unrelated open of the past-chats
-            // popup for a DIFFERENT character incorrectly reuse this one's
-            // id for a brief window.
-            clearPastChatsBridge(setCharacterId);
+            // Primary teardown for the viewing-only bridge (session-state.js):
+            // restores this_chid to whatever it held before browsing started
+            // (a real active character, or nothing), rather than just
+            // clearing it. Note: core's native "Manage chat files" popup
+            // (#option_select_chat/#select_chat_cross) no longer needs its
+            // own hooks here — the bridge is eager now, so this_chid is
+            // already correctly set to the viewed character for the whole
+            // time the editor is open, well before that popup could ever be
+            // clicked. Closing that popup must NOT tear the bridge down
+            // either, since the editor itself (not the popup) owns its
+            // lifetime and is very likely still open behind it.
+            restorePastChatsBridge(setCharacterId);
             clickVanillaControl('rm_button_characters');
             return;
-        }
-
-        // Bridges the gap between "viewing a character's sheet" (which
-        // deliberately never sets this_chid — see selectCharacterForEditingOnly's
-        // call site above) and core's native "Manage chat files" delete/
-        // rename flow, which assumes this_chid is already set by the time it
-        // runs (script.js: the #option_select_chat handler gates the whole
-        // past-chats list on this_chid !== undefined; displayChats/delChat
-        // both dereference characters[this_chid] with no undefined-guard).
-        // In stock ST this assumption always holds, because merely viewing a
-        // character there IS activating them. Here it doesn't, so without
-        // this hook, opening "Manage chat files" while just browsing a
-        // character shows an empty/broken list or "No character selected."
-        // Deliberately NO preventDefault/stopPropagation — this only needs
-        // to run BEFORE the native handler (capture phase guarantees that),
-        // then let it proceed normally now that its precondition is met.
-        if (target?.closest('#option_select_chat')) {
-            if (getContext().characterId === undefined) {
-                bridgeThisChidForPastChats(setCharacterId);
-            }
-        }
-
-        // The popup's own native close button — the other half of the hook
-        // above. Only clears this_chid if OUR code was the one that set it,
-        // so a genuinely active chat's real this_chid is never touched. Also
-        // no preventDefault — the native close animation/logic must still run.
-        if (target?.closest('#select_chat_cross')) {
-            clearPastChatsBridge(setCharacterId);
         }
 
         if (target?.closest('[data-remodel-guided-cancel]')) {
@@ -2358,15 +2358,23 @@ async function handleCharacterAction(element) {
             }
 
             // Outside the guided wizard, a card click only opens the character
-            // sheet for viewing/editing — it must never touch the active chat.
+            // sheet for viewing/editing — it must never ACTIVATE a chat.
             // selectCharacterById() (used above during the wizard's own flow)
             // calls getChat() internally and silently switches/opens a real
             // chat with that character; select_selected_character() populates
-            // the same editor panel without ever calling getChat() or setting
-            // this_chid. Entering a chat is reserved for the Timeline tab's
-            // own "Open Scene" button — there must be no other path in.
+            // the same editor panel without ever calling getChat(). It also
+            // never touches this_chid itself — noteViewingCharacterForPastChats
+            // (session-state.js) is what eagerly keeps this_chid in sync with
+            // whichever character's editor is shown (so native buttons like
+            // Delete/Duplicate/Rename work), while still never loading a real
+            // chat. Entering a chat is reserved for the Timeline tab's own
+            // "Open Scene" button — there must be no other path in. Read the
+            // current this_chid BEFORE selectCharacterForEditingOnly runs (it
+            // doesn't touch this_chid, so ordering isn't strictly load-bearing
+            // here, but this is the more obviously-correct order to preserve).
+            const currentChid = getContext().characterId;
             selectCharacterForEditingOnly(characterId);
-            noteViewingCharacterForPastChats(characterId);
+            noteViewingCharacterForPastChats(characterId, currentChid, setCharacterId);
             break;
         }
         case 'create-character':
@@ -2801,7 +2809,10 @@ function renderFavoritesStrip(favorites, context) {
 }
 
 function renderFavoriteAvatar(character, index, context) {
-    const isActive = String(context.characterId) === String(index);
+    // Suppressed while the viewing-only bridge owns this_chid — otherwise a
+    // character merely being browsed (not really active) would incorrectly
+    // light up as "the active chat" here.
+    const isActive = String(context.characterId) === String(index) && !isPastChatsBridgeActive();
     const hasAvatar = Boolean(character?.avatar) && character.avatar !== 'none';
     const avatarStyle = hasAvatar ? `background-image: url('${escapeAttribute(context.getThumbnailUrl('avatar', character.avatar))}')` : '';
 
@@ -2880,7 +2891,8 @@ function getCharacterDateValue(value) {
 }
 
 function renderCharacterColumn({ character, index }, context) {
-    const isActive = String(context.characterId) === String(index);
+    // Same reasoning as renderFavoriteAvatar above.
+    const isActive = String(context.characterId) === String(index) && !isPastChatsBridgeActive();
     const name = character?.name || 'Unnamed';
     const hasAvatar = Boolean(character?.avatar) && character.avatar !== 'none';
     const bgStyle = hasAvatar ? `--character-bg: url('${escapeAttribute(context.getThumbnailUrl('avatar', character.avatar))}')` : '';
@@ -3293,7 +3305,18 @@ async function openScene(sceneId) {
 async function ensureActiveCharacterContext() {
     const context = getContext();
 
-    if (context.groupId || (context.characterId !== undefined && context.characterId !== null)) {
+    // The definedness check alone isn't enough to mean "genuinely active" —
+    // if a character is merely being browsed via the viewing-only bridge,
+    // this_chid is defined but doesn't reflect a real chat. Without the
+    // discriminator here, opening a never-before-opened Roleplay Scene while
+    // some other character happens to be browsed in the background would
+    // silently skip the auto-pick below and bind the new Scene to whoever
+    // was browsed, instead of a deliberate choice.
+    const hasGenuinelyActiveCharacter = context.characterId !== undefined
+        && context.characterId !== null
+        && !isPastChatsBridgeActive();
+
+    if (context.groupId || hasGenuinelyActiveCharacter) {
         return;
     }
 
@@ -3414,7 +3437,7 @@ function syncActiveSceneFromChatMetadata() {
     const wizardWasActive = getWizardState().sceneCreationFlow !== null;
 
     syncStoryWorkspaceClass(scene);
-    resetAllChatScopedState(setCharacterId);
+    resetAllChatScopedState();
     closeStoryComposer();
     updateStoryActionBarState();
     restoreAdoptedPanel(); // idempotent, safe to call unconditionally
