@@ -402,6 +402,46 @@ export function setSuppressDrawerObserver(value) {
     session.suppressDrawerObserver = value;
 }
 
+// --- Manuscript-editor domain -------------------------------------------------
+//
+// Backs the unified cross-message Story Scene editor: while active, every
+// currently-visible .mes_text in the story workspace is swapped to raw text
+// and made contenteditable, with no seam between what are, underneath, still
+// N separate chat[] messages. snapshot records each block's message id and
+// its raw text AT THE MOMENT editing began, so the commit path can diff
+// "did this block's text actually change" without re-deriving anything from
+// live core state afterward (which could itself have moved on independently
+// — e.g. a swipe landing on an untouched message while another block is
+// still mid-edit).
+const manuscriptEdit = { active: false, snapshot: null };
+
+export function getManuscriptEditState() {
+    return Object.freeze({
+        active: manuscriptEdit.active,
+        snapshot: manuscriptEdit.snapshot ? manuscriptEdit.snapshot.map((entry) => ({ ...entry })) : null,
+    });
+}
+
+// snapshot: array of { mesId, originalRaw }, one per currently-visible
+// message block. The DOM access needed to build this list lives in
+// timeline-spine.js — this module stays a pure state container, same
+// convention as every other domain here.
+export function beginManuscriptEdit(snapshot) {
+    manuscriptEdit.active = true;
+    manuscriptEdit.snapshot = snapshot;
+}
+
+// The one function every teardown path calls — finished commit, cancel, and
+// the chat-scoped reconciliation backstop all end here. Idempotent.
+export function endManuscriptEdit() {
+    manuscriptEdit.active = false;
+    manuscriptEdit.snapshot = null;
+}
+
+export function resetManuscriptEditState() {
+    endManuscriptEdit();
+}
+
 // --- Chat-scoped reconciliation ---------------------------------------------
 //
 // Every domain's reset here is a pure state operation — resetPastChatsBridge()
@@ -420,4 +460,5 @@ export function resetAllChatScopedState() {
     resetWizardState();
     resetPastChatsBridge();
     resetPanelsState();
+    resetManuscriptEditState();
 }

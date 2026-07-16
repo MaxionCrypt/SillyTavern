@@ -860,6 +860,28 @@ body.remodel-story-workspace-active #chat .edit_textarea {
   caret-color: rgba(255, 255, 255, 0.9) !important;
 }
 
+/* Unified manuscript editor (timeline-spine.js: bindStoryManuscriptEditing).
+   While active, every visible .mes_text becomes contenteditable and holds
+   raw text (not Showdown-rendered HTML) — no new wrapper element, so
+   font/color/line-height/Scene-Beat-boxing are already identical to read
+   mode for free (same element, just toggled). Only what genuinely differs
+   from read mode needs a rule here. */
+
+body.remodel-manuscript-editing #chat .mes_text[contenteditable="true"] {
+  /* Suppress the default contenteditable focus ring — an outline around one
+     block while its siblings aren't focused would visibly reintroduce the
+     exact message boundary this whole feature exists to erase. */
+  outline: none !important;
+  caret-color: rgba(255, 255, 255, 0.9) !important;
+  cursor: text !important;
+  /* Required, not cosmetic: raw text assigned via textContent has no <p>/
+     <br> structure, only literal \n characters. Without this, a
+     multi-paragraph message collapses onto one line the instant edit mode
+     is entered. Also what makes the boundary-protection design's "Enter
+     inserts a literal \n" behavior actually look like a line break. */
+  white-space: pre-wrap !important;
+}
+
 /* Story workspace actions bar: Continue-arrow and Send are redundant with
    Enter-to-send / the hamburger menu here, and Impersonate is redundant with
    the same action already reachable from the hamburger's native menu. Only
