@@ -29,15 +29,18 @@ import {
 import {
     advanceWizardToPersonaStep,
     armGenerationWatchdog,
+    armSceneSummarySaveDebounce,
     beginOwnedGenerationRun,
     beginWizard,
     bridgeThisChidForPastChats,
     clearGenerationWatchdog,
     clearPastChatsBridge,
+    clearSceneSummarySaveDebounce,
     consumeWizardFlow,
     endOwnedGenerationRun,
     getGenerationState,
     getOriginalPanelHomes,
+    getPanelsState,
     getSessionState,
     getWizardState,
     isGenerationRunOurs,
@@ -56,6 +59,7 @@ import {
     setFocusedTimelineId,
     setGenerating,
     setInitialized,
+    setPromptPreviewInFlight,
     setRenamingSceneId,
     setRenderQueued,
     setSuppressDrawerObserver,
@@ -1118,7 +1122,8 @@ function togglePanelGroup() {
 // and never sent anywhere unless the user types the macro into a prompt
 // surface themselves (system prompt, Author's Note, etc.).
 
-let sceneSummarySaveDebounce = null;
+// sceneSummarySaveDebounce now lives in session-state.js's panels domain —
+// see armSceneSummarySaveDebounce()/clearSceneSummarySaveDebounce() imported above.
 
 function ensureSceneSummaryPanel() {
     if (!document.body.classList.contains('remodel-story-workspace-active')) {
@@ -1186,8 +1191,7 @@ function bindSceneSummaryEvents() {
             return;
         }
 
-        clearTimeout(sceneSummarySaveDebounce);
-        sceneSummarySaveDebounce = setTimeout(() => saveActiveSceneSummary(textarea.value), 600);
+        armSceneSummarySaveDebounce(() => saveActiveSceneSummary(textarea.value), 600);
     });
 }
 
@@ -1869,7 +1873,8 @@ function registerAllInsertedTextSlotMacros() {
 // return, so capturing it via a one-shot listener and awaiting
 // context.generate(...) directly is race-free.
 
-let promptPreviewInFlight = false;
+// promptPreviewInFlight now lives in session-state.js's panels domain — see
+// getPanelsState()/setPromptPreviewInFlight() imported above.
 
 async function runPromptPreviewDryRun(generationType) {
     const context = getContext();
@@ -2026,7 +2031,7 @@ function togglePromptPreviewPanel() {
 }
 
 async function handlePromptPreviewRefreshClick() {
-    if (promptPreviewInFlight) {
+    if (getPanelsState().promptPreviewInFlight) {
         return;
     }
 
@@ -2040,7 +2045,7 @@ async function handlePromptPreviewRefreshClick() {
         return;
     }
 
-    promptPreviewInFlight = true;
+    setPromptPreviewInFlight(true);
     refreshButton?.classList.add('remodel-story-disabled');
 
     if (statusEl) {
@@ -2078,7 +2083,7 @@ async function handlePromptPreviewRefreshClick() {
         }
         shouldAutoClearStatus = false;
     } finally {
-        promptPreviewInFlight = false;
+        setPromptPreviewInFlight(false);
         refreshButton?.classList.remove('remodel-story-disabled');
 
         if (shouldAutoClearStatus) {
@@ -3371,11 +3376,54 @@ function writeSceneMetadata(scene) {
     context.saveMetadataDebounced();
 }
 
+// A (re)loaded chat is always a clean starting point — nothing this
+// extension tracks alongside core's own state should survive a CHAT_CHANGED/
+// CHAT_LOADED unless it's genuinely chat-independent. resetAllChatScopedState()
+// (session-state.js) is the single, structural reconciliation point for
+// every chat-scoped domain (generation, wizard, pastChatsBridge, panels) —
+// each domain owns its own resetX(), registered once, so a future field has
+// nowhere to go except inside a domain that's already covered. This
+// replaced an earlier hand-audited flat reset function whose predecessor
+// had a real, confirmed bug: it reset storyIsGenerating but not its two
+// siblings in the same feature, letting a stale GENERATION_ENDED from an
+// abandoned chat mutate button state for whatever chat became active by the
+// time it arrived (see resetGenerationState()'s own comment in
+// session-state.js for the full account).
+//
+// currentWindow, activeTavernTab, focusedTimelineId, and the rest of the
+// `session` domain are deliberately EXEMPT from this reconciliation — see
+// that domain's doc comment in session-state.js. Switching chats shouldn't
+// force-close the Tavern drawer, kick a scene out of an in-progress rename,
+// or discard an in-progress "create timeline" draft.
 function syncActiveSceneFromChatMetadata() {
     const scene = getActiveScene();
 
+    // Captured before resetAllChatScopedState() clears wizard.sceneCreationFlow
+    // below — the reset only clears the state itself, not the wizard's DOM-
+    // side cancellation effects (hideGuidedPrompt/transitionToWindow), which
+    // still need to run here if the wizard was actually active. Safe to run
+    // unconditionally: finishStoryGuidedCreation() already consumes the
+    // wizard flow itself BEFORE triggering the chat switch that completes
+    // the wizard, so wizardWasActive is already false by the time CHAT_CHANGED
+    // fires from the wizard's own expected completion — this branch is a
+    // no-op for that case. What it DOES fix: an UNRELATED chat switch
+    // happening mid-wizard (e.g. the user manually opens a different chat
+    // via native UI while still on the "choose persona" step), which would
+    // otherwise leave the wizard flow dangling against a chat it no longer
+    // matches, guided-prompt UI still showing.
+    const wizardWasActive = getWizardState().sceneCreationFlow !== null;
+
     syncStoryWorkspaceClass(scene);
-    reconcileStateOnCoreChange();
+    resetAllChatScopedState(setCharacterId);
+    closeStoryComposer();
+    updateStoryActionBarState();
+    restoreAdoptedPanel(); // idempotent, safe to call unconditionally
+
+    if (wizardWasActive) {
+        hideGuidedPrompt();
+        transitionToWindow({ kind: 'native' });
+    }
+
     refreshStoryMessageDecorations();
     ensureSceneSummaryPanel();
     refreshSceneSummaryPanel();
@@ -3392,100 +3440,6 @@ function syncActiveSceneFromChatMetadata() {
 
     setActiveScene(scene.id);
     queueRender();
-}
-
-// A (re)loaded chat is always a clean starting point — nothing this
-// extension tracks alongside core's own state should survive a CHAT_CHANGED/
-// CHAT_LOADED unless it's genuinely chat-independent. This function is the
-// single audited reconciliation point for EVERY module-level state variable
-// in this file (22 total, per the state inventory this was built from) —
-// each one gets an explicit reset or an explicit "exempt, here's why"
-// comment, specifically so a future change can't silently reintroduce a
-// PARTIAL reconciliation gap the way this function's predecessor
-// (resetStoryWorkspaceTransientState) did: it reset storyIsGenerating but
-// not its two siblings in the same feature (storyGenerationRunIsOurs,
-// storyGenerationWatchdog) — meaning a chat switch mid-generation left
-// storyGenerationRunIsOurs stuck true, so a stale, late-arriving
-// GENERATION_ENDED for the ABANDONED chat's generation would pass that
-// gate and mutate button state for whatever chat happened to be active by
-// the time it arrived. Confirmed via reading the event handlers in
-// bindStoryGenerationStateEvents, not guessed.
-function reconcileStateOnCoreChange() {
-    // --- Generation state — the actual bug this reconciliation was built to
-    // fix (see comment above). Now owned by session-state.js's generation
-    // domain; resetAllChatScopedState() below resets that domain plus the
-    // wizard and pastChatsBridge domains (the panels domain joins in a
-    // later increment of the state-backbone refactor, at which point its
-    // manual reset further down will be removed from this function too).
-    //
-    // Captured BEFORE resetAllChatScopedState() clears wizard.sceneCreationFlow
-    // below — resetAllChatScopedState() only clears the state itself, not the
-    // wizard's DOM-side cancellation effects (hideGuidedPrompt/transitionToWindow),
-    // which still need to run further down if the wizard was actually active.
-    const wizardWasActive = getWizardState().sceneCreationFlow !== null;
-
-    resetAllChatScopedState(setCharacterId);
-    closeStoryComposer();
-    updateStoryActionBarState();
-
-    // --- Prompt Preview: defensive backstop. Already finally-guarded within
-    // its own async flow (handlePromptPreviewRefreshClick), so this can't
-    // leak true from a normal completion or error — but a chat switch mid-
-    // dry-run should still clear the disabled/"Assembling…" look rather than
-    // leave it stuck referencing a chat that's no longer active.
-    promptPreviewInFlight = false;
-
-    // --- Adopted legacy panel (Characters/WorldInfo/Personas DOM-adopted
-    // into the Tavern drawer): idempotent, safe to call unconditionally.
-    restoreAdoptedPanel();
-
-    // --- currentWindow: EXEMPT. Deliberately independent of chat/character
-    // identity — it tracks which Window (native vs Tavern-and-which-tab) is
-    // on screen, which is orthogonal to which chat is loaded. Switching
-    // chats while Tavern is open should not force-close Tavern.
-
-    // --- sceneCreationFlow: state already reset unconditionally above via
-    // resetAllChatScopedState() — confirmed SAFE. finishStoryGuidedCreation()
-    // already consumes (clears) the wizard flow itself BEFORE triggering the
-    // chat switch that completes the wizard, so by the time CHAT_CHANGED
-    // fires from the wizard's own expected completion, wizardWasActive is
-    // already false and this branch is a no-op for that case — no special-
-    // casing needed. What this DOES fix: an UNRELATED chat switch happening
-    // mid-wizard, before completion (e.g. the user manually opens a
-    // different chat via native UI while still on the "choose persona" step)
-    // previously left the wizard flow dangling against a chat it no longer
-    // matches, with the guided-prompt UI still showing. Now the DOM side of
-    // cancellation (hiding the prompt, returning to native) runs too.
-    if (wizardWasActive) {
-        hideGuidedPrompt();
-        transitionToWindow({ kind: 'native' });
-    }
-
-    // --- pastChatsBridge (viewedCharacterId / weSetThisChid): state already
-    // reset unconditionally above via resetAllChatScopedState(setCharacterId).
-    // The #option_select_chat / #select_chat_cross hooks (bindStoryLockInterceptor)
-    // are the normal way this_chid gets set/cleared for the "browse a
-    // character's past chats without activating them" case, but if a chat
-    // change happens some other way while the past-chats popup happens to be
-    // open (or the editor is open but the popup never was), this reconciler
-    // is what guarantees the temporarily-set this_chid never survives past
-    // the change and never gets attributed to a now-stale character.
-
-    // --- focusedTimelineId / renamingSceneId / createModalOpen+Draft:
-    // Timeline-tab UI state, not chat-scoped — EXEMPT. Switching chats
-    // shouldn't kick the user out of a Timeline they're editing in the
-    // drawer.
-
-    // --- characterSearchQuery / characterSortMode: UI preferences, not
-    // per-chat state — EXEMPT.
-
-    // --- sceneSummarySaveDebounce: cancel any pending autosave for the
-    // PREVIOUS chat's summary textarea before it can fire against the new
-    // one. refreshSceneSummaryPanel(), called right after this function
-    // returns in syncActiveSceneFromChatMetadata, re-arms a fresh debounce
-    // if the new Scene's summary is edited.
-    clearTimeout(sceneSummarySaveDebounce);
-    sceneSummarySaveDebounce = null;
 }
 
 // The story workspace is a native-chat sub-mode driven by which Scene is

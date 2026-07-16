@@ -201,14 +201,45 @@ export function resetPastChatsBridge(setCharacterId) {
     clearPastChatsBridge(setCharacterId);
 }
 
+// --- Panel-specific ephemeral state domain -----------------------------------
+//
+// sceneSummarySaveDebounce: debounce timer handle for autosaving the Scene
+// Summary panel's textarea 600ms after the user stops typing.
+//
+// promptPreviewInFlight: guards Prompt Preview's dry-run flow against
+// concurrent refresh clicks.
+const panels = { sceneSummarySaveDebounce: null, promptPreviewInFlight: false };
+
+export function getPanelsState() {
+    return Object.freeze({ ...panels });
+}
+
+export function armSceneSummarySaveDebounce(callback, ms) {
+    clearTimeout(panels.sceneSummarySaveDebounce);
+    panels.sceneSummarySaveDebounce = setTimeout(callback, ms);
+}
+
+export function clearSceneSummarySaveDebounce() {
+    clearTimeout(panels.sceneSummarySaveDebounce);
+    panels.sceneSummarySaveDebounce = null;
+}
+
+export function setPromptPreviewInFlight(value) {
+    panels.promptPreviewInFlight = value;
+}
+
+export function resetPanelsState() {
+    clearTimeout(panels.sceneSummarySaveDebounce);
+    panels.sceneSummarySaveDebounce = null;
+    panels.promptPreviewInFlight = false;
+}
+
 // --- Session / UI-navigation domain -----------------------------------------
 //
 // Ephemeral on-screen-UI state that is explicitly NOT chat-scoped — this is
 // the one domain resetAllChatScopedState() below deliberately never touches,
 // because switching chats should not force-close an open Timeline drawer,
 // collapse an open Tab, or discard an in-progress "create timeline" draft.
-// Mirrors reconcileStateOnCoreChange()'s field-by-field "EXEMPT" comments in
-// timeline-spine.js.
 //
 // initialized: guards initTimelineSpine() against double-init.
 //
@@ -351,10 +382,10 @@ export function setSuppressDrawerObserver(value) {
 // etc.) that is orthogonal to which chat is loaded — e.g. switching chats
 // while the Tavern drawer is open should not force-close it, and switching
 // chats mid-rename shouldn't kick a scene out of its rename input. See the
-// `session` domain's own doc comment above, and reconcileStateOnCoreChange()'s
-// field-by-field "EXEMPT" comments in timeline-spine.js, for the reasoning.
+// `session` domain's own doc comment above for the full reasoning.
 export function resetAllChatScopedState(setCharacterId) {
     resetGenerationState();
     resetWizardState();
     resetPastChatsBridge(setCharacterId);
+    resetPanelsState();
 }
