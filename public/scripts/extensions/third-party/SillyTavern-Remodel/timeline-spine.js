@@ -130,6 +130,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindSillyTavernEvents();
     observeTavernPanelState();
     bindStoryManuscriptEditing();
+    bindManuscriptBoundaryProtection();
     bindStoryWorkspaceEditCommit();
     bindStoryLockInterceptor();
     bindStoryComposerContinueOnEmptySend();
@@ -3474,6 +3475,16 @@ function syncStoryWorkspaceClass(scene) {
     document.body.classList.toggle('remodel-story-workspace-active', scene?.mode === 'story');
 }
 
+// core's Background tab embeds a full clone of the entire page markup
+// (including a second, hidden, disconnected-from-events #chat/#sheld pair)
+// as a live preview inside #bg_tabs — meaning document.getElementById('chat')
+// is genuinely ambiguous and can silently resolve to the dead clone instead
+// of the real chat log. Scoped to the real #sheld directly under body,
+// which the clone is nested many levels beneath instead of matching.
+function getRealChatElement() {
+    return document.body.querySelector(':scope > #sheld > #chat');
+}
+
 // Click anywhere in the visible manuscript to enter unified cross-message
 // editing: every visible message's .mes_text swaps from rendered HTML to
 // raw text and becomes directly contenteditable, with no seam between what
@@ -3483,7 +3494,7 @@ function syncStoryWorkspaceClass(scene) {
 // right now is unprotected and (until the commit stage exists) not yet
 // saved back to chat[] — expected at this point in the rollout.
 function bindStoryManuscriptEditing() {
-    document.getElementById('chat')?.addEventListener('click', (event) => {
+    getRealChatElement()?.addEventListener('click', (event) => {
         if (!document.body.classList.contains('remodel-story-workspace-active')) {
             return;
         }
@@ -3511,12 +3522,12 @@ function bindStoryManuscriptEditing() {
         // caret-from-point on a plain-text node — no estimation needed there.
         const approxOffset = estimateRawTextOffsetFromClick(textEl, event.clientX, event.clientY);
 
-        const chatEl = document.getElementById('chat');
+        const chatEl = getRealChatElement();
         const scrollTopBeforeEdit = chatEl?.scrollTop;
 
         // Skip collapsed Scene Beats (display:none) — a click can't reach
         // them anyway, and there's nothing to usefully edit while hidden.
-        const blocks = Array.from(document.querySelectorAll('#chat > .mes .mes_text'))
+        const blocks = Array.from(chatEl?.querySelectorAll(':scope > .mes .mes_text') ?? [])
             .filter((el) => el.offsetParent !== null);
 
         const context = getContext();
@@ -3568,6 +3579,148 @@ function bindStoryManuscriptEditing() {
             });
         }
     });
+}
+
+// Keeps message count fixed while manuscript-edit-mode is active (see
+// bindStoryManuscriptEditing above): freeform typing must never merge two
+// message blocks into one or split one into two, since that would mean
+// creating/destroying chat[] entries as a side effect of ordinary typing —
+// only explicit actions (like handleStoryBeatDelete's merge) may do that.
+function bindManuscriptBoundaryProtection() {
+    const chat = getRealChatElement();
+
+    if (!chat) {
+        return;
+    }
+
+    const isActive = () => document.body.classList.contains('remodel-manuscript-editing');
+    const getBlock = (node) => {
+        const el = node instanceof Element ? node : node?.parentElement;
+        return el?.closest('[data-remodel-manuscript-block]') ?? null;
+    };
+    const isCrossBlockSelection = () => {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) {
+            return false;
+        }
+        const anchorBlock = getBlock(selection.anchorNode);
+        const focusBlock = getBlock(selection.focusNode);
+        return Boolean(anchorBlock && focusBlock && anchorBlock !== focusBlock);
+    };
+    // document.execCommand('insertText', ...) was tried first (matches core's
+    // own editing-command usage elsewhere) but Chrome's contenteditable engine
+    // interprets embedded \n characters in the inserted string as paragraph
+    // breaks, splitting the block into multiple <div> children instead of
+    // inserting a literal newline character — confirmed directly via live
+    // diagnostic (childNodeTypes showed new DIV nodes appear, not a single
+    // updated text node). That silently violates the single-text-node/
+    // fixed-block-count invariant this whole feature depends on. Manually
+    // splicing the Range's text content sidesteps the browser's paragraph
+    // heuristics entirely and always produces one Text node per block.
+    const insertPlainText = (text) => {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) {
+            return;
+        }
+        const range = selection.getRangeAt(0);
+        const block = getBlock(range.startContainer);
+        // Caret offset relative to the block's full text, measured BEFORE
+        // the splice, so it can be restored by plain character offset after
+        // normalize() below invalidates today's node references.
+        const preRange = document.createRange();
+        preRange.selectNodeContents(block ?? range.startContainer);
+        preRange.setEnd(range.startContainer, range.startOffset);
+        const caretOffset = preRange.toString().length + text.length;
+
+        range.deleteContents();
+        range.insertNode(document.createTextNode(text));
+
+        // insertNode splits any existing text node around the insertion
+        // point, leaving multiple sibling Text nodes — normalize() merges
+        // them back into the single Text node the rest of this feature
+        // assumes (block.firstChild, textNode.textContent.length checks
+        // above).
+        block?.normalize();
+        if (block?.firstChild) {
+            const restoredRange = document.createRange();
+            const offset = Math.min(caretOffset, block.firstChild.textContent.length);
+            restoredRange.setStart(block.firstChild, Math.max(0, offset));
+            restoredRange.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(restoredRange);
+        }
+    };
+
+    chat.addEventListener('beforeinput', (event) => {
+        if (!isActive() || event.isComposing) {
+            return; // IME composition: let it run uninterrupted rather than risk corrupting it
+        }
+
+        const block = getBlock(event.target);
+
+        if (!block) {
+            return;
+        }
+
+        if (isCrossBlockSelection()) {
+            event.preventDefault(); // any edit over a cross-block selection is rejected outright
+            return;
+        }
+
+        const selection = window.getSelection();
+        const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+
+        if (!range || !range.collapsed) {
+            return;
+        }
+
+        if (event.inputType === 'deleteContentBackward'
+            && range.startContainer === (block.firstChild ?? block) && range.startOffset === 0) {
+            event.preventDefault(); // would merge into the previous block
+        } else if (event.inputType === 'deleteContentForward'
+            && range.endContainer === (block.lastChild ?? block) && range.endOffset === (block.textContent?.length ?? 0)) {
+            event.preventDefault(); // would merge the next block into this one
+        }
+    });
+
+    // Enter is handled here via keydown, not beforeinput's insertParagraph —
+    // keydown is the more universally reliable signal for the Enter key
+    // specifically across browser engines, and handling it in exactly one
+    // place avoids any risk of double-inserting the replacement newline.
+    chat.addEventListener('keydown', (event) => {
+        if (!isActive() || event.key !== 'Enter' || event.shiftKey || event.ctrlKey
+            || event.altKey || event.isComposing) {
+            return;
+        }
+
+        if (!getBlock(event.target)) {
+            return;
+        }
+
+        event.preventDefault();
+        // A literal \n keeps everything as one block/one chat[] entry while
+        // still letting multi-paragraph prose exist within a single
+        // message, exactly as already-normal for any chat[].mes value.
+        insertPlainText('\n');
+    });
+
+    const handlePasteOrDrop = (event) => {
+        if (!isActive() || !getBlock(event.target)) {
+            return;
+        }
+
+        event.preventDefault();
+
+        if (isCrossBlockSelection()) {
+            return; // reject outright rather than guess which block should receive it
+        }
+
+        const text = (event.clipboardData || event.dataTransfer)?.getData('text/plain') ?? '';
+        insertPlainText(text.replace(/\r\n?/g, '\n'));
+    };
+
+    chat.addEventListener('paste', handlePasteOrDrop);
+    chat.addEventListener('drop', handlePasteOrDrop);
 }
 
 // Approximates a raw-markdown-source character offset from a click position,
