@@ -31,12 +31,15 @@ import {
     armGenerationWatchdog,
     beginOwnedGenerationRun,
     beginWizard,
+    bridgeThisChidForPastChats,
     clearGenerationWatchdog,
+    clearPastChatsBridge,
     consumeWizardFlow,
     endOwnedGenerationRun,
     getGenerationState,
     getWizardState,
     isGenerationRunOurs,
+    noteViewingCharacterForPastChats,
     resetAllChatScopedState,
     resetWizardState,
     setAutoContinueStatus,
@@ -96,24 +99,9 @@ let suppressDrawerObserver = false; // true while WE are driving doNavbarIconCli
 // wizard domain — see getWizardState()/beginWizard()/advanceWizardToPersonaStep()/
 // consumeWizardFlow() imported above.
 
-// Which character's editor panel is open, set the moment selectCharacterForEditingOnly()
-// is called (see handleCharacterAction's 'select-character' case). NOT the
-// same thing as this_chid — selectCharacterForEditingOnly() deliberately
-// never touches this_chid, so simply viewing a character can't silently
-// switch/open a real chat with them (see that call site's own comment).
-// This variable exists so the two hook points below (#option_select_chat /
-// #select_chat_cross) know which character to temporarily associate with
-// this_chid — core's native "Manage chat files" delete/rename flow
-// (script.js: displayPastChats/displayChats/delChat) all assume this_chid is
-// already set by the time they run, an assumption that's always true in
-// stock ST (viewing a character IS activating them there) but not here.
-let viewedCharacterIdForPastChats = null;
-
-// True only while OUR code is the one that set this_chid for the narrow
-// purpose above — guards the close-hook so it only clears this_chid back to
-// undefined in the case it itself created, never clobbering a genuinely
-// active chat's real this_chid.
-let weSetThisChidForPastChats = false;
+// Character-viewing / past-chats bridge state now lives in session-state.js's
+// pastChatsBridge domain — see getPastChatsBridgeState()/noteViewingCharacterForPastChats()/
+// bridgeThisChidForPastChats()/clearPastChatsBridge() imported above.
 
 // Story auto-continue loop state and story-generation tracking (isGenerating,
 // runIsOurs, watchdog, autoContinue, autoContinueTurnIsFirst) now live in
@@ -466,15 +454,11 @@ function bindStoryLockInterceptor() {
             // Defensive backstop: normally #select_chat_cross (below) is what
             // clears this_chid back out, but if the user closes the character
             // editor without ever opening "Manage chat files," there's no
-            // other path that resets viewedCharacterIdForPastChats — leaving
-            // it stale would let a LATER, unrelated open of the past-chats
-            // popup for a DIFFERENT character incorrectly reuse this one's id
-            // for a brief window. Clear both here too, guarded the same way.
-            if (weSetThisChidForPastChats) {
-                setCharacterId(undefined);
-                weSetThisChidForPastChats = false;
-            }
-            viewedCharacterIdForPastChats = null;
+            // other path that resets the past-chats bridge — leaving it
+            // stale would let a LATER, unrelated open of the past-chats
+            // popup for a DIFFERENT character incorrectly reuse this one's
+            // id for a brief window.
+            clearPastChatsBridge(setCharacterId);
             clickVanillaControl('rm_button_characters');
             return;
         }
@@ -494,22 +478,17 @@ function bindStoryLockInterceptor() {
         // to run BEFORE the native handler (capture phase guarantees that),
         // then let it proceed normally now that its precondition is met.
         if (target?.closest('#option_select_chat')) {
-            if (getContext().characterId === undefined && viewedCharacterIdForPastChats !== null) {
-                setCharacterId(viewedCharacterIdForPastChats);
-                weSetThisChidForPastChats = true;
+            if (getContext().characterId === undefined) {
+                bridgeThisChidForPastChats(setCharacterId);
             }
         }
 
         // The popup's own native close button — the other half of the hook
-        // above. Only clears this_chid if OUR code was the one that set it
-        // (weSetThisChidForPastChats), so a genuinely active chat's real
-        // this_chid is never touched. Also no preventDefault — the native
-        // close animation/logic must still run.
+        // above. Only clears this_chid if OUR code was the one that set it,
+        // so a genuinely active chat's real this_chid is never touched. Also
+        // no preventDefault — the native close animation/logic must still run.
         if (target?.closest('#select_chat_cross')) {
-            if (weSetThisChidForPastChats) {
-                setCharacterId(undefined);
-                weSetThisChidForPastChats = false;
-            }
+            clearPastChatsBridge(setCharacterId);
         }
 
         if (target?.closest('[data-remodel-guided-cancel]')) {
@@ -2375,7 +2354,7 @@ async function handleCharacterAction(element) {
             // this_chid. Entering a chat is reserved for the Timeline tab's
             // own "Open Scene" button — there must be no other path in.
             selectCharacterForEditingOnly(characterId);
-            viewedCharacterIdForPastChats = characterId;
+            noteViewingCharacterForPastChats(characterId);
             break;
         }
         case 'create-character':
@@ -3405,10 +3384,10 @@ function syncActiveSceneFromChatMetadata() {
 function reconcileStateOnCoreChange() {
     // --- Generation state — the actual bug this reconciliation was built to
     // fix (see comment above). Now owned by session-state.js's generation
-    // domain; resetAllChatScopedState() below resets both that domain and
-    // the wizard domain (pastChatsBridge/panels domains join in later
-    // increments of the state-backbone refactor, at which point their manual
-    // resets further down will be removed from this function too).
+    // domain; resetAllChatScopedState() below resets that domain plus the
+    // wizard and pastChatsBridge domains (the panels domain joins in a
+    // later increment of the state-backbone refactor, at which point its
+    // manual reset further down will be removed from this function too).
     //
     // Captured BEFORE resetAllChatScopedState() clears wizard.sceneCreationFlow
     // below — resetAllChatScopedState() only clears the state itself, not the
@@ -3416,7 +3395,7 @@ function reconcileStateOnCoreChange() {
     // which still need to run further down if the wizard was actually active.
     const wizardWasActive = getWizardState().sceneCreationFlow !== null;
 
-    resetAllChatScopedState();
+    resetAllChatScopedState(setCharacterId);
     closeStoryComposer();
     updateStoryActionBarState();
 
@@ -3453,19 +3432,15 @@ function reconcileStateOnCoreChange() {
         transitionToWindow({ kind: 'native' });
     }
 
-    // --- viewedCharacterIdForPastChats / weSetThisChidForPastChats: the
-    // #option_select_chat / #select_chat_cross hooks (bindStoryLockInterceptor)
+    // --- pastChatsBridge (viewedCharacterId / weSetThisChid): state already
+    // reset unconditionally above via resetAllChatScopedState(setCharacterId).
+    // The #option_select_chat / #select_chat_cross hooks (bindStoryLockInterceptor)
     // are the normal way this_chid gets set/cleared for the "browse a
     // character's past chats without activating them" case, but if a chat
     // change happens some other way while the past-chats popup happens to be
-    // open (or the editor is open but the popup never was), this backstop
-    // guarantees the temporarily-set this_chid never survives past the
-    // change and never gets attributed to a now-stale character.
-    if (weSetThisChidForPastChats) {
-        setCharacterId(undefined);
-        weSetThisChidForPastChats = false;
-    }
-    viewedCharacterIdForPastChats = null;
+    // open (or the editor is open but the popup never was), this reconciler
+    // is what guarantees the temporarily-set this_chid never survives past
+    // the change and never gets attributed to a now-stale character.
 
     // --- focusedTimelineId / renamingSceneId / createModalOpen+Draft:
     // Timeline-tab UI state, not chat-scoped — EXEMPT. Switching chats

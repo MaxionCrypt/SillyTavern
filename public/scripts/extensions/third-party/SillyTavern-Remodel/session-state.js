@@ -147,10 +147,65 @@ export function resetWizardState() {
     wizard.sceneCreationFlow = null;
 }
 
+// --- Character-viewing / past-chats bridge domain ---------------------------
+//
+// viewedCharacterId: which character's editor panel is open, set the moment
+// a character card is clicked for viewing/editing only — never activates a
+// chat with them (see selectCharacterForEditingOnly's call site in
+// timeline-spine.js). weSetThisChid: true only while THIS bridge is the one
+// that temporarily set this_chid, so clearing it can never clobber a
+// genuinely active chat's real this_chid. Exists to bridge the gap between
+// "viewing a character's sheet" (which never touches this_chid here) and
+// core's native "Manage chat files" delete/rename flow, which assumes
+// this_chid is already set by the time it runs. setCharacterId is core's
+// own function, passed in by the caller rather than imported here — this
+// module stays a pure state container with no core/DOM dependencies, same
+// as timeline-state.js.
+const pastChatsBridge = { viewedCharacterId: null, weSetThisChid: false };
+
+export function getPastChatsBridgeState() {
+    return Object.freeze({ ...pastChatsBridge });
+}
+
+// Called the instant a character sheet is opened for viewing only.
+export function noteViewingCharacterForPastChats(characterId) {
+    pastChatsBridge.viewedCharacterId = characterId;
+}
+
+// Called by the #option_select_chat capture hook right before letting the
+// native handler run, only when there's no genuinely active chat yet.
+// Returns whether it actually bridged anything, so the call site doesn't
+// need to re-derive the guard.
+export function bridgeThisChidForPastChats(setCharacterId) {
+    if (pastChatsBridge.viewedCharacterId === null) {
+        return false;
+    }
+    setCharacterId(pastChatsBridge.viewedCharacterId);
+    pastChatsBridge.weSetThisChid = true;
+    return true;
+}
+
+// The ONE function every backstop site calls to tear the bridge down —
+// idempotent, safe to call redundantly. Only clears this_chid if THIS
+// bridge is the one that set it.
+export function clearPastChatsBridge(setCharacterId) {
+    if (pastChatsBridge.weSetThisChid) {
+        setCharacterId(undefined);
+    }
+    pastChatsBridge.weSetThisChid = false;
+    pastChatsBridge.viewedCharacterId = null;
+}
+
+export function resetPastChatsBridge(setCharacterId) {
+    clearPastChatsBridge(setCharacterId);
+}
+
 // --- Chat-scoped reconciliation ---------------------------------------------
-
-const CHAT_SCOPED_DOMAIN_RESETS = [resetGenerationState, resetWizardState];
-
-export function resetAllChatScopedState() {
-    CHAT_SCOPED_DOMAIN_RESETS.forEach((reset) => reset());
+//
+// setCharacterId is threaded through here only because resetPastChatsBridge
+// needs it — every other domain's reset is a pure state operation.
+export function resetAllChatScopedState(setCharacterId) {
+    resetGenerationState();
+    resetWizardState();
+    resetPastChatsBridge(setCharacterId);
 }
