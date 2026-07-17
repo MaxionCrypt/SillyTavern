@@ -990,6 +990,17 @@ async function handleStoryBeatDelete(deleteButton) {
         return;
     }
 
+    // mergeAdjacentAiMessages/context.deleteMessage below mutate chat[]
+    // indices directly (splice/shift). If a manuscript edit is still open,
+    // its snapshot's mesIds — and any block still holding unsaved typing —
+    // would silently point at the wrong messages afterward. Force-settle
+    // (committing any real edits) before the index-mutating delete/merge
+    // proceeds, same settle path Escape and focus-out already use.
+    const { snapshot: openManuscriptSnapshot } = getManuscriptEditState();
+    if (openManuscriptSnapshot) {
+        await settleManuscriptEdits(openManuscriptSnapshot);
+    }
+
     const context = getContext();
     const beforeMes = context.chat[mesId - 1];
     const afterMes = context.chat[mesId + 1];
@@ -2239,14 +2250,27 @@ function updateStoryActionBarState() {
     }
 
     const playing = autoContinue.status === 'playing';
+    // A manuscript edit in progress means one or more blocks may hold
+    // unsaved typing. Starting a new generation would let streaming
+    // overwrite a message's content out from under an open edit (the same
+    // reasoning that already blocks ENTERING edit mode during generation,
+    // see bindStoryManuscriptEditing) — so every control that can trigger
+    // generation is disabled for the same duration a real generation would
+    // disable them, not just Regenerate specifically. Reads the BODY CLASS,
+    // not getManuscriptEditState().active — settleManuscriptEdits nulls the
+    // latter (endManuscriptEdit) before its own async replay loop runs, but
+    // the class deliberately stays set for that entire loop (see its own
+    // comment), so it's the only signal that's true for the WHOLE window
+    // where a real generation could still race with in-flight replay.
+    const manuscriptEditing = document.body.classList.contains('remodel-manuscript-editing');
 
-    setStoryButtonDisabled('stscript_continue', isGenerating || playing);
+    setStoryButtonDisabled('stscript_continue', isGenerating || playing || manuscriptEditing);
     setStoryButtonDisabled('stscript_pause', !playing);
     setStoryButtonDisabled('stscript_stop', !isGenerating && autoContinue.status === 'idle');
-    setStoryButtonDisabled('remodel-add-user-message', isGenerating);
+    setStoryButtonDisabled('remodel-add-user-message', isGenerating || manuscriptEditing);
 
     document.querySelectorAll('.remodel-beat-regenerate').forEach((button) => {
-        button.classList.toggle('remodel-story-disabled', isGenerating);
+        button.classList.toggle('remodel-story-disabled', isGenerating || manuscriptEditing);
     });
 }
 
@@ -3545,6 +3569,7 @@ function bindStoryManuscriptEditing() {
 
         beginManuscriptEdit(snapshot);
         document.body.classList.add('remodel-manuscript-editing');
+        updateStoryActionBarState();
 
         blocks.forEach((mesText) => {
             const { raw } = readRaw(mesText);
@@ -3884,6 +3909,7 @@ async function settleManuscriptEdits(snapshot, { discard = false } = {}) {
     }
 
     document.body.classList.remove('remodel-manuscript-editing');
+    updateStoryActionBarState();
 
     if (chatEl && scrollTopBeforeCommit !== undefined) {
         requestAnimationFrame(() => {
