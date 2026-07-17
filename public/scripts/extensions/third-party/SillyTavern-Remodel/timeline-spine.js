@@ -2208,6 +2208,22 @@ function bindStoryGenerationStateEvents() {
         beginOwnedGenerationRun();
         updateStoryActionBarState();
 
+        // The story workspace's OWN generation-triggering controls are
+        // already disabled while manuscript-editing is active
+        // (updateStoryActionBarState), but a generation can still start
+        // through a path this extension doesn't gate — the native composer's
+        // Enter key, a slash command, another extension. GENERATION_STARTED
+        // fires synchronously right as streaming is about to begin, too late
+        // to block this specific run, so this can't PREVENT the race — but
+        // force-settling here still salvages whatever's currently in the
+        // open blocks before streaming's own innerHTML replacement
+        // (StreamingProcessor.onProgressStreaming, script.js) can silently
+        // discard it out from under an open edit.
+        const { snapshot: openManuscriptSnapshot } = getManuscriptEditState();
+        if (openManuscriptSnapshot) {
+            settleManuscriptEdits(openManuscriptSnapshot);
+        }
+
         armGenerationWatchdog(() => {
             if (getGenerationState().isGenerating) {
                 console.warn('Remodel UI: generation state watchdog fired — no GENERATION_ENDED/STOPPED arrived, resetting.');
@@ -3464,6 +3480,25 @@ function syncActiveSceneFromChatMetadata() {
     // otherwise leave the wizard flow dangling against a chat it no longer
     // matches, guided-prompt UI still showing.
     const wizardWasActive = getWizardState().sceneCreationFlow !== null;
+
+    // A chat switch mid-manuscript-edit leaves DOM state (the body class,
+    // contenteditable/data-remodel-manuscript-block on blocks) belonging to
+    // the OLD chat — resetAllChatScopedState() below only clears the
+    // manuscriptEdit STATE domain, not these DOM side effects, since it's a
+    // pure state module with no DOM access (same convention as every other
+    // domain there). Without this, the body class would stay set
+    // indefinitely, permanently disabling Regenerate/Continue/Add User
+    // Message (updateStoryActionBarState gates on it) and leaving boundary
+    // protection's isActive() checks live against a chat that's no longer
+    // current. No native .mes_edit/.mes_edit_cancel replay is needed here —
+    // the chat is already gone from the DOM by the time CHAT_CHANGED fires,
+    // so there's nothing left to click; this is pure leftover-attribute
+    // cleanup on whatever markup still happens to be attached.
+    document.querySelectorAll('[data-remodel-manuscript-block]').forEach((el) => {
+        el.removeAttribute('contenteditable');
+        delete el.dataset.remodelManuscriptBlock;
+    });
+    document.body.classList.remove('remodel-manuscript-editing');
 
     syncStoryWorkspaceClass(scene);
     resetAllChatScopedState();
