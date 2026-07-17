@@ -133,6 +133,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     observeTavernPanelState();
     bindManuscriptBoundaryProtection();
     bindManuscriptBeatGuard();
+    bindStoryWorkspaceInvariantWatcher();
     bindStoryManuscriptEditCommit();
     bindStoryManuscriptEditCancel();
     bindStoryLockInterceptor();
@@ -539,7 +540,7 @@ function bindStoryLockInterceptor() {
             }
         }
 
-        if (target && document.body.classList.contains('remodel-story-workspace-active')) {
+        if (target && isRealStoryWorkspaceActive()) {
             const continueButton = target.closest('#stscript_continue');
             if (continueButton) {
                 event.preventDefault();
@@ -727,7 +728,7 @@ function bindStoryLockInterceptor() {
 // sending still starts a new Scene Beat exactly as before.
 function bindStoryComposerContinueOnEmptySend() {
     document.addEventListener('keydown', (event) => {
-        if (!document.body.classList.contains('remodel-story-workspace-active')) {
+        if (!isRealStoryWorkspaceActive()) {
             return;
         }
 
@@ -862,7 +863,7 @@ async function triggerNextAutoContinueTurn() {
         return;
     }
 
-    if (!document.body.classList.contains('remodel-story-workspace-active')) {
+    if (!isRealStoryWorkspaceActive()) {
         setAutoContinueStatus('idle'); // safety: never loop outside the story workspace
         return;
     }
@@ -974,7 +975,7 @@ function handleStoryAiMessageReceived() {
 // USER_MESSAGE_RENDERED per message, which previously left reloaded chats
 // with no decorations and no Regenerate button at all.
 function refreshStoryMessageDecorations() {
-    if (!document.body.classList.contains('remodel-story-workspace-active')) {
+    if (!isRealStoryWorkspaceActive()) {
         return;
     }
 
@@ -1219,7 +1220,7 @@ function refreshStoryRegenerateButtons() {
 // bar then expands just that one, exactly as before.
 
 function ensurePanelGroupContainer() {
-    if (!document.body.classList.contains('remodel-story-workspace-active')) {
+    if (!isRealStoryWorkspaceActive()) {
         return null;
     }
 
@@ -1263,7 +1264,7 @@ function ensurePanelGroupContainer() {
 }
 
 function ensurePanelBodyContainer() {
-    if (!document.body.classList.contains('remodel-story-workspace-active')) {
+    if (!isRealStoryWorkspaceActive()) {
         return null;
     }
 
@@ -1291,7 +1292,7 @@ function ensurePanelBodyContainer() {
 // see armSceneSummarySaveDebounce()/clearSceneSummarySaveDebounce() imported above.
 
 function ensureSceneSummaryPanel() {
-    if (!document.body.classList.contains('remodel-story-workspace-active')) {
+    if (!isRealStoryWorkspaceActive()) {
         return;
     }
 
@@ -1673,7 +1674,7 @@ function getActiveTimelineForPriorText() {
 }
 
 function ensurePriorTextPanel() {
-    if (!document.body.classList.contains('remodel-story-workspace-active')) {
+    if (!isRealStoryWorkspaceActive()) {
         return;
     }
 
@@ -2137,7 +2138,7 @@ function formatPromptPreview(generateData) {
 }
 
 function ensurePromptPreviewPanel() {
-    if (!document.body.classList.contains('remodel-story-workspace-active')) {
+    if (!isRealStoryWorkspaceActive()) {
         return;
     }
 
@@ -2212,7 +2213,7 @@ const MANUSCRIPT_FONT_OPTIONS = [
 ];
 
 function ensureManuscriptToolbarPanel() {
-    if (!document.body.classList.contains('remodel-story-workspace-active')) {
+    if (!isRealStoryWorkspaceActive()) {
         return;
     }
 
@@ -2546,7 +2547,7 @@ function updateStoryActionBarState() {
     const { isGenerating, autoContinue } = getGenerationState();
     document.body.classList.toggle('remodel-story-generating', isGenerating);
 
-    if (!document.body.classList.contains('remodel-story-workspace-active')) {
+    if (!isRealStoryWorkspaceActive()) {
         return;
     }
 
@@ -3840,53 +3841,83 @@ function syncStoryWorkspaceClass(scene) {
     document.body.classList.toggle('remodel-story-workspace-active', scene?.mode === 'story');
 }
 
-// Confirmed as a real, reported bug: close a story chat, reopen it, and the
-// manuscript overlay ends up rendering the WELCOME SCREEN's raw HTML as
-// literal text ("<div class=\"flex-container\">" printed as visible prose).
-// Root cause is a structural one, not a single missed event — the whole
-// story-workspace feature set (manuscript overlay, icon column, toolbar,
-// composer state) is built entirely on trusting that
-// syncActiveSceneFromChatMetadata() correctly fires and correctly tears
-// down remodel-story-workspace-active on every possible chat
-// open/close/switch. It doesn't always: core has multiple distinct
-// "no chat loaded" paths (closing a chat, an async welcome-screen render
-// racing the sync call, wizard cancellation, etc.), and any one of them
-// skipping CHAT_CHANGED/CHAT_LOADED leaves the class stuck true with no
-// independent check anywhere to catch it — every render after that
-// blindly trusts the stale class and processes whatever's currently in
-// #chat (welcome-screen markup, not .mes rows) as if it were manuscript
-// content.
+// SINGLE SOURCE OF TRUTH for "are we in the story workspace" — every other
+// place in this file that needs that answer calls this function instead of
+// reading document.body.classList directly. The CSS class
+// (remodel-story-workspace-active) still exists and still drives every
+// visual rule exactly as before — CSS's only job is painting, it was never
+// the problem. The problem was that ~10 separate call sites each read that
+// class directly as their OWN copy of "the answer," so a class left stale
+// by one missed event silently misled all of them at once, with nothing
+// cross-checking any of it. Now there is exactly one place that computes
+// the real answer, live, from SillyTavern's own data — getActiveScene()
+// reads context.chatMetadata directly every call, no caching — and every
+// other function asks THIS instead of keeping its own copy.
 //
-// This is a deliberate structural backstop, not another point-fix: a
-// synchronous, event-independent truth check — getActiveScene() reads
-// context.chatMetadata directly, no caching, no event dependency — called
-// at the top of every function that's about to trust
-// remodel-story-workspace-active for something visible. If the class is
-// on but there's no real story-mode scene bound to the CURRENT chat right
-// now, this forcibly corrects it (same teardown syncActiveSceneFromChatMetadata
-// already does for a legitimate chat switch) before anything downstream
-// can render against the mismatch. Cheap to call on every render — same
-// pattern already established by syncNoChatComposerVisibility's own
-// synchronous, race-proof context.chatId check.
+// Confirmed as a real, reported bug (traced live, not assumed): the class
+// itself is not actually what goes stale in the worst case found so far —
+// context.chatMetadata can still correctly point at a real story scene
+// while context.chat's actual message array has been silently replaced
+// with SillyTavern's own welcome-screen placeholder content (core's
+// openWelcomeScreen()/sendAssistantMessage()/sendWelcomePrompt(), a
+// separate, still-open core-side race — see isChatContentSane below).
+// That means "is the label right" and "is the CONTENT the label describes
+// actually real story content" are two different questions —
+// isRealStoryWorkspaceActive() answers the first (scene binding is live
+// and correct) and isChatContentSane() answers the second (what's
+// actually in chat[] right now looks like real messages, not the welcome
+// screen's known placeholder shape).
+function isRealStoryWorkspaceActive() {
+    return getActiveScene()?.mode === 'story';
+}
+
+// Detects SillyTavern's own welcome-screen placeholder content specifically
+// (see welcome-screen.js: sendAssistantMessage/sendWelcomePrompt) rather
+// than trying to validate "is this real story prose" in general, which
+// would be guesswork. This is a narrow, exact fingerprint of ONE known-bad
+// shape: exactly the two system/assistant placeholder messages
+// openWelcomeScreen() pushes when it (incorrectly) fires against a chat
+// that's actually still loaded. A real story chat's first two messages
+// will essentially never match this exact pairing.
+function isChatContentSane() {
+    const chat = getContext().chat;
+
+    if (!Array.isArray(chat) || chat.length !== 2) {
+        return true; // not the specific 2-message welcome-screen shape — assume fine
+    }
+
+    const [first, second] = chat;
+    const looksLikeWelcomeGreeting = first?.extra?.type === 'assistant_message';
+    const looksLikeWelcomePrompt = second?.is_system === true && String(second?.mes ?? '').includes('flex-container');
+
+    return !(looksLikeWelcomeGreeting && looksLikeWelcomePrompt);
+}
+
+// Forcibly tears down every visible trace of the story workspace — same
+// cleanup syncActiveSceneFromChatMetadata already performs on a legitimate
+// chat switch, run here unconditionally when either half of the truth
+// check above says the workspace should NOT be showing right now. Callers
+// bail out of whatever they were about to do when this returns false, so
+// nothing downstream ever renders against the mismatch.
 function enforceStoryWorkspaceInvariant() {
+    // Deliberately reads the PAINTED class here, not isRealStoryWorkspaceActive()
+    // — this function's whole job is comparing what's painted against what's
+    // actually true, so checking the truth function against itself would be
+    // circular and this branch would never fire.
+    // Deliberately reads the PAINTED class here, not isRealStoryWorkspaceActive()
+    // — this function's whole job is comparing what's painted against what's
+    // actually true, so checking the truth function against itself would be
+    // circular and this branch would never fire.
     const isMarkedActive = document.body.classList.contains('remodel-story-workspace-active');
 
     if (!isMarkedActive) {
         return true; // nothing to correct
     }
 
-    const scene = getActiveScene();
-
-    if (scene?.mode === 'story') {
-        return true; // invariant holds — class matches reality
+    if (isRealStoryWorkspaceActive() && isChatContentSane()) {
+        return true; // invariant holds — label is correct AND content is real
     }
 
-    // Invariant violated: the class says "story workspace" but the
-    // CURRENTLY loaded chat isn't actually bound to a story-mode scene.
-    // Same cleanup syncActiveSceneFromChatMetadata performs on a real
-    // chat switch, run here unconditionally instead of trusting an event
-    // that evidently didn't fire (or fired before this chat's metadata
-    // was actually current).
     const overlay = getRealManuscriptOverlay();
     if (overlay) {
         overlay.textContent = '';
@@ -3895,7 +3926,42 @@ function enforceStoryWorkspaceInvariant() {
     document.body.classList.remove('remodel-story-workspace-active');
     updateStoryActionBarState();
 
-    return false; // caller should bail out of whatever it was about to do
+    return false;
+}
+
+// The always-watching half of the hardening: every render-trigger call
+// site (refreshStoryMessageDecorations, renderManuscriptOverlay, etc.)
+// already calls enforceStoryWorkspaceInvariant() before doing anything
+// visible, but that only helps for changes THIS extension's own code
+// causes. core's welcome-screen race (see isChatContentSane's comment)
+// rewrites #chat's content directly, with no guarantee any of our own
+// render triggers fire afterward — nothing here was watching for changes
+// core itself makes. A MutationObserver on the real #chat element's
+// childList catches ANY content change regardless of what caused it,
+// same "observe reality, don't predict/trust events" principle already
+// proven out by bindManuscriptBeatGuard elsewhere in this file. Debounced
+// via requestAnimationFrame — #chat's own normal rendering already
+// produces many rapid mutations per message, and the invariant check only
+// needs to run once after they settle, not once per individual node.
+function bindStoryWorkspaceInvariantWatcher() {
+    const chatEl = getRealChatElement();
+    if (!chatEl) {
+        return;
+    }
+
+    let scheduled = false;
+    const observer = new MutationObserver(() => {
+        if (scheduled) {
+            return;
+        }
+        scheduled = true;
+        requestAnimationFrame(() => {
+            scheduled = false;
+            enforceStoryWorkspaceInvariant();
+        });
+    });
+
+    observer.observe(chatEl, { childList: true, subtree: false });
 }
 
 // core's Background tab embeds a full clone of the entire page markup
