@@ -438,6 +438,30 @@ export function endManuscriptEdit() {
     manuscriptEdit.snapshot = null;
 }
 
+// Called when a live boundary-crossing merge (backspace/forward-delete
+// across two messages) absorbs one message into its neighbor, so the
+// in-progress snapshot stays truthful for the rest of the session — without
+// this, settleManuscriptEdits would keep iterating a snapshot entry for a
+// chat[] message that no longer exists. Two things need fixing up:
+// 1. The absorbed mesId's entry is dropped entirely.
+// 2. deleteMessage() splices chat[] out from under every mesId greater than
+//    the absorbed one, shifting them all down by 1 — core does not walk any
+//    external state to fix up captured indices (confirmed: nothing does this
+//    for extensions), so this module must do it itself for every remaining
+//    snapshot entry above the absorbed index.
+// The survivor's own originalRaw is deliberately left untouched (not
+// updated to the merged text) — that mismatch against its later live
+// textContent is exactly what makes settleManuscriptEdits treat it as dirty
+// unconditionally once merged into, with no separate "merged" flag needed.
+export function mergeManuscriptSnapshotEntries(absorbedMesId) {
+    if (!manuscriptEdit.snapshot) {
+        return;
+    }
+    manuscriptEdit.snapshot = manuscriptEdit.snapshot
+        .filter((entry) => entry.mesId !== absorbedMesId)
+        .map((entry) => (entry.mesId > absorbedMesId ? { ...entry, mesId: entry.mesId - 1 } : entry));
+}
+
 export function resetManuscriptEditState() {
     endManuscriptEdit();
 }

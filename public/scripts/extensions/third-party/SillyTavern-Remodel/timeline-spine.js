@@ -46,6 +46,7 @@ import {
     getWizardState,
     isGenerationRunOurs,
     isPastChatsBridgeActive,
+    mergeManuscriptSnapshotEntries,
     noteViewingCharacterForPastChats,
     resetAllChatScopedState,
     resetWizardState,
@@ -130,8 +131,8 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindTimelineEvents(drawer);
     bindSillyTavernEvents();
     observeTavernPanelState();
-    bindStoryManuscriptEditing();
     bindManuscriptBoundaryProtection();
+    bindManuscriptBeatGuard();
     bindStoryManuscriptEditCommit();
     bindStoryManuscriptEditCancel();
     bindStoryLockInterceptor();
@@ -139,6 +140,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindStoryAutoContinueEvents();
     bindStoryGenerationStateEvents();
     ensureStoryComposerExtras();
+    ensurePanelGroupContainer();
     ensureSceneSummaryPanel();
     bindSceneSummaryEvents();
     registerSceneMacros();
@@ -147,6 +149,8 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindPriorTextPanelEvents();
     registerAllInsertedTextSlotMacros();
     ensurePromptPreviewPanel();
+    ensureManuscriptToolbarPanel();
+    bindManuscriptToolbarEvents();
     ensureCharacterEditorCancelButton();
     setInitialized(true);
 
@@ -442,6 +446,12 @@ function bindSillyTavernEvents() {
     context.eventSource.on(context.eventTypes.CHAT_LOADED, syncActiveSceneFromChatMetadata);
     context.eventSource.on(context.eventTypes.PERSONA_CHANGED, handlePersonaChangedDuringCreation);
     context.eventSource.on(context.eventTypes.USER_MESSAGE_RENDERED, handleStoryUserMessageRendered);
+    // Confirmed as a real bug via live testing: an AI-authored message
+    // arriving (addOneMessage, the same low-level insertion core's own
+    // generate() pipeline ultimately uses) never triggered a manuscript
+    // overlay rebuild — only USER_MESSAGE_RENDERED did. The overlay would
+    // silently never show newly-generated prose at all without this.
+    context.eventSource.on(context.eventTypes.MESSAGE_RECEIVED, handleStoryAiMessageReceived);
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, syncNoChatComposerVisibility);
     context.eventSource.on(context.eventTypes.CHAT_LOADED, syncNoChatComposerVisibility);
     context.eventSource.on(context.eventTypes.APP_READY, syncNoChatComposerVisibility);
@@ -530,13 +540,6 @@ function bindStoryLockInterceptor() {
         }
 
         if (target && document.body.classList.contains('remodel-story-workspace-active')) {
-            const panelGroupTrigger = target.closest('#remodel-panelgroup-trigger');
-            if (panelGroupTrigger) {
-                event.preventDefault();
-                togglePanelGroup();
-                return;
-            }
-
             const continueButton = target.closest('#stscript_continue');
             if (continueButton) {
                 event.preventDefault();
@@ -653,10 +656,24 @@ function bindStoryLockInterceptor() {
                 return;
             }
 
+            const manuscriptToolbarToggle = target.closest('[data-remodel-manuscript-toolbar-toggle]');
+            if (manuscriptToolbarToggle) {
+                event.preventDefault();
+                toggleManuscriptToolbarPanel();
+                return;
+            }
+
             const promptPreviewRefreshButton = target.closest('[data-remodel-promptpreview-refresh]');
             if (promptPreviewRefreshButton) {
                 event.preventDefault();
                 handlePromptPreviewRefreshClick();
+                return;
+            }
+
+            const manuscriptFormatButton = target.closest('[data-remodel-manuscript-format]');
+            if (manuscriptFormatButton) {
+                event.preventDefault();
+                handleManuscriptFormatClick(manuscriptFormatButton.dataset.remodelManuscriptFormat);
                 return;
             }
         }
@@ -908,8 +925,7 @@ async function handleStoryRegenerateClick(button) {
         return;
     }
 
-    const mesEl = button.closest('.mes');
-    const mesId = Number(mesEl?.getAttribute('mesid'));
+    const mesId = resolveBeatMesId(button);
 
     if (!Number.isFinite(mesId)) {
         return;
@@ -943,6 +959,13 @@ function handleStoryUserMessageRendered() {
     setAutoContinueTurnIsFirst(true);
 }
 
+// Unlike handleStoryUserMessageRendered, an AI message arriving needs none
+// of that user-turn bookkeeping — just the same decoration/overlay refresh
+// every other render trigger point already does.
+function handleStoryAiMessageReceived() {
+    refreshStoryMessageDecorations();
+}
+
 // Re-applies Scene Beat headers + the Regenerate button placement to
 // whatever's currently in #chat. Called both when a single new message is
 // rendered (USER_MESSAGE_RENDERED) AND whenever the chat is (re)loaded
@@ -955,8 +978,17 @@ function refreshStoryMessageDecorations() {
         return;
     }
 
+    // Checked here too, not just inside renderManuscriptOverlay() below —
+    // decorateStoryUserMessage/refreshStoryRegenerateButtons would otherwise
+    // still run their own real-DOM work against a stale/incorrect chat
+    // before renderManuscriptOverlay ever got a chance to self-correct.
+    if (!enforceStoryWorkspaceInvariant()) {
+        return;
+    }
+
     document.querySelectorAll('#chat > .mes[is_user="true"]').forEach(decorateStoryUserMessage);
     refreshStoryRegenerateButtons();
+    renderManuscriptOverlay();
 }
 
 function decorateStoryUserMessage(mesEl) {
@@ -983,8 +1015,7 @@ function decorateStoryUserMessage(mesEl) {
 }
 
 async function handleStoryBeatDelete(deleteButton) {
-    const mesEl = deleteButton.closest('.mes');
-    const mesId = Number(mesEl?.getAttribute('mesid'));
+    const mesId = resolveBeatMesId(deleteButton);
 
     if (!Number.isFinite(mesId)) {
         return;
@@ -1014,6 +1045,16 @@ async function handleStoryBeatDelete(deleteButton) {
         return;
     }
 
+    // context.deleteMessage/updateMessageBlock (called inside
+    // mergeAdjacentAiMessages, or directly below) do their own internal DOM
+    // removal/re-render with no scroll-position compensation of their own,
+    // and renderManuscriptOverlay's full rebuild below resets scroll to 0
+    // by clearing the overlay's content — capture/restore around BOTH here.
+    // The overlay is the real scroll container now (#chat itself is
+    // display-collapsed, see style.css), not #chat.
+    const overlayEl = getRealManuscriptOverlay();
+    const scrollTopBeforeDelete = overlayEl?.scrollTop;
+
     if (canMerge) {
         await mergeAdjacentAiMessages(mesId - 1, mesId, mesId + 1);
     } else {
@@ -1021,6 +1062,13 @@ async function handleStoryBeatDelete(deleteButton) {
     }
 
     refreshStoryRegenerateButtons();
+    renderManuscriptOverlay();
+
+    if (overlayEl && scrollTopBeforeDelete !== undefined) {
+        requestAnimationFrame(() => {
+            overlayEl.scrollTop = scrollTopBeforeDelete;
+        });
+    }
 }
 
 // Splices the Scene Beat's surrounding AI passages back into one continuous
@@ -1060,15 +1108,85 @@ async function mergeAdjacentAiMessages(firstIndex, beatIndex, secondIndex) {
     await context.saveChat();
 }
 
-function toggleStoryBeatCollapse(hideButton) {
-    const mesEl = hideButton.closest('.mes');
+// The general two-message case for the manuscript's live boundary-crossing
+// merge (backspace at a block's start / forward-delete at a block's end) —
+// modeled directly on mergeAdjacentAiMessages above (same delete-then-
+// re-render-then-save shape) but for exactly two ADJACENT messages with no
+// beat between them, and critically with NO inserted separator: unlike that
+// function (rejoining two passages a whole beat message used to sit
+// between), this merge is standing in for the single boundary the user's
+// own backspace/delete keystroke just erased, so the two halves are
+// concatenated exactly as typed with nothing added between them. Swipe
+// alternates on the absorbed message (anything in its swipes[] besides the
+// one currently folded into keepMessage.mes) are deliberately discarded —
+// same tradeoff mergeAdjacentAiMessages already makes for beat-delete, now
+// generalized to ordinary in-manuscript typing per the user's own explicit
+// sign-off on that tradeoff.
+async function mergeTwoAdjacentMessages(keepIndex, absorbIndex) {
+    const context = getContext();
+    const keepMessage = context.chat[keepIndex];
+    const absorbMessage = context.chat[absorbIndex];
+
+    if (!keepMessage || !absorbMessage) {
+        return null;
+    }
+
+    const keepIsFirst = keepIndex < absorbIndex;
+    keepMessage.mes = keepIsFirst
+        ? keepMessage.mes + absorbMessage.mes
+        : absorbMessage.mes + keepMessage.mes;
+
+    if (keepMessage.swipe_id !== undefined && Array.isArray(keepMessage.swipes)) {
+        keepMessage.swipes[keepMessage.swipe_id] = keepMessage.mes;
+    }
+
+    await context.deleteMessage(absorbIndex);
+
+    // deleteMessage splices chat[] — if the absorbed message was BEFORE the
+    // survivor, the survivor's own index just shifted down by 1.
+    const survivingIndex = absorbIndex < keepIndex ? keepIndex - 1 : keepIndex;
+    context.updateMessageBlock(survivingIndex, keepMessage);
+    await context.saveChat();
+
+    return { survivingIndex, mergedText: keepMessage.mes };
+}
+
+// A beat-related button may be clicked either on the real (hidden) .mes row
+// or on its clone in the manuscript overlay (buildManuscriptBeatMarker) —
+// the clone has no .mes ancestor to resolve, only a data-remodel-mesid on
+// the marker itself. Real row takes priority when both are somehow
+// resolvable (shouldn't normally happen — a click only ever lands on one).
+function resolveBeatMesId(button) {
+    const mesEl = button.closest('.mes');
+    if (mesEl) {
+        return Number(mesEl.getAttribute('mesid'));
+    }
+    const marker = button.closest('[data-remodel-mesid]');
+    return marker ? Number(marker.dataset.remodelMesid) : NaN;
+}
+
+async function toggleStoryBeatCollapse(hideButton) {
+    const mesId = resolveBeatMesId(hideButton);
+    const mesEl = document.querySelector(`#chat > .mes[mesid="${mesId}"]`);
 
     if (!mesEl) {
         return;
     }
 
+    // renderManuscriptOverlay() below does a full destructive rebuild of
+    // every span from chat[] — if there's unsaved typing anywhere in the
+    // overlay right now, that rebuild would silently discard it (confirmed
+    // as a real reported bug: clicking Hide/Show reset whatever was inside
+    // the beat). Force-settle first, same pattern handleStoryBeatDelete
+    // already uses for the same reason.
+    const { snapshot: openManuscriptSnapshot } = getManuscriptEditState();
+    if (openManuscriptSnapshot) {
+        await settleManuscriptEdits(openManuscriptSnapshot);
+    }
+
     const collapsed = mesEl.classList.toggle('remodel-beat-collapsed');
     hideButton.textContent = collapsed ? 'Show' : 'Hide';
+    renderManuscriptOverlay();
 }
 
 function refreshStoryRegenerateButtons() {
@@ -1108,26 +1226,57 @@ function ensurePanelGroupContainer() {
     let container = document.getElementById('remodel-panelgroup');
 
     if (!container) {
-        const trigger = document.createElement('button');
-        trigger.type = 'button';
-        trigger.id = 'remodel-panelgroup-trigger';
-        trigger.className = 'remodel-panelgroup-trigger';
-        trigger.title = 'Scene tools';
-        trigger.setAttribute('aria-label', 'Scene tools');
-        trigger.innerHTML = '<i class="fa-solid fa-bars" aria-hidden="true"></i>';
-        document.getElementById('sheld')?.prepend(trigger);
-
+        // Each panel (Scene Summary, Prior Scene Text, Prompt Preview,
+        // Manuscript Toolbar) already toggles its own -open class
+        // independently (toggleSceneSummaryPanel/togglePriorTextPanel/
+        // togglePromptPreviewPanel/toggleManuscriptToolbarPanel) — this used
+        // to sit behind one shared hamburger trigger that revealed the
+        // whole group of collapsed bars before any single one could be
+        // opened. Replaced with a fixed vertical column of square icon
+        // buttons floating to the right of the sidebar, one per panel,
+        // each independently clickable — no group-level gate anymore. The
+        // panels themselves are UNCHANGED: they still dock above the
+        // manuscript and still expand inline exactly as before, only their
+        // own inline strip-header (icon + label + chevron) is replaced by
+        // its column icon as the click target.
         container = document.createElement('div');
         container.id = 'remodel-panelgroup';
         container.className = 'remodel-panelgroup';
+        container.innerHTML = `
+            <button type="button" class="remodel-panelgroup-icon" data-remodel-summary-toggle title="Scene Summary" aria-label="Scene Summary">
+                <i class="fa-solid fa-scroll" aria-hidden="true"></i>
+            </button>
+            <button type="button" class="remodel-panelgroup-icon" data-remodel-priortext-toggle title="Prior Scene Text" aria-label="Prior Scene Text">
+                <i class="fa-solid fa-book-open" aria-hidden="true"></i>
+            </button>
+            <button type="button" class="remodel-panelgroup-icon" data-remodel-promptpreview-toggle title="Prompt Preview" aria-label="Prompt Preview">
+                <i class="fa-solid fa-eye" aria-hidden="true"></i>
+            </button>
+            <button type="button" class="remodel-panelgroup-icon" data-remodel-manuscript-toolbar-toggle title="Manuscript Toolbar" aria-label="Manuscript Toolbar">
+                <i class="fa-solid fa-font" aria-hidden="true"></i>
+            </button>
+        `;
         document.getElementById('sheld')?.prepend(container);
     }
 
     return container;
 }
 
-function togglePanelGroup() {
-    document.getElementById('remodel-panelgroup')?.classList.toggle('remodel-panelgroup-open');
+function ensurePanelBodyContainer() {
+    if (!document.body.classList.contains('remodel-story-workspace-active')) {
+        return null;
+    }
+
+    let container = document.getElementById('remodel-panelbodies');
+
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'remodel-panelbodies';
+        container.className = 'remodel-panelbodies';
+        document.getElementById('sheld')?.prepend(container);
+    }
+
+    return container;
 }
 
 // --- Scene Summary panel ----------------------------------------------------
@@ -1152,11 +1301,11 @@ function ensureSceneSummaryPanel() {
         panel = document.createElement('div');
         panel.id = 'remodel-scene-summary-panel';
         panel.className = 'remodel-scene-summary-panel';
+        // No inline toggle header anymore — the panelgroup's floating
+        // fa-scroll icon (ensurePanelGroupContainer) is now the click
+        // target that opens/closes this panel via the same
+        // toggleSceneSummaryPanel()/.remodel-summary-open class toggle.
         panel.innerHTML = `
-            <button type="button" class="remodel-scene-summary-toggle" data-remodel-summary-toggle>
-                <i class="fa-solid fa-scroll" aria-hidden="true"></i> Scene Summary
-                <i class="fa-solid fa-chevron-down remodel-scene-summary-chevron" aria-hidden="true"></i>
-            </button>
             <div class="remodel-scene-summary-body">
                 <textarea
                     class="remodel-scene-summary-textarea"
@@ -1171,7 +1320,7 @@ function ensureSceneSummaryPanel() {
                 </div>
             </div>
         `;
-        ensurePanelGroupContainer()?.append(panel);
+        ensurePanelBodyContainer()?.append(panel);
     }
 
     refreshSceneSummaryPanel();
@@ -1534,11 +1683,10 @@ function ensurePriorTextPanel() {
         panel = document.createElement('div');
         panel.id = 'remodel-priortext-panel';
         panel.className = 'remodel-priortext-panel';
+        // No inline toggle header anymore — the panelgroup's floating
+        // fa-book-open icon (ensurePanelGroupContainer) is now the click
+        // target, same as Scene Summary above.
         panel.innerHTML = `
-            <button type="button" class="remodel-priortext-toggle" data-remodel-priortext-toggle>
-                <i class="fa-solid fa-book-open" aria-hidden="true"></i> Prior Scene Text
-                <i class="fa-solid fa-chevron-down remodel-priortext-chevron" aria-hidden="true"></i>
-            </button>
             <div class="remodel-priortext-body">
                 <label class="remodel-priortext-label">Source Scene</label>
                 <select class="remodel-priortext-select" data-remodel-priortext-select></select>
@@ -1570,7 +1718,7 @@ function ensurePriorTextPanel() {
                 <div class="remodel-priortext-slotlist" data-remodel-priortext-slotlist></div>
             </div>
         `;
-        ensurePanelGroupContainer()?.append(panel);
+        ensurePanelBodyContainer()?.append(panel);
     }
 
     refreshPriorTextPanel();
@@ -1999,11 +2147,10 @@ function ensurePromptPreviewPanel() {
         panel = document.createElement('div');
         panel.id = 'remodel-promptpreview-panel';
         panel.className = 'remodel-promptpreview-panel';
+        // No inline toggle header anymore — the panelgroup's floating
+        // fa-eye icon (ensurePanelGroupContainer) is now the click target,
+        // same as Scene Summary/Prior Scene Text above.
         panel.innerHTML = `
-            <button type="button" class="remodel-promptpreview-toggle" data-remodel-promptpreview-toggle>
-                <i class="fa-solid fa-eye" aria-hidden="true"></i> Prompt Preview
-                <i class="fa-solid fa-chevron-down remodel-promptpreview-chevron" aria-hidden="true"></i>
-            </button>
             <div class="remodel-promptpreview-body">
                 <div class="remodel-promptpreview-typerow">
                     <label class="remodel-promptpreview-radio-label">
@@ -2025,7 +2172,7 @@ function ensurePromptPreviewPanel() {
                     placeholder="Click Refresh Preview to see the fully assembled prompt."></textarea>
             </div>
         `;
-        ensurePanelGroupContainer()?.append(panel);
+        ensurePanelBodyContainer()?.append(panel);
     }
 
     refreshPromptPreviewPanel();
@@ -2044,6 +2191,144 @@ function refreshPromptPreviewPanel() {
 
 function togglePromptPreviewPanel() {
     document.getElementById('remodel-promptpreview-panel')?.classList.toggle('remodel-promptpreview-open');
+}
+
+// Manuscript Toolbar — formatting stays markdown, not true rich text.
+// chat[].mes IS markdown (confirmed: messageFormatting() is a one-way
+// markdown->HTML pipeline with no reverse mapping anywhere in the
+// codebase), and the commit path (openEditCloseWith) pastes raw text into
+// core's real edit textarea exactly like typing markdown by hand — so
+// "Bold" here means wrapping the selection in ** the same way a user
+// would type it themselves, not toggling a live rendered-bold state. Font
+// picker is purely cosmetic/local: it sets --remodel-manuscript-font on
+// body, which only the overlay's CSS reads (public/style.css) — no
+// chat[]/session-state persistence, matches "font" being a display
+// preference, not story content.
+const MANUSCRIPT_FONT_OPTIONS = [
+    { label: 'Georgia (default)', value: "Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', serif" },
+    { label: 'Garamond', value: "'EB Garamond', Garamond, 'Times New Roman', serif" },
+    { label: 'Courier (typewriter)', value: "'Courier New', Courier, monospace" },
+    { label: 'Grotesque (sans)', value: "'Segoe UI', Helvetica, Arial, sans-serif" },
+];
+
+function ensureManuscriptToolbarPanel() {
+    if (!document.body.classList.contains('remodel-story-workspace-active')) {
+        return;
+    }
+
+    let panel = document.getElementById('remodel-manuscript-toolbar-panel');
+
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'remodel-manuscript-toolbar-panel';
+        panel.className = 'remodel-manuscript-toolbar-panel';
+        panel.innerHTML = `
+            <div class="remodel-manuscript-toolbar-body">
+                <div class="remodel-manuscript-toolbar-row">
+                    <button type="button" class="remodel-manuscript-toolbar-btn" data-remodel-manuscript-format="bold" title="Bold (**text**)" aria-label="Bold">
+                        <i class="fa-solid fa-bold" aria-hidden="true"></i>
+                    </button>
+                    <button type="button" class="remodel-manuscript-toolbar-btn" data-remodel-manuscript-format="italic" title="Italic (_text_)" aria-label="Italic">
+                        <i class="fa-solid fa-italic" aria-hidden="true"></i>
+                    </button>
+                    <button type="button" class="remodel-manuscript-toolbar-btn" data-remodel-manuscript-format="underline" title="Underline (<u>text</u>)" aria-label="Underline">
+                        <i class="fa-solid fa-underline" aria-hidden="true"></i>
+                    </button>
+                    <button type="button" class="remodel-manuscript-toolbar-btn" data-remodel-manuscript-format="strikethrough" title="Strikethrough (~~text~~)" aria-label="Strikethrough">
+                        <i class="fa-solid fa-strikethrough" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <label class="remodel-manuscript-toolbar-label">
+                    Font
+                    <select class="remodel-manuscript-toolbar-font" data-remodel-manuscript-font-select>
+                        ${MANUSCRIPT_FONT_OPTIONS.map((opt) => `<option value="${escapeAttribute(opt.value)}">${escapeHtml(opt.label)}</option>`).join('')}
+                    </select>
+                </label>
+            </div>
+        `;
+        ensurePanelBodyContainer()?.append(panel);
+    }
+}
+
+function toggleManuscriptToolbarPanel() {
+    document.getElementById('remodel-manuscript-toolbar-panel')?.classList.toggle('remodel-manuscript-toolbar-open');
+}
+
+function applyManuscriptFont(fontValue) {
+    document.body.style.setProperty('--remodel-manuscript-font', fontValue);
+}
+
+function handleManuscriptFontChange(selectEl) {
+    applyManuscriptFont(selectEl.value);
+}
+
+// Wraps the current selection (if it's inside a manuscript block) in the
+// given markdown delimiter pair — e.g. bold -> **text**. A collapsed
+// selection (no highlighted text) just inserts an empty pair with the
+// caret placed between them, same as most markdown editors' toolbar
+// buttons. Deliberately reuses plain Range/textContent splicing (not
+// execCommand) for the same reason insertPlainText does inside
+// bindManuscriptBoundaryProtection: predictable single-text-node output,
+// no browser-specific rich-formatting side effects.
+function wrapManuscriptSelectionWithMarkdown(before, after) {
+    const overlay = getRealManuscriptOverlay();
+    const selection = window.getSelection();
+    if (!overlay || !selection || selection.rangeCount === 0) {
+        return;
+    }
+    const range = selection.getRangeAt(0);
+    const block = (range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement)
+        ?.closest('[data-remodel-manuscript-block]');
+    if (!block || !overlay.contains(block)) {
+        return; // selection isn't inside a manuscript block at all
+    }
+
+    const selectedText = range.toString();
+    const replacement = document.createTextNode(before + selectedText + after);
+    range.deleteContents();
+    range.insertNode(replacement);
+    block.normalize();
+
+    // Place the caret right after the inserted text (or between the
+    // delimiters, for an empty/collapsed selection) rather than leaving it
+    // wherever insertNode happened to put it.
+    const caretOffset = selectedText
+        ? before.length + selectedText.length + after.length
+        : before.length;
+    const textNode = block.firstChild;
+    if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+        const caretRange = document.createRange();
+        const offset = Math.min(caretOffset, textNode.textContent.length);
+        caretRange.setStart(textNode, offset);
+        caretRange.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(caretRange);
+    }
+    overlay.focus();
+}
+
+function handleManuscriptFormatClick(formatType) {
+    const delimiters = {
+        bold: ['**', '**'],
+        italic: ['_', '_'],
+        underline: ['<u>', '</u>'],
+        strikethrough: ['~~', '~~'],
+    };
+    const pair = delimiters[formatType];
+    if (!pair) {
+        return;
+    }
+    wrapManuscriptSelectionWithMarkdown(pair[0], pair[1]);
+}
+
+function bindManuscriptToolbarEvents() {
+    document.addEventListener('change', (event) => {
+        const select = event.target instanceof Element ? event.target.closest('[data-remodel-manuscript-font-select]') : null;
+        if (!select) {
+            return;
+        }
+        handleManuscriptFontChange(select);
+    });
 }
 
 async function handlePromptPreviewRefreshClick() {
@@ -2266,27 +2551,25 @@ function updateStoryActionBarState() {
     }
 
     const playing = autoContinue.status === 'playing';
-    // A manuscript edit in progress means one or more blocks may hold
-    // unsaved typing. Starting a new generation would let streaming
-    // overwrite a message's content out from under an open edit (the same
-    // reasoning that already blocks ENTERING edit mode during generation,
-    // see bindStoryManuscriptEditing) — so every control that can trigger
-    // generation is disabled for the same duration a real generation would
-    // disable them, not just Regenerate specifically. Reads the BODY CLASS,
-    // not getManuscriptEditState().active — settleManuscriptEdits nulls the
-    // latter (endManuscriptEdit) before its own async replay loop runs, but
-    // the class deliberately stays set for that entire loop (see its own
-    // comment), so it's the only signal that's true for the WHOLE window
-    // where a real generation could still race with in-flight replay.
-    const manuscriptEditing = document.body.classList.contains('remodel-manuscript-editing');
+    // remodel-manuscript-editing is no longer a brief, click-triggered
+    // window — the manuscript overlay is continuously live (see
+    // renderManuscriptOverlay), so that class is essentially always set
+    // while the story workspace is active. Gating Regenerate/Continue/Add
+    // User Message on it would permanently disable them. The race this
+    // guard originally protected against (a new generation's streaming
+    // overwriting unsaved manuscript typing) is already covered elsewhere:
+    // bindStoryGenerationStateEvents force-settles any open manuscript edit
+    // the instant GENERATION_STARTED fires, before streaming can touch
+    // anything. So these controls now only need to reflect a REAL
+    // generation actually being in flight, same as any other chat control.
 
-    setStoryButtonDisabled('stscript_continue', isGenerating || playing || manuscriptEditing);
+    setStoryButtonDisabled('stscript_continue', isGenerating || playing);
     setStoryButtonDisabled('stscript_pause', !playing);
     setStoryButtonDisabled('stscript_stop', !isGenerating && autoContinue.status === 'idle');
-    setStoryButtonDisabled('remodel-add-user-message', isGenerating || manuscriptEditing);
+    setStoryButtonDisabled('remodel-add-user-message', isGenerating);
 
     document.querySelectorAll('.remodel-beat-regenerate').forEach((button) => {
-        button.classList.toggle('remodel-story-disabled', isGenerating || manuscriptEditing);
+        button.classList.toggle('remodel-story-disabled', isGenerating);
     });
 }
 
@@ -3482,22 +3765,22 @@ function syncActiveSceneFromChatMetadata() {
     const wizardWasActive = getWizardState().sceneCreationFlow !== null;
 
     // A chat switch mid-manuscript-edit leaves DOM state (the body class,
-    // contenteditable/data-remodel-manuscript-block on blocks) belonging to
-    // the OLD chat — resetAllChatScopedState() below only clears the
-    // manuscriptEdit STATE domain, not these DOM side effects, since it's a
-    // pure state module with no DOM access (same convention as every other
-    // domain there). Without this, the body class would stay set
-    // indefinitely, permanently disabling Regenerate/Continue/Add User
-    // Message (updateStoryActionBarState gates on it) and leaving boundary
-    // protection's isActive() checks live against a chat that's no longer
-    // current. No native .mes_edit/.mes_edit_cancel replay is needed here —
-    // the chat is already gone from the DOM by the time CHAT_CHANGED fires,
-    // so there's nothing left to click; this is pure leftover-attribute
-    // cleanup on whatever markup still happens to be attached.
-    document.querySelectorAll('[data-remodel-manuscript-block]').forEach((el) => {
-        el.removeAttribute('contenteditable');
-        delete el.dataset.remodelManuscriptBlock;
-    });
+    // the overlay's stale spans) belonging to the OLD chat —
+    // resetAllChatScopedState() below only clears the manuscriptEdit STATE
+    // domain, not these DOM side effects, since it's a pure state module
+    // with no DOM access (same convention as every other domain there).
+    // Without this, the body class would stay set indefinitely, permanently
+    // disabling Regenerate/Continue/Add User Message (updateStoryActionBarState
+    // gates on it) and the overlay would keep showing the old chat's text
+    // until refreshStoryMessageDecorations happens to run again (which it
+    // won't at all if the new chat isn't a story workspace). No native
+    // .mes_edit/.mes_edit_cancel replay is needed here — the chat is
+    // already gone from the DOM by the time CHAT_CHANGED fires, so there's
+    // nothing left to click; this is pure leftover-content cleanup.
+    const overlay = getRealManuscriptOverlay();
+    if (overlay) {
+        overlay.textContent = '';
+    }
     document.body.classList.remove('remodel-manuscript-editing');
 
     syncStoryWorkspaceClass(scene);
@@ -3512,6 +3795,7 @@ function syncActiveSceneFromChatMetadata() {
     }
 
     refreshStoryMessageDecorations();
+    ensurePanelGroupContainer();
     ensureSceneSummaryPanel();
     refreshSceneSummaryPanel();
     ensurePriorTextPanel();
@@ -3519,6 +3803,26 @@ function syncActiveSceneFromChatMetadata() {
     registerInsertedTextSlotMacros(getActiveTimelineForPriorText());
     ensurePromptPreviewPanel();
     refreshPromptPreviewPanel();
+    ensureManuscriptToolbarPanel();
+
+    // Confirmed as a real, reported bug: opening/reopening a Story Scene
+    // landed the manuscript overlay scrolled to its TOP (the opening of the
+    // story) rather than the bottom (the latest, most recently written
+    // content) — the natural point to resume writing from. This runs
+    // exactly once per chat load (this function is CHAT_CHANGED's handler,
+    // not called per-message), so it never fights a mid-session scroll
+    // position the way scrolling-to-bottom on every decoration refresh
+    // would. requestAnimationFrame lets the overlay's freshly (re)built
+    // content lay out first — scrollHeight read synchronously right after
+    // renderManuscriptOverlay() can undercount before layout settles.
+    if (scene?.mode === 'story') {
+        requestAnimationFrame(() => {
+            const overlayEl = getRealManuscriptOverlay();
+            if (overlayEl) {
+                overlayEl.scrollTop = overlayEl.scrollHeight;
+            }
+        });
+    }
 
     if (!scene) {
         queueRender();
@@ -3536,6 +3840,64 @@ function syncStoryWorkspaceClass(scene) {
     document.body.classList.toggle('remodel-story-workspace-active', scene?.mode === 'story');
 }
 
+// Confirmed as a real, reported bug: close a story chat, reopen it, and the
+// manuscript overlay ends up rendering the WELCOME SCREEN's raw HTML as
+// literal text ("<div class=\"flex-container\">" printed as visible prose).
+// Root cause is a structural one, not a single missed event — the whole
+// story-workspace feature set (manuscript overlay, icon column, toolbar,
+// composer state) is built entirely on trusting that
+// syncActiveSceneFromChatMetadata() correctly fires and correctly tears
+// down remodel-story-workspace-active on every possible chat
+// open/close/switch. It doesn't always: core has multiple distinct
+// "no chat loaded" paths (closing a chat, an async welcome-screen render
+// racing the sync call, wizard cancellation, etc.), and any one of them
+// skipping CHAT_CHANGED/CHAT_LOADED leaves the class stuck true with no
+// independent check anywhere to catch it — every render after that
+// blindly trusts the stale class and processes whatever's currently in
+// #chat (welcome-screen markup, not .mes rows) as if it were manuscript
+// content.
+//
+// This is a deliberate structural backstop, not another point-fix: a
+// synchronous, event-independent truth check — getActiveScene() reads
+// context.chatMetadata directly, no caching, no event dependency — called
+// at the top of every function that's about to trust
+// remodel-story-workspace-active for something visible. If the class is
+// on but there's no real story-mode scene bound to the CURRENT chat right
+// now, this forcibly corrects it (same teardown syncActiveSceneFromChatMetadata
+// already does for a legitimate chat switch) before anything downstream
+// can render against the mismatch. Cheap to call on every render — same
+// pattern already established by syncNoChatComposerVisibility's own
+// synchronous, race-proof context.chatId check.
+function enforceStoryWorkspaceInvariant() {
+    const isMarkedActive = document.body.classList.contains('remodel-story-workspace-active');
+
+    if (!isMarkedActive) {
+        return true; // nothing to correct
+    }
+
+    const scene = getActiveScene();
+
+    if (scene?.mode === 'story') {
+        return true; // invariant holds — class matches reality
+    }
+
+    // Invariant violated: the class says "story workspace" but the
+    // CURRENTLY loaded chat isn't actually bound to a story-mode scene.
+    // Same cleanup syncActiveSceneFromChatMetadata performs on a real
+    // chat switch, run here unconditionally instead of trusting an event
+    // that evidently didn't fire (or fired before this chat's metadata
+    // was actually current).
+    const overlay = getRealManuscriptOverlay();
+    if (overlay) {
+        overlay.textContent = '';
+    }
+    document.body.classList.remove('remodel-manuscript-editing');
+    document.body.classList.remove('remodel-story-workspace-active');
+    updateStoryActionBarState();
+
+    return false; // caller should bail out of whatever it was about to do
+}
+
 // core's Background tab embeds a full clone of the entire page markup
 // (including a second, hidden, disconnected-from-events #chat/#sheld pair)
 // as a live preview inside #bg_tabs — meaning document.getElementById('chat')
@@ -3546,110 +3908,429 @@ function getRealChatElement() {
     return document.body.querySelector(':scope > #sheld > #chat');
 }
 
-// Click anywhere in the visible manuscript to enter unified cross-message
-// editing: every visible message's .mes_text swaps from rendered HTML to
-// raw text and becomes directly contenteditable, with no seam between what
-// are still, underneath, N separate chat[] messages — see the
-// manuscriptEdit domain in session-state.js. This stage only handles entry;
-// boundary protection and commit/cancel land in later commits, so typing
-// right now is unprotected and (until the commit stage exists) not yet
-// saved back to chat[] — expected at this point in the rollout.
-function bindStoryManuscriptEditing() {
-    getRealChatElement()?.addEventListener('click', (event) => {
-        if (!document.body.classList.contains('remodel-story-workspace-active')) {
+const MANUSCRIPT_OVERLAY_ID = 'remodel-manuscript-overlay';
+
+// The real #chat rows (avatars, mes_buttons, swipe arrows, edit buttons,
+// timers) are not safe to make contenteditable wholesale — that would pull
+// every one of those controls into the editable surface, each needing its
+// own contenteditable="false" exclusion, a much wider and more fragile
+// blast radius than the manuscript actually needs. Instead #chat stays the
+// real data source, hidden, and this overlay is a SEPARATE contenteditable
+// element holding only text spans (one per visible message) and non-
+// editable Scene Beat header clones — the only two things that actually
+// need to be in the manuscript's reading/editing flow.
+// document.getElementById(MANUSCRIPT_OVERLAY_ID) is exactly as ambiguous as
+// document.getElementById('chat') already proved to be (see
+// getRealChatElement's own comment) — core's Background tab embeds a full
+// hidden clone of the ENTIRE page, and once the overlay gets created, that
+// clone acquires its own copy of #remodel-manuscript-overlay too. Plain
+// getElementById can silently resolve to that dead clone instead of the
+// real, live one, producing exactly the kind of stray/duplicated/unrelated
+// content bleeding into the manuscript that this scoping fixes. Scoped the
+// same way, through the real #sheld directly under body.
+function getRealManuscriptOverlay() {
+    return document.body.querySelector(`:scope > #sheld > #${MANUSCRIPT_OVERLAY_ID}`);
+}
+
+function ensureManuscriptOverlay() {
+    let overlay = getRealManuscriptOverlay();
+    if (overlay) {
+        return overlay;
+    }
+    const chatEl = getRealChatElement();
+    if (!chatEl) {
+        return null;
+    }
+    overlay = document.createElement('div');
+    overlay.id = MANUSCRIPT_OVERLAY_ID;
+    overlay.setAttribute('contenteditable', 'true');
+    chatEl.after(overlay);
+    return overlay;
+}
+
+// Beat header clones in the overlay need their own live Hide/Delete buttons
+// — the real header (with the real listeners' .closest('.mes') target)
+// stays on the hidden real row and never receives a click from here. Both
+// toggleStoryBeatCollapse and handleStoryBeatDelete already resolve mesId
+// via the clicked button's ancestry (see their own resolveBeatMesId calls
+// below) so a clone just needs to carry the same data-remodel-beat-hide/
+// -delete attributes plus a data-remodel-mesid the resolver can fall back
+// to when there's no real .mes ancestor.
+function buildManuscriptBeatMarker(mesId, collapsed) {
+    const marker = document.createElement('div');
+    marker.className = 'remodel-beat-header remodel-manuscript-beat-marker';
+    marker.dataset.remodelMesid = String(mesId);
+    marker.setAttribute('contenteditable', 'false');
+    // contenteditable="false" on the marker alone isn't reliably enough:
+    // confirmed as a real bug — the label text and Hide/Delete buttons were
+    // still directly typeable (a caret could be placed inside "Scene Beat"
+    // itself, and Enter there ran boundary-protection's insertPlainText,
+    // producing a brand-new editable text node with no relation to any
+    // chat[] message). Native contenteditable's own inheritance doesn't
+    // reliably block a nested, natively-focusable <button> the same way it
+    // blocks plain text, so every interactive/label element inside this
+    // marker is marked contenteditable="false" explicitly too, not just the
+    // wrapper — belt and suspenders, not relying on inheritance alone.
+    marker.innerHTML = `
+        <span class="remodel-beat-label" contenteditable="false"><i class="fa-solid fa-bolt" aria-hidden="true"></i> Scene Beat</span>
+        <span class="remodel-beat-header-actions" contenteditable="false">
+            <button type="button" class="remodel-beat-hide" contenteditable="false" data-remodel-beat-hide>${collapsed ? 'Show' : 'Hide'}</button>
+            <button type="button" class="remodel-beat-delete" contenteditable="false" data-remodel-beat-delete title="Delete this Scene Beat" aria-label="Delete this Scene Beat">Delete</button>
+        </span>
+    `;
+    return marker;
+}
+
+// Rebuilds the overlay's full contents from whatever's currently in the
+// real (hidden) #chat — called at every point refreshStoryMessageDecorations
+// already runs (chat load, a message rendered, a beat deleted/collapsed),
+// so the overlay never drifts from the real DOM it mirrors. A full rebuild
+// rather than incremental patching is deliberate: it's the same "just
+// re-derive from source" simplicity the rest of this file already leans on
+// (e.g. refreshStoryRegenerateButtons re-scans every user message rather
+// than tracking deltas), and per-chat message counts here are small enough
+// that this is cheap, not a real cost worth optimizing away preemptively.
+//
+// Live-editing note: rebuilding wipes and recreates every span, which would
+// normally nuke the user's caret position mid-keystroke. This is only ever
+// called from render-trigger points (new message, beat collapse/delete,
+// chat load) — never on a plain keystroke, since ordinary typing lands
+// directly in the overlay's own contenteditable spans and needs no rebuild
+// at all. A caret invalidation during those specific trigger points (e.g.
+// deleting a beat while typing elsewhere) is an accepted, narrow edge case,
+// not a general typing-loses-your-place problem.
+function renderManuscriptOverlay() {
+    // Must run BEFORE ensureManuscriptOverlay() below — ensureManuscriptOverlay
+    // itself only checks getRealChatElement() exists, not whether the
+    // CURRENT chat is actually a story-mode scene, so it would happily
+    // (re)create/keep the overlay even on a stale/incorrect
+    // remodel-story-workspace-active. This is the actual fix for the
+    // confirmed close-then-reopen-a-story-chat bug where the overlay ended
+    // up rendering the welcome screen's raw HTML as literal manuscript text.
+    if (!enforceStoryWorkspaceInvariant()) {
+        return;
+    }
+
+    const overlay = ensureManuscriptOverlay();
+    if (!overlay) {
+        return;
+    }
+
+    const chatEl = getRealChatElement();
+    const context = getContext();
+    overlay.textContent = '';
+
+    const mesEls = Array.from(chatEl?.querySelectorAll(':scope > .mes') ?? []);
+    const snapshot = [];
+
+    // Regenerate is only ever offered on the LATEST Scene Beat (same rule
+    // refreshStoryRegenerateButtons already enforces on the real hidden
+    // row) — computed once up front rather than per-message, same reason
+    // refreshStoryRegenerateButtons itself needs the full user-message list
+    // before it can know which one is last.
+    const userMesEls = mesEls.filter((mesEl) => mesEl.getAttribute('is_user') === 'true');
+    const lastUserMesId = userMesEls.length
+        ? Number(userMesEls[userMesEls.length - 1].getAttribute('mesid'))
+        : NaN;
+
+    mesEls.forEach((mesEl) => {
+        const mesId = Number(mesEl.getAttribute('mesid'));
+        const message = context.chat[mesId];
+        if (!Number.isFinite(mesId) || !message) {
             return;
         }
 
-        if (getGenerationState().isGenerating) {
-            return; // never enter edit mode while a generation is in flight
+        if (message.is_user) {
+            const collapsed = mesEl.classList.contains('remodel-beat-collapsed');
+            overlay.appendChild(buildManuscriptBeatMarker(mesId, collapsed));
+            if (collapsed) {
+                return; // collapsed beats contribute a marker only, no editable text span
+            }
         }
 
-        const textEl = event.target instanceof Element ? event.target.closest('.mes_text') : null;
+        const span = document.createElement('span');
+        span.dataset.remodelMesid = String(mesId);
+        span.dataset.remodelManuscriptBlock = '';
+        if (message.is_user) {
+            // Identifies the beat's OWN span directly rather than via
+            // adjacent-sibling position — a marker+span sibling selector
+            // silently breaks the moment the beat is collapsed, since a
+            // collapsed beat contributes no span at all and the "next"
+            // sibling becomes whatever AI message follows it instead
+            // (confirmed as a real bug: the boxed styling wrapped the
+            // FOLLOWING message's text once its own beat was hidden).
+            span.classList.add('remodel-manuscript-beat-text');
+        }
+        span.textContent = message.mes ?? '';
+        overlay.appendChild(span);
 
-        if (!textEl) {
-            return; // not a click into prose (e.g. a beat header/regenerate button)
+        if (message.is_user && mesId === lastUserMesId) {
+            // Same class/creation shape as refreshStoryRegenerateButtons'
+            // real-row button — .remodel-story-disabled state is applied
+            // separately by updateStoryActionBarState, which already
+            // queries by class rather than by DOM location.
+            const regenerateButton = document.createElement('button');
+            regenerateButton.type = 'button';
+            regenerateButton.className = 'remodel-beat-regenerate';
+            // Never had this at all — confirmed as a real bug: without it,
+            // the button's own label text was directly editable/typeable
+            // like any other manuscript text, since a <button> with no
+            // contenteditable attribute of its own inherits "true" from the
+            // overlay same as a plain text node would.
+            regenerateButton.setAttribute('contenteditable', 'false');
+            // resolveBeatMesId walks .closest('[data-remodel-mesid]') — this
+            // button is appended as a standalone sibling in the overlay, not
+            // nested inside the beat marker, so it needs its OWN
+            // data-remodel-mesid to be resolvable at all. Confirmed as a
+            // real bug: without this, clicking Regenerate fired the click
+            // handler but resolveBeatMesId found no ancestor with either
+            // .mes or [data-remodel-mesid], returned NaN, and
+            // handleStoryRegenerateClick silently no-opped.
+            regenerateButton.dataset.remodelMesid = String(mesId);
+            regenerateButton.textContent = 'Regenerate';
+            overlay.appendChild(regenerateButton);
         }
 
-        if (getManuscriptEditState().active) {
-            return; // already editing — let the click place a caret natively
+        snapshot.push({ mesId, originalRaw: message.mes ?? '' });
+    });
+
+    // The manuscript is continuously live now (requirement: no explicit
+    // enter/exit) — beginManuscriptEdit's snapshot is rebuilt fresh every
+    // render rather than captured once on click. Any snapshot from a PRIOR
+    // render is discarded here; settleManuscriptEdits is expected to have
+    // already run (via focusout/Escape/generation-start) before anything
+    // could trigger a re-render while genuinely mid-edit — same ordering
+    // guarantee the old click-triggered flow relied on, just re-triggered
+    // continuously instead of once.
+    beginManuscriptEdit(snapshot);
+    document.body.classList.add('remodel-manuscript-editing');
+    updateStoryActionBarState();
+
+    // Every legitimate rebuild (a beat added/deleted/collapsed, a new AI
+    // message rendered) redefines what "correct" looks like for
+    // bindManuscriptBeatGuard's MutationObserver — refresh its snapshot
+    // here rather than only at bind-time, or the guard would keep trying to
+    // restore beats to a stale, pre-rebuild shape.
+    captureBeatSnapshots(overlay);
+}
+
+// Scene Beat protection used to be predict-and-block: inspect the
+// beforeinput/keydown event BEFORE it does anything, guess whether it would
+// touch a beat, preventDefault() if so. That kept failing in ways synthetic
+// tests never caught — confirmed via research (Mozilla bug 439808/685445/
+// 685452 and others) that Backspace/Delete behavior right at a
+// contenteditable="false" boundary is a long-standing, genuinely
+// browser-inconsistent area of the spec, not something interceptable with
+// full reliability no matter how many input-type branches are added.
+// ProseMirror/Lexical solve this exact class of problem the other way
+// around: let the browser mutate the DOM however it wants, then read the
+// result back and reject/revert whatever violates an invariant. This is
+// that approach, scoped to just the one thing that actually needs it —
+// Scene Beats — while the already-reliable, already-live-verified
+// beforeinput prediction in bindManuscriptBoundaryProtection keeps handling
+// ordinary AI-to-AI merging exactly as before (that logic runs through
+// this extension's OWN, fully controlled merge code path, not through
+// unpredictable native contenteditable behavior next to a
+// contenteditable="false" sibling, which is the specific part that isn't
+// reliably predictable).
+const beatSnapshots = new Map(); // mesId -> { markerHTML, spanText, regenerateHTML }
+
+function captureBeatSnapshots(overlay) {
+    beatSnapshots.clear();
+    overlay.querySelectorAll('.remodel-manuscript-beat-marker').forEach((marker) => {
+        const mesId = marker.dataset.remodelMesid;
+        if (mesId === undefined) {
+            return;
         }
-
-        // Capture the click's approximate position in the RENDERED text of
-        // the CLICKED block before ANY block swaps to raw text — same
-        // deliberate best-effort estimation as the single-message flow this
-        // replaces, unchanged, since the click necessarily lands on
-        // still-rendered HTML. Re-clicks AFTER entry (already raw-text mode)
-        // place the caret exactly, for free, via native browser
-        // caret-from-point on a plain-text node — no estimation needed there.
-        const approxOffset = estimateRawTextOffsetFromClick(textEl, event.clientX, event.clientY);
-
-        const chatEl = getRealChatElement();
-        const scrollTopBeforeEdit = chatEl?.scrollTop;
-
-        // Skip collapsed Scene Beats (display:none) — a click can't reach
-        // them anyway, and there's nothing to usefully edit while hidden.
-        const blocks = Array.from(chatEl?.querySelectorAll(':scope > .mes .mes_text') ?? [])
-            .filter((el) => el.offsetParent !== null);
-
-        const context = getContext();
-        const readRaw = (mesText) => {
-            const mesId = Number(mesText.closest('.mes')?.getAttribute('mesid'));
-            return { mesId, raw: context.chat[mesId]?.mes ?? '' };
-        };
-
-        const snapshot = blocks.map((mesText) => {
-            const { mesId, raw } = readRaw(mesText);
-            return { mesId, originalRaw: raw };
+        const span = overlay.querySelector(`.remodel-manuscript-beat-text[data-remodel-mesid="${mesId}"]`);
+        // The Regenerate button (only present on the LAST user message) was
+        // never tracked here at all — confirmed as a real bug: a native
+        // delete that removed the beat's marker+span in one browser
+        // mutation left this button behind as an orphan pointing at a
+        // mesId whose marker/span had just been reverted underneath it,
+        // since nothing in this guard ever looked at it.
+        const regenerateButton = overlay.querySelector(`.remodel-beat-regenerate[data-remodel-mesid="${mesId}"]`);
+        beatSnapshots.set(mesId, {
+            markerHTML: marker.outerHTML,
+            spanText: span ? span.textContent : null,
+            regenerateHTML: regenerateButton ? regenerateButton.outerHTML : null,
         });
-
-        beginManuscriptEdit(snapshot);
-        document.body.classList.add('remodel-manuscript-editing');
-        updateStoryActionBarState();
-
-        blocks.forEach((mesText) => {
-            const { raw } = readRaw(mesText);
-            mesText.textContent = raw;
-            mesText.setAttribute('contenteditable', 'true');
-            mesText.dataset.remodelManuscriptBlock = '';
-        });
-
-        // Place the caret in the clicked block, now holding raw text as a
-        // single Text node, at the offset estimated above.
-        if (approxOffset !== null) {
-            const targetNode = textEl.firstChild;
-            const maxOffset = targetNode?.nodeType === Node.TEXT_NODE ? targetNode.textContent.length : 0;
-            const clampedOffset = Math.min(approxOffset, maxOffset);
-            const range = document.createRange();
-            range.setStart(targetNode ?? textEl, clampedOffset);
-            range.collapse(true);
-            const selection = window.getSelection();
-            selection?.removeAllRanges();
-            selection?.addRange(range);
-        }
-
-        textEl.focus();
-
-        // Same reasoning as the single-message flow this replaces: native
-        // messageEdit()/messageEditDone() (driven later, during commit) only
-        // restore scroll position for the LAST message in chat. This entry
-        // step doesn't touch that native path at all (pure local DOM
-        // manipulation), so a jump shouldn't occur here — kept as cheap,
-        // defensive insurance regardless, pending empirical verification.
-        if (chatEl && scrollTopBeforeEdit !== undefined) {
-            requestAnimationFrame(() => {
-                chatEl.scrollTop = scrollTopBeforeEdit;
-            });
-        }
     });
 }
 
-// Keeps message count fixed while manuscript-edit-mode is active (see
-// bindStoryManuscriptEditing above): freeform typing must never merge two
-// message blocks into one or split one into two, since that would mean
-// creating/destroying chat[] entries as a side effect of ordinary typing —
-// only explicit actions (like handleStoryBeatDelete's merge) may do that.
+function flashBeatGuard(el) {
+    if (!el) {
+        return;
+    }
+    el.classList.remove('remodel-beat-guard-flash');
+    // Force a reflow so re-adding the class restarts the CSS transition even
+    // if a previous flash on this same element hasn't finished fading yet.
+    void el.offsetWidth;
+    el.classList.add('remodel-beat-guard-flash');
+    setTimeout(() => el.classList.remove('remodel-beat-guard-flash'), 500);
+}
+
+// Watches for any DOM mutation that violates a Scene Beat's invariants
+// (its marker removed/altered, its text span removed, merged into a
+// neighbor, or split into more than one node) and reverts it immediately —
+// same microtask MutationObserver callbacks always run in, so there is no
+// window for a second fast keystroke to land on already-corrupted DOM.
+// Ordinary edits WITHIN a beat's own text (typing, selecting, deleting
+// mid-span) never trip this: the span still exists, still has exactly one
+// child text node, still carries its class — only boundary-violating
+// mutations (the span disappearing, merging, or splitting) get caught.
+function bindManuscriptBeatGuard() {
+    const overlay = ensureManuscriptOverlay();
+    if (!overlay) {
+        return;
+    }
+
+    captureBeatSnapshots(overlay);
+
+    const observerConfig = { childList: true, subtree: true, characterData: true };
+    const observer = new MutationObserver(() => {
+        if (!document.body.classList.contains('remodel-manuscript-editing')) {
+            return;
+        }
+
+        // Every restorative write below (replaceWith, textContent reset,
+        // rebuilt-span insertion) is itself a mutation on the exact subtree
+        // this observer watches. Left connected, each write re-queues a new
+        // callback that finds its OWN just-applied fix already in place —
+        // that should be a no-op next pass, but was confirmed live to hang
+        // the renderer instead (a minimal isolated repro — one span, one
+        // text-node split, one textContent reset back to snapshot — never
+        // returned even on a freshly launched, otherwise-responsive Chrome
+        // instance). Disconnecting before writing and reconnecting after
+        // guarantees self-caused mutations are never observed at all, which
+        // is the standard pattern for a MutationObserver that both watches
+        // and repairs the same subtree.
+        observer.disconnect();
+
+        for (const [mesId, snap] of beatSnapshots) {
+            const marker = overlay.querySelector(`.remodel-manuscript-beat-marker[data-remodel-mesid="${mesId}"]`);
+            const span = overlay.querySelector(`.remodel-manuscript-beat-text[data-remodel-mesid="${mesId}"]`);
+
+            const markerBroken = !marker || marker.outerHTML !== snap.markerHTML;
+            // STRUCTURAL violations only — the span disappearing, splitting
+            // into multiple nodes, or its single child stopping being a
+            // plain text node. Comparing against the snapshot's TEXT was a
+            // real bug caught in review before ever needing a live test:
+            // the snapshot only refreshes on a full renderManuscriptOverlay()
+            // rebuild, never on ordinary keystrokes, so it goes stale the
+            // instant the user types their first character inside a beat —
+            // every following keystroke would then look "broken" against
+            // that stale baseline and get silently reverted, making beats
+            // completely uneditable. A beat's own text is free to change;
+            // only the span's STRUCTURE (still exists, still exactly one
+            // text-node child, still not merged into a sibling) is guarded.
+            // Zero children is also valid — confirmed as a real, reported
+            // bug: backspacing a beat down to its very last character
+            // empties the text node's parent to 0 childNodes (the browser
+            // drops the now-empty text node entirely rather than leaving
+            // it as an empty string), which childNodes.length !== 1 read as
+            // "broken" and reverted back to the last 1-character snapshot —
+            // so the final backspace of a full clear-out always silently
+            // resurrected one stray leftover character. An empty, fully
+            // cleared beat is legitimate content, not corruption; only 2+
+            // children (split/merged text) or a single non-text child
+            // counts as broken.
+            const spanBroken = snap.spanText !== null
+                && (!span || span.childNodes.length > 1
+                    || (span.childNodes.length === 1 && span.firstChild.nodeType !== Node.TEXT_NODE));
+
+            if (!markerBroken && !spanBroken) {
+                // No structural violation — update the live snapshot so a
+                // FUTURE structural check has an up-to-date baseline to
+                // restore to if something does go wrong later in the
+                // session (e.g. the marker itself gets tampered with after
+                // the beat's text has already been legitimately edited).
+                if (span) {
+                    snap.spanText = span.textContent;
+                }
+                continue;
+            }
+
+            if (markerBroken && marker) {
+                // The marker itself was mutated (its Hide/Delete buttons live
+                // inside it) rather than removed outright — restore its exact
+                // original markup in place.
+                const restored = document.createRange().createContextualFragment(snap.markerHTML);
+                marker.replaceWith(restored);
+            } else if (markerBroken && !marker && span) {
+                // Marker was removed entirely (e.g. backspace at the very
+                // start of the beat's text tried to delete backward into/
+                // through it) — reinsert it right before the surviving span.
+                const restored = document.createRange().createContextualFragment(snap.markerHTML);
+                span.before(restored);
+            }
+
+            if (spanBroken && snap.spanText !== null) {
+                const currentMarker = overlay.querySelector(`.remodel-manuscript-beat-marker[data-remodel-mesid="${mesId}"]`);
+                if (span) {
+                    // Span still exists but its content was corrupted
+                    // (merged with neighboring text, split into multiple
+                    // nodes, etc.) — reset it to exactly one text node.
+                    span.textContent = snap.spanText;
+                } else if (currentMarker) {
+                    // Span was removed outright (e.g. forward-delete at the
+                    // beat's end tried to delete forward through it) —
+                    // rebuild and reinsert it right after the marker.
+                    const rebuilt = document.createElement('span');
+                    rebuilt.dataset.remodelMesid = mesId;
+                    rebuilt.dataset.remodelManuscriptBlock = '';
+                    rebuilt.classList.add('remodel-manuscript-beat-text');
+                    rebuilt.textContent = snap.spanText;
+                    currentMarker.after(rebuilt);
+                }
+            }
+
+            // Confirmed as a real, reported bug: a native delete that
+            // removed the beat's marker+span in one mutation left the
+            // Regenerate button (a standalone sibling, only present on the
+            // LAST user message) behind, pointing at a mesId whose
+            // marker/span had just been restored above it — this button was
+            // never part of the guarded set at all until now. Only ever
+            // acts if the button existed in the original snapshot (beats
+            // that aren't the last user message have no Regenerate button
+            // and none should reappear here).
+            if (snap.regenerateHTML !== null) {
+                const regenerateButton = overlay.querySelector(`.remodel-beat-regenerate[data-remodel-mesid="${mesId}"]`);
+                const regenerateBroken = !regenerateButton || regenerateButton.outerHTML !== snap.regenerateHTML;
+                if (regenerateBroken) {
+                    if (regenerateButton) {
+                        regenerateButton.replaceWith(document.createRange().createContextualFragment(snap.regenerateHTML));
+                    } else {
+                        const anchor = overlay.querySelector(`.remodel-manuscript-beat-text[data-remodel-mesid="${mesId}"]`)
+                            ?? overlay.querySelector(`.remodel-manuscript-beat-marker[data-remodel-mesid="${mesId}"]`);
+                        if (anchor) {
+                            anchor.after(document.createRange().createContextualFragment(snap.regenerateHTML));
+                        }
+                    }
+                }
+            }
+
+            const flashTarget = overlay.querySelector(`.remodel-manuscript-beat-marker[data-remodel-mesid="${mesId}"]`);
+            flashBeatGuard(flashTarget);
+        }
+
+        observer.observe(overlay, observerConfig);
+    });
+
+    observer.observe(overlay, observerConfig);
+}
+
+// Detects and blocks/handles typing that would cross a message-span
+// boundary — a mid-message Enter always stays one message (never splits),
+// per this feature's own design; a backspace-at-start/forward-delete-at-end
+// AT this stage (Stage 1 of the overlay rewrite) is still unconditionally
+// blocked, matching the original per-block design. Merging across a
+// boundary instead of blocking it is Stage 2+ work, not yet wired here.
 function bindManuscriptBoundaryProtection() {
-    const chat = getRealChatElement();
+    // Bound to the overlay, not the real (hidden) #chat — typing/backspace/
+    // paste all happen in the overlay's own contenteditable spans now, per
+    // ensureManuscriptOverlay's separate-contenteditable-surface design.
+    const chat = ensureManuscriptOverlay();
 
     if (!chat) {
         return;
@@ -3660,6 +4341,16 @@ function bindManuscriptBoundaryProtection() {
         const el = node instanceof Element ? node : node?.parentElement;
         return el?.closest('[data-remodel-manuscript-block]') ?? null;
     };
+    // Scene Beats are always fully off-limits to every typing behavior this
+    // whole closure implements — never merged into, never merged out of,
+    // never split by Enter, never pasted into across a boundary. A single,
+    // named, checked-FIRST gate, not a condition buried inside one sub-path
+    // (merge) that other handlers (Enter, paste) forgot to also check —
+    // that gap is exactly why Enter inside a beat still created a stray new
+    // block and backspace at a beat's start still deleted it outright, both
+    // confirmed as real, reported bugs despite the merge path itself
+    // already excluding beats correctly.
+    const isBeatBlock = (block) => Boolean(block?.classList.contains('remodel-manuscript-beat-text'));
     const isCrossBlockSelection = () => {
         const selection = window.getSelection();
         if (!selection || selection.rangeCount === 0) {
@@ -3668,6 +4359,25 @@ function bindManuscriptBoundaryProtection() {
         const anchorBlock = getBlock(selection.anchorNode);
         const focusBlock = getBlock(selection.focusNode);
         return Boolean(anchorBlock && focusBlock && anchorBlock !== focusBlock);
+    };
+    // event.target for a real, physically-dispatched key event is whatever
+    // element currently has DOM FOCUS — which is the overlay itself (the
+    // one and only contenteditable="true" root), not the specific message
+    // span the caret happens to be inside. getBlock(event.target) therefore
+    // resolved to null for every real keypress once focus lived on the
+    // overlay rather than a span, silently skipping every check that
+    // followed — confirmed as the actual root cause of Enter still
+    // splitting a Scene Beat into two spans live (event.target-based
+    // resolution never even reached the isBeatBlock gate). The Selection's
+    // anchor node is always the caret's true container regardless of which
+    // ancestor holds focus, and is what every other check in this closure
+    // (isCrossBlockSelection, insertPlainText) already correctly relies on.
+    const getBlockFromSelection = () => {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) {
+            return null;
+        }
+        return getBlock(selection.getRangeAt(0).startContainer);
     };
     // document.execCommand('insertText', ...) was tried first (matches core's
     // own editing-command usage elsewhere) but Chrome's contenteditable engine
@@ -3713,12 +4423,133 @@ function bindManuscriptBoundaryProtection() {
         }
     };
 
+    // Finds the adjacent EDITABLE block in the given direction, skipping
+    // past any non-block siblings (Scene Beat markers, Regenerate button)
+    // that sit between two message spans — a Scene Beat's own header/
+    // controls are never merge targets themselves, only its text span is
+    // (and that span is still excluded separately below via the beat-text
+    // class check, since Stage 2 only wires the backspace/previous
+    // direction — see handleManuscriptBoundaryMerge's own comment).
+    const getAdjacentBlock = (block, direction) => {
+        let sibling = direction === 'previous' ? block.previousElementSibling : block.nextElementSibling;
+        while (sibling && !sibling.hasAttribute('data-remodel-manuscript-block')) {
+            sibling = direction === 'previous' ? sibling.previousElementSibling : sibling.nextElementSibling;
+        }
+        return sibling;
+    };
+
+    // Performs a real chat[]-level merge instead of just blocking the
+    // boundary-crossing edit, per the user's explicit sign-off: true
+    // single-document feel, backspacing/forward-deleting across a message
+    // boundary should actually join the two messages, discarding any
+    // unused swipe alternates on the absorbed one. Scene Beats are always a
+    // hard stop in both directions (never absorbed, never absorb) — a beat
+    // is a distinct user-authored instruction with its own swipe/
+    // regenerate/delete lifecycle (requirement #1 from the plan), so
+    // silently folding its text into surrounding AI prose would corrupt
+    // that lifecycle exactly as explicit-action-only merging already
+    // avoids for handleStoryBeatDelete. Stage 2 only wires the
+    // backspace/'previous' direction; forward-delete/'next' plus the full
+    // beat-boundary check on THAT side is Stage 3.
+    async function handleManuscriptBoundaryMerge(block, direction) {
+        const adjacent = getAdjacentBlock(block, direction);
+        if (!adjacent) {
+            return false; // start/end of the whole manuscript — nothing to merge into
+        }
+        if (block.classList.contains('remodel-manuscript-beat-text')
+            || adjacent.classList.contains('remodel-manuscript-beat-text')) {
+            return false; // Scene Beat boundary — never merged, either side
+        }
+
+        // Which message SURVIVES differs by direction, and getting this
+        // backwards silently swaps whose swipe alternates get kept vs
+        // discarded (confirmed as a real bug during review, caught before
+        // ever shipping the 'next' direction): backspace at the START of
+        // `block` absorbs `block` INTO the previous message (`adjacent`
+        // survives) — symmetrically, forward-delete at the END of `block`
+        // absorbs the NEXT message (`adjacent`) INTO `block` (`block`
+        // survives). In both cases the message the user is actively
+        // standing in when they press the key is the one that keeps going;
+        // the other one is what disappears.
+        const keepMesId = Number((direction === 'previous' ? adjacent : block).dataset.remodelMesid);
+        const absorbMesId = Number((direction === 'previous' ? block : adjacent).dataset.remodelMesid);
+        if (!Number.isFinite(keepMesId) || !Number.isFinite(absorbMesId)) {
+            return false;
+        }
+
+        const result = await mergeTwoAdjacentMessages(keepMesId, absorbMesId);
+        if (!result) {
+            return false;
+        }
+        mergeManuscriptSnapshotEntries(absorbMesId);
+
+        // Reflect the merge live in the overlay immediately, rather than
+        // waiting for the next full renderManuscriptOverlay() rebuild — the
+        // user is actively typing right now and a full rebuild mid-keystroke
+        // would nuke their caret (see renderManuscriptOverlay's own
+        // live-editing note). Fold the absorbed block's text into the
+        // surviving one directly, in the same order mergeTwoAdjacentMessages
+        // used, and place the caret at the exact join point.
+        const survivorEl = direction === 'previous' ? adjacent : block;
+        const removedEl = direction === 'previous' ? block : adjacent;
+        // The join point is always the SURVIVOR's own pre-merge text
+        // length, read here before its textContent is overwritten below.
+        // True in both directions because the survivor is always
+        // chronologically the earlier of the two messages, so its own text
+        // is always the first half of the merged result: 'previous' merges
+        // adjacent.mes + block.mes (survivor=adjacent); 'next' merges
+        // block.mes + adjacent.mes (survivor=block). Either way, the
+        // survivor's own pre-merge length is exactly where its text ends
+        // and the absorbed text begins.
+        const joinOffset = survivorEl.textContent?.length ?? 0;
+        survivorEl.textContent = result.mergedText;
+        survivorEl.dataset.remodelMesid = String(result.survivingIndex);
+        removedEl.remove();
+
+        // deleteMessage() (inside mergeTwoAdjacentMessages) splices chat[],
+        // shifting every message ABOVE absorbMesId down by 1 — exactly the
+        // same bookkeeping mergeManuscriptSnapshotEntries already does for
+        // the snapshot, but the live DOM spans' own data-remodel-mesid
+        // attributes need the identical correction, or a SECOND merge later
+        // in the same session reads a stale mesId and silently targets the
+        // wrong chat[] message. Confirmed as a real bug via live multi-merge
+        // testing: without this, merging twice in one session merged the
+        // WRONG pair the second time, silently dropping a message's text
+        // entirely rather than merging the intended one.
+        // Every mesId-carrying element in the overlay, not just message
+        // spans — the Scene Beat marker (buildManuscriptBeatMarker) and its
+        // Regenerate button carry their own data-remodel-mesid too, and
+        // neither has data-remodel-manuscript-block, so a selector scoped
+        // to only that attribute would miss them. A beat that sits AFTER
+        // the merge point would otherwise keep pointing its Hide/Delete/
+        // Regenerate handlers at the wrong (stale) chat[] message.
+        chat.querySelectorAll('[data-remodel-mesid]').forEach((el) => {
+            const elMesId = Number(el.dataset.remodelMesid);
+            if (Number.isFinite(elMesId) && elMesId > absorbMesId && el !== survivorEl) {
+                el.dataset.remodelMesid = String(elMesId - 1);
+            }
+        });
+
+        const targetNode = survivorEl.firstChild;
+        if (targetNode) {
+            const caretRange = document.createRange();
+            const maxOffset = targetNode.nodeType === Node.TEXT_NODE ? targetNode.textContent.length : 0;
+            caretRange.setStart(targetNode, Math.min(joinOffset, maxOffset));
+            caretRange.collapse(true);
+            const selection = window.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(caretRange);
+        }
+
+        return true;
+    }
+
     chat.addEventListener('beforeinput', (event) => {
         if (!isActive() || event.isComposing) {
             return; // IME composition: let it run uninterrupted rather than risk corrupting it
         }
 
-        const block = getBlock(event.target);
+        const block = getBlockFromSelection();
 
         if (!block) {
             return;
@@ -3736,12 +4567,40 @@ function bindManuscriptBoundaryProtection() {
             return;
         }
 
-        if (event.inputType === 'deleteContentBackward'
-            && range.startContainer === (block.firstChild ?? block) && range.startOffset === 0) {
-            event.preventDefault(); // would merge into the previous block
-        } else if (event.inputType === 'deleteContentForward'
-            && range.endContainer === (block.lastChild ?? block) && range.endOffset === (block.textContent?.length ?? 0)) {
-            event.preventDefault(); // would merge the next block into this one
+        const atStart = range.startContainer === (block.firstChild ?? block) && range.startOffset === 0;
+        const atEnd = range.endContainer === (block.lastChild ?? block) && range.endOffset === (block.textContent?.length ?? 0);
+
+        if (event.inputType === 'deleteContentBackward' && atStart) {
+            event.preventDefault(); // native delete never gets to run — we replay it as a real merge, or block it
+            // Scene Beats are checked HERE, before handleManuscriptBoundaryMerge
+            // is ever called — not delegated to a check inside that function.
+            // A beat at the boundary must be a hard, immediate no-op: nothing
+            // deleted, nothing merged, full stop. Confirmed as a real bug:
+            // relying on the merge function's own internal beat check wasn't
+            // enough on its own to guarantee this — the gate now lives at the
+            // single point every boundary-crossing keystroke passes through.
+            if (isBeatBlock(block)) {
+                return;
+            }
+            handleManuscriptBoundaryMerge(block, 'previous');
+        } else if (event.inputType === 'deleteContentForward' && atEnd) {
+            event.preventDefault(); // native delete never gets to run — we replay it as a real merge, or block it
+            if (isBeatBlock(block)) {
+                return;
+            }
+            handleManuscriptBoundaryMerge(block, 'next');
+        } else if (event.inputType === 'insertParagraph') {
+            // Real, physical Enter keypresses were confirmed to still
+            // create a brand-new block-level element (native contenteditable's
+            // default action for a paragraph break) despite the keydown
+            // listener below calling preventDefault() first — keydown's
+            // preventDefault() does not reliably suppress the SEPARATE
+            // beforeinput event that follows it in every engine/situation,
+            // and this handler previously had no insertParagraph branch at
+            // all to catch it as a second line of defense. Blocked here
+            // unconditionally; the keydown handler is what actually inserts
+            // the replacement literal \n.
+            event.preventDefault();
         }
     });
 
@@ -3755,19 +4614,35 @@ function bindManuscriptBoundaryProtection() {
             return;
         }
 
-        if (!getBlock(event.target)) {
+        const block = getBlockFromSelection();
+        if (!block) {
             return;
         }
 
         event.preventDefault();
-        // A literal \n keeps everything as one block/one chat[] entry while
-        // still letting multi-paragraph prose exist within a single
-        // message, exactly as already-normal for any chat[].mes value.
+
+        // Confirmed as a real, reported bug, live-verified via real
+        // (non-synthetic) CDP keyboard dispatch: resolving the block via
+        // getBlock(event.target) was broken the moment DOM focus lived on
+        // the overlay root rather than the specific span (the normal case,
+        // since the overlay is the only contenteditable="true" element) —
+        // event.target for a keydown is the FOCUSED element, not the
+        // caret's container, so getBlock resolved to null and this entire
+        // handler silently no-opped on every real keypress, leaving
+        // native Enter's default paragraph-split behavior to run
+        // unblocked (the actual cause of Enter creating a stray second
+        // boxed span inside a beat). Fixed by resolving via
+        // getBlockFromSelection() (Selection.anchorNode is always the
+        // caret's true container) instead of event.target — this alone
+        // fixes Enter for beats too, same as any other block: a literal
+        // \n in place, never a preventDefault()-only no-op. Beats are NOT
+        // a hard stop for Enter (unlike merge/delete) — multi-line beat
+        // text is expected, same as any other block.
         insertPlainText('\n');
     });
 
     const handlePasteOrDrop = (event) => {
-        if (!isActive() || !getBlock(event.target)) {
+        if (!isActive() || !getBlockFromSelection()) {
             return;
         }
 
@@ -3783,49 +4658,6 @@ function bindManuscriptBoundaryProtection() {
 
     chat.addEventListener('paste', handlePasteOrDrop);
     chat.addEventListener('drop', handlePasteOrDrop);
-}
-
-// Approximates a raw-markdown-source character offset from a click position,
-// by walking the RENDERED DOM's text nodes (accumulating their rendered
-// plaintext lengths) up to the clicked position, using the browser's native
-// caretRangeFromPoint/caretPositionFromPoint. Since markdown syntax chars
-// (**, *, etc.) are stripped by rendering, this offset is exact for plain
-// prose and only approximate immediately around formatting — acceptable
-// per-design, not a precise source map (no such mapping exists anywhere in
-// SillyTavern; messageFormatting() is a one-way markdown-to-HTML renderer).
-function estimateRawTextOffsetFromClick(renderedTextEl, clientX, clientY) {
-    let caretNode = null;
-    let caretOffsetInNode = 0;
-
-    if (document.caretPositionFromPoint) {
-        const pos = document.caretPositionFromPoint(clientX, clientY);
-        if (!pos) return null;
-        caretNode = pos.offsetNode;
-        caretOffsetInNode = pos.offset;
-    } else if (document.caretRangeFromPoint) {
-        const range = document.caretRangeFromPoint(clientX, clientY);
-        if (!range) return null;
-        caretNode = range.startContainer;
-        caretOffsetInNode = range.startOffset;
-    } else {
-        return null;
-    }
-
-    if (!renderedTextEl.contains(caretNode)) {
-        return null; // click landed outside the message text (e.g. on the Scene Beat header)
-    }
-
-    const walker = document.createTreeWalker(renderedTextEl, NodeFilter.SHOW_TEXT);
-    let accumulatedLength = 0;
-    let node;
-    while ((node = walker.nextNode())) {
-        if (node === caretNode) {
-            return accumulatedLength + caretOffsetInNode;
-        }
-        accumulatedLength += node.textContent.length;
-    }
-
-    return accumulatedLength; // caret node not found as a text node itself — fall back to end
 }
 
 // Drives core's real, hidden .mes_edit/.mes_edit_done/.mes_edit_cancel
@@ -3894,8 +4726,12 @@ function openEditCloseWith(mesId, closeSelector, newValue) {
 // reimplementation, and .mes_edit_cancel is unconditionally present in the
 // DOM (just CSS-hidden) so it's clickable even though never visible.
 async function settleManuscriptEdits(snapshot, { discard = false } = {}) {
-    const chatEl = getRealChatElement();
-    const scrollTopBeforeCommit = chatEl?.scrollTop;
+    // The overlay is the real scroll container now (#chat itself is
+    // display-collapsed, see style.css) — captured here because
+    // renderManuscriptOverlay's rebuild at the end of this function resets
+    // scroll to 0 by clearing the overlay's content.
+    const overlayEl = getRealManuscriptOverlay();
+    const scrollTopBeforeCommit = overlayEl?.scrollTop;
 
     // Read every block's dirty/clean text BEFORE touching anything — once the
     // replay below starts clicking .mes_edit, core's own focus() call on the
@@ -3920,15 +4756,11 @@ async function settleManuscriptEdits(snapshot, { discard = false } = {}) {
     // before the loop let a completion-watcher read stale, still-being-
     // replayed DOM text as final.
     const diffs = snapshot.map(({ mesId, originalRaw }) => {
-        const block = document.querySelector(`#chat .mes[mesid="${mesId}"] .mes_text[data-remodel-manuscript-block]`);
+        const block = document.querySelector(`#${MANUSCRIPT_OVERLAY_ID} [data-remodel-mesid="${mesId}"][data-remodel-manuscript-block]`);
         const currentRaw = block ? block.textContent : originalRaw;
         return { mesId, currentRaw, dirty: !discard && currentRaw !== originalRaw };
     });
 
-    document.querySelectorAll('[data-remodel-manuscript-block]').forEach((el) => {
-        el.removeAttribute('contenteditable');
-        delete el.dataset.remodelManuscriptBlock;
-    });
     endManuscriptEdit();
 
     for (const { mesId, currentRaw, dirty } of diffs) {
@@ -3943,12 +4775,17 @@ async function settleManuscriptEdits(snapshot, { discard = false } = {}) {
         }
     }
 
-    document.body.classList.remove('remodel-manuscript-editing');
-    updateStoryActionBarState();
+    // Unlike the old click-to-enter model, there is no "exit" state to
+    // return to — the manuscript is continuously editable, so committing
+    // just means "rebuild the overlay from whatever chat[] now says" (picks
+    // up anything updateMessage's macro/regex pipeline changed on write)
+    // rather than tearing edit mode down. renderManuscriptOverlay() already
+    // re-adds remodel-manuscript-editing and calls updateStoryActionBarState.
+    renderManuscriptOverlay();
 
-    if (chatEl && scrollTopBeforeCommit !== undefined) {
+    if (overlayEl && scrollTopBeforeCommit !== undefined) {
         requestAnimationFrame(() => {
-            chatEl.scrollTop = scrollTopBeforeCommit;
+            overlayEl.scrollTop = scrollTopBeforeCommit;
         });
     }
 }
@@ -3956,10 +4793,10 @@ async function settleManuscriptEdits(snapshot, { discard = false } = {}) {
 // Whole-manuscript commit trigger: focus leaving the entire manuscript-edit
 // DOM subtree (not just one block — moving the caret between two editable
 // blocks is normal in-mode navigation, not a commit). focusout bubbles
-// (unlike blur), so this can stay a single delegated listener on #chat
-// rather than one per block.
+// (unlike blur), so this can stay a single delegated listener on the
+// overlay rather than one per block.
 function bindStoryManuscriptEditCommit() {
-    getRealChatElement()?.addEventListener('focusout', (event) => {
+    ensureManuscriptOverlay()?.addEventListener('focusout', (event) => {
         if (!document.body.classList.contains('remodel-manuscript-editing')) {
             return;
         }

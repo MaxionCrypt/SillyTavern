@@ -35,6 +35,12 @@
 }
 
 body.st-remodel-active {
+  /* Manuscript body font — deliberately separate from --remodel-serif
+     (Cinzel, a decorative display face used for UI chrome/headers, not
+     meant for long-form reading). System-safe stack, no new font files:
+     changed live by the Manuscript toolbar's font picker via this one
+     variable, persisted per-session in session-state.js. */
+  --remodel-manuscript-font: Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', serif;
   --solid-color: rgba(20, 21, 26, 0.95);
   --border-color: rgba(255, 255, 255, 0.08);
   --card-radius: 12px;
@@ -750,16 +756,22 @@ body.remodel-story-workspace-active #chat .mes[is_user="true"].remodel-beat-coll
   display: none !important;
 }
 
-/* Scene Beat header — label + Hide/Show toggle above each user message. */
+/* Scene Beat header — label + Hide/Show toggle above each user message.
+   Matches both the real (hidden) #chat row's header AND its live clone in
+   #remodel-manuscript-overlay (buildManuscriptBeatMarker, timeline-spine.js)
+   — the clone carries the exact same classes so it needs the exact same
+   rules, just not scoped to #chat since it doesn't live there. */
 
-body.remodel-story-workspace-active #chat .remodel-beat-header {
+body.remodel-story-workspace-active #chat .remodel-beat-header,
+body.remodel-story-workspace-active #remodel-manuscript-overlay .remodel-beat-header {
   display: flex !important;
   align-items: center !important;
   justify-content: space-between !important;
   margin-bottom: 4px !important;
 }
 
-body.remodel-story-workspace-active #chat .remodel-beat-label {
+body.remodel-story-workspace-active #chat .remodel-beat-label,
+body.remodel-story-workspace-active #remodel-manuscript-overlay .remodel-beat-label {
   font-family: var(--remodel-serif) !important;
   font-size: 10px !important;
   letter-spacing: 0.14em !important;
@@ -770,14 +782,17 @@ body.remodel-story-workspace-active #chat .remodel-beat-label {
   gap: 5px !important;
 }
 
-body.remodel-story-workspace-active #chat .remodel-beat-header-actions {
+body.remodel-story-workspace-active #chat .remodel-beat-header-actions,
+body.remodel-story-workspace-active #remodel-manuscript-overlay .remodel-beat-header-actions {
   display: flex !important;
   align-items: center !important;
   gap: 10px !important;
 }
 
 body.remodel-story-workspace-active #chat .remodel-beat-hide,
-body.remodel-story-workspace-active #chat .remodel-beat-delete {
+body.remodel-story-workspace-active #chat .remodel-beat-delete,
+body.remodel-story-workspace-active #remodel-manuscript-overlay .remodel-beat-hide,
+body.remodel-story-workspace-active #remodel-manuscript-overlay .remodel-beat-delete {
   appearance: none !important;
   background: transparent !important;
   border: 0 !important;
@@ -790,18 +805,24 @@ body.remodel-story-workspace-active #chat .remodel-beat-delete {
   padding: 0 !important;
 }
 
-body.remodel-story-workspace-active #chat .remodel-beat-delete:hover {
+body.remodel-story-workspace-active #chat .remodel-beat-delete:hover,
+body.remodel-story-workspace-active #remodel-manuscript-overlay .remodel-beat-delete:hover {
   color: rgba(255, 130, 130, 0.85) !important;
 }
 
-body.remodel-story-workspace-active #chat .remodel-beat-hide:hover {
+body.remodel-story-workspace-active #chat .remodel-beat-hide:hover,
+body.remodel-story-workspace-active #remodel-manuscript-overlay .remodel-beat-hide:hover {
   color: var(--tarot-gold-bright) !important;
 }
 
 /* Regenerate — only ever present on the latest Scene Beat (see
-   refreshStoryRegenerateButtons in timeline-spine.js). */
+   renderManuscriptOverlay in timeline-spine.js, which now builds this
+   button directly into the overlay — the real #chat row's copy is kept for
+   bookkeeping but never actually visible, so both locations are matched
+   here for safety, same as the beat-header rules above). */
 
-body.remodel-story-workspace-active #chat .remodel-beat-regenerate {
+body.remodel-story-workspace-active #chat .remodel-beat-regenerate,
+body.remodel-story-workspace-active #remodel-manuscript-overlay .remodel-beat-regenerate {
   appearance: none !important;
   display: block !important;
   margin: 6px 0 0 !important;
@@ -818,12 +839,14 @@ body.remodel-story-workspace-active #chat .remodel-beat-regenerate {
   transition: color 0.16s ease, border-color 0.16s ease !important;
 }
 
-body.remodel-story-workspace-active #chat .remodel-beat-regenerate:hover {
+body.remodel-story-workspace-active #chat .remodel-beat-regenerate:hover,
+body.remodel-story-workspace-active #remodel-manuscript-overlay .remodel-beat-regenerate:hover {
   color: var(--tarot-gold-bright) !important;
   border-color: var(--tarot-gold-bright) !important;
 }
 
-body.remodel-story-workspace-active #chat .remodel-beat-regenerate.remodel-story-disabled {
+body.remodel-story-workspace-active #chat .remodel-beat-regenerate.remodel-story-disabled,
+body.remodel-story-workspace-active #remodel-manuscript-overlay .remodel-beat-regenerate.remodel-story-disabled {
   opacity: 0.4 !important;
   pointer-events: none !important;
 }
@@ -860,25 +883,111 @@ body.remodel-story-workspace-active #chat .edit_textarea {
   caret-color: rgba(255, 255, 255, 0.9) !important;
 }
 
-/* Unified manuscript editor (timeline-spine.js: bindStoryManuscriptEditing).
-   While active, every visible .mes_text becomes contenteditable and holds
-   raw text (not Showdown-rendered HTML) — no new wrapper element, so
-   font/color/line-height/Scene-Beat-boxing are already identical to read
-   mode for free (same element, just toggled). Only what genuinely differs
-   from read mode needs a rule here. */
+/* Unified manuscript editor (timeline-spine.js: renderManuscriptOverlay).
+   The real #chat rows stay in the DOM as the data source but are hidden —
+   #remodel-manuscript-overlay is the actual visible/editable surface, a
+   SEPARATE contenteditable element holding one <span> per message plus
+   non-editable Scene Beat header clones, so per-message chrome (avatars,
+   buttons, swipe arrows) never has to be excluded piece by piece from the
+   editable region (see ensureManuscriptOverlay's own comment). */
 
-body.remodel-manuscript-editing #chat .mes_text[contenteditable="true"] {
-  /* Suppress the default contenteditable focus ring — an outline around one
-     block while its siblings aren't focused would visibly reintroduce the
-     exact message boundary this whole feature exists to erase. */
+/* #chat is core's own scroll container (#chat { overflow-y: scroll;
+   max-height: calc(100vh - ...) }, public/style.css:858) — hiding it
+   outright would remove the page's actual scrolling region entirely, not
+   just the visible message rows. Kept in-flow but visually collapsed
+   (height/padding zeroed, content clipped) so it still occupies its layout
+   slot and the overlay below inherits the matching scroll/sizing rules
+   directly rather than trying to independently replicate core's own
+   responsive max-height calc. */
+body.remodel-story-workspace-active #chat {
+  padding: 0 !important;
+  border: none !important;
+}
+
+body.remodel-story-workspace-active #chat > .mes {
+  display: none !important;
+}
+
+body.remodel-story-workspace-active #remodel-manuscript-overlay {
+  display: block !important;
+  max-height: calc(100vh - calc(var(--topBarBlockSize) + var(--bottomFormBlockSize))) !important;
+  overflow-x: hidden !important;
+  overflow-y: scroll !important;
+  /* Widened from 620px to fit ~13 words/line at the manuscript font/size
+     below (was tuned for the old font-size:16px on a narrower measure —
+     a real serif at reading size needs more horizontal room per word). */
+  width: min(760px, calc(100% - 44px)) !important;
+  margin: 0 auto !important;
+  padding: 20px 0 !important;
+}
+
+/* AI-message spans read as plain flowing prose, matching the old .mes_text
+   rule this replaces. display:block (not inline) + margin gives each
+   message its own visual paragraph break — in the original per-.mes design
+   this separation came for free from each message being its own row in
+   #chat's layout; flattening everything into one shared contenteditable
+   region lost that for free spacing, so it's set explicitly here instead. */
+body.remodel-story-workspace-active #remodel-manuscript-overlay > span {
+  display: block !important;
+  margin-bottom: 20px !important;
+  font-family: var(--remodel-manuscript-font) !important;
+  font-size: 17px !important;
+  line-height: 1.65 !important;
+  color: rgba(238, 235, 245, 0.92) !important;
+}
+
+/* Scene Beat message spans keep the exact same boxed treatment as the real
+   .mes[is_user="true"] .mes_text rule above (values copied verbatim, not
+   changed) — identified directly via a class the JS sets at creation time
+   (renderManuscriptOverlay), not via sibling position: an adjacent-sibling
+   selector broke the moment a beat was collapsed, since a collapsed beat
+   contributes no span at all, silently making the "next sibling" the
+   FOLLOWING message's span instead and wrapping the wrong text in the box. */
+body.remodel-story-workspace-active #remodel-manuscript-overlay > .remodel-manuscript-beat-text {
+  font-size: 11.5px !important;
+  line-height: 1.55 !important;
+  color: rgba(255, 255, 255, 0.92) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-radius: 6px !important;
+  padding: 8px 12px !important;
+  background: rgba(255, 255, 255, 0.03) !important;
+}
+
+body.remodel-story-workspace-active #remodel-manuscript-overlay .remodel-manuscript-beat-marker {
+  cursor: default !important;
+  margin-top: 20px !important;
+}
+
+/* Rejected-edit flash (bindManuscriptBeatGuard, timeline-spine.js): a Scene
+   Beat is never predicted/blocked before a keystroke lands anymore — native
+   contenteditable's own boundary handling around contenteditable="false"
+   siblings is too inconsistent across browsers to reliably preventDefault
+   correctly (confirmed via direct testing: the old predict-and-block
+   approach kept failing for beats specifically, in ways synthetic event
+   tests couldn't reproduce). Instead the edit is allowed to happen, a
+   MutationObserver catches the violation immediately afterward, and the
+   beat is restored — this class marks that moment visibly rather than
+   leaving the revert silent, so a rejected edit reads as "blocked", not as
+   "nothing happened for no reason".) */
+body.remodel-story-workspace-active #remodel-manuscript-overlay .remodel-manuscript-beat-marker.remodel-beat-guard-flash,
+body.remodel-story-workspace-active #remodel-manuscript-overlay .remodel-manuscript-beat-text.remodel-beat-guard-flash {
+  outline: 2px solid rgba(255, 100, 100, 0.85) !important;
+  outline-offset: 2px !important;
+  transition: outline-color 0.4s ease !important;
+}
+
+body.remodel-manuscript-editing #remodel-manuscript-overlay {
+  /* Suppress the default contenteditable focus ring — a single outline
+     around the whole shared editable region is fine (unlike the old
+     per-block model, there's no seam here to worry about reintroducing). */
   outline: none !important;
   caret-color: rgba(255, 255, 255, 0.9) !important;
   cursor: text !important;
   /* Required, not cosmetic: raw text assigned via textContent has no <p>/
      <br> structure, only literal \n characters. Without this, a
-     multi-paragraph message collapses onto one line the instant edit mode
-     is entered. Also what makes the boundary-protection design's "Enter
-     inserts a literal \n" behavior actually look like a line break. */
+     multi-paragraph message collapses onto one line. Also what makes the
+     boundary-protection design's "Enter inserts a literal \n" behavior
+     actually look like a line break. */
   white-space: pre-wrap !important;
 }
 
@@ -1023,40 +1132,54 @@ body.remodel-story-workspace-active.remodel-story-input-open #send_form.remodel-
   display: none !important;
 }
 
-/* Panel group — Scene Summary / Prior Scene Text / Prompt Preview each
-   collapse their own body already, but as three permanently-visible bars
-   they still eat vertical space above the manuscript even fully collapsed.
-   Hidden behind one small trigger button; clicking it reveals the group of
-   (still individually collapsed) bars, clicking a bar then expands just
-   that one's body, same as before this wrapper existed. */
+/* Panel icon column — Scene Summary / Prior Scene Text / Prompt Preview /
+   Manuscript Toolbar each toggle their own panel body independently
+   (toggleSceneSummaryPanel/togglePriorTextPanel/togglePromptPreviewPanel/
+   toggleManuscriptToolbarPanel). Used to sit behind one shared hamburger
+   trigger that had to be opened before any single panel's own strip-header
+   was even clickable; replaced with a fixed vertical column of square
+   icon buttons floating to the right of the sidebar, each independently
+   clickable, no group-level gate. The panel BODIES themselves
+   (#remodel-panelbodies) are a separate container that keeps the original
+   above-the-manuscript docked/expand-in-place behavior unchanged — only
+   the trigger moved out of #sheld's flex flow and off to the side. */
 
-body.remodel-story-workspace-active #remodel-panelgroup-trigger {
+body.remodel-story-workspace-active #remodel-panelgroup {
+  position: fixed !important;
+  top: calc(var(--topBarBlockSize, 40px) + 16px) !important;
+  right: 10px !important;
+  z-index: 20 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+}
+
+body.remodel-story-workspace-active .remodel-panelgroup-icon {
   flex: 0 0 auto !important;
-  order: -1 !important;
-  align-self: center !important;
-  margin: 10px 0 0 !important;
-  width: 30px !important;
-  height: 30px !important;
+  width: 34px !important;
+  height: 34px !important;
   box-sizing: border-box !important;
   appearance: none !important;
   background: var(--solid-color) !important;
   border: 1px solid rgba(198, 164, 74, 0.28) !important;
-  border-radius: 999px !important;
+  border-radius: 8px !important;
   color: var(--tarot-gold) !important;
   cursor: pointer !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
-  font-size: 12px !important;
-  transition: color 0.16s ease, border-color 0.16s ease !important;
+  font-size: 14px !important;
+  box-shadow: var(--card-shadow) !important;
+  transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease !important;
 }
 
-body.remodel-story-workspace-active #remodel-panelgroup-trigger:hover {
+body.remodel-story-workspace-active .remodel-panelgroup-icon:hover {
   color: var(--tarot-gold-bright) !important;
   border-color: var(--tarot-gold-bright) !important;
+  background: rgba(198, 164, 74, 0.1) !important;
 }
 
-body.remodel-story-workspace-active #remodel-panelgroup {
+body.remodel-story-workspace-active #remodel-panelbodies {
   display: none !important;
   order: -1 !important;
   flex-direction: column !important;
@@ -1064,7 +1187,7 @@ body.remodel-story-workspace-active #remodel-panelgroup {
   margin: 8px 22px 0 !important;
 }
 
-body.remodel-story-workspace-active #remodel-panelgroup.remodel-panelgroup-open {
+body.remodel-story-workspace-active #remodel-panelbodies:has(.remodel-summary-open, .remodel-priortext-open, .remodel-promptpreview-open, .remodel-manuscript-toolbar-open) {
   display: flex !important;
 }
 
@@ -1074,7 +1197,22 @@ body.remodel-story-workspace-active #remodel-panelgroup.remodel-panelgroup-open 
    {{prior_scene_summaries}} macros — purely user-facing editing UI, no
    generation-time behavior lives here. */
 
+/* Confirmed as a real, reported bug: with the old strip-header design
+   (icon + label + chevron always visible), a collapsed panel still had
+   real content to show even with its body hidden. Once the header was
+   replaced by the floating icon column, the panel div itself kept
+   rendering as an empty bordered/padded box with nothing in it whenever
+   its own body wasn't open — visible as a stray empty bar above the
+   manuscript. Each panel now hides itself outright unless its own -open
+   class is set; the always-present #remodel-panelbodies container above
+   only governs whether the WHOLE group has any gap/margin to show at
+   all, not whether any individual, still-closed panel is visible. */
 body.remodel-story-workspace-active #remodel-scene-summary-panel {
+  display: none !important;
+}
+
+body.remodel-story-workspace-active #remodel-scene-summary-panel.remodel-summary-open {
+  display: block !important;
   flex: 0 0 auto !important;
   padding: 10px 16px !important;
   border: 1px solid rgba(198, 164, 74, 0.28) !important;
@@ -1185,6 +1323,11 @@ body.remodel-story-workspace-active .remodel-scene-summary-status {
    real, user-triggered action here (Load Preview), not automatic. */
 
 body.remodel-story-workspace-active #remodel-priortext-panel {
+  display: none !important;
+}
+
+body.remodel-story-workspace-active #remodel-priortext-panel.remodel-priortext-open {
+  display: block !important;
   flex: 0 0 auto !important;
   padding: 10px 16px !important;
   border: 1px solid rgba(198, 164, 74, 0.28) !important;
@@ -1394,6 +1537,11 @@ body.remodel-story-workspace-active .remodel-priortext-slot-meta {
    anywhere until the user leaves the drawer and sends/continues for real. */
 
 body.remodel-story-workspace-active #remodel-promptpreview-panel {
+  display: none !important;
+}
+
+body.remodel-story-workspace-active #remodel-promptpreview-panel.remodel-promptpreview-open {
+  display: block !important;
   flex: 0 0 auto !important;
   padding: 10px 16px !important;
   border: 1px solid rgba(198, 164, 74, 0.28) !important;
@@ -1514,6 +1662,92 @@ body.remodel-story-workspace-active .remodel-promptpreview-output {
   font-size: 11px !important;
   line-height: 1.5 !important;
   white-space: pre-wrap !important;
+}
+
+/* Manuscript Toolbar panel — same docked-above-manuscript card shape as
+   Scene Summary/Prior Scene Text/Prompt Preview, opened via its own
+   floating column icon (fa-font). Bold/Italic/Underline/Strikethrough
+   wrap the current manuscript selection in markdown delimiters
+   (wrapManuscriptSelectionWithMarkdown) — chat[].mes is markdown, same as
+   typing the syntax by hand; there is no separate rendered-rich-text
+   state to toggle. Font picker sets --remodel-manuscript-font on body,
+   which only #remodel-manuscript-overlay's prose rule reads. */
+
+body.remodel-story-workspace-active #remodel-manuscript-toolbar-panel {
+  display: none !important;
+}
+
+body.remodel-story-workspace-active #remodel-manuscript-toolbar-panel.remodel-manuscript-toolbar-open {
+  display: block !important;
+  flex: 0 0 auto !important;
+  padding: 10px 16px !important;
+  border: 1px solid rgba(198, 164, 74, 0.28) !important;
+  border-radius: var(--card-radius) !important;
+  background: var(--solid-color) !important;
+  box-sizing: border-box !important;
+}
+
+body.remodel-story-workspace-active .remodel-manuscript-toolbar-body {
+  display: none !important;
+}
+
+body.remodel-story-workspace-active #remodel-manuscript-toolbar-panel.remodel-manuscript-toolbar-open .remodel-manuscript-toolbar-body {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 10px !important;
+}
+
+body.remodel-story-workspace-active .remodel-manuscript-toolbar-row {
+  display: flex !important;
+  gap: 8px !important;
+}
+
+body.remodel-story-workspace-active .remodel-manuscript-toolbar-btn {
+  flex: 0 0 auto !important;
+  width: 30px !important;
+  height: 30px !important;
+  box-sizing: border-box !important;
+  appearance: none !important;
+  background: rgba(0, 0, 0, 0.24) !important;
+  border: 1px solid rgba(198, 164, 74, 0.2) !important;
+  border-radius: 6px !important;
+  color: var(--tarot-gold) !important;
+  cursor: pointer !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 12px !important;
+  transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease !important;
+}
+
+body.remodel-story-workspace-active .remodel-manuscript-toolbar-btn:hover {
+  color: var(--tarot-gold-bright) !important;
+  border-color: var(--tarot-gold-bright) !important;
+  background: rgba(198, 164, 74, 0.1) !important;
+}
+
+body.remodel-story-workspace-active .remodel-manuscript-toolbar-label {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+  color: var(--tarot-gold) !important;
+  font-family: var(--remodel-serif) !important;
+  font-size: 11px !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+}
+
+body.remodel-story-workspace-active .remodel-manuscript-toolbar-font {
+  flex: 1 1 auto !important;
+  box-sizing: border-box !important;
+  background: rgba(0, 0, 0, 0.24) !important;
+  border: 1px solid rgba(198, 164, 74, 0.2) !important;
+  border-radius: 6px !important;
+  padding: 6px 8px !important;
+  color: rgba(245, 240, 225, 0.92) !important;
+  font-family: var(--remodel-serif) !important;
+  font-size: 12px !important;
 }
 
 /* Guided Story-Scene creation prompt — a non-blocking "coach mark," not a
