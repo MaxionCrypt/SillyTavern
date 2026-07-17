@@ -36,6 +36,7 @@ import {
     clearGenerationWatchdog,
     clearSceneSummarySaveDebounce,
     consumeWizardFlow,
+    endManuscriptEdit,
     endOwnedGenerationRun,
     getGenerationState,
     getManuscriptEditState,
@@ -131,7 +132,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     observeTavernPanelState();
     bindStoryManuscriptEditing();
     bindManuscriptBoundaryProtection();
-    bindStoryWorkspaceEditCommit();
+    bindStoryManuscriptEditCommit();
     bindStoryLockInterceptor();
     bindStoryComposerContinueOnEmptySend();
     bindStoryAutoContinueEvents();
@@ -3766,37 +3767,150 @@ function estimateRawTextOffsetFromClick(renderedTextEl, clientX, clientY) {
     return accumulatedLength; // caret node not found as a text node itself — fall back to end
 }
 
-// Blur commits the edit (clicks the real, hidden .mes_edit_done). Escape
-// cancels for free via SillyTavern's own global keydown handler.
-function bindStoryWorkspaceEditCommit() {
-    document.getElementById('chat')?.addEventListener('blur', (event) => {
-        const textarea = event.target instanceof Element ? event.target.closest('#curEditTextarea') : null;
+// Drives core's real, hidden .mes_edit/.mes_edit_done/.mes_edit_cancel
+// buttons for exactly one message and waits for that message's write-back to
+// actually land in chat[] — messageEditDone (script.js) is not exported, so
+// this is the only way to invoke it. MESSAGE_UPDATED is emitted at the very
+// end of messageEditDone, strictly after chat[].mes has been overwritten and
+// the DOM re-rendered back to formatted HTML (both happen synchronously,
+// earlier in that same function, before any await) — confirmed directly by
+// reading messageEditDone's source rather than assumed. Listening for it is
+// therefore a reliable way to sequence N of these calls one at a time,
+// exactly as this_edit_mes_id (a single scalar slot) requires.
+function openEditCloseWith(mesId, closeSelector, newValue) {
+    const context = getContext();
+    return new Promise((resolve, reject) => {
+        const mesEl = document.querySelector(`#chat .mes[mesid="${mesId}"]`);
+        const editButton = mesEl?.querySelector('.mes_edit');
+        if (!mesEl || !editButton) {
+            reject(new Error(`Manuscript commit: message #${mesId} not found in DOM.`));
+            return;
+        }
 
-        if (!textarea || !document.body.classList.contains('remodel-story-workspace-active')) {
+        const onUpdated = (updatedMesId) => {
+            if (Number(updatedMesId) !== mesId) {
+                return; // some other message's edit resolved first (shouldn't happen — sequential by design)
+            }
+            context.eventSource.removeListener(context.eventTypes.MESSAGE_UPDATED, onUpdated);
+            // messageEditDone/messageEditCancel (script.js) clear this_edit_mes_id
+            // on the line immediately AFTER awaiting this same MESSAGE_UPDATED
+            // emit — meaning this listener can run (and this Promise can
+            // resolve) BEFORE that clear has actually happened, since it runs
+            // synchronously inside the emit's own internal listener loop.
+            // Resolving on setTimeout(0) instead of immediately guarantees
+            // the caller's continuation (this loop's next iteration, opening
+            // the next message) runs in a later tick, after this_edit_mes_id
+            // is definitely cleared — confirmed necessary via live diagnostic
+            // (without this, the next .mes_edit click could still see a
+            // stale this_edit_mes_id and take core's own
+            // auto-commit-previous-edit branch unexpectedly).
+            setTimeout(resolve, 0);
+        };
+        context.eventSource.on(context.eventTypes.MESSAGE_UPDATED, onUpdated);
+
+        editButton.click();
+        const textarea = mesEl.querySelector('#curEditTextarea');
+        if (!textarea) {
+            context.eventSource.removeListener(context.eventTypes.MESSAGE_UPDATED, onUpdated);
+            reject(new Error(`Manuscript commit: #curEditTextarea did not appear for message #${mesId}.`));
+            return;
+        }
+        if (newValue !== null) {
+            textarea.value = newValue;
+        }
+        mesEl.querySelector(closeSelector)?.click();
+    });
+}
+
+// Sequential, not parallel — this_edit_mes_id is a genuine single slot, so
+// two of these in flight at once would corrupt each other. Dirty blocks are
+// written back via open->overwrite->.mes_edit_done (real commit, re-runs
+// core's normal MESSAGE_EDITED/MESSAGE_UPDATED/saveChatConditional pipeline
+// exactly as a native single-message edit would). Untouched blocks are
+// restored via open->.mes_edit_cancel instead of hand-rolling a re-render —
+// slightly wasteful, but reuses core's own messageFormatting() call with
+// zero reimplementation, and .mes_edit_cancel is unconditionally present in
+// the DOM (just CSS-hidden) so it's clickable even though never visible.
+async function commitManuscriptEdits(snapshot) {
+    const chatEl = getRealChatElement();
+    const scrollTopBeforeCommit = chatEl?.scrollTop;
+
+    // Read every block's dirty/clean text BEFORE touching anything — once the
+    // replay below starts clicking .mes_edit, core's own focus() call on the
+    // freshly-created #curEditTextarea fires ANOTHER focusout on whatever was
+    // focused a moment ago. If remodel-manuscript-editing / the manuscript
+    // state were still "active" at that point, bindStoryManuscriptEditCommit's
+    // listener would treat that as a second, overlapping commit and start a
+    // concurrent, racing call into this same function — confirmed directly
+    // via live diagnostic (multiple .mes_edit buttons ended up open
+    // simultaneously, and content landed on the wrong message's DOM block via
+    // this_edit_mes_id cross-talk between the two racing sequences). Snapshot
+    // the diffs and tear down the "active" state synchronously, before the
+    // first await, so that re-entrant focusout during the replay below is a
+    // guaranteed no-op (getManuscriptEditState().snapshot is already null).
+    const diffs = snapshot.map(({ mesId, originalRaw }) => {
+        const block = document.querySelector(`#chat .mes[mesid="${mesId}"] .mes_text[data-remodel-manuscript-block]`);
+        const currentRaw = block ? block.textContent : originalRaw;
+        return { mesId, currentRaw, dirty: currentRaw !== originalRaw };
+    });
+
+    document.querySelectorAll('[data-remodel-manuscript-block]').forEach((el) => {
+        el.removeAttribute('contenteditable');
+        delete el.dataset.remodelManuscriptBlock;
+    });
+    document.body.classList.remove('remodel-manuscript-editing');
+    endManuscriptEdit();
+
+    for (const { mesId, currentRaw, dirty } of diffs) {
+        try {
+            if (dirty) {
+                await openEditCloseWith(mesId, '.mes_edit_done', currentRaw);
+            } else {
+                await openEditCloseWith(mesId, '.mes_edit_cancel', null);
+            }
+        } catch (err) {
+            console.error('Remodel manuscript editor: failed to settle message', mesId, err);
+        }
+    }
+
+    if (chatEl && scrollTopBeforeCommit !== undefined) {
+        requestAnimationFrame(() => {
+            chatEl.scrollTop = scrollTopBeforeCommit;
+        });
+    }
+}
+
+// Whole-manuscript commit trigger: focus leaving the entire manuscript-edit
+// DOM subtree (not just one block — moving the caret between two editable
+// blocks is normal in-mode navigation, not a commit). focusout bubbles
+// (unlike blur), so this can stay a single delegated listener on #chat
+// rather than one per block.
+function bindStoryManuscriptEditCommit() {
+    getRealChatElement()?.addEventListener('focusout', (event) => {
+        if (!document.body.classList.contains('remodel-manuscript-editing')) {
+            return;
+        }
+
+        const leavingBlock = event.target instanceof Element
+            ? event.target.closest('[data-remodel-manuscript-block]')
+            : null;
+        if (!leavingBlock) {
             return;
         }
 
         const relatedTarget = event.relatedTarget;
-        if (relatedTarget instanceof Element && relatedTarget.closest('.mes_edit_buttons')) {
-            return; // user clicked a real edit button directly — let that handler own it
+        const stayingInManuscript = relatedTarget instanceof Element
+            && relatedTarget.closest('[data-remodel-manuscript-block]');
+        if (stayingInManuscript) {
+            return; // caret moved to another block — still editing, not a commit
         }
 
-        // Same reasoning as bindStoryWorkspaceEditing: committing the edit
-        // (messageEditDone, native) re-renders the message and can shift
-        // scroll position, and native code only guards against that for the
-        // last message in the chat. Restore whatever the scroll position was
-        // right before committing, for every message.
-        const chatEl = document.getElementById('chat');
-        const scrollTopBeforeCommit = chatEl?.scrollTop;
-
-        textarea.closest('.mes')?.querySelector('.mes_edit_done')?.click();
-
-        if (chatEl && scrollTopBeforeCommit !== undefined) {
-            requestAnimationFrame(() => {
-                chatEl.scrollTop = scrollTopBeforeCommit;
-            });
+        const { snapshot } = getManuscriptEditState();
+        if (!snapshot) {
+            return;
         }
-    }, true); // capture — blur does not bubble
+        commitManuscriptEdits(snapshot);
+    }, true); // capture — focusout target resolution is more reliable in capture for delegated listeners
 }
 
 function getLinkedChatLabel(scene) {
