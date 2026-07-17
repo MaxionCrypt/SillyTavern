@@ -133,6 +133,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindStoryManuscriptEditing();
     bindManuscriptBoundaryProtection();
     bindStoryManuscriptEditCommit();
+    bindStoryManuscriptEditCancel();
     bindStoryLockInterceptor();
     bindStoryComposerContinueOnEmptySend();
     bindStoryAutoContinueEvents();
@@ -3826,39 +3827,48 @@ function openEditCloseWith(mesId, closeSelector, newValue) {
 // two of these in flight at once would corrupt each other. Dirty blocks are
 // written back via open->overwrite->.mes_edit_done (real commit, re-runs
 // core's normal MESSAGE_EDITED/MESSAGE_UPDATED/saveChatConditional pipeline
-// exactly as a native single-message edit would). Untouched blocks are
-// restored via open->.mes_edit_cancel instead of hand-rolling a re-render —
-// slightly wasteful, but reuses core's own messageFormatting() call with
-// zero reimplementation, and .mes_edit_cancel is unconditionally present in
-// the DOM (just CSS-hidden) so it's clickable even though never visible.
-async function commitManuscriptEdits(snapshot) {
+// exactly as a native single-message edit would). Untouched blocks — and
+// EVERY block, dirty or not, when discard is true (Escape) — are restored
+// via open->.mes_edit_cancel instead of hand-rolling a re-render — slightly
+// wasteful, but reuses core's own messageFormatting() call with zero
+// reimplementation, and .mes_edit_cancel is unconditionally present in the
+// DOM (just CSS-hidden) so it's clickable even though never visible.
+async function settleManuscriptEdits(snapshot, { discard = false } = {}) {
     const chatEl = getRealChatElement();
     const scrollTopBeforeCommit = chatEl?.scrollTop;
 
     // Read every block's dirty/clean text BEFORE touching anything — once the
     // replay below starts clicking .mes_edit, core's own focus() call on the
     // freshly-created #curEditTextarea fires ANOTHER focusout on whatever was
-    // focused a moment ago. If remodel-manuscript-editing / the manuscript
-    // state were still "active" at that point, bindStoryManuscriptEditCommit's
-    // listener would treat that as a second, overlapping commit and start a
-    // concurrent, racing call into this same function — confirmed directly
-    // via live diagnostic (multiple .mes_edit buttons ended up open
-    // simultaneously, and content landed on the wrong message's DOM block via
-    // this_edit_mes_id cross-talk between the two racing sequences). Snapshot
-    // the diffs and tear down the "active" state synchronously, before the
-    // first await, so that re-entrant focusout during the replay below is a
-    // guaranteed no-op (getManuscriptEditState().snapshot is already null).
+    // focused a moment ago. If the manuscript state were still "active" at
+    // that point, bindStoryManuscriptEditCommit's listener would treat that
+    // as a second, overlapping commit and start a concurrent, racing call
+    // into this same function — confirmed directly via live diagnostic
+    // (multiple .mes_edit buttons ended up open simultaneously, and content
+    // landed on the wrong message's DOM block via this_edit_mes_id cross-talk
+    // between the two racing sequences). Snapshot the diffs and null out
+    // getManuscriptEditState().snapshot synchronously, before the first
+    // await, so that a re-entrant focusout/Escape during the replay below is
+    // a guaranteed no-op in every OTHER binding that gates on that snapshot.
+    // The remodel-manuscript-editing BODY CLASS is deliberately NOT removed
+    // here: it stays present (and contenteditable/data-remodel-manuscript-block
+    // stay stripped only from the blocks, not the class) until the replay
+    // below fully finishes, so external callers — including tests — that
+    // watch the class as a "settled" signal don't observe a false-early
+    // completion while .mes_edit/.mes_edit_done/.mes_edit_cancel replay is
+    // still in flight. Confirmed via live diagnostic: removing the class
+    // before the loop let a completion-watcher read stale, still-being-
+    // replayed DOM text as final.
     const diffs = snapshot.map(({ mesId, originalRaw }) => {
         const block = document.querySelector(`#chat .mes[mesid="${mesId}"] .mes_text[data-remodel-manuscript-block]`);
         const currentRaw = block ? block.textContent : originalRaw;
-        return { mesId, currentRaw, dirty: currentRaw !== originalRaw };
+        return { mesId, currentRaw, dirty: !discard && currentRaw !== originalRaw };
     });
 
     document.querySelectorAll('[data-remodel-manuscript-block]').forEach((el) => {
         el.removeAttribute('contenteditable');
         delete el.dataset.remodelManuscriptBlock;
     });
-    document.body.classList.remove('remodel-manuscript-editing');
     endManuscriptEdit();
 
     for (const { mesId, currentRaw, dirty } of diffs) {
@@ -3872,6 +3882,8 @@ async function commitManuscriptEdits(snapshot) {
             console.error('Remodel manuscript editor: failed to settle message', mesId, err);
         }
     }
+
+    document.body.classList.remove('remodel-manuscript-editing');
 
     if (chatEl && scrollTopBeforeCommit !== undefined) {
         requestAnimationFrame(() => {
@@ -3909,8 +3921,37 @@ function bindStoryManuscriptEditCommit() {
         if (!snapshot) {
             return;
         }
-        commitManuscriptEdits(snapshot);
+        settleManuscriptEdits(snapshot);
     }, true); // capture — focusout target resolution is more reliable in capture for delegated listeners
+}
+
+// Escape discards the WHOLE in-progress manuscript edit, not just the
+// focused block — a deliberate departure from core's own global Escape
+// handler (script.js), which only closes whatever single message is
+// currently mid-edit via this_edit_mes_id. That handler is also bound on
+// document in the bubble phase, so capturing Escape here first and calling
+// stopPropagation() (not just preventDefault()) keeps it from ever seeing
+// the key at all — there is nothing for it to act on anyway, since by the
+// time settleManuscriptEdits's discard pass finishes, this_edit_mes_id has
+// already cycled through the real .mes_edit/.mes_edit_cancel replay itself.
+function bindStoryManuscriptEditCancel() {
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || event.isComposing) {
+            return;
+        }
+        if (!document.body.classList.contains('remodel-manuscript-editing')) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const { snapshot } = getManuscriptEditState();
+        if (!snapshot) {
+            return;
+        }
+        settleManuscriptEdits(snapshot, { discard: true });
+    }, true); // capture — must run before core's own document-level Escape handler
 }
 
 function getLinkedChatLabel(scene) {
