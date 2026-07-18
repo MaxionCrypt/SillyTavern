@@ -2249,18 +2249,55 @@ function ensureManuscriptToolbarPanel() {
         `;
         ensurePanelBodyContainer()?.append(panel);
     }
+
+    restoreManuscriptFontPreference();
 }
 
 function toggleManuscriptToolbarPanel() {
     document.getElementById('remodel-manuscript-toolbar-panel')?.classList.toggle('remodel-manuscript-toolbar-open');
 }
 
+// Confirmed as a real, reported bug: the font choice applied live but was
+// never actually saved anywhere, so it silently reset to the default on
+// every reload/reopened scene. It's a pure display preference (not story
+// content, doesn't belong in chat[]/chatMetadata), so localStorage is the
+// right persistence layer — survives reloads, applies globally rather than
+// per-chat, which matches how a font choice is normally understood ("my
+// reading font"), not scoped to one specific scene.
+const MANUSCRIPT_FONT_STORAGE_KEY = 'remodel-manuscript-font';
+
 function applyManuscriptFont(fontValue) {
     document.body.style.setProperty('--remodel-manuscript-font', fontValue);
 }
 
+function saveManuscriptFontPreference(fontValue) {
+    try {
+        localStorage.setItem(MANUSCRIPT_FONT_STORAGE_KEY, fontValue);
+    } catch (err) {
+        console.error('Remodel manuscript toolbar: failed to save font preference', err);
+    }
+}
+
+function restoreManuscriptFontPreference() {
+    let stored;
+    try {
+        stored = localStorage.getItem(MANUSCRIPT_FONT_STORAGE_KEY);
+    } catch (err) {
+        return;
+    }
+    if (!stored) {
+        return;
+    }
+    applyManuscriptFont(stored);
+    const select = document.querySelector('[data-remodel-manuscript-font-select]');
+    if (select) {
+        select.value = stored;
+    }
+}
+
 function handleManuscriptFontChange(selectEl) {
     applyManuscriptFont(selectEl.value);
+    saveManuscriptFontPreference(selectEl.value);
 }
 
 // Wraps the current selection (if it's inside a manuscript block) in the
@@ -4857,28 +4894,41 @@ async function settleManuscriptEdits(snapshot, { discard = false } = {}) {
 }
 
 // Whole-manuscript commit trigger: focus leaving the entire manuscript-edit
-// DOM subtree (not just one block — moving the caret between two editable
-// blocks is normal in-mode navigation, not a commit). focusout bubbles
-// (unlike blur), so this can stay a single delegated listener on the
-// overlay rather than one per block.
+// DOM subtree.
+//
+// Confirmed as a real, reported bug (traced live, not assumed): typed
+// edits made without triggering an AI generation never saved at all —
+// only edits that happened to run right before a generation started
+// (which force-commits separately, see the GENERATION_STARTED handler)
+// ever stuck. Root cause: clicking or placing a caret ANYWHERE inside a
+// contenteditable region gives real DOM focus to the contenteditable
+// ROOT itself (#remodel-manuscript-overlay) — the caret position within
+// it is tracked purely via Selection/Range, never by focusing individual
+// child <span> elements (confirmed directly: span.focus() silently does
+// nothing here, document.activeElement stays the overlay/body). This
+// listener is bound directly to the overlay (not delegated from a
+// parent), so for a focusout fired BECAUSE THE OVERLAY ITSELF lost
+// focus, event.target IS the overlay — .closest('[data-remodel-manuscript-block]')
+// on the overlay itself always returned null (the overlay is the
+// blocks' PARENT, not a block), so this guard silently discarded every
+// single real commit attempt, unconditionally, regardless of what was
+// clicked. There was no bug in WHEN this fired — only in a target check
+// that could never pass.
 function bindStoryManuscriptEditCommit() {
-    ensureManuscriptOverlay()?.addEventListener('focusout', (event) => {
+    const overlay = ensureManuscriptOverlay();
+    overlay?.addEventListener('focusout', (event) => {
         if (!document.body.classList.contains('remodel-manuscript-editing')) {
             return;
         }
 
-        const leavingBlock = event.target instanceof Element
-            ? event.target.closest('[data-remodel-manuscript-block]')
-            : null;
-        if (!leavingBlock) {
-            return;
-        }
-
+        // event.target is the overlay itself here (this listener is bound
+        // directly to it) — the real question is only where focus is
+        // GOING, not where it came from.
         const relatedTarget = event.relatedTarget;
         const stayingInManuscript = relatedTarget instanceof Element
-            && relatedTarget.closest('[data-remodel-manuscript-block]');
+            && overlay.contains(relatedTarget);
         if (stayingInManuscript) {
-            return; // caret moved to another block — still editing, not a commit
+            return; // focus moved to something still inside the manuscript (e.g. a beat's Hide/Delete button) — not a commit
         }
 
         const { snapshot } = getManuscriptEditState();
