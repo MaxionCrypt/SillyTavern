@@ -3941,14 +3941,40 @@ function enforceStoryWorkspaceInvariant() {
     // — this function's whole job is comparing what's painted against what's
     // actually true, so checking the truth function against itself would be
     // circular and this branch would never fire.
-    // Deliberately reads the PAINTED class here, not isRealStoryWorkspaceActive()
-    // — this function's whole job is comparing what's painted against what's
-    // actually true, so checking the truth function against itself would be
-    // circular and this branch would never fire.
     const isMarkedActive = document.body.classList.contains('remodel-story-workspace-active');
 
     if (!isMarkedActive) {
         return true; // nothing to correct
+    }
+
+    // Fixes the ROOT CAUSE, not just the symptom isChatContentSane() below
+    // catches after the fact — traced live (not assumed): browsing a
+    // character's sheet from the Tavern's Characters tab while a story
+    // chat is loaded repoints this_chid (via
+    // noteViewingCharacterForPastChats/setCharacterId,
+    // session-state.js/timeline-spine.js) at the BROWSED character,
+    // overwriting the story chat's real one. Confirmed directly: core's
+    // getCurrentChatId() (script.js) derives its answer from this_chid,
+    // not from context.chatId — so core's own openWelcomeScreen(), which
+    // core registers via eventSource.makeFirst(CHAT_CHANGED, ...) (running
+    // BEFORE this extension's own CHAT_CHANGED handler ever gets a chance
+    // to clean anything up), reads the wrong this_chid and concludes no
+    // chat is loaded, wiping the real one. resetPastChatsBridge()'s own
+    // assumption — "core has already set this_chid correctly by the time
+    // CHAT_CHANGED fires" — is true for a real chat switch, but false
+    // here, since openWelcomeScreen is racing to read the SAME this_chid
+    // this extension temporarily repointed. This restores this_chid to
+    // the scene's real linked character proactively, every time this
+    // invariant check runs, rather than only on an explicit "close the
+    // character editor" click — the explicit-close path still exists
+    // (restorePastChatsBridge) but proved too late for this specific race.
+    const scene = getActiveScene();
+    if (scene?.linkedChat?.characterId !== undefined) {
+        const expectedCharacterId = Number(scene.linkedChat.characterId);
+        const context = getContext();
+        if (Number.isFinite(expectedCharacterId) && context.characterId !== expectedCharacterId) {
+            setCharacterId(expectedCharacterId);
+        }
     }
 
     if (isRealStoryWorkspaceActive() && isChatContentSane()) {
