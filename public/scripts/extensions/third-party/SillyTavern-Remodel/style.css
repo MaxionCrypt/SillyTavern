@@ -1157,6 +1157,32 @@ body.remodel-story-workspace-active.remodel-story-input-open #send_form.remodel-
    above-the-manuscript docked/expand-in-place behavior unchanged — only
    the trigger moved out of #sheld's flex flow and off to the side. */
 
+/* Confirmed as a real, reported bug: every one of the manuscript's own
+   panels (icon column, Scene Summary, Prior Scene Text, Prompt Preview,
+   Manuscript Toolbar, the overlay itself) ONLY had a display rule while
+   body.remodel-story-workspace-active was present. That class is removed
+   the instant a story chat is closed (core's closeCurrentChat/CHAT_CHANGED
+   path), but the DOM elements themselves are NOT removed — they're reused
+   across chat switches. With no rule left to match once the class is
+   gone, each element fell back to its plain, unstyled default display
+   (block for a <div>), floating fully visible over the plain welcome
+   screen — exactly what a fresh page reload never showed, since a reload
+   never creates these elements at all until a workspace is actually
+   entered. Fixed with a real, unconditional default-hidden baseline for
+   every one of them here, unscoped from the body class entirely — the
+   scoped rules below now only turn visibility ON, never OFF; OFF is
+   always the true, unconditional default regardless of what class state
+   might be stale on body.*/
+#remodel-panelgroup,
+#remodel-panelbodies,
+#remodel-scene-summary-panel,
+#remodel-priortext-panel,
+#remodel-promptpreview-panel,
+#remodel-manuscript-toolbar-panel,
+#remodel-manuscript-overlay {
+  display: none !important;
+}
+
 body.remodel-story-workspace-active #remodel-panelgroup {
   position: fixed !important;
   top: calc(var(--topBarBlockSize, 40px) + 16px) !important;
