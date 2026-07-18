@@ -953,6 +953,7 @@ async function handleStoryRegenerateClick(button) {
 
 function handleStoryUserMessageRendered() {
     refreshStoryMessageDecorations();
+    renderRoleplayScene(); // no-ops unless the current scene is a roleplay scene
     closeStoryComposer();
     // A new user Scene Beat means the next AI turn (whether typed, Regenerated,
     // or the first turn of a subsequent Play run) is responding to genuinely
@@ -965,6 +966,7 @@ function handleStoryUserMessageRendered() {
 // every other render trigger point already does.
 function handleStoryAiMessageReceived() {
     refreshStoryMessageDecorations();
+    renderRoleplayScene(); // no-ops unless the current scene is a roleplay scene
 }
 
 // Re-applies Scene Beat headers + the Regenerate button placement to
@@ -3833,6 +3835,7 @@ function syncActiveSceneFromChatMetadata() {
     }
 
     refreshStoryMessageDecorations();
+    renderRoleplayScene(); // no-ops unless the current scene is a roleplay scene
     ensurePanelGroupContainer();
     ensureSceneSummaryPanel();
     refreshSceneSummaryPanel();
@@ -3871,11 +3874,22 @@ function syncActiveSceneFromChatMetadata() {
     queueRender();
 }
 
-// The story workspace is a native-chat sub-mode driven by which Scene is
-// bound to the currently loaded chat — not a currentWindow kind (Window
-// stays native/tavern).
+// The story/roleplay workspace is a native-chat sub-mode driven by which
+// Scene is bound to the currently loaded chat — not a currentWindow kind
+// (Window stays native/tavern). Story and Roleplay are mutually exclusive
+// sub-modes of the same underlying native chat: a scene is one or the
+// other, never both, so exactly one of these classes is ever set.
 function syncStoryWorkspaceClass(scene) {
     document.body.classList.toggle('remodel-story-workspace-active', scene?.mode === 'story');
+    document.body.classList.toggle('remodel-roleplay-workspace-active', scene?.mode === 'roleplay');
+}
+
+// Roleplay counterpart to isRealStoryWorkspaceActive() — same single-
+// source-of-truth discipline: every call site asks this instead of reading
+// the class directly, and it reads context.chatMetadata live every call
+// via getActiveScene() with no caching.
+function isRealRoleplayWorkspaceActive() {
+    return getActiveScene()?.mode === 'roleplay';
 }
 
 // SINGLE SOURCE OF TRUTH for "are we in the story workspace" — every other
@@ -4075,6 +4089,250 @@ function ensureManuscriptOverlay() {
     overlay.setAttribute('contenteditable', 'true');
     chatEl.after(overlay);
     return overlay;
+}
+
+// =====================================================================
+// ROLEPLAY WORKSPACE
+// ---------------------------------------------------------------------
+// The Roleplay counterpart to the manuscript overlay: instead of one
+// flowing contenteditable prose surface, it renders the same underlying
+// chat[] as a stream of per-speaker chat bubbles (characters left, the
+// user/persona right, narrator centered), plus a left cast column and a
+// turn/speaker control bar. Same foundational contract as Story mode —
+// the real #chat rows stay the hidden data source, this is a separate
+// presentation layer built fresh from chat[] on every render trigger, and
+// edits/sends still drive core's real buttons underneath. NOT
+// contenteditable: roleplay bubbles are read-only in-place (edit opens the
+// message's own editor, same as native), so no boundary-protection or
+// beat-guard machinery is needed here.
+// =====================================================================
+
+const ROLEPLAY_ROOT_ID = 'remodel-roleplay-root';
+
+// Same Background-tab duplicate-ID scoping as getRealManuscriptOverlay —
+// see its comment. Resolved through the real #sheld under body so a click
+// never lands on the dead hidden clone.
+function getRealRoleplayRoot() {
+    return document.body.querySelector(`:scope > #sheld > #${ROLEPLAY_ROOT_ID}`);
+}
+
+function ensureRoleplayRoot() {
+    let root = getRealRoleplayRoot();
+    if (root) {
+        return root;
+    }
+    const chatEl = getRealChatElement();
+    if (!chatEl) {
+        return null;
+    }
+    root = document.createElement('div');
+    root.id = ROLEPLAY_ROOT_ID;
+    // Structural skeleton built once; contents (cast + stream) are
+    // re-rendered from chat[] on every refresh, same "re-derive from
+    // source" discipline the manuscript overlay uses.
+    root.innerHTML = `
+        <aside class="remodel-rp-cast" data-remodel-rp-cast></aside>
+        <div class="remodel-rp-stream" data-remodel-rp-stream></div>
+    `;
+    chatEl.after(root);
+    return root;
+}
+
+// Resolves a stable, per-name accent from the extension's own Nord aurora
+// palette (see style.css --c-* / --nord-aurora-*), so each speaker keeps a
+// consistent color across the whole scene without needing per-character
+// config. Hash the name to one of the palette slots — deterministic, so
+// "Robin" is always the same color in a given scene. The user/persona and
+// the narrator are handled separately (gold / neutral) and never routed
+// here.
+const ROLEPLAY_SPEAKER_COLORS = ['green', 'yellow', 'frost', 'purple', 'orange', 'red'];
+
+function roleplaySpeakerColor(name) {
+    const key = String(name || '');
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+        hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+    }
+    return ROLEPLAY_SPEAKER_COLORS[hash % ROLEPLAY_SPEAKER_COLORS.length];
+}
+
+// Two-letter avatar initials from a display name ("Robin" -> "R",
+// "Nico Robin" -> "NR") — the mockup's letter-tile stand-in, used only
+// when a message has no real avatar image (extra.force_avatar / the
+// character card thumbnail are wired in a later stage).
+function roleplayInitials(name) {
+    const parts = String(name || '?').trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) {
+        return '?';
+    }
+    if (parts.length === 1) {
+        return parts[0].slice(0, 1).toUpperCase();
+    }
+    return (parts[0].slice(0, 1) + parts[parts.length - 1].slice(0, 1)).toUpperCase();
+}
+
+// Builds one chat-bubble row for a single chat[] message. Kind is one of
+// 'character' | 'user' | 'narrator', deciding alignment/styling. The row
+// carries data-remodel-mesid so per-bubble controls (edit/delete/swipe)
+// can resolve back to the real message the same way the manuscript
+// overlay's spans do.
+function buildRoleplayMessage(mesId, message) {
+    const isUser = Boolean(message.is_user);
+    const isSystem = Boolean(message.is_system);
+    const name = message.name || (isUser ? 'You' : 'Unknown');
+
+    const kind = isUser ? 'user' : (isSystem ? 'narrator' : 'character');
+    const color = kind === 'character' ? roleplaySpeakerColor(name) : null;
+
+    const row = document.createElement('div');
+    row.className = `remodel-rp-msg remodel-rp-${kind}`;
+    if (color) {
+        row.classList.add(`remodel-rp-color-${color}`);
+    }
+    row.dataset.remodelMesid = String(mesId);
+
+    // Avatar (letter-tile stand-in for now).
+    const avatar = document.createElement('div');
+    avatar.className = 'remodel-rp-avatar';
+    avatar.textContent = kind === 'user' ? roleplayInitials(name) : roleplayInitials(name);
+    if (kind !== 'narrator') {
+        row.appendChild(avatar);
+    }
+
+    const bubble = document.createElement('div');
+    bubble.className = 'remodel-rp-bubble';
+
+    const meta = document.createElement('div');
+    meta.className = 'remodel-rp-meta';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'remodel-rp-name';
+    nameEl.textContent = name;
+    meta.appendChild(nameEl);
+    if (message.send_date) {
+        const timeEl = document.createElement('span');
+        timeEl.className = 'remodel-rp-time';
+        // send_date is already a human-ish string in core; show it as-is,
+        // trimmed to a time-looking tail if it parses, else raw.
+        timeEl.textContent = formatRoleplayTime(message.send_date);
+        meta.appendChild(timeEl);
+    }
+    bubble.appendChild(meta);
+
+    const body = document.createElement('div');
+    body.className = 'remodel-rp-body';
+    // Raw message text for now — markdown/italic-action rendering is a
+    // later polish pass; textContent keeps it safe and structural.
+    body.textContent = message.mes ?? '';
+    bubble.appendChild(body);
+
+    row.appendChild(bubble);
+    return row;
+}
+
+function formatRoleplayTime(sendDate) {
+    const parsed = new Date(sendDate);
+    if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    return String(sendDate);
+}
+
+// Top-level roleplay render — the counterpart to renderManuscriptOverlay.
+// Rebuilds the whole bubble stream from chat[]. Gated the same way the
+// manuscript render is: bail unless the CURRENT scene is genuinely a
+// roleplay scene.
+function renderRoleplayScene() {
+    if (!isRealRoleplayWorkspaceActive()) {
+        return;
+    }
+
+    const root = ensureRoleplayRoot();
+    if (!root) {
+        return;
+    }
+
+    const chatEl = getRealChatElement();
+    const context = getContext();
+    const stream = root.querySelector('[data-remodel-rp-stream]');
+    if (!stream) {
+        return;
+    }
+    stream.textContent = '';
+
+    const mesEls = Array.from(chatEl?.querySelectorAll(':scope > .mes') ?? []);
+
+    if (mesEls.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'remodel-rp-empty';
+        empty.textContent = 'The scene is set. Write the first line below to begin.';
+        stream.appendChild(empty);
+    } else {
+        mesEls.forEach((mesEl) => {
+            const mesId = Number(mesEl.getAttribute('mesid'));
+            const message = context.chat[mesId];
+            if (!Number.isFinite(mesId) || !message) {
+                return;
+            }
+            stream.appendChild(buildRoleplayMessage(mesId, message));
+        });
+        // Land at the latest line, same as the manuscript's scroll-to-bottom.
+        requestAnimationFrame(() => {
+            stream.scrollTop = stream.scrollHeight;
+        });
+    }
+
+    renderRoleplayCast(root);
+}
+
+// Rebuilds the left cast column from the current chat's participants —
+// for a group, its members; for a solo character chat, that one character.
+// Stage 1: renders the avatars + names read-only; add/remove/reorder and
+// the live speaking indicator are wired in Stage 3.
+function renderRoleplayCast(root) {
+    const cast = root.querySelector('[data-remodel-rp-cast]');
+    if (!cast) {
+        return;
+    }
+    cast.textContent = '';
+
+    const label = document.createElement('div');
+    label.className = 'remodel-rp-cast-label';
+    label.textContent = 'Cast';
+    cast.appendChild(label);
+
+    const context = getContext();
+    const members = roleplaySceneMembers(context);
+    members.forEach((member) => {
+        const chip = document.createElement('div');
+        chip.className = `remodel-rp-cast-member remodel-rp-color-${roleplaySpeakerColor(member.name)}`;
+        chip.dataset.remodelCharacterId = String(member.characterId ?? '');
+        chip.title = member.name;
+        chip.textContent = roleplayInitials(member.name);
+        cast.appendChild(chip);
+    });
+}
+
+// Returns the cast list for the current chat as [{ name, characterId }].
+// Group chats expose their members; a solo character chat is a cast of
+// one. Deliberately reads live context, no caching.
+function roleplaySceneMembers(context) {
+    if (context.groupId) {
+        const group = (context.groups || []).find((g) => String(g.id) === String(context.groupId));
+        if (!group) {
+            return [];
+        }
+        return (group.members || []).map((avatar) => {
+            const idx = (context.characters || []).findIndex((c) => c.avatar === avatar);
+            const character = idx >= 0 ? context.characters[idx] : null;
+            return { name: character?.name || avatar, characterId: idx >= 0 ? idx : null };
+        });
+    }
+    const characterId = context.characterId;
+    if (characterId === undefined || characterId === null) {
+        return [];
+    }
+    const character = (context.characters || [])[Number(characterId)];
+    return character ? [{ name: character.name, characterId: Number(characterId) }] : [];
 }
 
 // Beat header clones in the overlay need their own live Hide/Delete buttons
