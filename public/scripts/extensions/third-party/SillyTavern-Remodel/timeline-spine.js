@@ -138,6 +138,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindStoryManuscriptEditCancel();
     bindStoryLockInterceptor();
     bindStoryComposerContinueOnEmptySend();
+    bindRoleplayComposerEvents();
     bindStoryAutoContinueEvents();
     bindStoryGenerationStateEvents();
     ensureStoryComposerExtras();
@@ -4127,15 +4128,203 @@ function ensureRoleplayRoot() {
     }
     root = document.createElement('div');
     root.id = ROLEPLAY_ROOT_ID;
-    // Structural skeleton built once; contents (cast + stream) are
-    // re-rendered from chat[] on every refresh, same "re-derive from
-    // source" discipline the manuscript overlay uses.
+    // Structural skeleton built once; contents (cast + stream + composer)
+    // are re-rendered from chat[] on every refresh, same "re-derive from
+    // source" discipline the manuscript overlay uses. The cast column
+    // spans both rows on the left; the stream and composer stack on the
+    // right (grid areas defined in style.css).
     root.innerHTML = `
         <aside class="remodel-rp-cast" data-remodel-rp-cast></aside>
         <div class="remodel-rp-stream" data-remodel-rp-stream></div>
+        <div class="remodel-rp-composer-zone" data-remodel-rp-composer></div>
     `;
     chatEl.after(root);
     return root;
+}
+
+// Builds the roleplay composer zone: the turn/speaker control bar plus the
+// persona input row. Rebuilt on each render so the "speak as" chip and the
+// per-member active toggles reflect the current cast/persona. Sends drive
+// core's real #send_textarea + #send_but underneath — the same reliable
+// path the story composer uses — so generation, group activation, swipes,
+// and World Info all run exactly as native.
+function renderRoleplayComposer(root) {
+    const zone = root.querySelector('[data-remodel-rp-composer]');
+    if (!zone) {
+        return;
+    }
+    const context = getContext();
+    const members = roleplaySceneMembers(context);
+    const personaName = context.name1 || 'You';
+
+    // Active-member toggles: only meaningful for a group. For a solo chat,
+    // there's just the one character and nothing to toggle.
+    const memberToggles = context.groupId
+        ? members.map((m) => `
+            <span class="remodel-rp-active-dot remodel-rp-color-${roleplaySpeakerColor(m.name)}" data-remodel-rp-member="${escapeAttribute(String(m.characterId ?? ''))}">
+                <span class="remodel-rp-dot"></span>${escapeHtml(m.name)}
+            </span>`).join('')
+        : '';
+
+    zone.innerHTML = `
+        <div class="remodel-rp-turn-bar">
+            <div class="remodel-rp-speaker-select" data-remodel-rp-speaker-select title="Who narrates / speaks next">
+                <span class="remodel-rp-chip-av">${escapeHtml(roleplayInitials(personaName))}</span>
+                <span class="remodel-rp-speaker-lbl">${escapeHtml(personaName)}</span>
+                <span class="remodel-rp-caret">▾</span>
+            </div>
+            <div class="remodel-rp-seg"><span class="remodel-rp-seg-k">Next speaker</span><span class="remodel-rp-seg-v">AI decides</span></div>
+        </div>
+
+        <div class="remodel-rp-action-row">
+            <button type="button" class="remodel-rp-act" data-remodel-rp-action="regenerate"><span class="remodel-rp-g">↺</span> Regenerate</button>
+            <button type="button" class="remodel-rp-act" data-remodel-rp-action="next"><span class="remodel-rp-g">▷</span> Next</button>
+            <button type="button" class="remodel-rp-act" data-remodel-rp-action="trigger"><span class="remodel-rp-g">✦</span> Trigger…</button>
+            <button type="button" class="remodel-rp-act" data-remodel-rp-action="impersonate"><span class="remodel-rp-g">✎</span> Write for me</button>
+            <button type="button" class="remodel-rp-act" data-remodel-rp-action="preview"><span class="remodel-rp-g">◉</span> Preview</button>
+            <span class="remodel-rp-spacer"></span>
+            ${memberToggles}
+        </div>
+
+        <div class="remodel-rp-composer">
+            <button type="button" class="remodel-rp-as-chip" data-remodel-rp-persona title="Speak as… (persona / narrator)">
+                <span class="remodel-rp-as-av">${escapeHtml(roleplayInitials(personaName))}</span>
+                <span class="remodel-rp-as-txt"><span class="remodel-rp-as-k">Speak as</span><span class="remodel-rp-as-v">${escapeHtml(personaName)}</span></span>
+            </button>
+            <textarea class="remodel-rp-input" data-remodel-rp-input placeholder="Write as ${escapeAttribute(personaName)}…" rows="1"></textarea>
+            <button type="button" class="remodel-rp-send" data-remodel-rp-send title="Send">➤</button>
+        </div>
+
+        <div class="remodel-rp-composer-meta">
+            <span data-remodel-rp-meta-left></span>
+            <span>${members.length} character${members.length === 1 ? '' : 's'} in scene</span>
+        </div>
+    `;
+}
+
+// Sends the roleplay composer's text as a user message and lets core
+// generate the reply — by driving the real #send_textarea + #send_but,
+// exactly the mechanism the story composer relies on (so group activation,
+// swipes, World Info, and generation all run native). An empty send
+// falls through to core's own continue behavior via the composer's own
+// keydown handling elsewhere; this explicit-send path always sends.
+function handleRoleplaySend(root) {
+    const input = root.querySelector('[data-remodel-rp-input]');
+    const textarea = document.getElementById('send_textarea');
+    const sendBut = document.getElementById('send_but');
+    if (!(input instanceof HTMLTextAreaElement) || !(textarea instanceof HTMLTextAreaElement) || !sendBut) {
+        return;
+    }
+    const value = input.value;
+    input.value = '';
+    autosizeRoleplayInput(input);
+    textarea.value = value;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    sendBut.click();
+}
+
+// One-line-growing textarea, capped so a long message scrolls inside the
+// composer rather than pushing the stream off-screen.
+function autosizeRoleplayInput(input) {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+}
+
+// Maps the roleplay action buttons onto core's real controls. Reuses the
+// same native buttons the story action bar drives, so behavior is
+// identical to native — no reimplementation of generation/regeneration.
+function handleRoleplayAction(action) {
+    switch (action) {
+        case 'regenerate': {
+            // core's regenerate = swipe/regenerate the last message.
+            document.getElementById('option_regenerate')?.click();
+            break;
+        }
+        case 'next': {
+            // Advance the group's turn / continue — core's continue option.
+            document.getElementById('option_continue')?.click();
+            break;
+        }
+        case 'trigger': {
+            // Opens native group member selection is non-trivial; for now
+            // trigger the group's "next speaker" via the native trigger flow
+            // if present, else no-op. Wired fully in the cast-polish stage.
+            document.getElementById('option_continue')?.click();
+            break;
+        }
+        case 'impersonate': {
+            document.getElementById('option_impersonate')?.click();
+            break;
+        }
+        case 'preview': {
+            // Reuse the existing Prompt Preview panel toggle.
+            togglePromptPreviewPanel();
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+// Delegated listeners for the roleplay composer/turn-bar. Bound at document
+// level (not on the root, which is rebuilt) and gated on
+// isRealRoleplayWorkspaceActive() so nothing fires outside a roleplay scene.
+function bindRoleplayComposerEvents() {
+    // Send button + action buttons (click).
+    document.addEventListener('click', (event) => {
+        if (!isRealRoleplayWorkspaceActive()) {
+            return;
+        }
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target) {
+            return;
+        }
+        const root = getRealRoleplayRoot();
+        if (!root || !root.contains(target)) {
+            return;
+        }
+
+        if (target.closest('[data-remodel-rp-send]')) {
+            event.preventDefault();
+            handleRoleplaySend(root);
+            return;
+        }
+
+        const actionBtn = target.closest('[data-remodel-rp-action]');
+        if (actionBtn) {
+            event.preventDefault();
+            handleRoleplayAction(actionBtn.getAttribute('data-remodel-rp-action'));
+            return;
+        }
+    });
+
+    // Enter-to-send + autosize in the roleplay input.
+    document.addEventListener('keydown', (event) => {
+        if (!isRealRoleplayWorkspaceActive()) {
+            return;
+        }
+        const input = event.target instanceof Element ? event.target.closest('[data-remodel-rp-input]') : null;
+        if (!input) {
+            return;
+        }
+        if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.isComposing) {
+            event.preventDefault();
+            const root = getRealRoleplayRoot();
+            if (root) {
+                handleRoleplaySend(root);
+            }
+        }
+    });
+
+    document.addEventListener('input', (event) => {
+        if (!isRealRoleplayWorkspaceActive()) {
+            return;
+        }
+        const input = event.target instanceof Element ? event.target.closest('[data-remodel-rp-input]') : null;
+        if (input instanceof HTMLTextAreaElement) {
+            autosizeRoleplayInput(input);
+        }
+    });
 }
 
 // Resolves a stable, per-name accent from the extension's own Nord aurora
@@ -4282,6 +4471,7 @@ function renderRoleplayScene() {
     }
 
     renderRoleplayCast(root);
+    renderRoleplayComposer(root);
 }
 
 // Rebuilds the left cast column from the current chat's participants —
