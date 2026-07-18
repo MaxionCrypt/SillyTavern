@@ -4223,6 +4223,29 @@ function renderManuscriptOverlay() {
         snapshot.push({ mesId, originalRaw: message.mes ?? '' });
     });
 
+    // Confirmed as a real, reported bug: a freshly-created Story Scene with
+    // zero messages left the overlay as a bare, empty
+    // contenteditable="true" div with no children at all — nothing in the
+    // loop above ran, so there was no [data-remodel-manuscript-block] span
+    // for the Manuscript Toolbar's format buttons to act on (they're
+    // scoped to that selector), and the overlay itself was directly,
+    // unprotectedly typeable with no Scene Beat structure around it, no
+    // guard, nothing. A real user's first keystroke landed as raw text
+    // with none of the manuscript's normal invariants in place. This is a
+    // genuine dead-end state, not a rare edge case — it's what EVERY new
+    // Story Scene looks like before its first beat exists. A single
+    // non-editable placeholder (matching the Scene Beat markers' own
+    // contenteditable="false" pattern above) makes the empty state
+    // explicit and safe instead of silently falling through to "the whole
+    // overlay is a blank text box."
+    if (mesEls.length === 0) {
+        const emptyState = document.createElement('div');
+        emptyState.className = 'remodel-manuscript-empty-state';
+        emptyState.setAttribute('contenteditable', 'false');
+        emptyState.textContent = 'Write your first Scene Beat below to begin the story.';
+        overlay.appendChild(emptyState);
+    }
+
     // The manuscript is continuously live now (requirement: no explicit
     // enter/exit) — beginManuscriptEdit's snapshot is rebuilt fresh every
     // render rather than captured once on click. Any snapshot from a PRIOR

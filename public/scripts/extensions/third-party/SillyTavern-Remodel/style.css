@@ -936,6 +936,19 @@ body.remodel-story-workspace-active #remodel-manuscript-overlay > span {
   color: rgba(238, 235, 245, 0.92) !important;
 }
 
+/* Shown only when a Story Scene has zero messages yet (renderManuscriptOverlay) —
+   a real, non-editable placeholder instead of leaving the overlay as a
+   bare, silently-typeable empty box with no manuscript structure at all. */
+body.remodel-story-workspace-active #remodel-manuscript-overlay > .remodel-manuscript-empty-state {
+  display: block !important;
+  font-family: var(--remodel-manuscript-font) !important;
+  font-size: 15px !important;
+  font-style: italic !important;
+  line-height: 1.6 !important;
+  color: rgba(238, 235, 245, 0.5) !important;
+  cursor: default !important;
+}
+
 /* Scene Beat message spans keep the exact same boxed treatment as the real
    .mes[is_user="true"] .mes_text rule above (values copied verbatim, not
    changed) — identified directly via a class the JS sets at creation time
