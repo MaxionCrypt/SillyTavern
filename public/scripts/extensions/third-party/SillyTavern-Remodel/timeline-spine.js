@@ -4261,9 +4261,33 @@ function handleRoleplayAction(action) {
             togglePromptPreviewPanel();
             break;
         }
+        case 'add-cast': {
+            openRoleplayCastManagement();
+            break;
+        }
         default:
             break;
     }
+}
+
+// Add/remove/reorder the cast lives in core's Character Management drawer:
+// a group scene has the full member list there (add / remove / drag to
+// reorder); a solo scene has the character list from which a group can be
+// started. Rather than reimplement that UI inside the overlay, open the
+// native drawer to the relevant panel — the source of truth for cast.
+function openRoleplayCastManagement() {
+    const context = getContext();
+    const drawerIcon = document.getElementById('rightNavDrawerIcon');
+    const drawerContent = document.getElementById('rightNavDrawer');
+    const isOpen = drawerContent?.classList.contains('openDrawer');
+    if (drawerIcon && !isOpen) {
+        drawerIcon.click();
+    }
+    // Group scene → member panel; solo scene → character list.
+    const targetButton = context.groupId
+        ? document.getElementById('rm_button_group_chats') || document.getElementById('rm_button_characters')
+        : document.getElementById('rm_button_characters');
+    requestAnimationFrame(() => targetButton?.click());
 }
 
 // Delegated listeners for the roleplay composer/turn-bar. Bound at document
@@ -4346,9 +4370,8 @@ function roleplaySpeakerColor(name) {
 }
 
 // Two-letter avatar initials from a display name ("Robin" -> "R",
-// "Nico Robin" -> "NR") — the mockup's letter-tile stand-in, used only
-// when a message has no real avatar image (extra.force_avatar / the
-// character card thumbnail are wired in a later stage).
+// "Nico Robin" -> "NR") — the letter-tile shown when a speaker has no
+// real avatar image to fall back on.
 function roleplayInitials(name) {
     const parts = String(name || '?').trim().split(/\s+/).filter(Boolean);
     if (parts.length === 0) {
@@ -4358,6 +4381,58 @@ function roleplayInitials(name) {
         return parts[0].slice(0, 1).toUpperCase();
     }
     return (parts[0].slice(0, 1) + parts[parts.length - 1].slice(0, 1)).toUpperCase();
+}
+
+// Resolves the avatar image filename a speaker should use. Prefers an
+// explicit per-message override (extra.force_avatar, set by group chats
+// and /sendas), then the named character's card, then the persona avatar
+// for the user. Returns null when only initials are available.
+function roleplayAvatarFile(name, { message = null, isUser = false } = {}) {
+    const context = getContext();
+    const forced = message?.extra?.force_avatar;
+    if (forced) {
+        // force_avatar is a full thumbnail URL already, not a bare filename.
+        return { url: forced };
+    }
+    if (isUser) {
+        // The persona avatar isn't exposed on context; read the active
+        // persona thumbnail straight from core's avatar block (already a
+        // resolved thumbnail URL), falling back to initials when none.
+        const selected = document.querySelector('#user_avatar_block .avatar-container.selected img, #user_avatar_block .avatar-container[data-avatar-id].selected img');
+        const src = selected instanceof HTMLImageElement ? selected.getAttribute('src') : null;
+        return src ? { url: src } : null;
+    }
+    const character = (context.characters || []).find((c) => c.name === name);
+    if (character?.avatar && character.avatar !== 'none') {
+        return { file: character.avatar, thumbType: 'avatar' };
+    }
+    return null;
+}
+
+// Builds an avatar element used by both the bubble stream and the cast
+// column: a real thumbnail when one exists, an initials letter-tile
+// otherwise. The color class is applied by the caller (so the initials
+// tile picks up the speaker's palette gradient from CSS).
+function buildRoleplayAvatar(name, { message = null, isUser = false, className = 'remodel-rp-avatar' } = {}) {
+    const context = getContext();
+    const el = document.createElement('div');
+    el.className = className;
+    const resolved = roleplayAvatarFile(name, { message, isUser });
+    let url = null;
+    if (resolved?.url) {
+        url = resolved.url;
+    } else if (resolved?.file) {
+        url = context.getThumbnailUrl(resolved.thumbType, resolved.file);
+    }
+    if (url) {
+        el.classList.add('remodel-rp-has-img');
+        // Set with priority so the inline image wins over the palette
+        // gradient rules (which use !important); see .remodel-rp-has-img.
+        el.style.setProperty('background-image', `url('${url.replace(/'/g, "\\'")}')`, 'important');
+    } else {
+        el.textContent = roleplayInitials(name);
+    }
+    return el;
 }
 
 // Builds one chat-bubble row for a single chat[] message. Kind is one of
@@ -4380,11 +4455,9 @@ function buildRoleplayMessage(mesId, message) {
     }
     row.dataset.remodelMesid = String(mesId);
 
-    // Avatar (letter-tile stand-in for now).
-    const avatar = document.createElement('div');
-    avatar.className = 'remodel-rp-avatar';
-    avatar.textContent = kind === 'user' ? roleplayInitials(name) : roleplayInitials(name);
+    // Avatar: real thumbnail when the speaker has one, initials otherwise.
     if (kind !== 'narrator') {
+        const avatar = buildRoleplayAvatar(name, { message, isUser });
         row.appendChild(avatar);
     }
 
@@ -4492,14 +4565,63 @@ function renderRoleplayCast(root) {
 
     const context = getContext();
     const members = roleplaySceneMembers(context);
+    const speakingName = roleplayCurrentSpeakerName(context);
+
     members.forEach((member) => {
         const chip = document.createElement('div');
         chip.className = `remodel-rp-cast-member remodel-rp-color-${roleplaySpeakerColor(member.name)}`;
         chip.dataset.remodelCharacterId = String(member.characterId ?? '');
         chip.title = member.name;
-        chip.textContent = roleplayInitials(member.name);
+        if (member.name === speakingName) {
+            chip.classList.add('remodel-rp-speaking');
+        }
+
+        const av = buildRoleplayAvatar(member.name, { className: 'remodel-rp-cast-avatar' });
+        chip.appendChild(av);
+
+        const nameEl = document.createElement('span');
+        nameEl.className = 'remodel-rp-cast-name';
+        nameEl.textContent = member.name;
+        chip.appendChild(nameEl);
+
         cast.appendChild(chip);
     });
+
+    // Divider + add-character affordance. In a group this opens core's
+    // group management; solo scenes surface it too so the path to "add a
+    // second character" (which promotes the solo chat) is always visible.
+    const divider = document.createElement('div');
+    divider.className = 'remodel-rp-cast-divider';
+    cast.appendChild(divider);
+
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'remodel-rp-cast-add';
+    add.title = 'Add character to scene';
+    add.dataset.remodelRpAction = 'add-cast';
+    add.textContent = '+';
+    cast.appendChild(add);
+}
+
+// The speaker to highlight in the cast: whoever produced the most recent
+// non-user, non-system message. Returns null when the latest line is the
+// user's or the scene is empty (nobody is "speaking" then).
+function roleplayCurrentSpeakerName(context) {
+    const chat = context.chat || [];
+    for (let i = chat.length - 1; i >= 0; i--) {
+        const m = chat[i];
+        if (!m) {
+            continue;
+        }
+        if (m.is_user) {
+            return null;
+        }
+        if (m.is_system) {
+            continue;
+        }
+        return m.name || null;
+    }
+    return null;
 }
 
 // Returns the cast list for the current chat as [{ name, characterId }].

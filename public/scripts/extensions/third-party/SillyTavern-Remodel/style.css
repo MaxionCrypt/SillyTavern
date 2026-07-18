@@ -1879,11 +1879,29 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-label {
 
 body.remodel-roleplay-workspace-active .remodel-rp-cast-member {
   position: relative !important;
+  width: 100% !important;
+  margin-bottom: 12px !important;
+  cursor: pointer !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 5px !important;
+  background: transparent !important;
+  border: none !important;
+  transition: transform 0.16s ease !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-cast-member:hover {
+  transform: translateY(-2px) !important;
+}
+
+/* The colored tile / avatar image. Initials fall back to the palette
+   gradient (set per-color below); a real thumbnail covers it. */
+body.remodel-roleplay-workspace-active .remodel-rp-cast-avatar {
+  position: relative !important;
   width: 52px !important;
   height: 52px !important;
   border-radius: 10px !important;
-  margin-bottom: 14px !important;
-  cursor: pointer !important;
   display: grid !important;
   place-items: center !important;
   font-family: var(--remodel-serif) !important;
@@ -1891,16 +1909,72 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member {
   font-weight: 700 !important;
   color: var(--tarot-ink) !important;
   border: 1.5px solid transparent !important;
-  transition: transform 0.16s ease, border-color 0.16s ease !important;
+  background-size: cover !important;
+  background-position: center !important;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease !important;
 }
 
-body.remodel-roleplay-workspace-active .remodel-rp-cast-member:hover {
-  transform: translateY(-2px) !important;
+body.remodel-roleplay-workspace-active .remodel-rp-cast-name {
+  font-size: 10px !important;
+  letter-spacing: 0.02em !important;
+  color: rgba(238, 235, 245, 0.62) !important;
+  max-width: 72px !important;
+  text-align: center !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  font-family: var(--remodel-manuscript-font) !important;
 }
 
-body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-speaking {
+body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-speaking .remodel-rp-cast-avatar {
   border-color: var(--tarot-gold) !important;
   box-shadow: 0 0 0 3px rgba(198, 164, 74, 0.18), 0 4px 14px rgba(0, 0, 0, 0.5) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-speaking .remodel-rp-cast-name {
+  color: var(--tarot-gold-bright) !important;
+}
+
+/* Small "is speaking" dot on the active speaker's avatar. */
+body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-speaking .remodel-rp-cast-avatar::after {
+  content: '' !important;
+  position: absolute !important;
+  right: -3px !important;
+  top: -3px !important;
+  width: 12px !important;
+  height: 12px !important;
+  border-radius: 50% !important;
+  background: var(--nord-aurora-green, #a3be8c) !important;
+  border: 2px solid var(--tarot-ink) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-cast-divider {
+  width: 34px !important;
+  height: 1px !important;
+  background: var(--gold-faint, rgba(198, 164, 74, 0.14)) !important;
+  margin: 4px 0 12px !important;
+  flex: 0 0 auto !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-cast-add {
+  width: 44px !important;
+  height: 44px !important;
+  border-radius: 10px !important;
+  border: 1px dashed var(--tarot-gold-soft) !important;
+  color: var(--tarot-gold) !important;
+  background: transparent !important;
+  display: grid !important;
+  place-items: center !important;
+  cursor: pointer !important;
+  font-size: 20px !important;
+  line-height: 1 !important;
+  flex: 0 0 auto !important;
+  transition: background 0.16s ease, color 0.16s ease !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-cast-add:hover {
+  background: var(--gold-faint, rgba(198, 164, 74, 0.14)) !important;
+  color: var(--tarot-gold-bright) !important;
 }
 
 /* --- Message stream --- */
@@ -1985,46 +2059,60 @@ body.remodel-roleplay-workspace-active .remodel-rp-body {
 /* Per-character accent: avatar fill, name color, bubble left-stripe.
    remodel-rp-color-<name> is assigned in JS from the Nord palette. */
 body.remodel-roleplay-workspace-active .remodel-rp-color-green .remodel-rp-avatar,
-body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-color-green {
-  background: linear-gradient(145deg, #7fa06a, var(--rp-c-green)) !important;
+body.remodel-roleplay-workspace-active .remodel-rp-color-green .remodel-rp-cast-avatar {
+  background-color: var(--rp-c-green) !important;
+  background-image: linear-gradient(145deg, #7fa06a, var(--rp-c-green)) !important;
 }
 body.remodel-roleplay-workspace-active .remodel-rp-color-green .remodel-rp-name { color: var(--rp-c-green) !important; }
 body.remodel-roleplay-workspace-active .remodel-rp-color-green .remodel-rp-bubble { border-left: 2px solid rgba(163, 190, 140, 0.5) !important; }
 
 body.remodel-roleplay-workspace-active .remodel-rp-color-yellow .remodel-rp-avatar,
-body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-color-yellow {
-  background: linear-gradient(145deg, #c9a95e, var(--rp-c-yellow)) !important;
+body.remodel-roleplay-workspace-active .remodel-rp-color-yellow .remodel-rp-cast-avatar {
+  background-color: var(--rp-c-yellow) !important;
+  background-image: linear-gradient(145deg, #c9a95e, var(--rp-c-yellow)) !important;
 }
 body.remodel-roleplay-workspace-active .remodel-rp-color-yellow .remodel-rp-name { color: var(--rp-c-yellow) !important; }
 body.remodel-roleplay-workspace-active .remodel-rp-color-yellow .remodel-rp-bubble { border-left: 2px solid rgba(235, 203, 139, 0.5) !important; }
 
 body.remodel-roleplay-workspace-active .remodel-rp-color-frost .remodel-rp-avatar,
-body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-color-frost {
-  background: linear-gradient(145deg, #4f7d88, var(--rp-c-frost)) !important;
+body.remodel-roleplay-workspace-active .remodel-rp-color-frost .remodel-rp-cast-avatar {
+  background-color: var(--rp-c-frost) !important;
+  background-image: linear-gradient(145deg, #4f7d88, var(--rp-c-frost)) !important;
 }
 body.remodel-roleplay-workspace-active .remodel-rp-color-frost .remodel-rp-name { color: var(--rp-c-frost) !important; }
 body.remodel-roleplay-workspace-active .remodel-rp-color-frost .remodel-rp-bubble { border-left: 2px solid rgba(136, 192, 208, 0.5) !important; }
 
 body.remodel-roleplay-workspace-active .remodel-rp-color-purple .remodel-rp-avatar,
-body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-color-purple {
-  background: linear-gradient(145deg, #8a6a86, var(--rp-c-purple)) !important;
+body.remodel-roleplay-workspace-active .remodel-rp-color-purple .remodel-rp-cast-avatar {
+  background-color: var(--rp-c-purple) !important;
+  background-image: linear-gradient(145deg, #8a6a86, var(--rp-c-purple)) !important;
 }
 body.remodel-roleplay-workspace-active .remodel-rp-color-purple .remodel-rp-name { color: var(--rp-c-purple) !important; }
 body.remodel-roleplay-workspace-active .remodel-rp-color-purple .remodel-rp-bubble { border-left: 2px solid rgba(180, 142, 173, 0.5) !important; }
 
 body.remodel-roleplay-workspace-active .remodel-rp-color-orange .remodel-rp-avatar,
-body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-color-orange {
-  background: linear-gradient(145deg, #a86a52, var(--rp-c-orange)) !important;
+body.remodel-roleplay-workspace-active .remodel-rp-color-orange .remodel-rp-cast-avatar {
+  background-color: var(--rp-c-orange) !important;
+  background-image: linear-gradient(145deg, #a86a52, var(--rp-c-orange)) !important;
 }
 body.remodel-roleplay-workspace-active .remodel-rp-color-orange .remodel-rp-name { color: var(--rp-c-orange) !important; }
 body.remodel-roleplay-workspace-active .remodel-rp-color-orange .remodel-rp-bubble { border-left: 2px solid rgba(208, 135, 112, 0.5) !important; }
 
 body.remodel-roleplay-workspace-active .remodel-rp-color-red .remodel-rp-avatar,
-body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-color-red {
-  background: linear-gradient(145deg, #96525a, var(--rp-c-red)) !important;
+body.remodel-roleplay-workspace-active .remodel-rp-color-red .remodel-rp-cast-avatar {
+  background-color: var(--rp-c-red) !important;
+  background-image: linear-gradient(145deg, #96525a, var(--rp-c-red)) !important;
 }
 body.remodel-roleplay-workspace-active .remodel-rp-color-red .remodel-rp-name { color: var(--rp-c-red) !important; }
 body.remodel-roleplay-workspace-active .remodel-rp-color-red .remodel-rp-bubble { border-left: 2px solid rgba(191, 97, 106, 0.5) !important; }
+
+/* A real thumbnail is set as an inline !important background-image (see
+   buildRoleplayAvatar), which beats the palette gradient's !important;
+   here we just drop the (now hidden) initials text. */
+body.remodel-roleplay-workspace-active .remodel-rp-avatar.remodel-rp-has-img,
+body.remodel-roleplay-workspace-active .remodel-rp-cast-avatar.remodel-rp-has-img {
+  color: transparent !important;
+}
 
 /* --- Your message (persona, right-aligned, gold-tinted) --- */
 body.remodel-roleplay-workspace-active .remodel-rp-user {
