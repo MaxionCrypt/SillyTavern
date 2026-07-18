@@ -2024,11 +2024,135 @@ body.remodel-roleplay-workspace-active .remodel-rp-avatar {
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-bubble {
+  position: relative !important;
   background: var(--surface-soft) !important;
   border: 1px solid var(--border-color) !important;
   border-radius: 4px 14px 14px 14px !important;
   padding: 11px 16px 12px !important;
   min-width: 0 !important;
+}
+
+/* --- Per-bubble hover controls --- */
+body.remodel-roleplay-workspace-active .remodel-rp-controls {
+  position: absolute !important;
+  top: -12px !important;
+  right: 10px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  padding: 3px !important;
+  background: rgba(11, 11, 13, 0.96) !important;
+  border: 1px solid var(--tarot-gold-soft) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.14s ease !important;
+  z-index: 3 !important;
+}
+/* Reveal on hovering the message row (whole row, so the controls stay
+   reachable as the pointer travels up to them). */
+body.remodel-roleplay-workspace-active .remodel-rp-msg:hover .remodel-rp-controls,
+body.remodel-roleplay-workspace-active .remodel-rp-controls:hover {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+/* On the user's right-aligned bubbles, dock the controls to the left edge
+   so they don't run off-screen. */
+body.remodel-roleplay-workspace-active .remodel-rp-user .remodel-rp-controls {
+  right: auto !important;
+  left: 10px !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-ctrl {
+  appearance: none !important;
+  background: transparent !important;
+  border: none !important;
+  color: rgba(238, 235, 245, 0.6) !important;
+  width: 26px !important;
+  height: 26px !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  display: grid !important;
+  place-items: center !important;
+  font-size: 12px !important;
+  transition: color 0.14s ease, background 0.14s ease !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-ctrl:hover {
+  color: var(--tarot-gold-bright) !important;
+  background: rgba(198, 164, 74, 0.14) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-ctrl-danger:hover {
+  color: var(--nord-aurora-red, #bf616a) !important;
+  background: rgba(191, 97, 106, 0.14) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-swipe {
+  display: flex !important;
+  align-items: center !important;
+  gap: 2px !important;
+  margin-right: 2px !important;
+  padding-right: 4px !important;
+  border-right: 1px solid var(--border-color) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-swipe-count {
+  font-family: monospace !important;
+  font-size: 10.5px !important;
+  color: rgba(238, 235, 245, 0.5) !important;
+  min-width: 30px !important;
+  text-align: center !important;
+}
+
+/* --- Inline bubble editor --- */
+body.remodel-roleplay-workspace-active .remodel-rp-edit {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-edit-area {
+  width: 100% !important;
+  min-height: 64px !important;
+  resize: none !important;
+  background: rgba(0, 0, 0, 0.25) !important;
+  border: 1px solid var(--tarot-gold-soft) !important;
+  border-radius: 8px !important;
+  padding: 10px 12px !important;
+  color: rgba(238, 235, 245, 0.95) !important;
+  font-family: var(--remodel-manuscript-font) !important;
+  font-size: 15px !important;
+  line-height: 1.55 !important;
+  outline: none !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-edit-actions {
+  display: flex !important;
+  justify-content: flex-end !important;
+  gap: 8px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-edit-btn {
+  appearance: none !important;
+  background: transparent !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 7px !important;
+  color: rgba(238, 235, 245, 0.7) !important;
+  font-family: var(--remodel-manuscript-font) !important;
+  font-size: 12.5px !important;
+  padding: 5px 14px !important;
+  cursor: pointer !important;
+  transition: color 0.14s ease, border-color 0.14s ease, background 0.14s ease !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-edit-btn:hover {
+  color: var(--tarot-gold-bright) !important;
+  border-color: var(--tarot-gold-soft) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-edit-save {
+  background: linear-gradient(145deg, var(--tarot-gold-deep), var(--tarot-gold)) !important;
+  border-color: transparent !important;
+  color: var(--tarot-ink) !important;
+  font-family: var(--remodel-serif) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-edit-save:hover {
+  background: var(--tarot-gold-bright) !important;
+  color: var(--tarot-ink) !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-meta {

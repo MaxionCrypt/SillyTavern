@@ -4366,6 +4366,30 @@ function bindRoleplayComposerEvents() {
             handleRoleplayAction(actionBtn.getAttribute('data-remodel-rp-action'));
             return;
         }
+
+        // Inline-edit Save / Cancel.
+        const editBtn = target.closest('[data-remodel-rp-edit]');
+        if (editBtn) {
+            event.preventDefault();
+            const row = editBtn.closest('[data-remodel-mesid]');
+            const mesId = Number(row?.dataset.remodelMesid);
+            if (editBtn.getAttribute('data-remodel-rp-edit') === 'save') {
+                commitRoleplayBubbleEdit(mesId, row);
+            } else {
+                renderRoleplayScene(); // cancel = discard, re-render from chat[]
+            }
+            return;
+        }
+
+        // Per-bubble controls (edit / delete / swipe).
+        const bubbleCtrl = target.closest('[data-remodel-rp-bubble]');
+        if (bubbleCtrl) {
+            event.preventDefault();
+            const row = bubbleCtrl.closest('[data-remodel-mesid]');
+            const mesId = Number(row?.dataset.remodelMesid);
+            handleRoleplayBubbleControl(bubbleCtrl.getAttribute('data-remodel-rp-bubble'), mesId, row);
+            return;
+        }
     });
 
     // Enter-to-send + autosize in the roleplay input; Enter-to-roll in the
@@ -4384,6 +4408,21 @@ function bindRoleplayComposerEvents() {
             if (event.key === 'Enter' && !event.isComposing) {
                 event.preventDefault();
                 performRoleplayDiceRoll(diceInput.value);
+            }
+            return;
+        }
+
+        // Inline bubble editor: Ctrl/Cmd+Enter saves, Escape cancels.
+        const editArea = el.closest('.remodel-rp-edit-area');
+        if (editArea) {
+            const row = editArea.closest('[data-remodel-mesid]');
+            const mesId = Number(row?.dataset.remodelMesid);
+            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                commitRoleplayBubbleEdit(mesId, row);
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                renderRoleplayScene();
             }
             return;
         }
@@ -4407,6 +4446,11 @@ function bindRoleplayComposerEvents() {
         }
         const el = event.target instanceof Element ? event.target : null;
         if (!el) {
+            return;
+        }
+        const editArea = el.closest('.remodel-rp-edit-area');
+        if (editArea instanceof HTMLTextAreaElement) {
+            autosizeRoleplayEdit(editArea);
             return;
         }
         const input = el.closest('[data-remodel-rp-input]');
@@ -4573,8 +4617,160 @@ function buildRoleplayMessage(mesId, message) {
     }
     bubble.appendChild(body);
 
+    // Per-bubble controls (edit / delete, plus swipe for the last AI line).
+    // They drive core's real hidden buttons on the matching .mes row — the
+    // same "never touch #chat's DOM directly" discipline the manuscript
+    // overlay uses. Built into the bubble; shown on hover via CSS.
+    bubble.appendChild(buildRoleplayBubbleControls(mesId, message, kind));
+
     row.appendChild(bubble);
     return row;
+}
+
+// The hover control strip for one bubble. Edit + Delete are available on
+// every real message; Swipe only on the last message and only when it's an
+// AI/character line (swiping the user's own text isn't a thing in core).
+function buildRoleplayBubbleControls(mesId, message, kind) {
+    const context = getContext();
+    const controls = document.createElement('div');
+    controls.className = 'remodel-rp-controls';
+
+    const isLast = mesId === context.chat.length - 1;
+    const canSwipe = isLast && kind === 'character' && !message.is_system;
+
+    if (canSwipe) {
+        const swipeCount = Array.isArray(message.swipes) ? message.swipes.length : 1;
+        const swipeIndex = Number.isFinite(message.swipe_id) ? message.swipe_id : 0;
+        const swipeWrap = document.createElement('div');
+        swipeWrap.className = 'remodel-rp-swipe';
+        swipeWrap.innerHTML = `
+            <button type="button" class="remodel-rp-ctrl" data-remodel-rp-bubble="swipe-left" title="Previous response"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button>
+            <span class="remodel-rp-swipe-count">${swipeIndex + 1} / ${Math.max(swipeCount, swipeIndex + 1)}</span>
+            <button type="button" class="remodel-rp-ctrl" data-remodel-rp-bubble="swipe-right" title="Next / new response"><i class="fa-solid fa-chevron-right" aria-hidden="true"></i></button>
+        `;
+        controls.appendChild(swipeWrap);
+    }
+
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'remodel-rp-ctrl';
+    edit.dataset.remodelRpBubble = 'edit';
+    edit.title = 'Edit';
+    edit.innerHTML = '<i class="fa-solid fa-pencil" aria-hidden="true"></i>';
+    controls.appendChild(edit);
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'remodel-rp-ctrl remodel-rp-ctrl-danger';
+    del.dataset.remodelRpBubble = 'delete';
+    del.title = 'Delete';
+    del.innerHTML = '<i class="fa-solid fa-trash-can" aria-hidden="true"></i>';
+    controls.appendChild(del);
+
+    return controls;
+}
+
+// Routes a per-bubble control click to the right core action. mesId comes
+// from the bubble row's data-remodel-mesid.
+async function handleRoleplayBubbleControl(action, mesId, row) {
+    const context = getContext();
+    if (!Number.isFinite(mesId) || !context.chat[mesId]) {
+        return;
+    }
+
+    switch (action) {
+        case 'edit':
+            beginRoleplayBubbleEdit(mesId, row);
+            break;
+        case 'delete': {
+            if (!confirm('Delete this message? This cannot be undone.')) {
+                return;
+            }
+            await context.deleteMessage(mesId);
+            renderRoleplayScene();
+            break;
+        }
+        case 'swipe-left': {
+            const mesEl = getRealChatElement()?.querySelector(`.mes[mesid="${mesId}"]`);
+            mesEl?.querySelector('.swipe_left')?.click();
+            // core re-renders the real row + emits events; our stream render
+            // is driven off those, but nudge it in case the swipe was purely
+            // local (moving to an existing prior swipe, no generation).
+            setTimeout(() => renderRoleplayScene(), 60);
+            break;
+        }
+        case 'swipe-right': {
+            const mesEl = getRealChatElement()?.querySelector(`.mes[mesid="${mesId}"]`);
+            mesEl?.querySelector('.swipe_right')?.click();
+            setTimeout(() => renderRoleplayScene(), 60);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+// Inline edit: swap the bubble body for a textarea seeded with the raw
+// message text, with Save / Cancel. Commit drives core's real
+// .mes_edit/.mes_edit_done via the shared openEditCloseWith helper (the
+// same one the manuscript overlay uses) so the write-back runs core's
+// normal edit pipeline; Cancel just re-renders from untouched chat[].
+function beginRoleplayBubbleEdit(mesId, row) {
+    const context = getContext();
+    const message = context.chat[mesId];
+    const bubble = row?.querySelector('.remodel-rp-bubble');
+    const body = bubble?.querySelector('.remodel-rp-body');
+    if (!bubble || !body || row.querySelector('.remodel-rp-edit')) {
+        return;
+    }
+
+    const editor = document.createElement('div');
+    editor.className = 'remodel-rp-edit';
+    const textarea = document.createElement('textarea');
+    textarea.className = 'remodel-rp-edit-area';
+    textarea.value = message.mes ?? '';
+    editor.appendChild(textarea);
+
+    const actions = document.createElement('div');
+    actions.className = 'remodel-rp-edit-actions';
+    actions.innerHTML = `
+        <button type="button" class="remodel-rp-edit-btn" data-remodel-rp-edit="cancel">Cancel</button>
+        <button type="button" class="remodel-rp-edit-btn remodel-rp-edit-save" data-remodel-rp-edit="save">Save</button>
+    `;
+    editor.appendChild(actions);
+
+    body.style.display = 'none';
+    bubble.appendChild(editor);
+    autosizeRoleplayEdit(textarea);
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+}
+
+function autosizeRoleplayEdit(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 420)}px`;
+}
+
+async function commitRoleplayBubbleEdit(mesId, row) {
+    const textarea = row?.querySelector('.remodel-rp-edit-area');
+    if (!textarea) {
+        return;
+    }
+    const newValue = textarea.value;
+    const context = getContext();
+    const original = context.chat[mesId]?.mes ?? '';
+
+    if (newValue === original) {
+        renderRoleplayScene();
+        return;
+    }
+
+    try {
+        await openEditCloseWith(mesId, '.mes_edit_done', newValue);
+    } catch (err) {
+        console.error('Roleplay bubble edit failed:', err);
+    }
+    renderRoleplayScene();
 }
 
 // Renders a dice roll as a centered card in the stream, built from the
