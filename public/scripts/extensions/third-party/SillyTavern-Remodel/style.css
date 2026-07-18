@@ -1837,6 +1837,7 @@ body.remodel-roleplay-workspace-active #chat > .mes {
 }
 
 body.remodel-roleplay-workspace-active #remodel-roleplay-root {
+  position: relative !important;
   display: grid !important;
   grid-template-columns: var(--cast-column-width, 88px) 1fr !important;
   grid-template-rows: 1fr auto !important;
@@ -2889,6 +2890,120 @@ body.remodel-roleplay-workspace-active .remodel-rp-dice-card-plain {
   font-size: 14px !important;
   color: rgba(238, 235, 245, 0.7) !important;
   text-align: center !important;
+}
+
+/* --- Generation feedback: typing indicator, spinner, toast, flashes --- */
+
+/* The pending "someone is composing" bubble. Reuses the character bubble
+   look; the dots animate, and streamed text fills the body live. */
+body.remodel-roleplay-workspace-active .remodel-rp-typing .remodel-rp-bubble {
+  border-color: var(--tarot-gold-soft) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-typing-dots {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-typing-dots span {
+  width: 6px !important;
+  height: 6px !important;
+  border-radius: 50% !important;
+  background: var(--tarot-gold) !important;
+  opacity: 0.4 !important;
+  animation: remodel-rp-typing-bounce 1.2s infinite ease-in-out !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-typing-dots span:nth-child(2) { animation-delay: 0.18s !important; }
+body.remodel-roleplay-workspace-active .remodel-rp-typing-dots span:nth-child(3) { animation-delay: 0.36s !important; }
+@keyframes remodel-rp-typing-bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.35; }
+  40% { transform: translateY(-4px); opacity: 1; }
+}
+body.remodel-roleplay-workspace-active .remodel-rp-typing-body:empty::after {
+  content: 'composing…' !important;
+  color: rgba(238, 235, 245, 0.4) !important;
+  font-style: italic !important;
+}
+
+/* Send button becomes a live spinner while a roleplay generation is in
+   flight — the arrow is swapped for a spinning ring via ::after, and the
+   button is disabled so a second send can't stack. */
+body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-send {
+  color: transparent !important;
+  pointer-events: none !important;
+  position: relative !important;
+}
+body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-send::after {
+  content: '' !important;
+  position: absolute !important;
+  inset: 0 !important;
+  margin: auto !important;
+  width: 18px !important;
+  height: 18px !important;
+  border-radius: 50% !important;
+  border: 2px solid rgba(11, 11, 13, 0.35) !important;
+  border-top-color: var(--tarot-ink) !important;
+  animation: remodel-rp-spin 0.7s linear infinite !important;
+}
+@keyframes remodel-rp-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* While generating, the roleplay input dims and Regenerate/Next dim too —
+   they'd just queue behind the in-flight run. */
+body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-input {
+  opacity: 0.55 !important;
+}
+body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-act[data-remodel-rp-action="regenerate"],
+body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-act[data-remodel-rp-action="next"],
+body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-act[data-remodel-rp-action="impersonate"] {
+  opacity: 0.4 !important;
+  pointer-events: none !important;
+}
+
+/* Press flash: a quick gold pulse acknowledging a wired button's click. */
+body.remodel-roleplay-workspace-active .remodel-rp-act-flash {
+  animation: remodel-rp-flash 0.32s ease !important;
+}
+@keyframes remodel-rp-flash {
+  0% { background: rgba(198, 164, 74, 0.32); }
+  100% { background: transparent; }
+}
+
+/* Honestly-disabled controls: dimmed, not-allowed cursor, but still
+   clickable so their explain-why toast can fire. */
+body.remodel-roleplay-workspace-active [data-remodel-rp-act-disabled],
+body.remodel-roleplay-workspace-active .remodel-rp-soon {
+  opacity: 0.45 !important;
+  cursor: help !important;
+}
+body.remodel-roleplay-workspace-active [data-remodel-rp-act-disabled]:hover,
+body.remodel-roleplay-workspace-active .remodel-rp-soon:hover {
+  opacity: 0.7 !important;
+}
+
+/* Toast — bottom-center of the stream, above the composer. */
+body.remodel-roleplay-workspace-active .remodel-rp-toast {
+  position: absolute !important;
+  left: 50% !important;
+  bottom: 18px !important;
+  transform: translate(-50%, 8px) !important;
+  z-index: 25 !important;
+  max-width: 78% !important;
+  padding: 9px 16px !important;
+  background: rgba(11, 11, 13, 0.96) !important;
+  border: 1px solid var(--tarot-gold-soft) !important;
+  border-radius: 10px !important;
+  color: rgba(238, 235, 245, 0.9) !important;
+  font-family: var(--remodel-manuscript-font) !important;
+  font-size: 13px !important;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.5) !important;
+  opacity: 0 !important;
+  transition: opacity 0.2s ease, transform 0.2s ease !important;
+  pointer-events: none !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-toast.remodel-rp-toast-in {
+  opacity: 1 !important;
+  transform: translate(-50%, 0) !important;
 }
 
 /* Guided Story-Scene creation prompt — a non-blocking "coach mark," not a

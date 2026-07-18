@@ -139,6 +139,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindStoryLockInterceptor();
     bindStoryComposerContinueOnEmptySend();
     bindRoleplayComposerEvents();
+    bindRoleplayGenerationFeedback();
     bindStoryAutoContinueEvents();
     bindStoryGenerationStateEvents();
     ensureStoryComposerExtras();
@@ -4174,9 +4175,16 @@ function renderRoleplayComposer(root) {
             </span>`).join('')
         : '';
 
+    // Trigger (pick who speaks next) only means something in a group; in a
+    // solo scene there's nobody to pick, so it's honestly disabled there.
+    const inGroup = Boolean(context.groupId);
+    const triggerAttrs = inGroup
+        ? 'data-remodel-rp-action="trigger"'
+        : 'data-remodel-rp-act-disabled="Only in group scenes — there\'s just one character here"';
+
     zone.innerHTML = `
         <div class="remodel-rp-turn-bar">
-            <div class="remodel-rp-speaker-select" data-remodel-rp-speaker-select title="Who narrates / speaks next">
+            <div class="remodel-rp-speaker-select remodel-rp-soon" data-remodel-rp-soon="Speak-as switching is coming soon" title="Speaking as ${escapeAttribute(personaName)} — switching coming soon">
                 <span class="remodel-rp-chip-av">${escapeHtml(roleplayInitials(personaName))}</span>
                 <span class="remodel-rp-speaker-lbl">${escapeHtml(personaName)}</span>
                 <span class="remodel-rp-caret">▾</span>
@@ -4187,9 +4195,9 @@ function renderRoleplayComposer(root) {
         <div class="remodel-rp-action-row">
             <button type="button" class="remodel-rp-act" data-remodel-rp-action="regenerate"><span class="remodel-rp-g">↺</span> Regenerate</button>
             <button type="button" class="remodel-rp-act" data-remodel-rp-action="next"><span class="remodel-rp-g">▷</span> Next</button>
-            <button type="button" class="remodel-rp-act" data-remodel-rp-action="trigger"><span class="remodel-rp-g">✦</span> Trigger…</button>
+            <button type="button" class="remodel-rp-act" ${triggerAttrs}><span class="remodel-rp-g">✦</span> Trigger…</button>
             <button type="button" class="remodel-rp-act" data-remodel-rp-action="impersonate"><span class="remodel-rp-g">✎</span> Write for me</button>
-            <button type="button" class="remodel-rp-act" data-remodel-rp-action="preview"><span class="remodel-rp-g">◉</span> Preview</button>
+            <button type="button" class="remodel-rp-act" data-remodel-rp-act-disabled="Prompt preview isn't wired into roleplay yet"><span class="remodel-rp-g">◉</span> Preview</button>
             <span class="remodel-rp-spacer"></span>
             ${memberToggles}
         </div>
@@ -4224,11 +4232,23 @@ function handleRoleplaySend(root) {
         return;
     }
     const value = input.value;
+    if (!value.trim()) {
+        return;
+    }
     input.value = '';
     autosizeRoleplayInput(input);
     textarea.value = value;
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    // Immediate feedback: flip the generating state on right away rather
+    // than waiting for GENERATION_STARTED (there's real latency between the
+    // click and that event — the gap where "nothing looks like it's
+    // happening"). The event handler is idempotent, so an early flip here
+    // plus the event later is harmless; GENERATION_ENDED clears it.
+    setRoleplayGenerating(true);
     sendBut.click();
+    // The user's own line renders via USER_MESSAGE_RENDERED; show the
+    // pending speaker bubble on the next frame so it lands after it.
+    requestAnimationFrame(() => showRoleplayTypingIndicator());
 }
 
 // One-line-growing textarea, capped so a long message scrolls inside the
@@ -4262,11 +4282,6 @@ function handleRoleplayAction(action) {
         }
         case 'impersonate': {
             document.getElementById('option_impersonate')?.click();
-            break;
-        }
-        case 'preview': {
-            // Reuse the existing Prompt Preview panel toggle.
-            togglePromptPreviewPanel();
             break;
         }
         case 'add-cast': {
@@ -4360,9 +4375,21 @@ function bindRoleplayComposerEvents() {
             return;
         }
 
+        // Honest feedback for controls that aren't wired yet: rather than
+        // silently doing nothing, say why with a small toast.
+        const disabledCtrl = target.closest('[data-remodel-rp-act-disabled], [data-remodel-rp-soon]');
+        if (disabledCtrl) {
+            event.preventDefault();
+            const msg = disabledCtrl.getAttribute('data-remodel-rp-act-disabled')
+                || disabledCtrl.getAttribute('data-remodel-rp-soon');
+            showRoleplayToast(msg);
+            return;
+        }
+
         const actionBtn = target.closest('[data-remodel-rp-action]');
         if (actionBtn) {
             event.preventDefault();
+            flashRoleplayButton(actionBtn);
             handleRoleplayAction(actionBtn.getAttribute('data-remodel-rp-action'));
             return;
         }
@@ -4463,6 +4490,151 @@ function bindRoleplayComposerEvents() {
             writeRoleplayRulesNotes(rules.value);
         }
     });
+}
+
+// Live generation feedback for the roleplay workspace. Hooks the same
+// GENERATION_STARTED/ENDED/STOPPED + STREAM_TOKEN_RECEIVED events the story
+// side uses, but drives a roleplay-specific typing indicator (a pending
+// speaker bubble that fills with live streamed text) plus a body class
+// (remodel-roleplay-generating) the CSS keys the send-button spinner and
+// disabled states off of. Filtered to real user-facing turns via the same
+// STORY_GENERATION_TYPES table so background/quiet generations don't flip
+// the indicator on with nothing visibly happening.
+function bindRoleplayGenerationFeedback() {
+    const context = getContext();
+
+    context.eventSource.on(context.eventTypes.GENERATION_STARTED, (type, options, dryRun) => {
+        if (!isRealRoleplayWorkspaceActive() || dryRun || !STORY_GENERATION_TYPES.has(type)) {
+            return;
+        }
+        setRoleplayGenerating(true);
+        showRoleplayTypingIndicator();
+    });
+
+    const finish = () => {
+        if (!document.body.classList.contains('remodel-roleplay-generating')) {
+            return;
+        }
+        setRoleplayGenerating(false);
+        // The finished message will render via the normal
+        // MESSAGE_RECEIVED → renderRoleplayScene path, which rebuilds the
+        // stream and drops the indicator; nudge a render in case the event
+        // ordering leaves the indicator briefly orphaned.
+        renderRoleplayScene();
+    };
+    context.eventSource.on(context.eventTypes.GENERATION_ENDED, finish);
+    context.eventSource.on(context.eventTypes.GENERATION_STOPPED, finish);
+
+    // Live streamed text into the pending typing bubble.
+    context.eventSource.on(context.eventTypes.STREAM_TOKEN_RECEIVED, (text) => {
+        if (!isRealRoleplayWorkspaceActive() || !document.body.classList.contains('remodel-roleplay-generating')) {
+            return;
+        }
+        updateRoleplayTypingText(text);
+    });
+}
+
+function setRoleplayGenerating(on) {
+    document.body.classList.toggle('remodel-roleplay-generating', Boolean(on));
+    if (!on) {
+        removeRoleplayTypingIndicator();
+    }
+}
+
+// The pending "someone is composing" bubble at the bottom of the stream.
+// Guesses the upcoming speaker: in a group we can't know for sure until the
+// message arrives, so it shows a neutral "…" until the first token names a
+// speaker; in a solo scene it's the one character.
+function showRoleplayTypingIndicator() {
+    const root = getRealRoleplayRoot();
+    const stream = root?.querySelector('[data-remodel-rp-stream]');
+    if (!stream || stream.querySelector('.remodel-rp-typing')) {
+        return;
+    }
+
+    const context = getContext();
+    const members = roleplaySceneMembers(context);
+    const speaker = context.groupId ? null : members[0];
+    const name = speaker?.name || '';
+    const color = name ? roleplaySpeakerColor(name) : null;
+
+    const row = document.createElement('div');
+    row.className = `remodel-rp-msg remodel-rp-character remodel-rp-typing`;
+    if (color) {
+        row.classList.add(`remodel-rp-color-${color}`);
+    }
+
+    const avatar = speaker
+        ? buildRoleplayAvatar(name)
+        : (() => { const d = document.createElement('div'); d.className = 'remodel-rp-avatar'; d.textContent = '…'; return d; })();
+    row.appendChild(avatar);
+
+    const bubble = document.createElement('div');
+    bubble.className = 'remodel-rp-bubble';
+    bubble.innerHTML = `
+        <div class="remodel-rp-meta">
+            <span class="remodel-rp-name">${escapeHtml(name || 'Composing')}</span>
+            <span class="remodel-rp-typing-dots"><span></span><span></span><span></span></span>
+        </div>
+        <div class="remodel-rp-body remodel-rp-typing-body" data-remodel-rp-typing-body></div>
+    `;
+    row.appendChild(bubble);
+    stream.appendChild(row);
+    requestAnimationFrame(() => { stream.scrollTop = stream.scrollHeight; });
+}
+
+function updateRoleplayTypingText(text) {
+    const root = getRealRoleplayRoot();
+    const body = root?.querySelector('[data-remodel-rp-typing-body]');
+    if (!body) {
+        return;
+    }
+    body.textContent = String(text ?? '');
+    const stream = root.querySelector('[data-remodel-rp-stream]');
+    if (stream) {
+        stream.scrollTop = stream.scrollHeight;
+    }
+}
+
+function removeRoleplayTypingIndicator() {
+    getRealRoleplayRoot()?.querySelector('.remodel-rp-typing')?.remove();
+}
+
+// Brief, non-blocking toast anchored to the roleplay workspace — used to
+// explain why an unwired control did nothing, so a click always produces a
+// visible response. Auto-dismisses; only one at a time.
+let roleplayToastTimer = null;
+function showRoleplayToast(message) {
+    const root = getRealRoleplayRoot();
+    if (!root || !message) {
+        return;
+    }
+    root.querySelector('.remodel-rp-toast')?.remove();
+    clearTimeout(roleplayToastTimer);
+
+    const toast = document.createElement('div');
+    toast.className = 'remodel-rp-toast';
+    toast.textContent = message;
+    root.appendChild(toast);
+    // Force a reflow so the enter transition runs.
+    void toast.offsetWidth;
+    toast.classList.add('remodel-rp-toast-in');
+    roleplayToastTimer = setTimeout(() => {
+        toast.classList.remove('remodel-rp-toast-in');
+        setTimeout(() => toast.remove(), 220);
+    }, 2600);
+}
+
+// A quick press flash on an action button so the click is acknowledged even
+// when the underlying core action takes a moment to visibly do anything.
+function flashRoleplayButton(button) {
+    if (!(button instanceof Element)) {
+        return;
+    }
+    button.classList.remove('remodel-rp-act-flash');
+    void button.offsetWidth;
+    button.classList.add('remodel-rp-act-flash');
+    setTimeout(() => button.classList.remove('remodel-rp-act-flash'), 320);
 }
 
 // Resolves a stable, per-name accent from the extension's own Nord aurora
@@ -4870,6 +5042,13 @@ function renderRoleplayScene() {
     renderRoleplayCast(root);
     renderRoleplayComposer(root);
     ensureRoleplayPanels();
+
+    // A stream rebuild wipes the (non-.mes-backed) typing indicator; if a
+    // generation is still in flight, put it back so the "someone is
+    // composing" affordance survives the user's own message rendering.
+    if (document.body.classList.contains('remodel-roleplay-generating')) {
+        showRoleplayTypingIndicator();
+    }
 }
 
 // Right-edge drawer panels for the roleplay workspace: a floating icon
