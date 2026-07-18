@@ -4557,9 +4557,20 @@ function buildRoleplayMessage(mesId, message) {
 
     const body = document.createElement('div');
     body.className = 'remodel-rp-body';
-    // Raw message text for now — markdown/italic-action rendering is a
-    // later polish pass; textContent keeps it safe and structural.
-    body.textContent = message.mes ?? '';
+    // Render through core's own messageFormatting (Showdown markdown +
+    // *italic actions* + code, run through core's sanitizer) so bubbles
+    // match how the native chat renders the same text — same source of
+    // truth, no parallel markdown implementation to drift. display_text
+    // (used by some extensions to override what's shown) is honored first,
+    // exactly as core does.
+    const source = message.extra?.display_text ?? message.mes ?? '';
+    try {
+        const context = getContext();
+        body.innerHTML = context.messageFormatting(source, name, isSystem, isUser, mesId);
+    } catch (err) {
+        // Never let a formatting hiccup blank a bubble — fall back to text.
+        body.textContent = source;
+    }
     bubble.appendChild(body);
 
     row.appendChild(bubble);

@@ -2056,7 +2056,75 @@ body.remodel-roleplay-workspace-active .remodel-rp-body {
   font-size: 15px !important;
   line-height: 1.6 !important;
   color: rgba(238, 235, 245, 0.92) !important;
-  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+/* messageFormatting wraps prose in <p>; collapse the outer margins so a
+   single-paragraph bubble isn't padded, but keep spacing between multiple
+   paragraphs. */
+body.remodel-roleplay-workspace-active .remodel-rp-body p {
+  margin: 0 !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-body p + p {
+  margin-top: 0.7em !important;
+}
+/* *Italic actions* — the roleplay convention core renders as <em>. Tint
+   them so narration reads distinctly from spoken dialogue. */
+body.remodel-roleplay-workspace-active .remodel-rp-body em {
+  font-style: italic !important;
+  color: rgba(238, 235, 245, 0.62) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-body strong {
+  color: var(--tarot-gold-bright) !important;
+  font-weight: 700 !important;
+}
+/* "Quoted dialogue" — core wraps double-quoted text in <q> but keeps the
+   literal quote characters in the text (its own .mes_text q only recolors,
+   adding no glyphs). Match that: quotes:none so we don't render a second
+   pair on top of the literal ones. Just a subtle gold cast on speech. */
+body.remodel-roleplay-workspace-active .remodel-rp-body q {
+  quotes: none !important;
+  color: rgba(244, 231, 196, 0.96) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-body q::before,
+body.remodel-roleplay-workspace-active .remodel-rp-body q::after {
+  content: none !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-body code {
+  font-family: monospace !important;
+  font-size: 0.9em !important;
+  background: rgba(0, 0, 0, 0.35) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 4px !important;
+  padding: 1px 5px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-body pre {
+  background: rgba(0, 0, 0, 0.4) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 8px !important;
+  padding: 10px 12px !important;
+  overflow-x: auto !important;
+  margin: 0.6em 0 !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-body pre code {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-body blockquote {
+  border-left: 2px solid var(--tarot-gold-soft) !important;
+  margin: 0.5em 0 !important;
+  padding-left: 12px !important;
+  color: rgba(238, 235, 245, 0.7) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-body img {
+  max-width: 100% !important;
+  border-radius: 8px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-body a {
+  color: var(--nord-frost, #88c0d0) !important;
+  text-decoration: underline !important;
 }
 
 /* Per-character accent: avatar fill, name color, bubble left-stripe.
