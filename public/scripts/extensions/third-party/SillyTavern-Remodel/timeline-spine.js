@@ -4052,6 +4052,14 @@ function getRealChatElement() {
     return document.body.querySelector(':scope > #sheld > #chat');
 }
 
+// The real #sheld directly under body — scoped the same way as
+// getRealChatElement to sidestep the Background-tab clone's duplicate
+// #sheld. Roleplay panels dock inside it so they position over the
+// stream, not the dead clone.
+function getRealSheld() {
+    return document.body.querySelector(':scope > #sheld');
+}
+
 const MANUSCRIPT_OVERLAY_ID = 'remodel-manuscript-overlay';
 
 // The real #chat rows (avatars, mes_buttons, swipe arrows, edit buttons,
@@ -4303,6 +4311,22 @@ function bindRoleplayComposerEvents() {
         if (!target) {
             return;
         }
+
+        // Panels live in #sheld, outside the roleplay root — handle their
+        // toggle/close buttons before the root-containment guard below.
+        const panelToggle = target.closest('[data-remodel-rp-panel-toggle]');
+        if (panelToggle) {
+            event.preventDefault();
+            toggleRoleplayPanel(panelToggle.getAttribute('data-remodel-rp-panel-toggle'));
+            return;
+        }
+        const panelClose = target.closest('[data-remodel-rp-panel-close]');
+        if (panelClose) {
+            event.preventDefault();
+            closeRoleplayPanel(panelClose.getAttribute('data-remodel-rp-panel-close'));
+            return;
+        }
+
         const root = getRealRoleplayRoot();
         if (!root || !root.contains(target)) {
             return;
@@ -4344,9 +4368,18 @@ function bindRoleplayComposerEvents() {
         if (!isRealRoleplayWorkspaceActive()) {
             return;
         }
-        const input = event.target instanceof Element ? event.target.closest('[data-remodel-rp-input]') : null;
+        const el = event.target instanceof Element ? event.target : null;
+        if (!el) {
+            return;
+        }
+        const input = el.closest('[data-remodel-rp-input]');
         if (input instanceof HTMLTextAreaElement) {
             autosizeRoleplayInput(input);
+            return;
+        }
+        const rules = el.closest('[data-remodel-rp-rules]');
+        if (rules instanceof HTMLTextAreaElement) {
+            writeRoleplayRulesNotes(rules.value);
         }
     });
 }
@@ -4545,6 +4578,148 @@ function renderRoleplayScene() {
 
     renderRoleplayCast(root);
     renderRoleplayComposer(root);
+    ensureRoleplayPanels();
+}
+
+// Right-edge drawer panels for the roleplay workspace: a floating icon
+// column (like Story mode's panelgroup) plus the Rules/Mechanics and Dice
+// panels themselves. Built once, gated on a live roleplay scene; each
+// panel slides in from the right edge over the stream when its icon is
+// clicked (an -open class toggle, same discipline as the Story panels).
+function ensureRoleplayPanels() {
+    ensureRoleplayPanelGroup();
+    ensureRoleplayRulesPanel();
+    ensureRoleplayDicePanel();
+}
+
+function ensureRoleplayPanelGroup() {
+    if (!isRealRoleplayWorkspaceActive()) {
+        return;
+    }
+    if (document.getElementById('remodel-rp-panelgroup')) {
+        return;
+    }
+    const group = document.createElement('div');
+    group.id = 'remodel-rp-panelgroup';
+    group.className = 'remodel-rp-panelgroup';
+    group.innerHTML = `
+        <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="rules" title="Rules & Mechanics" aria-label="Rules & Mechanics">
+            <i class="fa-solid fa-scroll" aria-hidden="true"></i>
+        </button>
+        <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="dice" title="Dice" aria-label="Dice">
+            <i class="fa-solid fa-dice-d20" aria-hidden="true"></i>
+        </button>
+    `;
+    getRealSheld()?.appendChild(group);
+}
+
+// Rules / Mechanics panel: a free-text scratchpad for the table's house
+// rules, tone, and mechanics. This is user-facing reference the writer
+// keeps beside the scene — it is NOT auto-injected into prompts. Core
+// already owns real prompt injection (Author's Note / World Info / system
+// prompt); duplicating that here would silently double-inject. So this
+// panel is deliberately a notes surface, persisted per-scene in chat
+// metadata, that the user can reference or copy into a real injection
+// surface themselves.
+function ensureRoleplayRulesPanel() {
+    if (!isRealRoleplayWorkspaceActive()) {
+        return;
+    }
+    if (document.getElementById('remodel-rp-rules-panel')) {
+        refreshRoleplayRulesPanel();
+        return;
+    }
+    const panel = document.createElement('div');
+    panel.id = 'remodel-rp-rules-panel';
+    panel.className = 'remodel-rp-panel remodel-rp-rules-panel';
+    panel.innerHTML = `
+        <div class="remodel-rp-panel-head">
+            <span class="remodel-rp-panel-title"><i class="fa-solid fa-scroll" aria-hidden="true"></i> Rules &amp; Mechanics</span>
+            <button type="button" class="remodel-rp-panel-close" data-remodel-rp-panel-close="rules" title="Close" aria-label="Close">×</button>
+        </div>
+        <div class="remodel-rp-panel-body">
+            <textarea class="remodel-rp-rules-textarea" data-remodel-rp-rules placeholder="House rules, tone, mechanics — your table's reference notes. Kept beside the scene; not sent to the model automatically."></textarea>
+            <p class="remodel-rp-panel-hint">These notes stay with the scene. To feed them to the model, copy into your Author's Note, World Info, or system prompt.</p>
+        </div>
+    `;
+    getRealSheld()?.appendChild(panel);
+    refreshRoleplayRulesPanel();
+}
+
+function refreshRoleplayRulesPanel() {
+    const panel = document.getElementById('remodel-rp-rules-panel');
+    if (!panel) {
+        return;
+    }
+    const textarea = panel.querySelector('[data-remodel-rp-rules]');
+    if (textarea && document.activeElement !== textarea) {
+        textarea.value = readRoleplayRulesNotes();
+    }
+}
+
+// Rules notes live in chat metadata under a remodel-namespaced key, so
+// they're scoped to the scene's chat and travel with it — same storage
+// discipline the scene metadata uses.
+function readRoleplayRulesNotes() {
+    const context = getContext();
+    const meta = context.chatMetadata || {};
+    return typeof meta.remodelRpRules === 'string' ? meta.remodelRpRules : '';
+}
+
+function writeRoleplayRulesNotes(value) {
+    const context = getContext();
+    if (!context.chatMetadata) {
+        return;
+    }
+    context.chatMetadata.remodelRpRules = String(value ?? '');
+    context.saveMetadataDebounced?.();
+}
+
+function ensureRoleplayDicePanel() {
+    if (!isRealRoleplayWorkspaceActive()) {
+        return;
+    }
+    if (document.getElementById('remodel-rp-dice-panel')) {
+        return;
+    }
+    const panel = document.createElement('div');
+    panel.id = 'remodel-rp-dice-panel';
+    panel.className = 'remodel-rp-panel remodel-rp-dice-panel';
+    // Stage 4 builds the panel shell + placeholder; the live roll flow
+    // (notation parse, quick-rolls, in-stream result cards) is Stage 5.
+    panel.innerHTML = `
+        <div class="remodel-rp-panel-head">
+            <span class="remodel-rp-panel-title"><i class="fa-solid fa-dice-d20" aria-hidden="true"></i> Dice</span>
+            <button type="button" class="remodel-rp-panel-close" data-remodel-rp-panel-close="dice" title="Close" aria-label="Close">×</button>
+        </div>
+        <div class="remodel-rp-panel-body">
+            <p class="remodel-rp-panel-hint">Dice roller — coming online next stage.</p>
+        </div>
+    `;
+    getRealSheld()?.appendChild(panel);
+}
+
+function toggleRoleplayPanel(which) {
+    const id = which === 'rules' ? 'remodel-rp-rules-panel' : which === 'dice' ? 'remodel-rp-dice-panel' : null;
+    if (!id) {
+        return;
+    }
+    const panel = document.getElementById(id);
+    if (!panel) {
+        return;
+    }
+    const willOpen = !panel.classList.contains('remodel-rp-panel-open');
+    // Only one right-edge panel open at a time — close siblings first.
+    getRealSheld()?.querySelectorAll('.remodel-rp-panel.remodel-rp-panel-open')
+        .forEach((p) => p.classList.remove('remodel-rp-panel-open'));
+    if (willOpen) {
+        panel.classList.add('remodel-rp-panel-open');
+    }
+}
+
+function closeRoleplayPanel(which) {
+    const id = which === 'rules' ? 'remodel-rp-rules-panel' : which === 'dice' ? 'remodel-rp-dice-panel' : null;
+    document.getElementById(id)?.classList.remove('remodel-rp-panel-open');
 }
 
 // Rebuilds the left cast column from the current chat's participants —

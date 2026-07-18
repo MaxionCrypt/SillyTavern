@@ -1179,7 +1179,10 @@ body.remodel-story-workspace-active.remodel-story-input-open #send_form.remodel-
 #remodel-priortext-panel,
 #remodel-promptpreview-panel,
 #remodel-manuscript-toolbar-panel,
-#remodel-manuscript-overlay {
+#remodel-manuscript-overlay,
+#remodel-rp-panelgroup,
+#remodel-rp-rules-panel,
+#remodel-rp-dice-panel {
   display: none !important;
 }
 
@@ -2362,6 +2365,147 @@ body.remodel-roleplay-workspace-active .remodel-rp-composer-meta {
   color: rgba(238, 235, 245, 0.34) !important;
   font-family: monospace !important;
   padding: 0 4px !important;
+}
+
+/* --- Right-edge panel rail: floating icon column + slide-in panels --- */
+
+/* Floating icon column, top-right, like Story mode's panelgroup. */
+body.remodel-roleplay-workspace-active #remodel-rp-panelgroup {
+  position: fixed !important;
+  top: calc(var(--topBarBlockSize, 40px) + 16px) !important;
+  right: 10px !important;
+  z-index: 22 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+}
+
+/* When a panel is open it covers the right edge; shift the icon rail left
+   so it sits just beside the open panel and stays clickable. */
+body.remodel-roleplay-workspace-active #sheld:has(.remodel-rp-panel-open) #remodel-rp-panelgroup {
+  right: 350px !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-panel-icon {
+  flex: 0 0 auto !important;
+  width: 34px !important;
+  height: 34px !important;
+  box-sizing: border-box !important;
+  appearance: none !important;
+  background: var(--solid-color) !important;
+  border: 1px solid rgba(198, 164, 74, 0.28) !important;
+  border-radius: 8px !important;
+  color: var(--tarot-gold) !important;
+  cursor: pointer !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 14px !important;
+  box-shadow: var(--card-shadow) !important;
+  transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-panel-icon:hover {
+  color: var(--tarot-gold-bright) !important;
+  border-color: var(--tarot-gold-bright) !important;
+  background: rgba(198, 164, 74, 0.1) !important;
+}
+
+/* The panels: fixed to the right edge, slid off-screen until -open. */
+body.remodel-roleplay-workspace-active #remodel-rp-rules-panel,
+body.remodel-roleplay-workspace-active #remodel-rp-dice-panel {
+  display: flex !important;
+  flex-direction: column !important;
+  position: fixed !important;
+  top: var(--topBarBlockSize, 40px) !important;
+  right: 0 !important;
+  width: 340px !important;
+  max-width: 86vw !important;
+  height: calc(100vh - var(--topBarBlockSize, 40px)) !important;
+  z-index: 21 !important;
+  background: rgba(11, 11, 13, 0.94) !important;
+  border-left: 1px solid var(--tarot-gold-soft) !important;
+  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.5) !important;
+  transform: translateX(100%) !important;
+  transition: transform 0.2s ease !important;
+  pointer-events: none !important;
+}
+
+body.remodel-roleplay-workspace-active #remodel-rp-rules-panel.remodel-rp-panel-open,
+body.remodel-roleplay-workspace-active #remodel-rp-dice-panel.remodel-rp-panel-open {
+  transform: translateX(0) !important;
+  pointer-events: auto !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-panel-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding: 14px 16px !important;
+  border-bottom: 1px solid var(--gold-faint, rgba(198, 164, 74, 0.14)) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-panel-title {
+  font-family: var(--remodel-serif) !important;
+  font-size: 13px !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  color: var(--tarot-gold-bright) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-panel-close {
+  appearance: none !important;
+  background: transparent !important;
+  border: none !important;
+  color: rgba(238, 235, 245, 0.55) !important;
+  font-size: 20px !important;
+  line-height: 1 !important;
+  cursor: pointer !important;
+  padding: 0 4px !important;
+  transition: color 0.14s ease !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-panel-close:hover { color: var(--tarot-gold-bright) !important; }
+
+body.remodel-roleplay-workspace-active .remodel-rp-panel-body {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  padding: 16px !important;
+  overflow-y: auto !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-panel-hint {
+  font-size: 11.5px !important;
+  line-height: 1.5 !important;
+  color: rgba(238, 235, 245, 0.4) !important;
+  font-family: var(--remodel-manuscript-font) !important;
+  margin: 0 !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-rules-textarea {
+  flex: 1 !important;
+  min-height: 220px !important;
+  resize: none !important;
+  background: var(--solid-color) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 10px !important;
+  padding: 12px !important;
+  color: rgba(238, 235, 245, 0.92) !important;
+  font-family: var(--remodel-manuscript-font) !important;
+  font-size: 14px !important;
+  line-height: 1.55 !important;
+  outline: none !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-rules-textarea:focus {
+  border-color: var(--tarot-gold-soft) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-rules-textarea::placeholder {
+  color: rgba(238, 235, 245, 0.3) !important;
+  font-style: italic !important;
 }
 
 /* Guided Story-Scene creation prompt — a non-blocking "coach mark," not a
