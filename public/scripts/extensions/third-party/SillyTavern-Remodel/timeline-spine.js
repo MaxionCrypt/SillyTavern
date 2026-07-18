@@ -6,6 +6,7 @@ import {
     select_selected_character as selectCharacterForEditingOnly,
     setCharacterId,
 } from '../../../../script.js';
+import { openGroupById } from '../../../group-chats.js';
 import { MacroRegistry, MacroCategory, MacroValueType } from '../../../macros/engine/MacroRegistry.js';
 import {
     CHAT_METADATA_KEY,
@@ -140,6 +141,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindStoryComposerContinueOnEmptySend();
     bindRoleplayComposerEvents();
     bindRoleplayGenerationFeedback();
+    bindRoleplayCastPickerEvents();
     bindStoryAutoContinueEvents();
     bindStoryGenerationStateEvents();
     ensureStoryComposerExtras();
@@ -3613,20 +3615,14 @@ async function openScene(sceneId) {
     }
 
     if (!scene.linkedChat) {
-        // Never-opened Roleplay Scene: doesn't need the user to have manually
-        // picked a character/group first — silently anchor to one (SillyTavern's
-        // generation pipeline needs *some* character context under the hood),
-        // then create+bind a fresh chat and go straight into the viewport.
-        // "Open Scene" should always work in one click.
-        await ensureActiveCharacterContext();
-        await createNewChatForScene(sceneId);
-        scene = getScene(sceneId);
-
-        if (!scene?.linkedChat) {
-            return;
-        }
-
-        await enterSceneViewport();
+        // Never-opened Roleplay Scene: let the user cast it. This replaces
+        // the old behavior of silently anchoring to the first character in
+        // the list — the cause of "every new roleplay opens the same
+        // Co-Author chat." One character → a solo chat; several → a group.
+        openRoleplayCastPicker({
+            mode: 'create',
+            onConfirm: (avatars) => beginRoleplaySceneWithCast(sceneId, avatars),
+        });
         return;
     }
 
@@ -3636,13 +3632,24 @@ async function openScene(sceneId) {
     if (linkedChat.type === 'group') {
         const group = context.groups.find((item) => String(item.id) === String(linkedChat.groupId));
 
-        if (!group || !group.chats.includes(linkedChat.chatId)) {
+        // Match the chat id loosely (stored as string, core may hold number).
+        const chatMatch = group?.chats?.find((c) => String(c) === String(linkedChat.chatId));
+        if (!group || chatMatch === undefined) {
             updateScene(sceneId, { status: 'missing' });
             return;
         }
 
         setActiveScene(sceneId);
-        await context.openGroupChat(linkedChat.groupId, linkedChat.chatId);
+        // openGroupById selects the group and loads its current chat. If the
+        // scene is bound to a specific, non-current chat within that group,
+        // switch to it afterward (openGroupChat only works once the group is
+        // already selected — which openGroupById has just done). Pass core's
+        // own id types; its guards use strict === / includes().
+        await openGroupById(group.id);
+        if (String(group.chat_id) !== String(chatMatch)) {
+            await context.openGroupChat(group.id, chatMatch);
+        }
+        await waitForChatIdSettled();
         writeSceneMetadata(scene);
         updateScene(sceneId, { status: 'active' });
         await enterSceneViewport();
@@ -3672,6 +3679,70 @@ async function openScene(sceneId) {
     await enterSceneViewport();
 }
 
+// Casts a fresh roleplay scene from the picker's chosen characters. One
+// character → a solo character chat (selectCharacterById + new chat, bound
+// exactly like before). Two or more → a real group + a fresh group chat,
+// bound to the scene. Either way the scene ends up with a linkedChat and
+// drops into the viewport.
+async function beginRoleplaySceneWithCast(sceneId, avatars) {
+    const context = getContext();
+    const scene = getScene(sceneId);
+    if (!scene || !Array.isArray(avatars) || avatars.length === 0) {
+        return;
+    }
+
+    if (avatars.length === 1) {
+        // Solo: resolve the chosen character's id, select it, new chat, bind.
+        const idx = (context.characters || []).findIndex((c) => c.avatar === avatars[0]);
+        if (idx < 0) {
+            return;
+        }
+        await context.selectCharacterById(idx, { switchMenu: false });
+        await createNewChatForScene(sceneId);
+        if (!getScene(sceneId)?.linkedChat) {
+            return;
+        }
+        await enterSceneViewport();
+        return;
+    }
+
+    // Group: create it, bind the scene to its fresh chat, open it.
+    const groupId = await createRoleplayGroup(avatars, scene.title);
+    if (!groupId) {
+        return;
+    }
+    // Read the ids back off the real group object so they carry core's own
+    // types — openGroupChat() looks the group up with a STRICT === on id and
+    // includes() on chat id, so a stringified id silently fails that guard
+    // and nothing opens (confirmed live: the group was created but never
+    // entered). Pass group.id / group.chats[0] verbatim.
+    const group = findRoleplayGroup(groupId);
+    const nativeGroupId = group?.id ?? groupId;
+    const nativeChatId = group?.chats?.[0] ?? group?.chat_id;
+    if (nativeChatId === undefined || nativeChatId === null) {
+        return;
+    }
+    updateScene(sceneId, {
+        linkedChat: { type: 'group', groupId: String(nativeGroupId), chatId: String(nativeChatId) },
+        status: 'active',
+    });
+    setActiveScene(sceneId);
+    // openGroupById is the complete "switch to this group" entry point — it
+    // sets selected_group AND loads the group's chat. context.openGroupChat
+    // alone does NOT select the group (it only switches chats within an
+    // already-selected group), so it silently no-ops for a just-created
+    // group — confirmed live. A fresh group has exactly one chat, which
+    // openGroupById opens.
+    await openGroupById(nativeGroupId);
+    await waitForChatIdSettled();
+    writeSceneMetadata(getScene(sceneId));
+    // openGroupById's CHAT_CHANGED can land before the scene metadata write
+    // settles, so set the workspace class directly here too (idempotent).
+    syncStoryWorkspaceClass(getScene(sceneId));
+    await enterSceneViewport();
+    renderRoleplayScene();
+}
+
 async function ensureActiveCharacterContext() {
     const context = getContext();
 
@@ -3699,13 +3770,15 @@ async function ensureActiveCharacterContext() {
     await context.selectCharacterById(firstCharacterId, { switchMenu: false });
 }
 
-function bindCurrentChatToScene(sceneId) {
+function bindCurrentChatToScene(sceneId, { silent = false } = {}) {
     const scene = getScene(sceneId);
     const linkedChat = getCurrentLinkedChat();
 
     if (!scene || !linkedChat) {
-        alert('Open a character or group chat before binding this Scene.');
-        return;
+        if (!silent) {
+            alert('Open a character or group chat before binding this Scene.');
+        }
+        return false;
     }
 
     const updatedScene = updateScene(sceneId, {
@@ -3716,17 +3789,390 @@ function bindCurrentChatToScene(sceneId) {
     setActiveScene(sceneId);
     writeSceneMetadata(updatedScene);
     syncStoryWorkspaceClass(updatedScene);
+    return true;
 }
 
 async function createNewChatForScene(sceneId) {
     const scene = getScene(sceneId);
 
     if (!scene) {
-        return;
+        return false;
     }
 
     await doNewChat();
-    bindCurrentChatToScene(sceneId);
+    // doNewChat() resolves before context.chatId reflects the freshly-created
+    // chat (the id is populated a tick later via core's own load flow), so
+    // binding immediately would read a null linkedChat and no-op. Wait for
+    // the chat identity to settle first — confirmed as the cause of a
+    // roleplay Scene creating a chat on the right character but never binding.
+    await waitForChatIdSettled();
+    return bindCurrentChatToScene(sceneId, { silent: true });
+}
+
+// Polls (briefly) until a character chat identity is present, so a caller
+// that just created/loaded a chat can rely on getCurrentLinkedChat().
+async function waitForChatIdSettled(timeoutMs = 3000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        const context = getContext();
+        const ready = (context.groupId && context.chatId)
+            || (context.characterId !== undefined && context.characterId !== null && context.chatId);
+        if (ready) {
+            return true;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 60));
+    }
+    return false;
+}
+
+// --- Roleplay group plumbing ---------------------------------------------
+//
+// These drive core's real group HTTP API directly (POST /api/groups/create
+// and /api/groups/edit — the exact requests core's own createGroup()/_save()
+// send), then refresh via getCharacters(). Core doesn't export createGroup
+// or editGroup through getContext(), so replicating the request is the
+// supported way for an extension to build/modify a group; getRequestHeaders
+// and getCharacters ARE exposed, so this stays on public API surface.
+
+// Group enum + default-avatar constants aren't exposed on context; mirror
+// core's values (group-chats.js group_activation_strategy / _generation_mode,
+// script.js default_avatar) so a group we create matches a natively-created
+// one field-for-field.
+const REMODEL_GROUP_ACTIVATION_NATURAL = 0;
+const REMODEL_GROUP_GENERATION_SWAP = 0;
+const REMODEL_DEFAULT_AVATAR = 'img/ai4.png';
+
+// Creates a brand-new group from a list of character avatars and returns its
+// id, without navigating anywhere. Mirrors core's createGroup() request body.
+async function createRoleplayGroup(memberAvatars, name) {
+    const context = getContext();
+    const members = Array.isArray(memberAvatars) ? memberAvatars.filter(Boolean) : [];
+    if (members.length === 0) {
+        return null;
+    }
+
+    const memberNames = (context.characters || [])
+        .filter((c) => members.includes(c.avatar))
+        .map((c) => c.name)
+        .join(', ');
+    const chatName = `${Date.now()}`;
+
+    const groupModel = {
+        name: name || `Scene: ${memberNames}`,
+        members,
+        avatar_url: REMODEL_DEFAULT_AVATAR,
+        allow_self_responses: false,
+        hideMutedSprites: false,
+        activation_strategy: REMODEL_GROUP_ACTIVATION_NATURAL,
+        generation_mode: REMODEL_GROUP_GENERATION_SWAP,
+        disabled_members: [],
+        fav: false,
+        chat_id: chatName,
+        chats: [chatName],
+        auto_mode_delay: 5,
+    };
+
+    const response = await fetch('/api/groups/create', {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        body: JSON.stringify(groupModel),
+    });
+    if (!response.ok) {
+        console.error('Remodel: group create failed', response.status);
+        return null;
+    }
+    const data = await response.json();
+    await context.getCharacters();
+    return data?.id ?? null;
+}
+
+// Persists a modified group object (already mutated in place on
+// context.groups) via core's own /api/groups/edit request, then refreshes.
+async function saveRoleplayGroup(group) {
+    const context = getContext();
+    await fetch('/api/groups/edit', {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        body: JSON.stringify(group),
+    });
+    await context.getCharacters();
+}
+
+function findRoleplayGroup(groupId) {
+    return (getContext().groups || []).find((g) => String(g.id) === String(groupId)) || null;
+}
+
+// Resolves a character's avatar filename from a characterId or name.
+function roleplayCharacterAvatar({ characterId, name } = {}) {
+    const characters = getContext().characters || [];
+    if (characterId !== undefined && characterId !== null && characters[Number(characterId)]) {
+        return characters[Number(characterId)].avatar;
+    }
+    if (name) {
+        return characters.find((c) => c.name === name)?.avatar ?? null;
+    }
+    return null;
+}
+
+// Adds a character (by avatar) to the CURRENT scene's cast. In a group,
+// appends the member and reopens so the new cast takes effect. In a solo
+// scene, promotes it: create a group of [existing solo character + new one],
+// rebind the scene to a fresh group chat. Returns true on success.
+async function addCharacterToRoleplayScene(newAvatar) {
+    const context = getContext();
+    const scene = getActiveScene();
+    if (!scene || !newAvatar) {
+        return false;
+    }
+
+    // Group scene: append member (guard against duplicates) + reload chat.
+    if (context.groupId) {
+        const group = findRoleplayGroup(context.groupId);
+        if (!group) {
+            return false;
+        }
+        if (group.members.includes(newAvatar)) {
+            return false; // already in the cast
+        }
+        group.members = [...group.members, newAvatar];
+        await saveRoleplayGroup(group);
+        await context.reloadCurrentChat?.();
+        renderRoleplayScene();
+        return true;
+    }
+
+    // Solo scene: promote to a group. The current solo character plus the
+    // new one form the group; a fresh group chat becomes the scene's chat.
+    const soloAvatar = roleplayCharacterAvatar({ characterId: context.characterId });
+    if (!soloAvatar || soloAvatar === newAvatar) {
+        return false;
+    }
+    const groupId = await createRoleplayGroup([soloAvatar, newAvatar], scene.title);
+    if (!groupId) {
+        return false;
+    }
+    const group = findRoleplayGroup(groupId);
+    // Native id/chat-id types — openGroupChat guards with strict === (see
+    // beginRoleplaySceneWithCast).
+    const nativeGroupId = group?.id ?? groupId;
+    const nativeChatId = group?.chats?.[0] ?? group?.chat_id;
+    if (nativeChatId === undefined || nativeChatId === null) {
+        return false;
+    }
+    // Rebind the scene to the new group chat, then open it.
+    updateScene(scene.id, {
+        linkedChat: { type: 'group', groupId: String(nativeGroupId), chatId: String(nativeChatId) },
+        status: 'active',
+    });
+    setActiveScene(scene.id);
+    await openGroupById(nativeGroupId);
+    await waitForChatIdSettled();
+    writeSceneMetadata(getScene(scene.id));
+    syncStoryWorkspaceClass(getScene(scene.id));
+    renderRoleplayScene();
+    return true;
+}
+
+// Removes a character (by avatar) from the current group scene. Core keeps a
+// group valid down to a single member, so this is allowed until one remains;
+// removing the last member is refused.
+async function removeCharacterFromRoleplayScene(avatar) {
+    const context = getContext();
+    if (!context.groupId || !avatar) {
+        return false;
+    }
+    const group = findRoleplayGroup(context.groupId);
+    if (!group || !group.members.includes(avatar)) {
+        return false;
+    }
+    if (group.members.length <= 1) {
+        showRoleplayToast('A scene needs at least one character.');
+        return false;
+    }
+    group.members = group.members.filter((m) => m !== avatar);
+    // Keep disabled_members consistent so a removed member doesn't linger.
+    group.disabled_members = (group.disabled_members || []).filter((m) => m !== avatar);
+    await saveRoleplayGroup(group);
+    await context.reloadCurrentChat?.();
+    renderRoleplayScene();
+    return true;
+}
+
+// --- Roleplay cast picker (modal overlay) --------------------------------
+//
+// A tarot-styled character picker used both for scene creation (multi-select
+// → "Begin scene") and for adding to an existing scene's cast ("+"). It's a
+// self-contained overlay appended to <body>; selection state lives on the
+// element, and the confirm/cancel result is delivered via a callback. This
+// is deliberately Remodel's own UI (not core's native character list) so the
+// aesthetic matches and multi-select actually works.
+
+const ROLEPLAY_PICKER_ID = 'remodel-rp-cast-picker';
+
+// mode: 'create' (choose a fresh cast) | 'add' (add to current scene).
+// excludeAvatars: characters already in the scene (hidden in 'add' mode).
+// onConfirm: (selectedAvatars: string[]) => void
+function openRoleplayCastPicker({ mode = 'create', excludeAvatars = [], onConfirm } = {}) {
+    document.getElementById(ROLEPLAY_PICKER_ID)?.remove();
+
+    const context = getContext();
+    const exclude = new Set(excludeAvatars);
+    const characters = (context.characters || [])
+        .filter((c) => c && c.avatar && c.avatar !== 'none' && !exclude.has(c.avatar));
+
+    const overlay = document.createElement('div');
+    overlay.id = ROLEPLAY_PICKER_ID;
+    overlay.className = 'remodel-rp-picker-scrim';
+
+    const title = mode === 'create' ? 'Cast your scene' : 'Add to the cast';
+    const hint = mode === 'create'
+        ? 'Choose one character for a solo scene, or several for a group.'
+        : 'Choose one or more characters to bring into this scene.';
+    const confirmLabel = mode === 'create' ? 'Begin scene' : 'Add to scene';
+
+    const cards = characters.map((c) => {
+        const hasImg = Boolean(c.avatar) && c.avatar !== 'none';
+        const thumb = hasImg ? context.getThumbnailUrl('avatar', c.avatar) : '';
+        return `
+            <button type="button" class="remodel-rp-picker-card" data-remodel-rp-pick="${escapeAttribute(c.avatar)}" title="${escapeAttribute(c.name)}">
+                <span class="remodel-rp-picker-av" ${thumb ? `style="background-image:url('${escapeAttribute(thumb)}')"` : ''}>${thumb ? '' : escapeHtml(roleplayInitials(c.name))}</span>
+                <span class="remodel-rp-picker-name">${escapeHtml(c.name)}</span>
+                <span class="remodel-rp-picker-check" aria-hidden="true">✓</span>
+            </button>`;
+    }).join('');
+
+    overlay.innerHTML = `
+        <div class="remodel-rp-picker" role="dialog" aria-modal="true" data-remodel-rp-picker-stop>
+            <div class="remodel-rp-picker-head">
+                <div>
+                    <div class="remodel-rp-picker-title">${escapeHtml(title)}</div>
+                    <div class="remodel-rp-picker-hint">${escapeHtml(hint)}</div>
+                </div>
+                <button type="button" class="remodel-rp-picker-x" data-remodel-rp-picker-cancel aria-label="Close">×</button>
+            </div>
+            <input type="text" class="remodel-rp-picker-search" data-remodel-rp-picker-search placeholder="Search characters…" spellcheck="false" />
+            <div class="remodel-rp-picker-grid" data-remodel-rp-picker-grid>
+                ${cards || '<div class="remodel-rp-picker-empty">No other characters available.</div>'}
+            </div>
+            <div class="remodel-rp-picker-foot">
+                <span class="remodel-rp-picker-count" data-remodel-rp-picker-count>None selected</span>
+                <div class="remodel-rp-picker-actions">
+                    <button type="button" class="remodel-rp-picker-btn" data-remodel-rp-picker-cancel>Cancel</button>
+                    <button type="button" class="remodel-rp-picker-btn remodel-rp-picker-go" data-remodel-rp-picker-confirm disabled>${escapeHtml(confirmLabel)}</button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Selection + wiring. Stored on the element so the delegated document
+    // listener (bindRoleplayCastPickerEvents) can read/update it.
+    overlay._remodelPicker = { selected: new Set(), onConfirm, mode };
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
+    overlay.querySelector('[data-remodel-rp-picker-search]')?.focus();
+}
+
+function closeRoleplayCastPicker() {
+    const overlay = document.getElementById(ROLEPLAY_PICKER_ID);
+    if (!overlay) {
+        return;
+    }
+    overlay.classList.remove('remodel-rp-picker-in');
+    setTimeout(() => overlay.remove(), 200);
+}
+
+function updateRoleplayPickerFoot(overlay) {
+    const state = overlay._remodelPicker;
+    const count = state.selected.size;
+    const countEl = overlay.querySelector('[data-remodel-rp-picker-count]');
+    const confirmBtn = overlay.querySelector('[data-remodel-rp-picker-confirm]');
+    if (countEl) {
+        countEl.textContent = count === 0
+            ? 'None selected'
+            : `${count} character${count === 1 ? '' : 's'} selected`;
+    }
+    if (confirmBtn) {
+        confirmBtn.toggleAttribute('disabled', count === 0);
+    }
+}
+
+// One delegated listener set for the picker, bound once at init. All picker
+// instances share it (the overlay is looked up live), gated on the picker
+// actually being present.
+function bindRoleplayCastPickerEvents() {
+    document.addEventListener('click', (event) => {
+        const overlay = document.getElementById(ROLEPLAY_PICKER_ID);
+        if (!overlay) {
+            return;
+        }
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target) {
+            return;
+        }
+
+        // Click on the scrim (outside the dialog) cancels.
+        if (target === overlay) {
+            closeRoleplayCastPicker();
+            return;
+        }
+        if (target.closest('[data-remodel-rp-picker-cancel]')) {
+            closeRoleplayCastPicker();
+            return;
+        }
+
+        const card = target.closest('[data-remodel-rp-pick]');
+        if (card) {
+            const avatar = card.getAttribute('data-remodel-rp-pick');
+            const state = overlay._remodelPicker;
+            if (state.selected.has(avatar)) {
+                state.selected.delete(avatar);
+                card.classList.remove('remodel-rp-picked');
+            } else {
+                state.selected.add(avatar);
+                card.classList.add('remodel-rp-picked');
+            }
+            updateRoleplayPickerFoot(overlay);
+            return;
+        }
+
+        if (target.closest('[data-remodel-rp-picker-confirm]')) {
+            const state = overlay._remodelPicker;
+            const chosen = Array.from(state.selected);
+            if (chosen.length === 0) {
+                return;
+            }
+            const cb = state.onConfirm;
+            closeRoleplayCastPicker();
+            cb?.(chosen);
+            return;
+        }
+    });
+
+    // Live search filter.
+    document.addEventListener('input', (event) => {
+        const overlay = document.getElementById(ROLEPLAY_PICKER_ID);
+        if (!overlay) {
+            return;
+        }
+        const search = event.target instanceof Element ? event.target.closest('[data-remodel-rp-picker-search]') : null;
+        if (!(search instanceof HTMLInputElement)) {
+            return;
+        }
+        const q = search.value.trim().toLowerCase();
+        overlay.querySelectorAll('[data-remodel-rp-pick]').forEach((c) => {
+            const name = c.querySelector('.remodel-rp-picker-name')?.textContent?.toLowerCase() ?? '';
+            c.style.display = !q || name.includes(q) ? '' : 'none';
+        });
+    });
+
+    // Escape closes the picker.
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && document.getElementById(ROLEPLAY_PICKER_ID)) {
+            event.preventDefault();
+            closeRoleplayCastPicker();
+        }
+    });
 }
 
 function getCurrentLinkedChat() {
@@ -4293,24 +4739,29 @@ function handleRoleplayAction(action) {
     }
 }
 
-// Add/remove/reorder the cast lives in core's Character Management drawer:
-// a group scene has the full member list there (add / remove / drag to
-// reorder); a solo scene has the character list from which a group can be
-// started. Rather than reimplement that UI inside the overlay, open the
-// native drawer to the relevant panel — the source of truth for cast.
+// The cast "+" opens Remodel's own picker in 'add' mode (excluding whoever's
+// already cast) and, on confirm, brings each chosen character into the scene
+// — promoting a solo scene to a group on the first add, or appending to an
+// existing group. Drives core's real group API under the hood
+// (addCharacterToRoleplayScene).
 function openRoleplayCastManagement() {
     const context = getContext();
-    const drawerIcon = document.getElementById('rightNavDrawerIcon');
-    const drawerContent = document.getElementById('rightNavDrawer');
-    const isOpen = drawerContent?.classList.contains('openDrawer');
-    if (drawerIcon && !isOpen) {
-        drawerIcon.click();
-    }
-    // Group scene → member panel; solo scene → character list.
-    const targetButton = context.groupId
-        ? document.getElementById('rm_button_group_chats') || document.getElementById('rm_button_characters')
-        : document.getElementById('rm_button_characters');
-    requestAnimationFrame(() => targetButton?.click());
+    const already = roleplaySceneMembers(context)
+        .map((m) => roleplayCharacterAvatar({ characterId: m.characterId, name: m.name }))
+        .filter(Boolean);
+
+    openRoleplayCastPicker({
+        mode: 'add',
+        excludeAvatars: already,
+        onConfirm: async (avatars) => {
+            for (const avatar of avatars) {
+                // Sequential: each add may promote solo→group or reload the
+                // chat, which the next add needs to see settled first.
+                // eslint-disable-next-line no-await-in-loop
+                await addCharacterToRoleplayScene(avatar);
+            }
+        },
+    });
 }
 
 // Delegated listeners for the roleplay composer/turn-bar. Bound at document
@@ -4415,6 +4866,21 @@ function bindRoleplayComposerEvents() {
             const row = bubbleCtrl.closest('[data-remodel-mesid]');
             const mesId = Number(row?.dataset.remodelMesid);
             handleRoleplayBubbleControl(bubbleCtrl.getAttribute('data-remodel-rp-bubble'), mesId, row);
+            return;
+        }
+
+        // Cast: remove a member.
+        const castRemove = target.closest('[data-remodel-rp-cast-remove]');
+        if (castRemove) {
+            event.preventDefault();
+            const avatar = castRemove.getAttribute('data-remodel-rp-cast-remove');
+            const member = roleplaySceneMembers(getContext()).find(
+                (m) => roleplayCharacterAvatar({ characterId: m.characterId, name: m.name }) === avatar,
+            );
+            const who = member?.name || 'this character';
+            if (confirm(`Remove ${who} from the scene?`)) {
+                removeCharacterFromRoleplayScene(avatar);
+            }
             return;
         }
     });
@@ -5382,11 +5848,18 @@ function renderRoleplayCast(root) {
     const context = getContext();
     const members = roleplaySceneMembers(context);
     const speakingName = roleplayCurrentSpeakerName(context);
+    // Remove is only meaningful in a group, and only while more than one
+    // member remains (a scene needs at least one character).
+    const canRemove = Boolean(context.groupId) && members.length > 1;
 
     members.forEach((member) => {
+        const avatar = roleplayCharacterAvatar({ characterId: member.characterId, name: member.name });
         const chip = document.createElement('div');
         chip.className = `remodel-rp-cast-member remodel-rp-color-${roleplaySpeakerColor(member.name)}`;
         chip.dataset.remodelCharacterId = String(member.characterId ?? '');
+        if (avatar) {
+            chip.dataset.remodelRpAvatar = avatar;
+        }
         chip.title = member.name;
         if (member.name === speakingName) {
             chip.classList.add('remodel-rp-speaking');
@@ -5394,6 +5867,16 @@ function renderRoleplayCast(root) {
 
         const av = buildRoleplayAvatar(member.name, { className: 'remodel-rp-cast-avatar' });
         chip.appendChild(av);
+
+        if (canRemove && avatar) {
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'remodel-rp-cast-remove';
+            remove.title = `Remove ${member.name} from the scene`;
+            remove.dataset.remodelRpCastRemove = avatar;
+            remove.textContent = '×';
+            chip.appendChild(remove);
+        }
 
         const nameEl = document.createElement('span');
         nameEl.className = 'remodel-rp-cast-name';
