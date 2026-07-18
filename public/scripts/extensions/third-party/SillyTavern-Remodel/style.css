@@ -2508,6 +2508,197 @@ body.remodel-roleplay-workspace-active .remodel-rp-rules-textarea::placeholder {
   font-style: italic !important;
 }
 
+/* --- Dice panel controls --- */
+body.remodel-roleplay-workspace-active .remodel-rp-dice-quick {
+  display: grid !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 8px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-die {
+  appearance: none !important;
+  background: var(--solid-color) !important;
+  border: 1px solid var(--tarot-gold-soft) !important;
+  border-radius: 9px !important;
+  color: var(--tarot-gold-bright) !important;
+  font-family: var(--remodel-serif) !important;
+  font-size: 13px !important;
+  letter-spacing: 0.03em !important;
+  padding: 10px 0 !important;
+  cursor: pointer !important;
+  transition: background 0.14s ease, border-color 0.14s ease, transform 0.14s ease !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-die:hover {
+  background: rgba(198, 164, 74, 0.12) !important;
+  border-color: var(--tarot-gold-bright) !important;
+  transform: translateY(-1px) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-die:active { transform: translateY(0) !important; }
+
+body.remodel-roleplay-workspace-active .remodel-rp-dice-adv {
+  display: flex !important;
+  gap: 6px !important;
+  margin-top: 4px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-adv {
+  flex: 1 !important;
+  appearance: none !important;
+  background: transparent !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 8px !important;
+  color: rgba(238, 235, 245, 0.6) !important;
+  font-family: var(--remodel-manuscript-font) !important;
+  font-size: 11.5px !important;
+  padding: 7px 4px !important;
+  cursor: pointer !important;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-adv:hover { color: var(--tarot-gold-bright) !important; }
+body.remodel-roleplay-workspace-active .remodel-rp-adv.remodel-rp-adv-on {
+  background: rgba(198, 164, 74, 0.14) !important;
+  border-color: var(--tarot-gold-soft) !important;
+  color: var(--tarot-gold-bright) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-adv-hint { margin-top: -4px !important; }
+
+body.remodel-roleplay-workspace-active .remodel-rp-dice-custom {
+  display: flex !important;
+  gap: 8px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-input {
+  flex: 1 !important;
+  background: var(--solid-color) !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: 9px !important;
+  padding: 9px 12px !important;
+  color: rgba(238, 235, 245, 0.92) !important;
+  font-family: monospace !important;
+  font-size: 13px !important;
+  outline: none !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-input:focus { border-color: var(--tarot-gold-soft) !important; }
+body.remodel-roleplay-workspace-active .remodel-rp-dice-input::placeholder { color: rgba(238, 235, 245, 0.3) !important; }
+body.remodel-roleplay-workspace-active .remodel-rp-dice-go {
+  appearance: none !important;
+  background: linear-gradient(145deg, var(--tarot-gold-deep), var(--tarot-gold)) !important;
+  border: none !important;
+  border-radius: 9px !important;
+  color: var(--tarot-ink) !important;
+  font-family: var(--remodel-serif) !important;
+  font-size: 13px !important;
+  padding: 0 18px !important;
+  cursor: pointer !important;
+  transition: background 0.14s ease !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-go:hover { background: var(--tarot-gold-bright) !important; }
+
+body.remodel-roleplay-workspace-active .remodel-rp-dice-error {
+  min-height: 14px !important;
+  margin: 0 !important;
+  font-size: 11.5px !important;
+  color: var(--nord-aurora-red, #bf616a) !important;
+  font-family: var(--remodel-manuscript-font) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-dice-recent {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+  margin-top: 4px !important;
+  border-top: 1px solid var(--gold-faint, rgba(198, 164, 74, 0.14)) !important;
+  padding-top: 10px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-recent-row {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  font-family: monospace !important;
+  font-size: 12px !important;
+  color: rgba(238, 235, 245, 0.6) !important;
+  padding: 3px 2px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-recent-t {
+  color: var(--tarot-gold-bright) !important;
+  font-weight: 700 !important;
+  font-family: var(--remodel-serif) !important;
+}
+
+/* --- In-stream dice card --- */
+body.remodel-roleplay-workspace-active .remodel-rp-dice-card {
+  max-width: 78% !important;
+  margin: 0 auto !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-card-inner {
+  display: flex !important;
+  align-items: center !important;
+  gap: 14px !important;
+  background: linear-gradient(180deg, rgba(31, 34, 43, 0.85), rgba(11, 11, 13, 0.7)) !important;
+  border: 1px solid var(--tarot-gold-soft) !important;
+  border-radius: 12px !important;
+  padding: 12px 16px !important;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-glyph {
+  flex: 0 0 auto !important;
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 9px !important;
+  display: grid !important;
+  place-items: center !important;
+  background: rgba(198, 164, 74, 0.12) !important;
+  color: var(--tarot-gold-bright) !important;
+  font-size: 18px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-card-main {
+  flex: 1 !important;
+  min-width: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 3px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-card-top {
+  display: flex !important;
+  align-items: baseline !important;
+  gap: 8px !important;
+  flex-wrap: wrap !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-by {
+  font-family: var(--remodel-serif) !important;
+  font-size: 13px !important;
+  color: var(--tarot-gold-bright) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-formula {
+  font-family: monospace !important;
+  font-size: 12px !important;
+  color: rgba(238, 235, 245, 0.7) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-mode {
+  font-size: 10.5px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.06em !important;
+  color: var(--nord-aurora-yellow, #ebcb8b) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-card-detail {
+  font-family: monospace !important;
+  font-size: 12px !important;
+  color: rgba(238, 235, 245, 0.45) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-total {
+  flex: 0 0 auto !important;
+  font-family: var(--remodel-serif) !important;
+  font-size: 30px !important;
+  font-weight: 700 !important;
+  color: var(--tarot-gold-bright) !important;
+  line-height: 1 !important;
+  min-width: 44px !important;
+  text-align: right !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-card-plain {
+  font-family: var(--remodel-manuscript-font) !important;
+  font-size: 14px !important;
+  color: rgba(238, 235, 245, 0.7) !important;
+  text-align: center !important;
+}
+
 /* Guided Story-Scene creation prompt — a non-blocking "coach mark," not a
    modal: no full-screen scrim, so the Characters/Personas deck underneath
    stays fully clickable while it's showing. */

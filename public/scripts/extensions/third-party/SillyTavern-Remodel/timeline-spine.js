@@ -4327,6 +4327,28 @@ function bindRoleplayComposerEvents() {
             return;
         }
 
+        // Dice panel controls (also outside the roleplay root).
+        const quickRoll = target.closest('[data-remodel-rp-roll]');
+        if (quickRoll) {
+            event.preventDefault();
+            performRoleplayDiceRoll(quickRoll.getAttribute('data-remodel-rp-roll'));
+            return;
+        }
+        const advBtn = target.closest('[data-remodel-rp-adv]');
+        if (advBtn) {
+            event.preventDefault();
+            setRoleplayDiceAdvantage(advBtn.getAttribute('data-remodel-rp-adv'));
+            return;
+        }
+        if (target.closest('[data-remodel-rp-dice-go]')) {
+            event.preventDefault();
+            const input = document.querySelector('[data-remodel-rp-dice-input]');
+            if (input instanceof HTMLInputElement) {
+                performRoleplayDiceRoll(input.value);
+            }
+            return;
+        }
+
         const root = getRealRoleplayRoot();
         if (!root || !root.contains(target)) {
             return;
@@ -4346,12 +4368,27 @@ function bindRoleplayComposerEvents() {
         }
     });
 
-    // Enter-to-send + autosize in the roleplay input.
+    // Enter-to-send + autosize in the roleplay input; Enter-to-roll in the
+    // dice notation input.
     document.addEventListener('keydown', (event) => {
         if (!isRealRoleplayWorkspaceActive()) {
             return;
         }
-        const input = event.target instanceof Element ? event.target.closest('[data-remodel-rp-input]') : null;
+        const el = event.target instanceof Element ? event.target : null;
+        if (!el) {
+            return;
+        }
+
+        const diceInput = el.closest('[data-remodel-rp-dice-input]');
+        if (diceInput instanceof HTMLInputElement) {
+            if (event.key === 'Enter' && !event.isComposing) {
+                event.preventDefault();
+                performRoleplayDiceRoll(diceInput.value);
+            }
+            return;
+        }
+
+        const input = el.closest('[data-remodel-rp-input]');
         if (!input) {
             return;
         }
@@ -4474,6 +4511,11 @@ function buildRoleplayAvatar(name, { message = null, isUser = false, className =
 // can resolve back to the real message the same way the manuscript
 // overlay's spans do.
 function buildRoleplayMessage(mesId, message) {
+    // A dice roll gets its own centered card rather than a speaker bubble.
+    if (message.extra?.remodel_dice) {
+        return buildRoleplayDiceCard(mesId, message);
+    }
+
     const isUser = Boolean(message.is_user);
     const isSystem = Boolean(message.is_system);
     const name = message.name || (isUser ? 'You' : 'Unknown');
@@ -4521,6 +4563,48 @@ function buildRoleplayMessage(mesId, message) {
     bubble.appendChild(body);
 
     row.appendChild(bubble);
+    return row;
+}
+
+// Renders a dice roll as a centered card in the stream, built from the
+// structured roll data stored on the message (extra.remodel_dice), with a
+// graceful fallback to the raw text if an old/foreign dice message lacks it.
+function buildRoleplayDiceCard(mesId, message) {
+    const row = document.createElement('div');
+    row.className = 'remodel-rp-msg remodel-rp-dice-card';
+    row.dataset.remodelMesid = String(mesId);
+
+    const data = message.extra?.remodel_dice;
+    const card = document.createElement('div');
+    card.className = 'remodel-rp-dice-card-inner';
+
+    if (data && typeof data === 'object') {
+        const detail = data.rolls && data.rolls.length > 1
+            ? data.rolls.join(' + ') + (data.modifier ? (data.modifier > 0 ? ` + ${data.modifier}` : ` − ${Math.abs(data.modifier)}`) : '')
+            : `${data.rolls?.[0] ?? ''}${data.modifier ? (data.modifier > 0 ? ` + ${data.modifier}` : ` − ${Math.abs(data.modifier)}`) : ''}`;
+
+        const modeTag = data.mode && data.mode !== 'normal'
+            ? `<span class="remodel-rp-dice-mode">${escapeHtml(data.mode)}${data.dropped != null ? ` · dropped ${escapeHtml(String(data.dropped))}` : ''}</span>`
+            : '';
+
+        card.innerHTML = `
+            <span class="remodel-rp-dice-glyph"><i class="fa-solid fa-dice-d20" aria-hidden="true"></i></span>
+            <div class="remodel-rp-dice-card-main">
+                <div class="remodel-rp-dice-card-top">
+                    <span class="remodel-rp-dice-by">${escapeHtml(data.by || 'Someone')}</span>
+                    <span class="remodel-rp-dice-formula">${escapeHtml(data.formula || '')}</span>
+                    ${modeTag}
+                </div>
+                <div class="remodel-rp-dice-card-detail">${escapeHtml(detail)}</div>
+            </div>
+            <span class="remodel-rp-dice-total">${escapeHtml(String(data.total))}</span>
+        `;
+    } else {
+        card.classList.add('remodel-rp-dice-card-plain');
+        card.textContent = message.mes ?? '';
+    }
+
+    row.appendChild(card);
     return row;
 }
 
@@ -4675,6 +4759,8 @@ function writeRoleplayRulesNotes(value) {
     context.saveMetadataDebounced?.();
 }
 
+const ROLEPLAY_QUICK_DICE = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100'];
+
 function ensureRoleplayDicePanel() {
     if (!isRealRoleplayWorkspaceActive()) {
         return;
@@ -4685,18 +4771,187 @@ function ensureRoleplayDicePanel() {
     const panel = document.createElement('div');
     panel.id = 'remodel-rp-dice-panel';
     panel.className = 'remodel-rp-panel remodel-rp-dice-panel';
-    // Stage 4 builds the panel shell + placeholder; the live roll flow
-    // (notation parse, quick-rolls, in-stream result cards) is Stage 5.
+    const quickButtons = ROLEPLAY_QUICK_DICE
+        .map((d) => `<button type="button" class="remodel-rp-die" data-remodel-rp-roll="1${d}">${d}</button>`)
+        .join('');
     panel.innerHTML = `
         <div class="remodel-rp-panel-head">
             <span class="remodel-rp-panel-title"><i class="fa-solid fa-dice-d20" aria-hidden="true"></i> Dice</span>
             <button type="button" class="remodel-rp-panel-close" data-remodel-rp-panel-close="dice" title="Close" aria-label="Close">×</button>
         </div>
         <div class="remodel-rp-panel-body">
-            <p class="remodel-rp-panel-hint">Dice roller — coming online next stage.</p>
+            <div class="remodel-rp-dice-quick">${quickButtons}</div>
+
+            <div class="remodel-rp-dice-adv" data-remodel-rp-adv-group>
+                <button type="button" class="remodel-rp-adv" data-remodel-rp-adv="normal" aria-pressed="true">Normal</button>
+                <button type="button" class="remodel-rp-adv" data-remodel-rp-adv="advantage" aria-pressed="false">Advantage</button>
+                <button type="button" class="remodel-rp-adv" data-remodel-rp-adv="disadvantage" aria-pressed="false">Disadvantage</button>
+            </div>
+            <p class="remodel-rp-panel-hint remodel-rp-dice-adv-hint">Advantage / Disadvantage rolls a single d20 twice and keeps the higher / lower.</p>
+
+            <div class="remodel-rp-dice-custom">
+                <input type="text" class="remodel-rp-dice-input" data-remodel-rp-dice-input placeholder="e.g. 1d20+5, 2d6, 3d8-1" spellcheck="false" />
+                <button type="button" class="remodel-rp-dice-go" data-remodel-rp-dice-go title="Roll">Roll</button>
+            </div>
+            <p class="remodel-rp-dice-error" data-remodel-rp-dice-error></p>
+
+            <div class="remodel-rp-dice-recent" data-remodel-rp-dice-recent></div>
         </div>
     `;
     getRealSheld()?.appendChild(panel);
+}
+
+// --- Dice engine ---------------------------------------------------------
+//
+// Standard tabletop notation (NdM+K) via core's droll library (window.droll,
+// exposed in lib.js). Advantage/Disadvantage isn't part of droll's grammar,
+// so it's handled here: roll the formula twice and keep the higher/lower
+// total. Every roll becomes a real, persisted narrator message in chat[]
+// (via the same push→addOneMessage→saveChat path used everywhere else) so
+// it shows as an in-stream card AND the model sees the outcome in context.
+
+// Advantage mode is a transient UI preference for the dice panel — a
+// plain module variable, not chat- or session-scoped state.
+let roleplayDiceAdvantage = 'normal';
+
+// Rolls `formula` once, returning droll's result object (or null if invalid).
+function rollDiceFormula(formula) {
+    const droll = window.droll;
+    if (!droll || typeof droll.validate !== 'function') {
+        return null;
+    }
+    let f = String(formula || '').trim();
+    if (/^\d+$/.test(f)) {
+        f = `1d${f}`;
+    }
+    // Accept "d20" shorthand (no leading count).
+    if (/^d\d+([+-]\d+)?$/i.test(f)) {
+        f = `1${f}`;
+    }
+    if (!droll.validate(f)) {
+        return null;
+    }
+    const result = droll.roll(f);
+    return result === false ? null : { formula: f, result };
+}
+
+// Performs a roll (honoring advantage/disadvantage for single-d20 formulas)
+// and posts it to chat as an in-stream card.
+function performRoleplayDiceRoll(rawFormula) {
+    const errorEl = document.querySelector('[data-remodel-rp-dice-error]');
+    if (errorEl) {
+        errorEl.textContent = '';
+    }
+
+    const adv = roleplayDiceAdvantage;
+    const first = rollDiceFormula(rawFormula);
+    if (!first) {
+        if (errorEl) {
+            errorEl.textContent = `Not a valid dice formula: "${rawFormula}"`;
+        }
+        return;
+    }
+
+    // Advantage/disadvantage only applies to a single-die roll (the classic
+    // d20 case). For multi-die formulas it's ignored — no meaningful "keep
+    // higher of two 3d6 totals" convention to assume. droll's roll result
+    // exposes the individual dice as `rolls[]` (there is no numDice field on
+    // the result object), so single-die = exactly one entry.
+    const singleDie = Array.isArray(first.result.rolls) && first.result.rolls.length === 1;
+    let payload;
+    if (adv !== 'normal' && singleDie) {
+        const second = rollDiceFormula(first.formula);
+        const a = first.result;
+        const b = second.result;
+        const keep = adv === 'advantage'
+            ? (a.total >= b.total ? a : b)
+            : (a.total <= b.total ? a : b);
+        const dropped = keep === a ? b : a;
+        payload = {
+            formula: first.formula,
+            mode: adv,
+            keep,
+            dropped,
+        };
+    } else {
+        payload = { formula: first.formula, mode: 'normal', keep: first.result, dropped: null };
+    }
+
+    postRoleplayDiceMessage(payload);
+    renderRoleplayDiceRecent(payload);
+}
+
+// Builds the human-readable roll text and pushes it as a persisted narrator
+// message so it renders in the stream and enters the model's context.
+async function postRoleplayDiceMessage(payload) {
+    const context = getContext();
+    const persona = context.name1 || 'You';
+    const { formula, mode, keep, dropped } = payload;
+
+    const detail = keep.rolls.length > 1
+        ? `${keep.rolls.join(' + ')}${keep.modifier ? (keep.modifier > 0 ? ` + ${keep.modifier}` : ` - ${Math.abs(keep.modifier)}`) : ''} = ${keep.total}`
+        : `${keep.rolls[0]}${keep.modifier ? (keep.modifier > 0 ? ` + ${keep.modifier}` : ` - ${Math.abs(keep.modifier)}`) : ''}${keep.modifier ? ` = ${keep.total}` : ''}`;
+
+    let modeSuffix = '';
+    if (mode !== 'normal' && dropped) {
+        modeSuffix = ` — ${mode} (dropped ${dropped.total})`;
+    }
+
+    const text = `🎲 ${persona} rolls ${formula}${modeSuffix}: **${keep.total}** (${detail})`;
+
+    const message = {
+        name: 'Dice',
+        is_user: false,
+        is_system: false,
+        send_date: Date.now(),
+        mes: text,
+        extra: {
+            remodel_dice: {
+                formula,
+                mode,
+                total: keep.total,
+                rolls: keep.rolls,
+                modifier: keep.modifier,
+                dropped: dropped ? dropped.total : null,
+                by: persona,
+            },
+            type: 'narrator',
+        },
+    };
+
+    context.chat.push(message);
+    await context.addOneMessage(message, { scroll: false });
+    await context.saveChat();
+    // Re-render so the new card enters the bubble stream immediately.
+    renderRoleplayScene();
+}
+
+// Small echo of the last few rolls inside the panel, so the user gets
+// instant feedback without scrolling the stream.
+function renderRoleplayDiceRecent(payload) {
+    const box = document.querySelector('[data-remodel-rp-dice-recent]');
+    if (!box) {
+        return;
+    }
+    const { formula, mode, keep } = payload;
+    const row = document.createElement('div');
+    row.className = 'remodel-rp-dice-recent-row';
+    const modeTag = mode !== 'normal' ? ` · ${mode}` : '';
+    row.innerHTML = `<span class="remodel-rp-dice-recent-f">${escapeHtml(formula)}${escapeHtml(modeTag)}</span><span class="remodel-rp-dice-recent-t">${keep.total}</span>`;
+    box.prepend(row);
+    // Cap the visible history.
+    while (box.children.length > 8) {
+        box.removeChild(box.lastElementChild);
+    }
+}
+
+function setRoleplayDiceAdvantage(mode) {
+    roleplayDiceAdvantage = mode;
+    document.querySelectorAll('[data-remodel-rp-adv]').forEach((btn) => {
+        const on = btn.getAttribute('data-remodel-rp-adv') === mode;
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        btn.classList.toggle('remodel-rp-adv-on', on);
+    });
 }
 
 function toggleRoleplayPanel(which) {
