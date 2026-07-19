@@ -3638,32 +3638,60 @@ body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar > d
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  width: 40px !important;
-  height: 40px !important;
+  width: 34px !important;
+  height: 34px !important;
   box-sizing: border-box !important;
   cursor: pointer !important;
+  /* Match the roleplay action-row treatment: flat gold-accent glyphs,
+     muted by default, gold-bright + faint-gold background on hover. */
   background: transparent !important;
   background-color: transparent !important;
-  border: 0 !important;
+  border: 1px solid transparent !important;
+  border-radius: 8px !important;
   outline: 0 !important;
   box-shadow: none !important;
   filter: none !important;
   text-shadow: none !important;
-  color: rgba(255, 255, 255, 0.64) !important;
+  color: var(--tarot-gold, #c6a44a) !important;
+  opacity: 0.7 !important;
   font-family: "Font Awesome 6 Free" !important;
   font-weight: 900 !important;
-  font-size: 22px !important;
+  font-size: 17px !important;
   line-height: 1 !important;
+  transition: color 0.14s ease, background 0.14s ease, opacity 0.14s ease !important;
 }
 
 body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar > div:hover,
 body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar > div:focus-visible {
-  color: #fff !important;
-  transform: translateY(-1px) !important;
+  color: var(--tarot-gold-bright, #f4e7c4) !important;
+  opacity: 1 !important;
+  background: var(--gold-faint, rgba(198, 164, 74, 0.14)) !important;
 }
 
 body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar > div.displayNone {
   display: none !important;
+}
+
+/* Neutralize core's colored-circle styling on the auto-continue playback
+   controls (#stscript_continue/pause/stop) and abort (#mes_stop). Core
+   styles their INNER .fa-solid glyph as a filled blue/orange/grey rounded
+   square (public/style.css) — the outer-div reset above never reached the
+   inner glyph, so those raw colored circles were bleeding through. Flatten
+   them into plain gold glyphs consistent with every other toolbar icon. */
+body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar .stscript_btn > .fa-solid,
+body.st-remodel-active #send_form.remodel-composer .remodel-composer-toolbar #mes_stop > .fa-solid {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  aspect-ratio: auto !important;
+  width: auto !important;
+  height: auto !important;
+  color: inherit !important;
+  font-size: inherit !important;
+  padding: 0 !important;
+  margin: 0 !important;
 }
 
 /* ==========================================
