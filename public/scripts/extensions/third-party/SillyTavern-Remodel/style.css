@@ -337,6 +337,23 @@ body.st-remodel-active #right-nav-panel:has(#rm_group_chats_block[style*="flex"]
   pointer-events: auto !important;
 }
 
+/* Core's own generateGroupWrapper() (group-chats.js) calls
+   select_group_chats() as an internal "auto-navigate back to group menu"
+   side effect on EVERY group turn — completely unrelated to the user
+   choosing to manage the group. Without this override, that flips
+   #rm_group_chats_block to display:flex mid-generation and the :has() rule
+   above adopts it as a full-screen modal, silently kicking the roleplay
+   user out of the chat on every send/trigger/impersonate. Confirmed live:
+   the same rule is needed (and correct) for the deliberate "+ add cast"
+   click, which is why this is scoped to the generating state specifically
+   rather than suppressed for roleplay outright. */
+body.st-remodel-active.remodel-roleplay-generating #right-nav-panel:has(#rm_group_chats_block[style*="flex"]) {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
 body.st-remodel-active #right-nav-panel > #right-nav-panelheader,
 body.st-remodel-active #right-nav-panel > #CharListButtonAndHotSwaps {
   display: none !important;
@@ -3017,6 +3034,29 @@ body.remodel-roleplay-workspace-active .remodel-rp-dice-card-plain {
   text-align: center !important;
 }
 
+/* Old dice rolls fade progressively as more of the scene has moved past
+   them (see ROLEPLAY_DICE_FADE_TIERS) — shrinks a bit too, so a long scene
+   doesn't stay visually dominated by rolls from many turns back. Hovering
+   brings a faded card back to full opacity to re-check a past result. */
+body.remodel-roleplay-workspace-active .remodel-rp-dice-card {
+  transition: opacity 0.4s ease !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-card:hover {
+  opacity: 1 !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-card.remodel-rp-dice-fade-1 { opacity: 0.7 !important; }
+body.remodel-roleplay-workspace-active .remodel-rp-dice-card.remodel-rp-dice-fade-2 { opacity: 0.45 !important; }
+body.remodel-roleplay-workspace-active .remodel-rp-dice-card.remodel-rp-dice-fade-3 {
+  opacity: 0.25 !important;
+  transform: scale(0.94) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-card.remodel-rp-dice-fade-3 .remodel-rp-dice-card-inner {
+  padding: 8px 12px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-dice-card.remodel-rp-dice-fade-3 .remodel-rp-dice-total {
+  font-size: 22px !important;
+}
+
 /* --- Generation feedback: typing indicator, spinner, toast, flashes --- */
 
 /* The pending "someone is composing" bubble. Reuses the character bubble
@@ -3190,9 +3230,11 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
 }
 
 /* --- Cast picker modal (scene creation + add-to-cast) --- */
-/* Scoped by its own id, not the workspace class — it appears during scene
-   creation, which can be before the roleplay workspace class is set. */
-#remodel-rp-cast-picker {
+/* Scoped by class, not any single id — shared by the cast picker AND the
+   prompt-preview modal (both use the same full-viewport scrim). Not scoped
+   under the workspace body class either: the cast picker appears during
+   scene creation, which can be before that class is set. */
+.remodel-rp-picker-scrim {
   position: fixed !important;
   inset: 0 !important;
   z-index: 10000 !important;
@@ -3204,7 +3246,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
   opacity: 0 !important;
   transition: opacity 0.2s ease !important;
 }
-#remodel-rp-cast-picker.remodel-rp-picker-in { opacity: 1 !important; }
+.remodel-rp-picker-scrim.remodel-rp-picker-in { opacity: 1 !important; }
 
 #remodel-rp-cast-picker .remodel-rp-picker {
   width: min(620px, 92vw) !important;

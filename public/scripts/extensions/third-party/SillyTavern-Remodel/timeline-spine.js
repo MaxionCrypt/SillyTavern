@@ -4959,12 +4959,22 @@ function autosizeRoleplayInput(input) {
 function handleRoleplayAction(action) {
     switch (action) {
         case 'regenerate': {
-            // core's regenerate = swipe/regenerate the last message.
+            // core's regenerate = swipe/regenerate the last message. Flip the
+            // generating state ourselves before clicking: core's own group
+            // turn handling (generateGroupWrapper) flips the native group
+            // panel to a full-screen modal as an unrelated internal side
+            // effect, which the CSS in style.css suppresses ONLY while
+            // remodel-roleplay-generating is set — this must be true before
+            // the click, not after GENERATION_STARTED gets around to it.
+            setRoleplayGenerating(true);
+            showRoleplayTypingIndicator();
             document.getElementById('option_regenerate')?.click();
             break;
         }
         case 'next': {
             // Advance the group's turn / continue — core's continue option.
+            setRoleplayGenerating(true);
+            showRoleplayTypingIndicator();
             document.getElementById('option_continue')?.click();
             break;
         }
@@ -4976,6 +4986,12 @@ function handleRoleplayAction(action) {
             break;
         }
         case 'impersonate': {
+            // "Write for me" — impersonate generation isn't in
+            // STORY_GENERATION_TYPES (it's a quiet-adjacent type, not a story
+            // turn), so GENERATION_STARTED won't flip remodel-roleplay-
+            // generating for it. Set it directly so the group-panel
+            // suppression above still applies.
+            setRoleplayGenerating(true);
             document.getElementById('option_impersonate')?.click();
             break;
         }
@@ -5493,10 +5509,10 @@ function buildRoleplayAvatar(name, { message = null, isUser = false, className =
 // carries data-remodel-mesid so per-bubble controls (edit/delete/swipe)
 // can resolve back to the real message the same way the manuscript
 // overlay's spans do.
-function buildRoleplayMessage(mesId, message) {
+function buildRoleplayMessage(mesId, message, { messagesSince = 0 } = {}) {
     // A dice roll gets its own centered card rather than a speaker bubble.
     if (message.extra?.remodel_dice) {
-        return buildRoleplayDiceCard(mesId, message);
+        return buildRoleplayDiceCard(mesId, message, messagesSince);
     }
 
     const isUser = Boolean(message.is_user);
@@ -5715,10 +5731,26 @@ async function commitRoleplayBubbleEdit(mesId, row) {
 // Renders a dice roll as a centered card in the stream, built from the
 // structured roll data stored on the message (extra.remodel_dice), with a
 // graceful fallback to the raw text if an old/foreign dice message lacks it.
-function buildRoleplayDiceCard(mesId, message) {
+// A dice roll matters most right when it happens and fast becomes stale
+// context — after enough newer lines have piled up, it fades so it stops
+// competing visually with the active scene. Distance-based (messages since
+// the roll), not wall-clock: a roll from 15 turns ago should look faded
+// whether that took 2 minutes or 2 days.
+const ROLEPLAY_DICE_FADE_TIERS = [
+    { after: 4, className: 'remodel-rp-dice-fade-1' },
+    { after: 8, className: 'remodel-rp-dice-fade-2' },
+    { after: 14, className: 'remodel-rp-dice-fade-3' },
+];
+
+function buildRoleplayDiceCard(mesId, message, messagesSince = 0) {
     const row = document.createElement('div');
     row.className = 'remodel-rp-msg remodel-rp-dice-card';
     row.dataset.remodelMesid = String(mesId);
+    for (const tier of ROLEPLAY_DICE_FADE_TIERS) {
+        if (messagesSince >= tier.after) {
+            row.classList.add(tier.className);
+        }
+    }
 
     const data = message.extra?.remodel_dice;
     const card = document.createElement('div');
@@ -5792,13 +5824,17 @@ function renderRoleplayScene() {
         empty.textContent = 'The scene is set. Write the first line below to begin.';
         stream.appendChild(empty);
     } else {
-        mesEls.forEach((mesEl) => {
+        mesEls.forEach((mesEl, index) => {
             const mesId = Number(mesEl.getAttribute('mesid'));
             const message = context.chat[mesId];
             if (!Number.isFinite(mesId) || !message) {
                 return;
             }
-            stream.appendChild(buildRoleplayMessage(mesId, message));
+            // Distance from the newest message — used to fade old dice cards
+            // (a roll from many turns back is stale context, not something
+            // that should keep taking up visual weight forever).
+            const messagesSince = mesEls.length - 1 - index;
+            stream.appendChild(buildRoleplayMessage(mesId, message, { messagesSince }));
         });
         // Land at the latest line, same as the manuscript's scroll-to-bottom.
         requestAnimationFrame(() => {
@@ -5845,6 +5881,9 @@ function ensureRoleplayPanelGroup() {
         </button>
         <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="dice" title="Dice" aria-label="Dice">
             <i class="fa-solid fa-dice-d20" aria-hidden="true"></i>
+        </button>
+        <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-action="add-cast" title="Cast & Group Controls" aria-label="Cast & Group Controls">
+            <i class="fa-solid fa-users" aria-hidden="true"></i>
         </button>
     `;
     getRealSheld()?.appendChild(group);
