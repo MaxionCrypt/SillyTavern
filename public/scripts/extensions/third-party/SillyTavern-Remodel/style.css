@@ -1162,6 +1162,18 @@ body.remodel-story-workspace-active.remodel-story-input-open #send_form.remodel-
   display: none !important;
 }
 
+/* Cancel button — lives in #leftSendForm with the hamburger + wand, hidden
+   until the message box is open, then shown as the third icon so the user
+   can back out of a drafted message. Inherits the gold toolbar-icon styling
+   from .remodel-composer-toolbar > div; only its visibility is controlled
+   here (default hidden, revealed while remodel-story-input-open). */
+body.remodel-story-workspace-active #send_form.remodel-composer #remodel-cancel-user-message {
+  display: none !important;
+}
+body.remodel-story-workspace-active.remodel-story-input-open #send_form.remodel-composer #remodel-cancel-user-message {
+  display: inline-flex !important;
+}
+
 /* Panel icon column — Scene Summary / Prior Scene Text / Prompt Preview /
    Manuscript Toolbar each toggle their own panel body independently
    (toggleSceneSummaryPanel/togglePriorTextPanel/togglePromptPreviewPanel/

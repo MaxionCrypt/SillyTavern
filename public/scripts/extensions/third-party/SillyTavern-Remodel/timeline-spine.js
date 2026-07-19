@@ -586,6 +586,13 @@ function bindStoryLockInterceptor() {
                 return;
             }
 
+            const cancelMessageButton = target.closest('#remodel-cancel-user-message');
+            if (cancelMessageButton) {
+                event.preventDefault();
+                closeStoryComposer({ clearDraft: true });
+                return;
+            }
+
             const hideButton = target.closest('[data-remodel-beat-hide]');
             if (hideButton) {
                 event.preventDefault();
@@ -2467,6 +2474,21 @@ function ensureStoryComposerExtras() {
     spinner.title = 'Generating…';
     spinner.setAttribute('aria-hidden', 'true');
     rightSendForm.prepend(spinner);
+
+    // Cancel button: sits with the hamburger + wand in #leftSendForm and is
+    // only shown (via CSS, keyed on body.remodel-story-input-open) while the
+    // message box is open — gives a way to back out of a drafted message
+    // without sending it.
+    const leftSendForm = document.getElementById('leftSendForm');
+    if (leftSendForm && !document.getElementById('remodel-cancel-user-message')) {
+        const cancel = document.createElement('div');
+        cancel.id = 'remodel-cancel-user-message';
+        cancel.className = 'interactable fa-solid fa-xmark';
+        cancel.title = 'Cancel message';
+        cancel.setAttribute('role', 'button');
+        cancel.setAttribute('tabindex', '0');
+        leftSendForm.append(cancel);
+    }
 }
 
 function openStoryComposer() {
@@ -2486,8 +2508,19 @@ function openStoryComposer() {
     textarea?.focus();
 }
 
-function closeStoryComposer() {
+function closeStoryComposer({ clearDraft = false } = {}) {
     document.body.classList.remove('remodel-story-input-open');
+
+    // When the user explicitly cancels (vs. a send/chat-switch teardown),
+    // discard the drafted text so reopening starts clean — dispatching input
+    // so core's own send-button/token-count state resyncs to the empty value.
+    if (clearDraft) {
+        const textarea = document.getElementById('send_textarea');
+        if (textarea instanceof HTMLTextAreaElement && textarea.value !== '') {
+            textarea.value = '';
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+    }
 }
 
 // --- Generation state (drives disabled buttons + the loading spinner) ------
