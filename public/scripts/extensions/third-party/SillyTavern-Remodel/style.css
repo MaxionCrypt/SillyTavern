@@ -2430,6 +2430,131 @@ body.remodel-roleplay-workspace-active .remodel-rp-seg {
 body.remodel-roleplay-workspace-active .remodel-rp-seg-k { color: rgba(238, 235, 245, 0.55) !important; }
 body.remodel-roleplay-workspace-active .remodel-rp-seg-v { color: var(--tarot-gold) !important; font-family: var(--remodel-serif) !important; letter-spacing: 0.04em !important; }
 
+/* Interactive turn-bar pills (persona + next-speaker menus). */
+body.remodel-roleplay-workspace-active .remodel-rp-speaker-select:hover {
+  border-color: var(--tarot-gold-bright) !important;
+  background: rgba(198, 164, 74, 0.1) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-seg-menu {
+  cursor: pointer !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-seg-menu:hover {
+  border-color: var(--tarot-gold-soft) !important;
+  background: rgba(198, 164, 74, 0.08) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-as-chip { cursor: pointer !important; }
+body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
+  border-color: var(--tarot-gold-soft) !important;
+}
+
+/* --- Popover menu (persona / next speaker) --- */
+#remodel-rp-menu {
+  position: fixed !important;
+  z-index: 10001 !important;
+  min-width: 200px !important;
+  max-width: 280px !important;
+  max-height: 340px !important;
+  overflow-y: auto !important;
+  background: rgba(15, 16, 21, 0.98) !important;
+  border: 1px solid var(--tarot-gold-soft, rgba(198, 164, 74, 0.42)) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.6) !important;
+  padding: 6px !important;
+  opacity: 0 !important;
+  transform: translateY(6px) !important;
+  transition: opacity 0.14s ease, transform 0.14s ease !important;
+}
+#remodel-rp-menu.remodel-rp-menu-in { opacity: 1 !important; transform: translateY(0) !important; }
+#remodel-rp-menu .remodel-rp-menu-item {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  width: 100% !important;
+  appearance: none !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 8px !important;
+  padding: 8px 10px !important;
+  cursor: pointer !important;
+  text-align: left !important;
+  transition: background 0.12s ease !important;
+}
+#remodel-rp-menu .remodel-rp-menu-item:hover { background: rgba(198, 164, 74, 0.12) !important; }
+#remodel-rp-menu .remodel-rp-menu-item-active { background: rgba(198, 164, 74, 0.08) !important; }
+#remodel-rp-menu .remodel-rp-menu-av {
+  flex: 0 0 auto !important;
+  width: 30px !important;
+  height: 30px !important;
+  border-radius: 8px !important;
+  background-size: cover !important;
+  background-position: center !important;
+  background-color: var(--tarot-gold-deep, #8a6d2a) !important;
+  display: grid !important;
+  place-items: center !important;
+  color: var(--tarot-ink, #0b0b0d) !important;
+  font-family: var(--remodel-serif, 'Cinzel') !important;
+  font-weight: 700 !important;
+  font-size: 12px !important;
+}
+#remodel-rp-menu .remodel-rp-menu-txt { flex: 1 !important; min-width: 0 !important; display: flex !important; flex-direction: column !important; }
+#remodel-rp-menu .remodel-rp-menu-lbl {
+  font-size: 13.5px !important;
+  color: rgba(238, 235, 245, 0.92) !important;
+  font-family: var(--remodel-serif, 'Cinzel') !important;
+  letter-spacing: 0.02em !important;
+  overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important;
+}
+#remodel-rp-menu .remodel-rp-menu-sub {
+  font-size: 10.5px !important;
+  color: rgba(238, 235, 245, 0.4) !important;
+  font-family: var(--remodel-manuscript-font, Georgia) !important;
+}
+#remodel-rp-menu .remodel-rp-menu-check {
+  flex: 0 0 auto !important;
+  color: var(--tarot-gold-bright, #f4e7c4) !important;
+  font-weight: 700 !important;
+}
+
+/* --- Prompt preview modal --- */
+#remodel-rp-preview-modal .remodel-rp-preview {
+  width: min(760px, 94vw) !important;
+  max-height: 86vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background: rgba(15, 16, 21, 0.98) !important;
+  border: 1px solid var(--tarot-gold-soft, rgba(198, 164, 74, 0.42)) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6) !important;
+  transform: translateY(10px) !important;
+  transition: transform 0.2s ease !important;
+  overflow: hidden !important;
+}
+#remodel-rp-preview-modal.remodel-rp-picker-in .remodel-rp-preview { transform: translateY(0) !important; }
+#remodel-rp-preview-modal .remodel-rp-preview-warn {
+  margin: 12px 20px 0 !important;
+  padding: 8px 12px !important;
+  border-radius: 8px !important;
+  background: rgba(191, 97, 106, 0.14) !important;
+  border: 1px solid rgba(191, 97, 106, 0.4) !important;
+  color: var(--nord-aurora-red, #bf616a) !important;
+  font-size: 12px !important;
+  font-family: var(--remodel-manuscript-font, Georgia) !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-body {
+  margin: 16px 20px 20px !important;
+  padding: 16px !important;
+  overflow: auto !important;
+  background: rgba(0, 0, 0, 0.3) !important;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08)) !important;
+  border-radius: 10px !important;
+  color: rgba(238, 235, 245, 0.85) !important;
+  font-family: monospace !important;
+  font-size: 12.5px !important;
+  line-height: 1.55 !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+}
+
 body.remodel-roleplay-workspace-active .remodel-rp-action-row {
   display: flex !important;
   align-items: center !important;
@@ -2971,13 +3096,11 @@ body.remodel-roleplay-workspace-active .remodel-rp-act-flash {
 
 /* Honestly-disabled controls: dimmed, not-allowed cursor, but still
    clickable so their explain-why toast can fire. */
-body.remodel-roleplay-workspace-active [data-remodel-rp-act-disabled],
-body.remodel-roleplay-workspace-active .remodel-rp-soon {
+body.remodel-roleplay-workspace-active [data-remodel-rp-act-disabled] {
   opacity: 0.45 !important;
   cursor: help !important;
 }
-body.remodel-roleplay-workspace-active [data-remodel-rp-act-disabled]:hover,
-body.remodel-roleplay-workspace-active .remodel-rp-soon:hover {
+body.remodel-roleplay-workspace-active [data-remodel-rp-act-disabled]:hover {
   opacity: 0.7 !important;
 }
 
@@ -3035,9 +3158,12 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-remove:hover {
   border-color: var(--nord-aurora-red, #bf616a) !important;
 }
 
-/* --- Cast reorder (drag and drop) --- */
+/* --- Cast reorder (pointer drag) --- */
 body.remodel-roleplay-workspace-active .remodel-rp-cast-draggable {
   cursor: grab !important;
+  /* Keep pointer moves from being consumed by scroll/gesture so the drag
+     tracks cleanly. */
+  touch-action: none !important;
 }
 body.remodel-roleplay-workspace-active .remodel-rp-cast-draggable:active {
   cursor: grabbing !important;

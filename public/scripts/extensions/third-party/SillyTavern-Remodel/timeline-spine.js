@@ -7,6 +7,7 @@ import {
     setCharacterId,
 } from '../../../../script.js';
 import { openGroupById } from '../../../group-chats.js';
+import { setUserAvatar } from '../../../personas.js';
 import { MacroRegistry, MacroCategory, MacroValueType } from '../../../macros/engine/MacroRegistry.js';
 import {
     CHAT_METADATA_KEY,
@@ -4656,21 +4657,24 @@ function renderRoleplayComposer(root) {
             </span>`).join('')
         : '';
 
-    // Trigger (pick who speaks next) only means something in a group; in a
-    // solo scene there's nobody to pick, so it's honestly disabled there.
+    // Next speaker only means something in a group; in a solo scene there's
+    // one character, so it's fixed to "AI decides" and not a menu.
     const inGroup = Boolean(context.groupId);
+    const nextSpeakerAttrs = inGroup
+        ? 'data-remodel-rp-nextspeaker-menu role="button" tabindex="0"'
+        : '';
     const triggerAttrs = inGroup
         ? 'data-remodel-rp-action="trigger"'
         : 'data-remodel-rp-act-disabled="Only in group scenes — there\'s just one character here"';
 
     zone.innerHTML = `
         <div class="remodel-rp-turn-bar">
-            <div class="remodel-rp-speaker-select remodel-rp-soon" data-remodel-rp-soon="Speak-as switching is coming soon" title="Speaking as ${escapeAttribute(personaName)} — switching coming soon">
+            <div class="remodel-rp-speaker-select" data-remodel-rp-persona-menu role="button" tabindex="0" title="Speaking as ${escapeAttribute(personaName)} — click to switch persona">
                 <span class="remodel-rp-chip-av">${escapeHtml(roleplayInitials(personaName))}</span>
                 <span class="remodel-rp-speaker-lbl">${escapeHtml(personaName)}</span>
                 <span class="remodel-rp-caret">▾</span>
             </div>
-            <div class="remodel-rp-seg"><span class="remodel-rp-seg-k">Next speaker</span><span class="remodel-rp-seg-v">AI decides</span></div>
+            <div class="remodel-rp-seg ${inGroup ? 'remodel-rp-seg-menu' : ''}" ${nextSpeakerAttrs} title="${inGroup ? 'Who speaks next' : 'The AI decides who speaks next'}"><span class="remodel-rp-seg-k">Next speaker</span><span class="remodel-rp-seg-v">AI decides</span>${inGroup ? '<span class="remodel-rp-caret">▾</span>' : ''}</div>
         </div>
 
         <div class="remodel-rp-action-row">
@@ -4678,13 +4682,13 @@ function renderRoleplayComposer(root) {
             <button type="button" class="remodel-rp-act" data-remodel-rp-action="next"><span class="remodel-rp-g">▷</span> Next</button>
             <button type="button" class="remodel-rp-act" ${triggerAttrs}><span class="remodel-rp-g">✦</span> Trigger…</button>
             <button type="button" class="remodel-rp-act" data-remodel-rp-action="impersonate"><span class="remodel-rp-g">✎</span> Write for me</button>
-            <button type="button" class="remodel-rp-act" data-remodel-rp-act-disabled="Prompt preview isn't wired into roleplay yet"><span class="remodel-rp-g">◉</span> Preview</button>
+            <button type="button" class="remodel-rp-act" data-remodel-rp-action="preview"><span class="remodel-rp-g">◉</span> Preview</button>
             <span class="remodel-rp-spacer"></span>
             ${memberToggles}
         </div>
 
         <div class="remodel-rp-composer">
-            <button type="button" class="remodel-rp-as-chip" data-remodel-rp-persona title="Speak as… (persona / narrator)">
+            <button type="button" class="remodel-rp-as-chip" data-remodel-rp-persona-menu title="Speak as… — click to switch persona">
                 <span class="remodel-rp-as-av">${escapeHtml(roleplayInitials(personaName))}</span>
                 <span class="remodel-rp-as-txt"><span class="remodel-rp-as-k">Speak as</span><span class="remodel-rp-as-v">${escapeHtml(personaName)}</span></span>
             </button>
@@ -4697,6 +4701,216 @@ function renderRoleplayComposer(root) {
             <span>${members.length} character${members.length === 1 ? '' : 's'} in scene</span>
         </div>
     `;
+}
+
+// --- Turn-bar menus: persona switch + next speaker -----------------------
+
+// A small popover menu anchored under a trigger element. Reused by the
+// persona and next-speaker pills. items: [{ id, label, sublabel?, avatar?,
+// initials?, active? }]; onPick receives the chosen id. Only one menu open
+// at a time; clicking elsewhere or Escape closes it.
+function openRoleplayMenu(anchor, items, onPick) {
+    closeRoleplayMenu();
+    if (!anchor || !Array.isArray(items) || items.length === 0) {
+        return;
+    }
+    const menu = document.createElement('div');
+    menu.className = 'remodel-rp-menu';
+    menu.id = 'remodel-rp-menu';
+    menu.innerHTML = items.map((it) => `
+        <button type="button" class="remodel-rp-menu-item${it.active ? ' remodel-rp-menu-item-active' : ''}" data-remodel-rp-menu-pick="${escapeAttribute(String(it.id))}">
+            ${it.avatar || it.initials
+        ? `<span class="remodel-rp-menu-av"${it.avatar ? ` style="background-image:url('${escapeAttribute(it.avatar)}')"` : ''}>${it.avatar ? '' : escapeHtml(it.initials)}</span>`
+        : ''}
+            <span class="remodel-rp-menu-txt">
+                <span class="remodel-rp-menu-lbl">${escapeHtml(it.label)}</span>
+                ${it.sublabel ? `<span class="remodel-rp-menu-sub">${escapeHtml(it.sublabel)}</span>` : ''}
+            </span>
+            ${it.active ? '<span class="remodel-rp-menu-check">✓</span>' : ''}
+        </button>`).join('');
+
+    menu._remodelOnPick = onPick;
+    document.body.appendChild(menu);
+
+    // Position above the anchor (the turn bar sits near the bottom of the
+    // stream, so a downward menu would overflow the composer).
+    const rect = anchor.getBoundingClientRect();
+    menu.style.visibility = 'hidden';
+    requestAnimationFrame(() => {
+        const mh = menu.offsetHeight;
+        const top = rect.top - mh - 8;
+        menu.style.left = `${Math.max(8, rect.left)}px`;
+        menu.style.top = `${top > 8 ? top : rect.bottom + 8}px`;
+        menu.style.visibility = 'visible';
+        menu.classList.add('remodel-rp-menu-in');
+    });
+}
+
+function closeRoleplayMenu() {
+    const menu = document.getElementById('remodel-rp-menu');
+    if (menu) {
+        menu.remove();
+    }
+}
+
+// Builds the persona list for the speak-as menu from core's persona map
+// (powerUserSettings.personas: { avatarId: name }). The active persona is
+// the current user_avatar, read from the selected native persona element.
+function openRoleplayPersonaMenu(anchor) {
+    const context = getContext();
+    const personas = context.powerUserSettings?.personas || {};
+    const currentAvatarId = currentPersonaAvatarId();
+
+    const items = Object.entries(personas).map(([avatarId, name]) => ({
+        id: avatarId,
+        label: String(name || avatarId),
+        avatar: context.getThumbnailUrl('persona', avatarId),
+        initials: roleplayInitials(String(name || avatarId)),
+        active: avatarId === currentAvatarId,
+    }));
+
+    if (items.length === 0) {
+        showRoleplayToast('No personas defined. Create one in the Persona Management panel.');
+        return;
+    }
+
+    openRoleplayMenu(anchor, items, (avatarId) => switchRoleplayPersona(avatarId));
+}
+
+// The active persona's avatar id — read from the native persona block's
+// selected entry (user_avatar isn't exposed on context).
+function currentPersonaAvatarId() {
+    const selected = document.querySelector('#user_avatar_block .avatar-container.selected');
+    return selected instanceof HTMLElement ? (selected.getAttribute('data-avatar-id') || null) : null;
+}
+
+// Switches the persona via core's setUserAvatar, then re-renders the
+// composer so the pill/label reflect the new persona.
+async function switchRoleplayPersona(avatarId) {
+    closeRoleplayMenu();
+    try {
+        await setUserAvatar(avatarId, { toastPersonaNameChange: false });
+    } catch (err) {
+        console.error('Remodel: persona switch failed', err);
+    }
+    const root = getRealRoleplayRoot();
+    if (root) {
+        renderRoleplayComposer(root);
+    }
+}
+
+// Next-speaker menu: "AI decides" (clears any forced next speaker — the
+// default group behavior) plus one entry per cast member. Picking a member
+// triggers a generation for that specific character via /trigger <name>.
+function openRoleplayNextSpeakerMenu(anchor) {
+    const context = getContext();
+    if (!context.groupId) {
+        return;
+    }
+    const members = roleplaySceneMembers(context);
+    const items = [
+        { id: '__ai__', label: 'AI decides', sublabel: 'Group picks the next speaker' },
+        ...members.map((m) => ({
+            id: m.name,
+            label: m.name,
+            avatar: (() => {
+                const av = roleplayCharacterAvatar({ characterId: m.characterId, name: m.name });
+                return av ? context.getThumbnailUrl('avatar', av) : '';
+            })(),
+            initials: roleplayInitials(m.name),
+            sublabel: 'Speaks next',
+        })),
+    ];
+    openRoleplayMenu(anchor, items, (id) => {
+        closeRoleplayMenu();
+        if (id === '__ai__') {
+            // Nothing to force — the group's own strategy decides. Reflect it
+            // in the label and let the normal Send/Next flow proceed.
+            setRoleplayNextSpeakerLabel('AI decides');
+            return;
+        }
+        setRoleplayNextSpeakerLabel(id);
+        triggerRoleplaySpeaker(id);
+    });
+}
+
+function setRoleplayNextSpeakerLabel(text) {
+    const el = getRealRoleplayRoot()?.querySelector('.remodel-rp-seg .remodel-rp-seg-v');
+    if (el) {
+        el.textContent = text;
+    }
+}
+
+// Triggers a generation for a specific group member by name via the native
+// /trigger slash command (the supported way to make one member speak next).
+async function triggerRoleplaySpeaker(name) {
+    const context = getContext();
+    setRoleplayGenerating(true);
+    showRoleplayTypingIndicator();
+    try {
+        await context.executeSlashCommands(`/trigger ${name}`);
+    } catch (err) {
+        console.error('Remodel: trigger speaker failed', err);
+        setRoleplayGenerating(false);
+    }
+}
+
+// Prompt preview: assembles (but never sends) the exact prompt that a normal
+// turn would produce right now — reusing the same dry-run + formatter the
+// Story workspace's preview uses — and shows it in a read-only modal. Honest
+// "here's what the model will actually see," including whatever's typed in
+// the composer.
+const ROLEPLAY_PREVIEW_ID = 'remodel-rp-preview-modal';
+
+async function openRoleplayPromptPreview() {
+    // Build the modal shell immediately with a loading state so the click is
+    // acknowledged, then fill it once the dry run resolves.
+    document.getElementById(ROLEPLAY_PREVIEW_ID)?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = ROLEPLAY_PREVIEW_ID;
+    overlay.className = 'remodel-rp-picker-scrim';
+    overlay.innerHTML = `
+        <div class="remodel-rp-preview" data-remodel-rp-preview-stop>
+            <div class="remodel-rp-picker-head">
+                <div>
+                    <div class="remodel-rp-picker-title">Prompt preview</div>
+                    <div class="remodel-rp-picker-hint">Exactly what the model will receive on the next turn — nothing is sent.</div>
+                </div>
+                <button type="button" class="remodel-rp-picker-x" data-remodel-rp-preview-close aria-label="Close">×</button>
+            </div>
+            <div class="remodel-rp-preview-warn" data-remodel-rp-preview-warn hidden></div>
+            <pre class="remodel-rp-preview-body" data-remodel-rp-preview-body>Assembling prompt…</pre>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
+
+    try {
+        const { generateData, warnings } = await runPromptPreviewDryRun('normal');
+        const bodyEl = overlay.querySelector('[data-remodel-rp-preview-body]');
+        const warnEl = overlay.querySelector('[data-remodel-rp-preview-warn]');
+        if (bodyEl) {
+            bodyEl.textContent = formatPromptPreview(generateData);
+        }
+        if (warnEl && Array.isArray(warnings) && warnings.length > 0) {
+            warnEl.textContent = `⚠ ${warnings.join(' · ')}`;
+            warnEl.hidden = false;
+        }
+    } catch (err) {
+        const bodyEl = overlay.querySelector('[data-remodel-rp-preview-body]');
+        if (bodyEl) {
+            bodyEl.textContent = `Could not assemble a preview.\n\n${String(err)}`;
+        }
+    }
+}
+
+function closeRoleplayPromptPreview() {
+    const overlay = document.getElementById(ROLEPLAY_PREVIEW_ID);
+    if (!overlay) {
+        return;
+    }
+    overlay.classList.remove('remodel-rp-picker-in');
+    setTimeout(() => overlay.remove(), 200);
 }
 
 // Sends the roleplay composer's text as a user message and lets core
@@ -4755,14 +4969,18 @@ function handleRoleplayAction(action) {
             break;
         }
         case 'trigger': {
-            // Opens native group member selection is non-trivial; for now
-            // trigger the group's "next speaker" via the native trigger flow
-            // if present, else no-op. Wired fully in the cast-polish stage.
-            document.getElementById('option_continue')?.click();
+            // Pick a specific cast member to speak next (same menu as the
+            // "Next speaker" pill). Anchored to the Trigger button.
+            const btn = getRealRoleplayRoot()?.querySelector('[data-remodel-rp-action="trigger"]');
+            openRoleplayNextSpeakerMenu(btn);
             break;
         }
         case 'impersonate': {
             document.getElementById('option_impersonate')?.click();
+            break;
+        }
+        case 'preview': {
+            openRoleplayPromptPreview();
             break;
         }
         case 'add-cast': {
@@ -4813,6 +5031,37 @@ function bindRoleplayComposerEvents() {
             return;
         }
 
+        // Prompt-preview modal (in <body>): close on the × or scrim click.
+        const previewOverlay = document.getElementById(ROLEPLAY_PREVIEW_ID);
+        if (previewOverlay) {
+            if (target.closest('[data-remodel-rp-preview-close]') || target === previewOverlay) {
+                event.preventDefault();
+                closeRoleplayPromptPreview();
+                return;
+            }
+        }
+
+        // Popover menu (persona / next-speaker) lives in <body>, outside the
+        // roleplay root — handle picks and outside-click-to-close here first.
+        const menu = document.getElementById('remodel-rp-menu');
+        if (menu) {
+            const pick = target.closest('[data-remodel-rp-menu-pick]');
+            if (pick && menu.contains(pick)) {
+                event.preventDefault();
+                const onPick = menu._remodelOnPick;
+                const id = pick.getAttribute('data-remodel-rp-menu-pick');
+                closeRoleplayMenu();
+                onPick?.(id);
+                return;
+            }
+            // A click anywhere that isn't the menu itself (or the trigger that
+            // would reopen it) closes it.
+            if (!menu.contains(target) && !target.closest('[data-remodel-rp-persona-menu], [data-remodel-rp-nextspeaker-menu]')) {
+                closeRoleplayMenu();
+                // fall through — the click may also be a real control.
+            }
+        }
+
         // Panels live in #sheld, outside the roleplay root — handle their
         // toggle/close buttons before the root-containment guard below.
         const panelToggle = target.closest('[data-remodel-rp-panel-toggle]');
@@ -4858,6 +5107,23 @@ function bindRoleplayComposerEvents() {
         if (target.closest('[data-remodel-rp-send]')) {
             event.preventDefault();
             handleRoleplaySend(root);
+            return;
+        }
+
+        // Persona (speak-as) menu — both the turn-bar pill and the composer
+        // chip open it.
+        const personaTrigger = target.closest('[data-remodel-rp-persona-menu]');
+        if (personaTrigger) {
+            event.preventDefault();
+            openRoleplayPersonaMenu(personaTrigger);
+            return;
+        }
+
+        // Next-speaker menu (group scenes only).
+        const nextSpeakerTrigger = target.closest('[data-remodel-rp-nextspeaker-menu]');
+        if (nextSpeakerTrigger) {
+            event.preventDefault();
+            openRoleplayNextSpeakerMenu(nextSpeakerTrigger);
             return;
         }
 
@@ -5903,7 +6169,8 @@ function renderRoleplayCast(root) {
             chip.classList.add('remodel-rp-speaking');
         }
         if (canReorder && avatar) {
-            chip.draggable = true;
+            // Pointer-based drag (not native draggable — see
+            // bindRoleplayCastDragEvents); the class marks it as a handle.
             chip.classList.add('remodel-rp-cast-draggable');
         }
 
@@ -5944,75 +6211,109 @@ function renderRoleplayCast(root) {
     cast.appendChild(add);
 }
 
-// Native HTML5 drag-and-drop for reordering cast members. Delegated at
-// document level (the cast column is rebuilt on every render, so per-chip
-// listeners would be lost) and gated on a real roleplay scene. dragstart
-// stamps the moved avatar onto the dataTransfer; dragover shows an insertion
-// hint before the chip under the pointer; drop commits via
-// reorderRoleplayCast.
-let roleplayDragAvatar = null;
+// Pointer-based drag-to-reorder for cast members. Native HTML5 drag-and-drop
+// proved unreliable here (the drop event frequently never fired against the
+// avatar-image children), so this uses pointer events directly: press a chip,
+// move past a small threshold to begin a drag, and the chip the pointer is
+// over (hit-tested with elementFromPoint) shows an insertion hint; releasing
+// commits via reorderRoleplayCast. Delegated at document level since the cast
+// column is rebuilt on every render.
+const roleplayDrag = {
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    movedAvatar: null,
+    chip: null,
+};
+const ROLEPLAY_DRAG_THRESHOLD = 5; // px before a press becomes a drag
+
 function bindRoleplayCastDragEvents() {
-    document.addEventListener('dragstart', (event) => {
-        if (!isRealRoleplayWorkspaceActive()) {
+    document.addEventListener('pointerdown', (event) => {
+        if (!isRealRoleplayWorkspaceActive() || event.button !== 0) {
             return;
         }
         const chip = event.target instanceof Element ? event.target.closest('.remodel-rp-cast-draggable') : null;
-        if (!chip) {
+        // Don't start a drag from the remove "×" button.
+        if (!chip || (event.target instanceof Element && event.target.closest('[data-remodel-rp-cast-remove]'))) {
             return;
         }
-        roleplayDragAvatar = chip.dataset.remodelRpAvatar || null;
-        chip.classList.add('remodel-rp-cast-dragging');
-        if (event.dataTransfer) {
-            event.dataTransfer.effectAllowed = 'move';
-            // Some engines require data to be set for a drag to actually start.
-            try { event.dataTransfer.setData('text/plain', roleplayDragAvatar || ''); } catch { /* ignore */ }
-        }
+        roleplayDrag.pointerId = event.pointerId;
+        roleplayDrag.startX = event.clientX;
+        roleplayDrag.startY = event.clientY;
+        roleplayDrag.movedAvatar = chip.dataset.remodelRpAvatar || null;
+        roleplayDrag.chip = chip;
+        roleplayDrag.active = false;
     });
 
-    document.addEventListener('dragover', (event) => {
-        if (!isRealRoleplayWorkspaceActive() || !roleplayDragAvatar) {
+    document.addEventListener('pointermove', (event) => {
+        if (roleplayDrag.pointerId === null || event.pointerId !== roleplayDrag.pointerId) {
             return;
         }
-        const cast = event.target instanceof Element ? event.target.closest('[data-remodel-rp-cast]') : null;
-        if (!cast) {
-            return;
-        }
-        event.preventDefault(); // allow drop
-        if (event.dataTransfer) {
-            event.dataTransfer.dropEffect = 'move';
-        }
-        clearRoleplayDropHints(cast);
-        const overChip = event.target instanceof Element ? event.target.closest('.remodel-rp-cast-draggable') : null;
-        if (overChip && overChip.dataset.remodelRpAvatar !== roleplayDragAvatar) {
-            overChip.classList.add('remodel-rp-cast-drop-before');
-        }
-    });
+        const dx = event.clientX - roleplayDrag.startX;
+        const dy = event.clientY - roleplayDrag.startY;
 
-    document.addEventListener('drop', (event) => {
-        if (!isRealRoleplayWorkspaceActive() || !roleplayDragAvatar) {
-            return;
-        }
-        const cast = event.target instanceof Element ? event.target.closest('[data-remodel-rp-cast]') : null;
-        if (!cast) {
-            return;
+        if (!roleplayDrag.active) {
+            if (Math.hypot(dx, dy) < ROLEPLAY_DRAG_THRESHOLD) {
+                return;
+            }
+            // Begin the drag.
+            roleplayDrag.active = true;
+            roleplayDrag.chip?.classList.add('remodel-rp-cast-dragging');
+            roleplayDrag.chip?.setPointerCapture?.(event.pointerId);
         }
         event.preventDefault();
-        const overChip = event.target instanceof Element ? event.target.closest('.remodel-rp-cast-draggable') : null;
-        const targetAvatar = overChip ? (overChip.dataset.remodelRpAvatar || null) : null;
-        const moved = roleplayDragAvatar;
-        clearRoleplayDropHints(cast);
-        reorderRoleplayCast(moved, targetAvatar);
-    });
 
-    document.addEventListener('dragend', () => {
-        roleplayDragAvatar = null;
-        getRealRoleplayRoot()?.querySelectorAll('.remodel-rp-cast-dragging')
-            .forEach((el) => el.classList.remove('remodel-rp-cast-dragging'));
+        // Hit-test the chip under the pointer and show the insertion hint.
         const cast = getRealRoleplayRoot()?.querySelector('[data-remodel-rp-cast]');
         if (cast) {
             clearRoleplayDropHints(cast);
         }
+        const overChip = roleplayChipUnderPointer(event.clientX, event.clientY);
+        if (overChip && overChip.dataset.remodelRpAvatar !== roleplayDrag.movedAvatar) {
+            overChip.classList.add('remodel-rp-cast-drop-before');
+        }
     });
+
+    document.addEventListener('pointerup', (event) => {
+        if (roleplayDrag.pointerId === null || event.pointerId !== roleplayDrag.pointerId) {
+            return;
+        }
+        const wasActive = roleplayDrag.active;
+        const moved = roleplayDrag.movedAvatar;
+        const overChip = wasActive ? roleplayChipUnderPointer(event.clientX, event.clientY) : null;
+        const targetAvatar = overChip ? (overChip.dataset.remodelRpAvatar || null) : null;
+
+        endRoleplayDrag();
+
+        if (wasActive && moved) {
+            reorderRoleplayCast(moved, targetAvatar);
+        }
+    });
+
+    document.addEventListener('pointercancel', () => {
+        if (roleplayDrag.pointerId !== null) {
+            endRoleplayDrag();
+        }
+    });
+}
+
+// Returns the draggable cast chip under the given viewport point, if any.
+function roleplayChipUnderPointer(x, y) {
+    const el = document.elementFromPoint(x, y);
+    return el instanceof Element ? el.closest('.remodel-rp-cast-draggable') : null;
+}
+
+function endRoleplayDrag() {
+    roleplayDrag.chip?.classList.remove('remodel-rp-cast-dragging');
+    const cast = getRealRoleplayRoot()?.querySelector('[data-remodel-rp-cast]');
+    if (cast) {
+        clearRoleplayDropHints(cast);
+    }
+    roleplayDrag.active = false;
+    roleplayDrag.pointerId = null;
+    roleplayDrag.movedAvatar = null;
+    roleplayDrag.chip = null;
 }
 
 function clearRoleplayDropHints(cast) {
