@@ -2721,6 +2721,30 @@ body.remodel-roleplay-workspace-active #sheld:has(.remodel-rp-panel-open) #remod
   right: 350px !important;
 }
 
+/* The hamburger (#options) and wand (#extensionsMenu) menus are opened by
+   the relocated rail buttons, which sit at the extreme right edge. Core
+   positions both via a Popper instance anchored top-start to the button,
+   so the menu extends rightward and clips off the right side of the
+   viewport (worse the narrower the window). Pin them to a fixed position
+   just left of the rail instead — overriding Popper's inline transform —
+   so they open inward and always stay fully on-screen. Scoped to when
+   roleplay is active AND the button actually lives in the rail. */
+body.remodel-roleplay-workspace-active #options,
+body.remodel-roleplay-workspace-active #extensionsMenu {
+  position: fixed !important;
+  right: 52px !important;
+  left: auto !important;
+  /* Anchor from the top with a fixed offset (predictable at any window
+     height) rather than bottom-anchoring, which pushed a tall menu off the
+     top of short viewports. max-height + scroll keeps it in bounds. */
+  top: calc(var(--topBarBlockSize, 40px) + 60px) !important;
+  bottom: auto !important;
+  transform: none !important;
+  max-width: min(280px, calc(100vw - 64px)) !important;
+  max-height: calc(100vh - var(--topBarBlockSize, 40px) - 80px) !important;
+  overflow-y: auto !important;
+}
+
 body.remodel-roleplay-workspace-active .remodel-rp-panel-icon {
   flex: 0 0 auto !important;
   width: 34px !important;
