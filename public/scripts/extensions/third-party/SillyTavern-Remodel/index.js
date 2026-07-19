@@ -294,7 +294,14 @@ function renameSidebarDrawer(drawer, { label, icon }) {
     iconElement.setAttribute('data-i18n', '');
 
     const stateClass = iconElement.classList.contains('openIcon') ? 'openIcon' : 'closedIcon';
-    iconElement.className = `drawer-icon ${icon.join(' ')} ${stateClass}`;
+    // The Tavern drawer is pinned (see ensureTimelineDrawer, timeline-spine.js)
+    // so core's own doNavbarIconClick()/click-outside handlers never force-close
+    // it as a side effect of unrelated drawer activity elsewhere on the page —
+    // this className rebuild is a full overwrite, so drawerPinnedOpen has to be
+    // re-added every time or the pin silently falls off the next time this runs
+    // (it's re-triggered by a MutationObserver on any #top-settings-holder change).
+    const pinnedClass = drawer.id === 'remodel-timeline-drawer' ? ' drawerPinnedOpen' : '';
+    iconElement.className = `drawer-icon ${icon.join(' ')} ${stateClass}${pinnedClass}`;
 }
 
 function closeDrawer(drawer) {

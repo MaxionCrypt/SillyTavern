@@ -182,9 +182,9 @@ function ensureTimelineDrawer() {
     drawer.className = 'drawer';
     drawer.innerHTML = `
         <div class="drawer-toggle" tabindex="0" role="button" aria-label="Open Tavern">
-            <div class="drawer-icon fa-solid fa-beer-mug-empty fa-fw closedIcon" title="Tavern"></div>
+            <div class="drawer-icon fa-solid fa-beer-mug-empty fa-fw closedIcon drawerPinnedOpen" title="Tavern"></div>
         </div>
-        <div id="${PANEL_ID}" class="drawer-content closedDrawer remodel-timeline-drawer-content">
+        <div id="${PANEL_ID}" class="drawer-content closedDrawer pinnedOpen remodel-timeline-drawer-content">
             <div id="${CONTENT_ID}" class="remodel-timeline-content"></div>
         </div>
     `;
@@ -4364,8 +4364,61 @@ function syncActiveSceneFromChatMetadata() {
 // sub-modes of the same underlying native chat: a scene is one or the
 // other, never both, so exactly one of these classes is ever set.
 function syncStoryWorkspaceClass(scene) {
+    const enteringRoleplay = scene?.mode === 'roleplay';
     document.body.classList.toggle('remodel-story-workspace-active', scene?.mode === 'story');
-    document.body.classList.toggle('remodel-roleplay-workspace-active', scene?.mode === 'roleplay');
+    document.body.classList.toggle('remodel-roleplay-workspace-active', enteringRoleplay);
+
+    if (enteringRoleplay) {
+        relocateRoleplayNativeButtons();
+    } else {
+        restoreRoleplayNativeButtons();
+    }
+}
+
+// The native hamburger (#options_button) and Extensions wand
+// (#extensionsMenuButton) live in #leftSendForm, part of #form_sheld, which
+// roleplay hides wholesale (its own composer replaces it). Both menus
+// (#options, #extensionsMenu) are positioned by core relative to their
+// trigger's OWN DOM position — #extensionsMenu via a live Popper instance
+// (extensions.js addExtensionsButtonAndMenu) — so clicking them from a
+// synthetic lookalike button elsewhere would open them anchored to the
+// hidden composer, not the rail. Relocating the real singleton elements
+// into the roleplay rail makes core's own positioning correct for free.
+// Reuses the same origin-tracking map the Tavern panel-adoption path uses
+// (getOriginalPanelHomes) rather than a second parallel mechanism.
+const ROLEPLAY_NATIVE_BUTTON_IDS = ['options_button', 'extensionsMenuButton'];
+
+function relocateRoleplayNativeButtons() {
+    const group = document.getElementById('remodel-rp-panelgroup');
+    if (!group) {
+        return; // rail not built yet; ensureRoleplayPanelGroup relocates once it exists
+    }
+    for (const id of ROLEPLAY_NATIVE_BUTTON_IDS) {
+        const el = document.getElementById(id);
+        const slot = group.querySelector(`[data-remodel-rp-native-slot="${id}"]`);
+        if (!el || !slot || el.parentElement === slot) {
+            continue;
+        }
+        if (!getOriginalPanelHomes().has(el)) {
+            getOriginalPanelHomes().set(el, { parent: el.parentElement, nextSibling: el.nextSibling });
+        }
+        slot.appendChild(el);
+    }
+}
+
+function restoreRoleplayNativeButtons() {
+    for (const id of ROLEPLAY_NATIVE_BUTTON_IDS) {
+        const el = document.getElementById(id);
+        if (!el) {
+            continue;
+        }
+        const home = getOriginalPanelHomes().get(el);
+        if (!home) {
+            continue; // never relocated (e.g. roleplay never entered this session)
+        }
+        home.parent?.insertBefore(el, home.nextSibling);
+        getOriginalPanelHomes().delete(el);
+    }
 }
 
 // Roleplay counterpart to isRealStoryWorkspaceActive() — same single-
@@ -5885,8 +5938,15 @@ function ensureRoleplayPanelGroup() {
         <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-action="add-cast" title="Cast & Group Controls" aria-label="Cast & Group Controls">
             <i class="fa-solid fa-users" aria-hidden="true"></i>
         </button>
+        <div class="remodel-rp-panel-icon remodel-rp-native-slot" data-remodel-rp-native-slot="options_button" title="Chat Options"></div>
+        <div class="remodel-rp-panel-icon remodel-rp-native-slot" data-remodel-rp-native-slot="extensionsMenuButton" title="Extensions"></div>
     `;
     getRealSheld()?.appendChild(group);
+    // The rail may be built after syncStoryWorkspaceClass already flipped
+    // into roleplay (renderRoleplayScene calls ensureRoleplayPanels() on
+    // every render) — relocate here too so the slots don't sit empty on
+    // first render.
+    relocateRoleplayNativeButtons();
 }
 
 // Rules / Mechanics panel: a free-text scratchpad for the table's house
