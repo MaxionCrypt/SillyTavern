@@ -1659,12 +1659,77 @@ function isNarrativeProseMessage(mes) {
     return Boolean(mes) && !mes.is_user && !mes.is_system && mes.extra?.type !== 'narrator';
 }
 
-function extractSceneProse(messages, { wordLimit = null } = {}) {
-    const proseText = messages
-        .filter(isNarrativeProseMessage)
-        .map((mes) => mes.mes)
-        .filter(Boolean)
-        .join('\n\n');
+// Resolves a message to a { key, label } speaker identity used for the
+// per-speaker include/exclude filter. Keys are stable strings (not array
+// indices) so a checkbox selection survives a re-fetch and matches messages
+// back reliably:
+//   - narrator/system  -> key "narrator"
+//   - user/persona     -> key "user" (all personas collapse to one — the
+//                         "You" side of the scene), label = persona name
+//   - character/AI      -> key "char:<name>", label = the character name
+function messageSpeaker(mes) {
+    const isNarrator = Boolean(mes?.is_system) || mes?.extra?.type === 'narrator';
+    if (isNarrator) {
+        return { key: 'narrator', label: 'Narrator' };
+    }
+    if (mes?.is_user) {
+        return { key: 'user', label: mes.name || 'You' };
+    }
+    return { key: `char:${mes?.name || 'Unknown'}`, label: mes?.name || 'Unknown' };
+}
+
+// Distinct speakers in a scene, in first-appearance order — drives the
+// per-speaker checkbox list. Works for story scenes too (usually just the AI
+// voice + "You" from Scene Beats + maybe a narrator).
+function collectSceneSpeakers(messages) {
+    const seen = new Map();
+    for (const mes of (messages || [])) {
+        if (!mes || !mes.mes) {
+            continue;
+        }
+        const { key, label } = messageSpeaker(mes);
+        if (!seen.has(key)) {
+            seen.set(key, { key, label });
+        }
+    }
+    return [...seen.values()];
+}
+
+// Generalized prose extraction. Back-compatible: called with no options it
+// reproduces the old story behavior (narrative-only, unlabeled). With a
+// speaker set / labeling it supports multi-character roleplay sources.
+//   - includeSpeakers: Set/array of speaker keys to keep. null/undefined =>
+//     the legacy narrative-only filter (isNarrativeProseMessage).
+//   - labelSpeakers: prefix each kept message with "Speaker: " (roleplay);
+//     false => bare message text (story).
+//   - wordLimit: tail-slice the assembled text to the last N words.
+function extractSceneProse(messages, { wordLimit = null, includeSpeakers = null, labelSpeakers = false } = {}) {
+    const includeSet = includeSpeakers == null
+        ? null
+        : (includeSpeakers instanceof Set ? includeSpeakers : new Set(includeSpeakers));
+
+    const parts = [];
+    for (const mes of (messages || [])) {
+        if (!mes || !mes.mes) {
+            continue;
+        }
+
+        if (includeSet === null) {
+            // Legacy path: narrative prose only, no speaker labels.
+            if (isNarrativeProseMessage(mes)) {
+                parts.push(mes.mes);
+            }
+            continue;
+        }
+
+        const speaker = messageSpeaker(mes);
+        if (!includeSet.has(speaker.key)) {
+            continue;
+        }
+        parts.push(labelSpeakers ? `${speaker.label}: ${mes.mes}` : mes.mes);
+    }
+
+    const proseText = parts.join('\n\n');
 
     if (!wordLimit) {
         return proseText;
@@ -1676,6 +1741,95 @@ function extractSceneProse(messages, { wordLimit = null } = {}) {
 
 function sanitizeSlotName(rawName) {
     return String(rawName || '').trim().replace(/[^a-zA-Z0-9_]/g, '_').replace(/^_+/, '').slice(0, 60);
+}
+
+// The single live Prior Text panel body (Story or Roleplay — only one is in
+// the DOM at a time, relocated per workspace). All handlers query through
+// this so they work regardless of which rail currently hosts it.
+function getPriorTextPanelEl() {
+    const select = document.querySelector('[data-remodel-priortext-select]');
+    return select?.closest('.remodel-priortext-body') || select?.parentElement || null;
+}
+
+// Small in-panel cache so the Preview click doesn't re-fetch the messages the
+// speaker-list population already loaded for the same scene.
+let priorTextMessageCache = { sceneId: null, messages: null };
+
+// Fetches the chosen source scene's messages, lists its distinct speakers as
+// checkboxes (all checked by default), and reveals the container. A story
+// source usually resolves to 1–2 boxes; a roleplay group to one per cast
+// member + You + narrator.
+async function populatePriorTextSpeakers() {
+    const select = document.querySelector('[data-remodel-priortext-select]');
+    const container = document.querySelector('[data-remodel-priortext-speakers]');
+    if (!select || !container) {
+        return;
+    }
+
+    const sceneId = select.value;
+    if (!sceneId) {
+        container.hidden = true;
+        container.innerHTML = '';
+        return;
+    }
+
+    const store = getTimelineStore();
+    const sourceScene = store.scenes[sceneId];
+    if (!sourceScene) {
+        container.hidden = true;
+        return;
+    }
+
+    container.hidden = false;
+    container.innerHTML = '<div class="remodel-priortext-speakers-loading">Loading speakers…</div>';
+
+    let messages = null;
+    if (priorTextMessageCache.sceneId === sceneId && priorTextMessageCache.messages) {
+        messages = priorTextMessageCache.messages;
+    } else {
+        messages = await fetchSceneMessages(sourceScene);
+        priorTextMessageCache = { sceneId, messages };
+    }
+
+    // The select may have changed again while we awaited — bail if stale.
+    if (select.value !== sceneId) {
+        return;
+    }
+
+    if (!messages) {
+        container.innerHTML = '<div class="remodel-priortext-speakers-loading">Could not load this scene.</div>';
+        return;
+    }
+
+    const speakers = collectSceneSpeakers(messages);
+    if (speakers.length === 0) {
+        container.hidden = true;
+        container.innerHTML = '';
+        return;
+    }
+
+    container.innerHTML = `
+        <div class="remodel-priortext-speakers-label">Include speakers</div>
+        <div class="remodel-priortext-speakers-list">
+            ${speakers.map((s) => `
+                <label class="remodel-priortext-speaker">
+                    <input type="checkbox" data-remodel-priortext-speaker="${escapeAttribute(s.key)}" checked>
+                    ${escapeHtml(s.label)}
+                </label>
+            `).join('')}
+        </div>
+    `;
+}
+
+// Reads the checked speaker keys from the panel. Returns null when the
+// speaker UI isn't shown (story scene loaded the legacy way, or nothing
+// picked yet) so extraction falls back to the narrative-only default.
+function getSelectedPriorTextSpeakers() {
+    const boxes = [...document.querySelectorAll('[data-remodel-priortext-speaker]')];
+    if (boxes.length === 0) {
+        return null;
+    }
+    return boxes.filter((b) => b.checked).map((b) => b.getAttribute('data-remodel-priortext-speaker'));
 }
 
 function getActiveTimelineForPriorText() {
@@ -1702,53 +1856,73 @@ function ensurePriorTextPanel() {
         // No inline toggle header anymore — the panelgroup's floating
         // fa-book-open icon (ensurePanelGroupContainer) is now the click
         // target, same as Scene Summary above.
-        panel.innerHTML = `
-            <div class="remodel-priortext-body">
-                <label class="remodel-priortext-label">Source Scene</label>
-                <select class="remodel-priortext-select" data-remodel-priortext-select></select>
-
-                <div class="remodel-priortext-wordrow">
-                    <label class="remodel-priortext-checkbox-label">
-                        <input type="checkbox" data-remodel-priortext-fulltext>
-                        Full text
-                    </label>
-                    <label class="remodel-priortext-label">Last
-                        <input type="number" class="remodel-priortext-wordcount" data-remodel-priortext-wordcount value="500" min="1">
-                        words
-                    </label>
-                </div>
-
-                <button type="button" class="remodel-priortext-loadpreview" data-remodel-priortext-loadpreview>
-                    Load Preview
-                </button>
-                <span class="remodel-priortext-status" data-remodel-priortext-status></span>
-
-                <textarea class="remodel-priortext-preview" data-remodel-priortext-preview readonly placeholder="Preview will appear here."></textarea>
-                <span class="remodel-priortext-wordcount-display" data-remodel-priortext-wordcount-display></span>
-
-                <div class="remodel-priortext-saverow">
-                    <input type="text" class="remodel-priortext-slotname" data-remodel-priortext-slotname placeholder="Slot name, e.g. chapter1recap">
-                    <button type="button" class="remodel-priortext-save" data-remodel-priortext-save>Save Slot</button>
-                </div>
-
-                <div class="remodel-priortext-slotlist" data-remodel-priortext-slotlist></div>
-            </div>
-        `;
+        panel.innerHTML = buildPriorTextBodyMarkup();
         ensurePanelBodyContainer()?.append(panel);
     }
 
     refreshPriorTextPanel();
 }
 
-function refreshPriorTextPanel() {
-    const panel = document.getElementById('remodel-priortext-panel');
+// Shared inner markup for the Prior Text panel body — used by both the Story
+// rail panel (#remodel-priortext-panel) and the roleplay rail panel, so the
+// data-* hooks and handlers are identical for both. The single instance is
+// relocated between workspaces (see ensureRoleplayPriorTextPanel), so these
+// data-attributes/ids live in the DOM exactly once at a time.
+function buildPriorTextBodyMarkup() {
+    return `
+        <div class="remodel-priortext-body">
+            <label class="remodel-priortext-label">Source Scene</label>
+            <select class="remodel-priortext-select" data-remodel-priortext-select></select>
 
-    if (!panel) {
+            <div class="remodel-priortext-speakers" data-remodel-priortext-speakers hidden></div>
+
+            <div class="remodel-priortext-wordrow">
+                <label class="remodel-priortext-checkbox-label">
+                    <input type="checkbox" data-remodel-priortext-fulltext>
+                    Full text
+                </label>
+                <label class="remodel-priortext-label">Last
+                    <input type="number" class="remodel-priortext-wordcount" data-remodel-priortext-wordcount value="500" min="1">
+                    words
+                </label>
+            </div>
+
+            <button type="button" class="remodel-priortext-loadpreview" data-remodel-priortext-loadpreview>
+                Load Preview
+            </button>
+            <span class="remodel-priortext-status" data-remodel-priortext-status></span>
+
+            <textarea class="remodel-priortext-preview" data-remodel-priortext-preview readonly placeholder="Preview will appear here."></textarea>
+            <span class="remodel-priortext-wordcount-display" data-remodel-priortext-wordcount-display></span>
+
+            <div class="remodel-priortext-saverow">
+                <input type="text" class="remodel-priortext-slotname" data-remodel-priortext-slotname placeholder="Slot name, e.g. chapter1recap">
+                <button type="button" class="remodel-priortext-save" data-remodel-priortext-save>Save Slot</button>
+            </div>
+
+            <div class="remodel-priortext-slotlist" data-remodel-priortext-slotlist></div>
+        </div>
+    `;
+}
+
+function refreshPriorTextPanel() {
+    // Work off the shared body element (it may be relocated into the roleplay
+    // rail), not the story panel host specifically.
+    const body = getPriorTextPanelEl();
+
+    if (!body) {
         return;
     }
 
     const scene = getActiveScene();
-    panel.style.display = scene ? '' : 'none';
+
+    // Only the STORY host controls its own display via this style toggle; when
+    // the body is relocated into the roleplay rail, its visibility is driven
+    // by the roleplay panel's -open class instead, so don't fight that here.
+    const storyHost = document.getElementById('remodel-priortext-panel');
+    if (storyHost && storyHost.contains(body)) {
+        storyHost.style.display = scene ? '' : 'none';
+    }
 
     if (!scene) {
         return;
@@ -1756,7 +1930,7 @@ function refreshPriorTextPanel() {
 
     const store = getTimelineStore();
     const timeline = store.timelines[scene.timelineId];
-    const select = panel.querySelector('[data-remodel-priortext-select]');
+    const select = body.querySelector('[data-remodel-priortext-select]');
 
     if (select && timeline) {
         const previousValue = select.value;
@@ -1776,7 +1950,11 @@ function refreshPriorTextPanel() {
                     continue;
                 }
 
-                const usable = rowScene.mode === 'story' && Boolean(rowScene.linkedChat);
+                // Any bound scene — story OR roleplay — is a valid prior-text
+                // source now; the pipeline (fetchSceneMessages, extraction,
+                // slot macro) is mode-agnostic. "(unavailable)" now means only
+                // "no chat bound to this scene yet."
+                const usable = Boolean(rowScene.linkedChat);
                 options.push(`
                     <option value="${escapeAttribute(sceneId)}" ${usable ? '' : 'disabled'}>
                         ${escapeHtml(arc.title)} — ${escapeHtml(rowScene.title)}${usable ? '' : ' (unavailable)'}
@@ -1796,8 +1974,7 @@ function refreshPriorTextPanel() {
 }
 
 function refreshPriorTextSlotList(timeline) {
-    const panel = document.getElementById('remodel-priortext-panel');
-    const listEl = panel?.querySelector('[data-remodel-priortext-slotlist]');
+    const listEl = getPriorTextPanelEl()?.querySelector('[data-remodel-priortext-slotlist]');
 
     if (!listEl) {
         return;
@@ -1822,7 +1999,7 @@ function refreshPriorTextSlotList(timeline) {
 }
 
 async function handlePriorTextLoadPreview() {
-    const panel = document.getElementById('remodel-priortext-panel');
+    const panel = getPriorTextPanelEl();
     const select = panel?.querySelector('[data-remodel-priortext-select]');
     const fullTextCheckbox = panel?.querySelector('[data-remodel-priortext-fulltext]');
     const wordCountInput = panel?.querySelector('[data-remodel-priortext-wordcount]');
@@ -1846,7 +2023,14 @@ async function handlePriorTextLoadPreview() {
     }
 
     try {
-        const messages = await fetchSceneMessages(sourceScene);
+        // Reuse the messages the speaker-list already fetched for this scene.
+        let messages = null;
+        if (priorTextMessageCache.sceneId === sourceScene.id && priorTextMessageCache.messages) {
+            messages = priorTextMessageCache.messages;
+        } else {
+            messages = await fetchSceneMessages(sourceScene);
+            priorTextMessageCache = { sceneId: sourceScene.id, messages };
+        }
 
         if (!messages) {
             if (statusEl) {
@@ -1857,13 +2041,28 @@ async function handlePriorTextLoadPreview() {
 
         const useFullText = Boolean(fullTextCheckbox?.checked);
         const wordLimit = useFullText ? null : Math.max(1, Number(wordCountInput?.value) || 500);
-        const proseText = extractSceneProse(messages, { wordLimit });
+
+        const labelSpeakers = sourceScene.mode === 'roleplay';
+
+        // Speaker filter. If the checkboxes haven't been rendered yet (user
+        // hit Preview before the list populated), fall back to "all speakers
+        // in this scene" for a roleplay source so it's still filtered/labeled,
+        // and kick off population so the boxes appear for next time. A story
+        // source with no boxes uses the legacy narrative-only path (null).
+        let includeSpeakers = getSelectedPriorTextSpeakers();
+        if (includeSpeakers === null && labelSpeakers) {
+            includeSpeakers = collectSceneSpeakers(messages).map((s) => s.key);
+            populatePriorTextSpeakers();
+        }
+        const proseText = extractSceneProse(messages, { wordLimit, includeSpeakers, labelSpeakers });
 
         preview.value = proseText;
         preview.dataset.remodelPriortextSourceSceneId = sourceScene.id;
         preview.dataset.remodelPriortextSourceSceneTitle = sourceScene.title;
         preview.dataset.remodelPriortextWordMode = useFullText ? 'full' : 'last';
         preview.dataset.remodelPriortextWordCount = wordLimit ?? '';
+        preview.dataset.remodelPriortextSpeakers = includeSpeakers ? JSON.stringify(includeSpeakers) : '';
+        preview.dataset.remodelPriortextLabelSpeakers = labelSpeakers ? '1' : '';
 
         if (wordCountDisplay) {
             wordCountDisplay.textContent = `${proseText.split(/\s+/).filter(Boolean).length} words`;
@@ -1888,7 +2087,7 @@ async function handlePriorTextLoadPreview() {
 }
 
 function handlePriorTextSaveSlot() {
-    const panel = document.getElementById('remodel-priortext-panel');
+    const panel = getPriorTextPanelEl();
     const preview = panel?.querySelector('[data-remodel-priortext-preview]');
     const slotNameInput = panel?.querySelector('[data-remodel-priortext-slotname]');
     const statusEl = panel?.querySelector('[data-remodel-priortext-status]');
@@ -1909,12 +2108,24 @@ function handlePriorTextSaveSlot() {
         return;
     }
 
+    let includeSpeakers = null;
+    if (preview.dataset.remodelPriortextSpeakers) {
+        try {
+            includeSpeakers = JSON.parse(preview.dataset.remodelPriortextSpeakers);
+        } catch {
+            includeSpeakers = null;
+        }
+    }
+
     setInsertedTextSlot(timeline.id, slotName, {
         text: preview.value,
         sourceSceneId: preview.dataset.remodelPriortextSourceSceneId || null,
         sourceSceneTitle: preview.dataset.remodelPriortextSourceSceneTitle || '',
         wordMode: preview.dataset.remodelPriortextWordMode || 'full',
         wordCount: preview.dataset.remodelPriortextWordCount ? Number(preview.dataset.remodelPriortextWordCount) : null,
+        // Absent on legacy story slots (= all narrative prose, no labels).
+        includeSpeakers,
+        labelSpeakers: preview.dataset.remodelPriortextLabelSpeakers === '1',
     });
 
     registerInsertedTextSlotMacros(getTimelineStore().timelines[timeline.id]);
@@ -1952,7 +2163,11 @@ async function handlePriorTextSlotReload(slotName) {
     }
 
     const wordLimit = slot.wordMode === 'full' ? null : slot.wordCount;
-    const proseText = extractSceneProse(messages, { wordLimit });
+    const proseText = extractSceneProse(messages, {
+        wordLimit,
+        includeSpeakers: slot.includeSpeakers ?? null,
+        labelSpeakers: Boolean(slot.labelSpeakers),
+    });
 
     setInsertedTextSlot(timeline.id, slotName, {
         text: proseText,
@@ -1960,6 +2175,8 @@ async function handlePriorTextSlotReload(slotName) {
         sourceSceneTitle: sourceScene.title,
         wordMode: slot.wordMode,
         wordCount: slot.wordCount,
+        includeSpeakers: slot.includeSpeakers ?? null,
+        labelSpeakers: Boolean(slot.labelSpeakers),
     });
 
     registerInsertedTextSlotMacros(getTimelineStore().timelines[timeline.id]);
@@ -1987,17 +2204,25 @@ function togglePriorTextPanel() {
 
 function bindPriorTextPanelEvents() {
     document.addEventListener('change', (event) => {
-        const fullTextCheckbox = event.target instanceof Element ? event.target.closest('[data-remodel-priortext-fulltext]') : null;
-
-        if (!fullTextCheckbox) {
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target) {
             return;
         }
 
-        const panel = fullTextCheckbox.closest('.remodel-priortext-panel');
-        const wordCountInput = panel?.querySelector('[data-remodel-priortext-wordcount]');
+        // Full-text checkbox disables the word-count input.
+        const fullTextCheckbox = target.closest('[data-remodel-priortext-fulltext]');
+        if (fullTextCheckbox) {
+            const wordCountInput = getPriorTextPanelEl()?.querySelector('[data-remodel-priortext-wordcount]');
+            if (wordCountInput) {
+                wordCountInput.disabled = fullTextCheckbox.checked;
+            }
+            return;
+        }
 
-        if (wordCountInput) {
-            wordCountInput.disabled = fullTextCheckbox.checked;
+        // Source-scene selection change repopulates the speaker checkboxes.
+        const select = target.closest('[data-remodel-priortext-select]');
+        if (select) {
+            populatePriorTextSpeakers();
         }
     });
 }
@@ -4405,6 +4630,9 @@ function syncStoryWorkspaceClass(scene) {
         relocateRoleplayNativeButtons();
     } else {
         restoreRoleplayNativeButtons();
+        // Return the shared Prior Text body to the story rail so its panel
+        // works again outside roleplay.
+        restoreRoleplayPriorTextPanel();
     }
 }
 
@@ -5949,6 +6177,86 @@ function ensureRoleplayPanels() {
     ensureRoleplayPanelGroup();
     ensureRoleplayRulesPanel();
     ensureRoleplayDicePanel();
+    ensureRoleplayPriorTextPanel();
+}
+
+// Prior Text in roleplay reuses the ONE story Prior Text panel rather than a
+// second instance (which would duplicate every data-* hook). A roleplay
+// wrapper panel (.remodel-rp-panel, slide-in from the right like Rules/Dice)
+// hosts the shared body; the story panel's own inner markup is relocated in
+// and out of it via getOriginalPanelHomes(), the same origin-tracking used
+// for the hamburger/wand relocation — so exactly one prior-text body lives in
+// the DOM at a time, and refreshPriorTextPanel()/handlers stay unchanged.
+function ensureRoleplayPriorTextPanel() {
+    if (!isRealRoleplayWorkspaceActive()) {
+        return;
+    }
+    let panel = document.getElementById('remodel-rp-priortext-panel');
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'remodel-rp-priortext-panel';
+        panel.className = 'remodel-rp-panel remodel-rp-priortext-panel';
+        panel.innerHTML = `
+            <div class="remodel-rp-panel-head">
+                <span class="remodel-rp-panel-title"><i class="fa-solid fa-book-open" aria-hidden="true"></i> Prior Scene Text</span>
+                <button type="button" class="remodel-rp-panel-close" data-remodel-rp-panel-close="priortext" title="Close" aria-label="Close">×</button>
+            </div>
+            <div class="remodel-rp-panel-body" data-remodel-rp-priortext-outlet></div>
+        `;
+        getRealSheld()?.appendChild(panel);
+    }
+
+    // Relocate the shared prior-text body into this panel's outlet. The body
+    // lives inside #remodel-priortext-panel (story) by default; move its inner
+    // .remodel-priortext-body element here while roleplay is active.
+    const outlet = panel.querySelector('[data-remodel-rp-priortext-outlet]');
+    let body = document.querySelector('.remodel-priortext-body');
+    if (!body) {
+        // Story panel hasn't been built this session — build a bare host for
+        // the shared markup so roleplay has something to relocate.
+        ensurePriorTextHostForRoleplay();
+        body = document.querySelector('.remodel-priortext-body');
+    }
+    if (outlet && body && body.parentElement !== outlet) {
+        if (!getOriginalPanelHomes().has(body)) {
+            getOriginalPanelHomes().set(body, { parent: body.parentElement, nextSibling: body.nextSibling });
+        }
+        outlet.appendChild(body);
+    }
+
+    refreshPriorTextPanel();
+}
+
+// Builds the story-side #remodel-priortext-panel host (hidden) purely so its
+// shared .remodel-priortext-body exists to be relocated, in the case the user
+// lands directly in a roleplay scene without ever entering a story one this
+// session (ensurePriorTextPanel is gated on the story workspace being active).
+function ensurePriorTextHostForRoleplay() {
+    if (document.getElementById('remodel-priortext-panel')) {
+        return;
+    }
+    const panel = document.createElement('div');
+    panel.id = 'remodel-priortext-panel';
+    panel.className = 'remodel-priortext-panel';
+    panel.innerHTML = buildPriorTextBodyMarkup();
+    // Park it off-screen in the real sheld; the body gets relocated out of it.
+    getRealSheld()?.appendChild(panel);
+}
+
+// Restores the shared prior-text body to the story panel when leaving
+// roleplay, so the story rail's Prior Text works again. Mirror of the
+// hamburger/wand restore.
+function restoreRoleplayPriorTextPanel() {
+    const body = document.querySelector('.remodel-priortext-body');
+    if (!body) {
+        return;
+    }
+    const home = getOriginalPanelHomes().get(body);
+    if (!home) {
+        return;
+    }
+    home.parent?.insertBefore(body, home.nextSibling);
+    getOriginalPanelHomes().delete(body);
 }
 
 function ensureRoleplayPanelGroup() {
@@ -5967,6 +6275,9 @@ function ensureRoleplayPanelGroup() {
         </button>
         <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="dice" title="Dice" aria-label="Dice">
             <i class="fa-solid fa-dice-d20" aria-hidden="true"></i>
+        </button>
+        <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="priortext" title="Prior Scene Text" aria-label="Prior Scene Text">
+            <i class="fa-solid fa-book-open" aria-hidden="true"></i>
         </button>
         <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-action="add-cast" title="Cast & Group Controls" aria-label="Cast & Group Controls">
             <i class="fa-solid fa-users" aria-hidden="true"></i>
@@ -6239,8 +6550,14 @@ function setRoleplayDiceAdvantage(mode) {
     });
 }
 
+const ROLEPLAY_PANEL_IDS = {
+    rules: 'remodel-rp-rules-panel',
+    dice: 'remodel-rp-dice-panel',
+    priortext: 'remodel-rp-priortext-panel',
+};
+
 function toggleRoleplayPanel(which) {
-    const id = which === 'rules' ? 'remodel-rp-rules-panel' : which === 'dice' ? 'remodel-rp-dice-panel' : null;
+    const id = ROLEPLAY_PANEL_IDS[which];
     if (!id) {
         return;
     }
@@ -6254,12 +6571,19 @@ function toggleRoleplayPanel(which) {
         .forEach((p) => p.classList.remove('remodel-rp-panel-open'));
     if (willOpen) {
         panel.classList.add('remodel-rp-panel-open');
+        // The prior-text body is relocated in lazily; make sure it's present
+        // and its dropdown is fresh when the panel opens.
+        if (which === 'priortext') {
+            ensureRoleplayPriorTextPanel();
+        }
     }
 }
 
 function closeRoleplayPanel(which) {
-    const id = which === 'rules' ? 'remodel-rp-rules-panel' : which === 'dice' ? 'remodel-rp-dice-panel' : null;
-    document.getElementById(id)?.classList.remove('remodel-rp-panel-open');
+    const id = ROLEPLAY_PANEL_IDS[which];
+    if (id) {
+        document.getElementById(id)?.classList.remove('remodel-rp-panel-open');
+    }
 }
 
 // Rebuilds the left cast column from the current chat's participants —

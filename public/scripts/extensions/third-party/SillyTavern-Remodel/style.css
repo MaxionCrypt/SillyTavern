@@ -1211,7 +1211,8 @@ body.remodel-story-workspace-active.remodel-story-input-open #send_form.remodel-
 #remodel-manuscript-overlay,
 #remodel-rp-panelgroup,
 #remodel-rp-rules-panel,
-#remodel-rp-dice-panel {
+#remodel-rp-dice-panel,
+#remodel-rp-priortext-panel {
   display: none !important;
 }
 
@@ -1393,11 +1394,11 @@ body.remodel-story-workspace-active .remodel-scene-summary-status {
    (see registerInsertedTextSlotMacros in timeline-spine.js) — fetching is a
    real, user-triggered action here (Load Preview), not automatic. */
 
-body.remodel-story-workspace-active #remodel-priortext-panel {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) #remodel-priortext-panel {
   display: none !important;
 }
 
-body.remodel-story-workspace-active #remodel-priortext-panel.remodel-priortext-open {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) #remodel-priortext-panel.remodel-priortext-open {
   display: block !important;
   flex: 0 0 auto !important;
   padding: 10px 16px !important;
@@ -1407,7 +1408,7 @@ body.remodel-story-workspace-active #remodel-priortext-panel.remodel-priortext-o
   box-sizing: border-box !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-toggle {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-toggle {
   display: flex !important;
   align-items: center !important;
   justify-content: space-between !important;
@@ -1425,30 +1426,30 @@ body.remodel-story-workspace-active .remodel-priortext-toggle {
   gap: 8px !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-toggle:hover {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-toggle:hover {
   color: var(--tarot-gold-bright) !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-chevron {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-chevron {
   transition: transform 0.16s ease !important;
 }
 
-body.remodel-story-workspace-active #remodel-priortext-panel.remodel-priortext-open .remodel-priortext-chevron {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) #remodel-priortext-panel.remodel-priortext-open .remodel-priortext-chevron {
   transform: rotate(180deg) !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-body {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-body {
   display: none !important;
   margin-top: 10px !important;
   flex-direction: column !important;
   gap: 8px !important;
 }
 
-body.remodel-story-workspace-active #remodel-priortext-panel.remodel-priortext-open .remodel-priortext-body {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) #remodel-priortext-panel.remodel-priortext-open .remodel-priortext-body {
   display: flex !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-label {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-label {
   color: rgba(245, 240, 225, 0.7) !important;
   font-family: var(--remodel-serif) !important;
   font-size: 10px !important;
@@ -1459,8 +1460,8 @@ body.remodel-story-workspace-active .remodel-priortext-label {
   gap: 6px !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-select,
-body.remodel-story-workspace-active .remodel-priortext-slotname {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-select,
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-slotname {
   width: 100% !important;
   box-sizing: border-box !important;
   background: rgba(0, 0, 0, 0.24) !important;
@@ -1472,13 +1473,13 @@ body.remodel-story-workspace-active .remodel-priortext-slotname {
   font-size: 12px !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-wordrow {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-wordrow {
   display: flex !important;
   align-items: center !important;
   gap: 16px !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-checkbox-label {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-checkbox-label {
   display: flex !important;
   align-items: center !important;
   gap: 6px !important;
@@ -1489,7 +1490,7 @@ body.remodel-story-workspace-active .remodel-priortext-checkbox-label {
   letter-spacing: 0.06em !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-wordcount {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-wordcount {
   width: 70px !important;
   box-sizing: border-box !important;
   background: rgba(0, 0, 0, 0.24) !important;
@@ -1501,8 +1502,45 @@ body.remodel-story-workspace-active .remodel-priortext-wordcount {
   font-size: 12px !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-loadpreview,
-body.remodel-story-workspace-active .remodel-priortext-save {
+/* Per-speaker include/exclude checkboxes (appear after a source scene is
+   picked; a roleplay source lists one per cast member + You + narrator). */
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-speakers {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 5px !important;
+  padding: 8px 10px !important;
+  background: rgba(0, 0, 0, 0.18) !important;
+  border: 1px solid rgba(198, 164, 74, 0.14) !important;
+  border-radius: 8px !important;
+}
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-speakers-label,
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-speakers-loading {
+  color: rgba(245, 240, 225, 0.55) !important;
+  font-family: var(--remodel-serif) !important;
+  font-size: 9.5px !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+}
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-speakers-list {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 3px !important;
+}
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-speaker {
+  display: flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  color: rgba(245, 240, 225, 0.9) !important;
+  font-family: var(--remodel-manuscript-font) !important;
+  font-size: 12.5px !important;
+  cursor: pointer !important;
+}
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-speaker input {
+  accent-color: var(--tarot-gold) !important;
+}
+
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-loadpreview,
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-save {
   appearance: none !important;
   align-self: flex-start !important;
   background: transparent !important;
@@ -1518,20 +1556,20 @@ body.remodel-story-workspace-active .remodel-priortext-save {
   transition: color 0.16s ease, border-color 0.16s ease !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-loadpreview:hover,
-body.remodel-story-workspace-active .remodel-priortext-save:hover {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-loadpreview:hover,
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-save:hover {
   color: var(--tarot-gold-bright) !important;
   border-color: var(--tarot-gold-bright) !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-status {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-status {
   color: rgba(245, 240, 225, 0.5) !important;
   font-family: var(--remodel-serif) !important;
   font-size: 10px !important;
   letter-spacing: 0.06em !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-preview {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-preview {
   width: 100% !important;
   min-height: 100px !important;
   box-sizing: border-box !important;
@@ -1546,24 +1584,24 @@ body.remodel-story-workspace-active .remodel-priortext-preview {
   line-height: 1.5 !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-wordcount-display {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-wordcount-display {
   color: rgba(245, 240, 225, 0.4) !important;
   font-family: var(--remodel-serif) !important;
   font-size: 10px !important;
   align-self: flex-end !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-saverow {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-saverow {
   display: flex !important;
   gap: 8px !important;
   align-items: center !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-saverow .remodel-priortext-slotname {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-saverow .remodel-priortext-slotname {
   flex: 1 1 auto !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-slotlist {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-slotlist {
   display: flex !important;
   flex-direction: column !important;
   gap: 4px !important;
@@ -1572,14 +1610,14 @@ body.remodel-story-workspace-active .remodel-priortext-slotlist {
   padding-top: 8px !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-slotlist-empty {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-slotlist-empty {
   color: rgba(245, 240, 225, 0.4) !important;
   font-family: var(--remodel-serif) !important;
   font-size: 11px !important;
   font-style: italic !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-slot-item {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-slot-item {
   display: flex !important;
   align-items: center !important;
   gap: 8px !important;
@@ -1587,12 +1625,12 @@ body.remodel-story-workspace-active .remodel-priortext-slot-item {
   font-size: 11px !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-slot-name {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-slot-name {
   color: var(--tarot-gold) !important;
   flex: 0 0 auto !important;
 }
 
-body.remodel-story-workspace-active .remodel-priortext-slot-meta {
+body:is(.remodel-story-workspace-active, .remodel-roleplay-workspace-active) .remodel-priortext-slot-meta {
   color: rgba(245, 240, 225, 0.5) !important;
   flex: 1 1 auto !important;
   overflow: hidden !important;
@@ -2811,7 +2849,8 @@ body.remodel-roleplay-workspace-active .remodel-rp-native-slot:hover > * {
 
 /* The panels: fixed to the right edge, slid off-screen until -open. */
 body.remodel-roleplay-workspace-active #remodel-rp-rules-panel,
-body.remodel-roleplay-workspace-active #remodel-rp-dice-panel {
+body.remodel-roleplay-workspace-active #remodel-rp-dice-panel,
+body.remodel-roleplay-workspace-active #remodel-rp-priortext-panel {
   display: flex !important;
   flex-direction: column !important;
   position: fixed !important;
@@ -2830,9 +2869,21 @@ body.remodel-roleplay-workspace-active #remodel-rp-dice-panel {
 }
 
 body.remodel-roleplay-workspace-active #remodel-rp-rules-panel.remodel-rp-panel-open,
-body.remodel-roleplay-workspace-active #remodel-rp-dice-panel.remodel-rp-panel-open {
+body.remodel-roleplay-workspace-active #remodel-rp-dice-panel.remodel-rp-panel-open,
+body.remodel-roleplay-workspace-active #remodel-rp-priortext-panel.remodel-rp-panel-open {
   transform: translateX(0) !important;
   pointer-events: auto !important;
+}
+
+/* The relocated Prior Text body inside the roleplay panel: force it visible
+   (the story rail's display toggle keys on .remodel-priortext-open, which
+   isn't set here) and let it scroll within the panel body. */
+body.remodel-roleplay-workspace-active #remodel-rp-priortext-panel .remodel-priortext-body {
+  display: flex !important;
+  margin-top: 0 !important;
+}
+body.remodel-roleplay-workspace-active #remodel-rp-priortext-panel .remodel-rp-panel-body {
+  overflow-y: auto !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-panel-head {
