@@ -3035,6 +3035,34 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-remove:hover {
   border-color: var(--nord-aurora-red, #bf616a) !important;
 }
 
+/* --- Cast reorder (drag and drop) --- */
+body.remodel-roleplay-workspace-active .remodel-rp-cast-draggable {
+  cursor: grab !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-cast-draggable:active {
+  cursor: grabbing !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-dragging {
+  opacity: 0.4 !important;
+}
+/* Insertion hint: a gold bar above the chip the moved member would land
+   before. */
+body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-drop-before {
+  position: relative !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-drop-before::before {
+  content: '' !important;
+  position: absolute !important;
+  top: -7px !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  width: 42px !important;
+  height: 3px !important;
+  border-radius: 2px !important;
+  background: var(--tarot-gold-bright, #f4e7c4) !important;
+  box-shadow: 0 0 8px rgba(198, 164, 74, 0.6) !important;
+}
+
 /* --- Cast picker modal (scene creation + add-to-cast) --- */
 /* Scoped by its own id, not the workspace class — it appears during scene
    creation, which can be before the roleplay workspace class is set. */

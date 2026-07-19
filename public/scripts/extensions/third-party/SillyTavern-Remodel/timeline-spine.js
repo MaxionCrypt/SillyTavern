@@ -142,6 +142,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindRoleplayComposerEvents();
     bindRoleplayGenerationFeedback();
     bindRoleplayCastPickerEvents();
+    bindRoleplayCastDragEvents();
     bindStoryAutoContinueEvents();
     bindStoryGenerationStateEvents();
     ensureStoryComposerExtras();
@@ -3999,6 +4000,40 @@ async function removeCharacterFromRoleplayScene(avatar) {
     return true;
 }
 
+// Moves a cast member (by avatar) so it sits immediately before the member
+// currently at targetAvatar (or to the end when targetAvatar is null).
+// Reorders the group's members array in place and persists — this is the
+// group's turn/activation order, so the change is meaningful, not cosmetic.
+async function reorderRoleplayCast(movedAvatar, targetAvatar) {
+    const context = getContext();
+    if (!context.groupId || !movedAvatar || movedAvatar === targetAvatar) {
+        return false;
+    }
+    const group = findRoleplayGroup(context.groupId);
+    if (!group || !Array.isArray(group.members) || !group.members.includes(movedAvatar)) {
+        return false;
+    }
+
+    const next = group.members.filter((m) => m !== movedAvatar);
+    if (targetAvatar && next.includes(targetAvatar)) {
+        next.splice(next.indexOf(targetAvatar), 0, movedAvatar);
+    } else {
+        next.push(movedAvatar); // dropped past the end
+    }
+
+    // No-op if order is unchanged (dropped onto its own position).
+    if (next.length === group.members.length && next.every((m, i) => m === group.members[i])) {
+        return false;
+    }
+
+    group.members = next;
+    await saveRoleplayGroup(group);
+    // Members array is the source of truth for cast order; a chat reload
+    // isn't needed (no chat content changed), just re-render the column.
+    renderRoleplayScene();
+    return true;
+}
+
 // --- Roleplay cast picker (modal overlay) --------------------------------
 //
 // A tarot-styled character picker used both for scene creation (multi-select
@@ -5848,9 +5883,12 @@ function renderRoleplayCast(root) {
     const context = getContext();
     const members = roleplaySceneMembers(context);
     const speakingName = roleplayCurrentSpeakerName(context);
-    // Remove is only meaningful in a group, and only while more than one
-    // member remains (a scene needs at least one character).
-    const canRemove = Boolean(context.groupId) && members.length > 1;
+    // Remove + reorder are only meaningful in a group with more than one
+    // member (a scene needs at least one character; order matters for the
+    // group's turn/activation ordering).
+    const isMultiMemberGroup = Boolean(context.groupId) && members.length > 1;
+    const canRemove = isMultiMemberGroup;
+    const canReorder = isMultiMemberGroup;
 
     members.forEach((member) => {
         const avatar = roleplayCharacterAvatar({ characterId: member.characterId, name: member.name });
@@ -5860,9 +5898,13 @@ function renderRoleplayCast(root) {
         if (avatar) {
             chip.dataset.remodelRpAvatar = avatar;
         }
-        chip.title = member.name;
+        chip.title = canReorder ? `${member.name} — drag to reorder` : member.name;
         if (member.name === speakingName) {
             chip.classList.add('remodel-rp-speaking');
+        }
+        if (canReorder && avatar) {
+            chip.draggable = true;
+            chip.classList.add('remodel-rp-cast-draggable');
         }
 
         const av = buildRoleplayAvatar(member.name, { className: 'remodel-rp-cast-avatar' });
@@ -5900,6 +5942,82 @@ function renderRoleplayCast(root) {
     add.dataset.remodelRpAction = 'add-cast';
     add.textContent = '+';
     cast.appendChild(add);
+}
+
+// Native HTML5 drag-and-drop for reordering cast members. Delegated at
+// document level (the cast column is rebuilt on every render, so per-chip
+// listeners would be lost) and gated on a real roleplay scene. dragstart
+// stamps the moved avatar onto the dataTransfer; dragover shows an insertion
+// hint before the chip under the pointer; drop commits via
+// reorderRoleplayCast.
+let roleplayDragAvatar = null;
+function bindRoleplayCastDragEvents() {
+    document.addEventListener('dragstart', (event) => {
+        if (!isRealRoleplayWorkspaceActive()) {
+            return;
+        }
+        const chip = event.target instanceof Element ? event.target.closest('.remodel-rp-cast-draggable') : null;
+        if (!chip) {
+            return;
+        }
+        roleplayDragAvatar = chip.dataset.remodelRpAvatar || null;
+        chip.classList.add('remodel-rp-cast-dragging');
+        if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = 'move';
+            // Some engines require data to be set for a drag to actually start.
+            try { event.dataTransfer.setData('text/plain', roleplayDragAvatar || ''); } catch { /* ignore */ }
+        }
+    });
+
+    document.addEventListener('dragover', (event) => {
+        if (!isRealRoleplayWorkspaceActive() || !roleplayDragAvatar) {
+            return;
+        }
+        const cast = event.target instanceof Element ? event.target.closest('[data-remodel-rp-cast]') : null;
+        if (!cast) {
+            return;
+        }
+        event.preventDefault(); // allow drop
+        if (event.dataTransfer) {
+            event.dataTransfer.dropEffect = 'move';
+        }
+        clearRoleplayDropHints(cast);
+        const overChip = event.target instanceof Element ? event.target.closest('.remodel-rp-cast-draggable') : null;
+        if (overChip && overChip.dataset.remodelRpAvatar !== roleplayDragAvatar) {
+            overChip.classList.add('remodel-rp-cast-drop-before');
+        }
+    });
+
+    document.addEventListener('drop', (event) => {
+        if (!isRealRoleplayWorkspaceActive() || !roleplayDragAvatar) {
+            return;
+        }
+        const cast = event.target instanceof Element ? event.target.closest('[data-remodel-rp-cast]') : null;
+        if (!cast) {
+            return;
+        }
+        event.preventDefault();
+        const overChip = event.target instanceof Element ? event.target.closest('.remodel-rp-cast-draggable') : null;
+        const targetAvatar = overChip ? (overChip.dataset.remodelRpAvatar || null) : null;
+        const moved = roleplayDragAvatar;
+        clearRoleplayDropHints(cast);
+        reorderRoleplayCast(moved, targetAvatar);
+    });
+
+    document.addEventListener('dragend', () => {
+        roleplayDragAvatar = null;
+        getRealRoleplayRoot()?.querySelectorAll('.remodel-rp-cast-dragging')
+            .forEach((el) => el.classList.remove('remodel-rp-cast-dragging'));
+        const cast = getRealRoleplayRoot()?.querySelector('[data-remodel-rp-cast]');
+        if (cast) {
+            clearRoleplayDropHints(cast);
+        }
+    });
+}
+
+function clearRoleplayDropHints(cast) {
+    cast.querySelectorAll('.remodel-rp-cast-drop-before')
+        .forEach((el) => el.classList.remove('remodel-rp-cast-drop-before'));
 }
 
 // The speaker to highlight in the cast: whoever produced the most recent
