@@ -29,6 +29,11 @@ import {
     updateTimeline,
 } from './timeline-state.js';
 import {
+    createStoryDoc,
+    getStoryDoc,
+    updateStoryDoc,
+} from './story-doc.js';
+import {
     advanceWizardToPersonaStep,
     armGenerationWatchdog,
     armSceneSummarySaveDebounce,
@@ -138,6 +143,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindStoryWorkspaceInvariantWatcher();
     bindStoryManuscriptEditCommit();
     bindStoryManuscriptEditCancel();
+    bindStoryEditorEvents();
     bindStoryLockInterceptor();
     bindStoryComposerContinueOnEmptySend();
     bindRoleplayComposerEvents();
@@ -3866,11 +3872,13 @@ async function openScene(sceneId) {
         return;
     }
 
-    if (!scene.linkedChat && scene.mode === 'story') {
-        // Story Scenes get a guided cast-picking flow instead of silently
-        // auto-binding — character and persona are locked for the Scene's
-        // lifetime, so they need to be chosen deliberately up front.
-        await beginStoryGuidedCreation(sceneId);
+    // Redesigned Story mode: a story scene is a real document, not a chat.
+    // A scene already bound to a StoryDoc — or a NEW story scene (no legacy
+    // linkedChat) — opens straight into the document editor. Existing
+    // chat-bound story scenes (created before the redesign) still fall
+    // through to the legacy manuscript overlay path below, untouched.
+    if (scene.mode === 'story' && (scene.storyDocId || !scene.linkedChat)) {
+        await openStoryDocScene(sceneId);
         return;
     }
 
@@ -4623,8 +4631,21 @@ function syncActiveSceneFromChatMetadata() {
 // other, never both, so exactly one of these classes is ever set.
 function syncStoryWorkspaceClass(scene) {
     const enteringRoleplay = scene?.mode === 'roleplay';
-    document.body.classList.toggle('remodel-story-workspace-active', scene?.mode === 'story');
+    // A story scene is EITHER the redesigned document editor (has a storyDocId)
+    // or the legacy manuscript overlay (chat-bound). They're mutually exclusive
+    // classes so the two story surfaces never render at once.
+    const enteringStoryDoc = scene?.mode === 'story' && Boolean(scene.storyDocId);
+    const enteringLegacyStory = scene?.mode === 'story' && !scene.storyDocId;
+
+    document.body.classList.toggle('remodel-story-workspace-active', enteringLegacyStory);
+    document.body.classList.toggle('remodel-storydoc-active', enteringStoryDoc);
     document.body.classList.toggle('remodel-roleplay-workspace-active', enteringRoleplay);
+
+    if (enteringStoryDoc) {
+        activeStoryDocId = scene.storyDocId;
+        ensureStoryEditor();
+        renderStoryEditor();
+    }
 
     if (enteringRoleplay) {
         relocateRoleplayNativeButtons();
@@ -4717,7 +4738,12 @@ function isRealRoleplayWorkspaceActive() {
 // actually in chat[] right now looks like real messages, not the welcome
 // screen's known placeholder shape).
 function isRealStoryWorkspaceActive() {
-    return getActiveScene()?.mode === 'story';
+    const scene = getActiveScene();
+    // LEGACY story workspace only — a story scene still bound to a chat
+    // (manuscript-as-hidden-chat). A story scene bound to a StoryDoc is the
+    // redesigned document editor (isRealStoryDocSceneActive) and must NOT
+    // also trigger the legacy overlay, or both render at once.
+    return Boolean(scene && scene.mode === 'story' && !scene.storyDocId);
 }
 
 // Detects SillyTavern's own welcome-screen placeholder content specifically
@@ -4895,6 +4921,197 @@ function ensureManuscriptOverlay() {
     overlay.setAttribute('contenteditable', 'true');
     chatEl.after(overlay);
     return overlay;
+}
+
+// =====================================================================
+// STORY DOCUMENT EDITOR (redesigned Story mode)
+// ---------------------------------------------------------------------
+// A real document editor, fully decoupled from the chat DOM: no #chat, no
+// .mes rows, no driving core's hidden buttons. A story scene binds to a
+// StoryDoc (story-doc.js); this renders that document as an editable prose
+// surface and autosaves straight back to the doc. Generation (Continue /
+// Write a beat) goes through generateRaw + a single guarded context seam
+// (assembleStoryContext), NOT the chat pipeline — added in later stages.
+//
+// This is entirely separate from the legacy #remodel-manuscript-overlay
+// (the manuscript-as-hidden-chat illusion), which still serves any
+// pre-redesign story scene still bound to a chat until it's removed.
+// =====================================================================
+
+const STORY_EDITOR_ID = 'remodel-story-editor';
+
+// The document currently open in the editor. Set on open; read by autosave
+// and (later) generation so they write to the right doc without re-deriving
+// it from scene metadata on every keystroke.
+let activeStoryDocId = null;
+
+// Scoped like getRealChatElement/getRealManuscriptOverlay — the Background
+// tab clones the whole page, so a plain getElementById is ambiguous.
+function getRealStoryEditor() {
+    return document.body.querySelector(`:scope > #sheld > #${STORY_EDITOR_ID}`);
+}
+
+// Opens a story scene as a document. New scenes (no doc yet) first pick a
+// character to bind (reusing the guided character step), create a StoryDoc,
+// and bind the scene to it; already-bound scenes just load their doc.
+async function openStoryDocScene(sceneId) {
+    let scene = getScene(sceneId);
+    if (!scene) {
+        return;
+    }
+
+    if (!scene.storyDocId) {
+        // A brand-new story scene needs a character bound (its card feeds the
+        // generation context) — reuse the same character picker roleplay uses
+        // to keep the flow familiar, but on confirm create+bind a StoryDoc
+        // rather than a chat/group.
+        openRoleplayCastPicker({
+            mode: 'create',
+            onConfirm: (avatars) => beginStoryDocScene(sceneId, avatars),
+        });
+        return;
+    }
+
+    setActiveScene(sceneId);
+    activeStoryDocId = scene.storyDocId;
+    writeSceneMetadata(scene);
+    enterStoryDocWorkspace();
+}
+
+// Creates the StoryDoc for a new story scene, binds the scene to it, and
+// opens the editor. Takes the first chosen character as the doc's bound
+// card (story is single-voice, so only the first pick matters here).
+async function beginStoryDocScene(sceneId, avatars) {
+    const scene = getScene(sceneId);
+    if (!scene) {
+        return;
+    }
+    const context = getContext();
+    const firstAvatar = Array.isArray(avatars) ? avatars[0] : null;
+    const chid = firstAvatar
+        ? (context.characters || []).findIndex((c) => c.avatar === firstAvatar)
+        : (context.characterId ?? null);
+
+    const doc = createStoryDoc({ title: scene.title, boundCharacterId: chid >= 0 ? chid : null });
+    updateScene(sceneId, { storyDocId: doc.id, status: 'active' });
+    setActiveScene(sceneId);
+    activeStoryDocId = doc.id;
+    writeSceneMetadata(getScene(sceneId));
+    enterStoryDocWorkspace();
+}
+
+// Paints the storydoc workspace: sets the body class (CSS hides #chat and the
+// native composer, shows the editor), builds + renders the editor. Distinct
+// from the legacy remodel-story-workspace-active so the two never collide.
+function enterStoryDocWorkspace() {
+    document.body.classList.add('remodel-storydoc-active');
+    document.body.classList.remove('remodel-story-workspace-active', 'remodel-roleplay-workspace-active');
+    ensureStoryEditor();
+    renderStoryEditor();
+}
+
+function isRealStoryDocSceneActive() {
+    const scene = getActiveScene();
+    return Boolean(scene && scene.mode === 'story' && scene.storyDocId);
+}
+
+function ensureStoryEditor() {
+    let editor = getRealStoryEditor();
+    if (editor) {
+        return editor;
+    }
+    const chatEl = getRealChatElement();
+    if (!chatEl) {
+        return null;
+    }
+    editor = document.createElement('div');
+    editor.id = STORY_EDITOR_ID;
+    editor.innerHTML = `
+        <div class="remodel-storydoc-page">
+            <div class="remodel-storydoc-prose" data-remodel-storydoc-prose contenteditable="true" spellcheck="true"></div>
+        </div>
+    `;
+    chatEl.after(editor);
+    return editor;
+}
+
+// Renders the active doc's body into the editable prose surface. Only writes
+// the DOM when the value actually differs from what's typed, so a render
+// triggered mid-typing (autosave, etc.) never clobbers the caret.
+function renderStoryEditor() {
+    if (!isRealStoryDocSceneActive()) {
+        return;
+    }
+    const editor = ensureStoryEditor();
+    const prose = editor?.querySelector('[data-remodel-storydoc-prose]');
+    if (!prose) {
+        return;
+    }
+    const doc = getStoryDoc(activeStoryDocId);
+    if (!doc) {
+        return;
+    }
+    // Split the doc body into paragraphs (blank-line separated) rendered as
+    // <p> blocks — a real document look, not one run-on block. Only rebuild
+    // when the editor isn't focused (never fight the user's caret).
+    if (document.activeElement !== prose) {
+        renderProseParagraphs(prose, doc.body || '');
+    }
+    if (prose.dataset.placeholder === undefined) {
+        prose.dataset.placeholder = 'Begin your story…';
+    }
+}
+
+// Renders plain text (paragraphs separated by blank lines) as <p> elements.
+function renderProseParagraphs(prose, text) {
+    prose.textContent = '';
+    const paragraphs = String(text).split(/\n{2,}/);
+    for (const para of paragraphs) {
+        const p = document.createElement('p');
+        p.textContent = para;
+        prose.appendChild(p);
+    }
+    if (paragraphs.length === 0 || (paragraphs.length === 1 && paragraphs[0] === '')) {
+        // Ensure at least one editable paragraph so the caret has a home.
+        prose.innerHTML = '<p><br></p>';
+    }
+}
+
+// Reads the editor's current prose back to plain text (paragraphs joined by
+// blank lines), the inverse of renderProseParagraphs.
+function readStoryEditorText(prose) {
+    const paras = [...prose.querySelectorAll('p')].map((p) => p.textContent ?? '');
+    if (paras.length === 0) {
+        // No <p> structure yet (freshly typed into an empty editor) — take the
+        // raw text.
+        return (prose.textContent ?? '').trim();
+    }
+    return paras.join('\n\n').replace(/\n{3,}/g, '\n\n').trimEnd();
+}
+
+// Autosave: debounced write of the edited prose back to the StoryDoc. No
+// commit-through-core, no #send_but — editing a document just saves the
+// document.
+let storyEditorSaveTimer = null;
+function bindStoryEditorEvents() {
+    document.addEventListener('input', (event) => {
+        if (!isRealStoryDocSceneActive()) {
+            return;
+        }
+        const prose = event.target instanceof Element
+            ? event.target.closest('[data-remodel-storydoc-prose]')
+            : null;
+        if (!prose) {
+            return;
+        }
+        clearTimeout(storyEditorSaveTimer);
+        storyEditorSaveTimer = setTimeout(() => {
+            if (!activeStoryDocId) {
+                return;
+            }
+            updateStoryDoc(activeStoryDocId, { body: readStoryEditorText(prose) });
+        }, 500);
+    });
 }
 
 // =====================================================================

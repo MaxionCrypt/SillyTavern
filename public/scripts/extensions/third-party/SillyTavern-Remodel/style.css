@@ -1209,11 +1209,66 @@ body.remodel-story-workspace-active.remodel-story-input-open #send_form.remodel-
 #remodel-promptpreview-panel,
 #remodel-manuscript-toolbar-panel,
 #remodel-manuscript-overlay,
+#remodel-story-editor,
 #remodel-rp-panelgroup,
 #remodel-rp-rules-panel,
 #remodel-rp-dice-panel,
 #remodel-rp-priortext-panel {
   display: none !important;
+}
+
+/* ==========================================================================
+   Story Document Editor (redesigned Story mode) — a real manuscript page,
+   fully decoupled from #chat. Shown only while remodel-storydoc-active.
+   ========================================================================== */
+
+/* Hide the chat + native composer entirely — the editor owns the surface. */
+body.remodel-storydoc-active #chat > .mes { display: none !important; }
+body.remodel-storydoc-active #chat { padding: 0 !important; border: none !important; }
+body.remodel-storydoc-active #form_sheld { display: none !important; }
+
+body.remodel-storydoc-active #remodel-story-editor {
+  display: block !important;
+  position: relative !important;
+  height: calc(100vh - var(--topBarBlockSize, 40px)) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+/* The page: a centered manuscript column on the tarot-dark ground. */
+body.remodel-storydoc-active .remodel-storydoc-page {
+  width: min(760px, calc(100% - 48px)) !important;
+  margin: 0 auto !important;
+  padding: 48px 0 160px !important;
+  box-sizing: border-box !important;
+}
+
+body.remodel-storydoc-active .remodel-storydoc-prose {
+  outline: none !important;
+  min-height: 60vh !important;
+  font-family: var(--remodel-manuscript-font, Georgia) !important;
+  font-size: 18px !important;
+  line-height: 1.75 !important;
+  color: rgba(238, 235, 245, 0.94) !important;
+  caret-color: var(--tarot-gold, #c6a44a) !important;
+}
+
+/* Real paragraph rhythm — first line indented, spaced like a novel. */
+body.remodel-storydoc-active .remodel-storydoc-prose p {
+  margin: 0 0 1.1em !important;
+  text-indent: 1.6em !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-prose p:first-child {
+  text-indent: 0 !important;
+}
+
+/* Gold italic placeholder while the document is empty. */
+body.remodel-storydoc-active .remodel-storydoc-prose:empty::before,
+body.remodel-storydoc-active .remodel-storydoc-prose > p:only-child:empty::before {
+  content: attr(data-placeholder) !important;
+  color: rgba(198, 164, 74, 0.5) !important;
+  font-style: italic !important;
+  pointer-events: none !important;
 }
 
 body.remodel-story-workspace-active #remodel-panelgroup {
