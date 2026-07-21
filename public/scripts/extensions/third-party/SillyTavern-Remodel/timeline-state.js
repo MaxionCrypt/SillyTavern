@@ -195,6 +195,9 @@ export function createScene(arcId, mode = 'roleplay', title = 'New Scene') {
         title: normalizeText(title, mode === 'story' ? 'New Story Scene' : 'New Roleplay Scene'),
         mode: mode === 'story' ? 'story' : 'roleplay',
         linkedChat: null,
+        // Story scenes bind to a StoryDoc (redesigned document Story mode);
+        // roleplay scenes use linkedChat. Null until bound.
+        storyDocId: null,
         status: 'unbound',
         summary: '',
         summaryUpdatedAt: null,
@@ -330,6 +333,12 @@ function normalizeStore(store) {
     for (const arc of Object.values(store.arcs)) {
         arc.sceneIds = (arc.sceneIds || []).filter((id) => store.scenes[id]?.arcId === arc.id);
     }
+
+    for (const scene of Object.values(store.scenes)) {
+        // Backward-compat for scenes saved before story scenes bound to a
+        // StoryDoc instead of a chat.
+        scene.storyDocId ??= null;
+    }
 }
 
 function sanitizeTimelinePatch(patch) {
@@ -355,6 +364,9 @@ function sanitizeScenePatch(patch) {
         ...(patch.summary !== undefined ? { summary: String(patch.summary) } : {}),
         ...(patch.summaryUpdatedAt !== undefined ? { summaryUpdatedAt: patch.summaryUpdatedAt ? String(patch.summaryUpdatedAt) : null } : {}),
         ...(patch.linkedChat !== undefined ? { linkedChat: patch.linkedChat || null } : {}),
+        // Story scenes bind to a StoryDoc (the redesigned document-editor Story
+        // mode) instead of a chat file; roleplay scenes keep linkedChat.
+        ...(patch.storyDocId !== undefined ? { storyDocId: patch.storyDocId || null } : {}),
     };
 }
 
