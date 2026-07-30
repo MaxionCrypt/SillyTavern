@@ -41,6 +41,11 @@ export function createStoryDoc({ title = 'New Story', boundCharacterId = null } 
         // replaces the chat-scoped Author's Note, which a doc-only story has no
         // chat to carry.
         guidance: '',
+        // Optional prose carried forward from another timeline scene. Kept on
+        // the document so Story generation can consume it without chat macros.
+        priorText: '',
+        priorSceneId: null,
+        beats: [],
         // Which character card's fields feed the generation context. Stored as
         // core's numeric character index (this_chid-style), same convention the
         // timeline scene bindings use.
@@ -87,6 +92,15 @@ export function updateStoryDoc(docId, patch) {
     if (typeof patch.body === 'string') {
         doc.body = patch.body;
     }
+    if (typeof patch.priorText === 'string') {
+        doc.priorText = patch.priorText;
+    }
+    if ('priorSceneId' in patch) {
+        doc.priorSceneId = patch.priorSceneId == null ? null : String(patch.priorSceneId);
+    }
+    if (Array.isArray(patch.beats)) {
+        doc.beats = patch.beats.map(normalizeBeat).filter(Boolean);
+    }
     if ('boundCharacterId' in patch) {
         doc.boundCharacterId = patch.boundCharacterId == null ? null : String(patch.boundCharacterId);
     }
@@ -127,8 +141,24 @@ function normalizeStore(store) {
         doc.title ??= 'New Story';
         doc.guidance ??= '';
         doc.body ??= '';
+        doc.priorText ??= '';
+        doc.priorSceneId = doc.priorSceneId == null ? null : String(doc.priorSceneId);
+        doc.beats = Array.isArray(doc.beats) ? doc.beats.map(normalizeBeat).filter(Boolean) : [];
         doc.boundCharacterId = doc.boundCharacterId == null ? null : String(doc.boundCharacterId);
     }
+}
+
+function normalizeBeat(value) {
+    if (!value || typeof value !== 'object' || !value.id) return null;
+    return {
+        id: String(value.id),
+        instruction: String(value.instruction || ''),
+        generatedText: String(value.generatedText || ''),
+        position: Math.max(0, Number(value.position) || 0),
+        hidden: Boolean(value.hidden),
+        createdAt: value.createdAt || now(),
+        updatedAt: value.updatedAt || now(),
+    };
 }
 
 function normalizeText(value, fallback) {

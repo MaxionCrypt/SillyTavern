@@ -402,70 +402,6 @@ export function setSuppressDrawerObserver(value) {
     session.suppressDrawerObserver = value;
 }
 
-// --- Manuscript-editor domain -------------------------------------------------
-//
-// Backs the unified cross-message Story Scene editor: while active, every
-// currently-visible .mes_text in the story workspace is swapped to raw text
-// and made contenteditable, with no seam between what are, underneath, still
-// N separate chat[] messages. snapshot records each block's message id and
-// its raw text AT THE MOMENT editing began, so the commit path can diff
-// "did this block's text actually change" without re-deriving anything from
-// live core state afterward (which could itself have moved on independently
-// — e.g. a swipe landing on an untouched message while another block is
-// still mid-edit).
-const manuscriptEdit = { active: false, snapshot: null };
-
-export function getManuscriptEditState() {
-    return Object.freeze({
-        active: manuscriptEdit.active,
-        snapshot: manuscriptEdit.snapshot ? manuscriptEdit.snapshot.map((entry) => ({ ...entry })) : null,
-    });
-}
-
-// snapshot: array of { mesId, originalRaw }, one per currently-visible
-// message block. The DOM access needed to build this list lives in
-// timeline-spine.js — this module stays a pure state container, same
-// convention as every other domain here.
-export function beginManuscriptEdit(snapshot) {
-    manuscriptEdit.active = true;
-    manuscriptEdit.snapshot = snapshot;
-}
-
-// The one function every teardown path calls — finished commit, cancel, and
-// the chat-scoped reconciliation backstop all end here. Idempotent.
-export function endManuscriptEdit() {
-    manuscriptEdit.active = false;
-    manuscriptEdit.snapshot = null;
-}
-
-// Called when a live boundary-crossing merge (backspace/forward-delete
-// across two messages) absorbs one message into its neighbor, so the
-// in-progress snapshot stays truthful for the rest of the session — without
-// this, settleManuscriptEdits would keep iterating a snapshot entry for a
-// chat[] message that no longer exists. Two things need fixing up:
-// 1. The absorbed mesId's entry is dropped entirely.
-// 2. deleteMessage() splices chat[] out from under every mesId greater than
-//    the absorbed one, shifting them all down by 1 — core does not walk any
-//    external state to fix up captured indices (confirmed: nothing does this
-//    for extensions), so this module must do it itself for every remaining
-//    snapshot entry above the absorbed index.
-// The survivor's own originalRaw is deliberately left untouched (not
-// updated to the merged text) — that mismatch against its later live
-// textContent is exactly what makes settleManuscriptEdits treat it as dirty
-// unconditionally once merged into, with no separate "merged" flag needed.
-export function mergeManuscriptSnapshotEntries(absorbedMesId) {
-    if (!manuscriptEdit.snapshot) {
-        return;
-    }
-    manuscriptEdit.snapshot = manuscriptEdit.snapshot
-        .filter((entry) => entry.mesId !== absorbedMesId)
-        .map((entry) => (entry.mesId > absorbedMesId ? { ...entry, mesId: entry.mesId - 1 } : entry));
-}
-
-export function resetManuscriptEditState() {
-    endManuscriptEdit();
-}
-
 // --- Chat-scoped reconciliation ---------------------------------------------
 //
 // Every domain's reset here is a pure state operation — resetPastChatsBridge()
@@ -484,5 +420,4 @@ export function resetAllChatScopedState() {
     resetWizardState();
     resetPastChatsBridge();
     resetPanelsState();
-    resetManuscriptEditState();
 }
