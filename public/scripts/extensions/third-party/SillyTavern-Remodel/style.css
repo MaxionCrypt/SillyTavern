@@ -1,3 +1,795 @@
+/*
+ * Remodel UI extension stylesheet.
+ * Scoped to body.st-remodel-active so vanilla UI returns on extension disable.
+ */
+
+/*
+   SillyTavern Layout Remodel Stylesheet (Option B)
+   Phase 4: DOM-aligned sidebar, flush bottom chat, and modern input capsule.
+*/
+
+/* Cinzel — self-hosted OFL display serif for the tarot deck typography. */
+
+@font-face {
+  font-family: 'Cinzel';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/cinzel-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Cinzel';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('./fonts/cinzel-latin-600-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Cinzel';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/cinzel-latin-700-normal.woff2') format('woff2');
+}
+
+body.st-remodel-active {
+  /* Manuscript body font — deliberately separate from --remodel-serif
+     (Cinzel, a decorative display face used for UI chrome/headers, not
+     meant for long-form reading). System-safe stack, no new font files:
+     changed live by the Manuscript toolbar's font picker via this one
+     variable, persisted per-session in session-state.js. */
+  --remodel-manuscript-font: Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', serif;
+  --solid-color: rgba(20, 21, 26, 0.95);
+  --border-color: rgba(255, 255, 255, 0.08);
+  --card-radius: 12px;
+  --card-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+  --gap: 15px;
+  /* Margin/gap between columns */
+  --rail-width: 60px;
+  --remodel-left-width: 0px;
+  --remodel-right-width: 0px;
+  --remodel-chat-width: calc(100vw - var(--rail-width));
+  --remodel-chat-width: calc(100dvw - var(--rail-width));
+  --remodel-left-edge: var(--rail-width);
+  --remodel-right-edge: 100vw;
+  --remodel-right-edge: 100dvw;
+  --remodel-message-width: 900px;
+  --surface-dark: rgba(13, 14, 18, 0.78);
+  --surface-soft: rgba(31, 34, 43, 0.62);
+  --surface-gloss: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018) 42%, rgba(0, 0, 0, 0.13));
+  --obsidian-accent: #7f5af0;
+  /* Nordic accent palette (Nord frost/aurora) used across active/interactive states */
+  --nord-frost: #88c0d0;
+  --nord-frost-soft: rgba(136, 192, 208, 0.24);
+  --nord-aurora-green: #a3be8c;
+  --nord-aurora-yellow: #ebcb8b;
+  --nord-aurora-orange: #d08770;
+  --nord-aurora-red: #bf616a;
+  --nord-aurora-purple: #b48ead;
+  --remodel-accent: var(--nord-frost);
+  /* Tarot deck ornament tokens (gold-luxe, unified across cards). */
+  --remodel-serif: 'Cinzel', Georgia, 'Times New Roman', serif;
+  --tarot-gold: #c6a44a;
+  --tarot-gold-bright: #f4e7c4;
+  --tarot-gold-deep: #8a6d2a;
+  --tarot-gold-soft: rgba(198, 164, 74, 0.42);
+  --tarot-ink: #0b0b0d;
+  /* Centered divider fleuron (diamond + flanking rules) for section separators. */
+  --tarot-diamond: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2060%2016'%20fill='none'%20stroke='%23c6a44a'%20stroke-width='1'%3E%3Cpath%20d='M0%208%20H23'%20opacity='.7'/%3E%3Cpath%20d='M60%208%20H37'%20opacity='.7'/%3E%3Cpath%20d='M30%204%20L34%208%20L30%2012%20L26%208%20Z'%20fill='%23c6a44a'%20stroke='none'/%3E%3Ccircle%20cx='30'%20cy='8'%20r='1.3'%20fill='%230b0b0d'/%3E%3C/svg%3E");
+}
+
+/* Global body overlay adjustments */
+
+body.st-remodel-active {
+  background-color: transparent !important;
+}
+
+body.st-remodel-active #top-bar {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  box-shadow: none !important;
+}
+
+body.st-remodel-active #preloader {
+  display: none !important;
+}
+
+/* Ensure drag handles are disabled since panels are stationary */
+
+body.st-remodel-active .drag-grabber {
+  display: none !important;
+}
+
+/* Keep inactive sidebar drawers out of the remodel shell without disabling them entirely. */
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.closedDrawer:not(#right-nav-panel) {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Open sidebar drawers in the full left lane between the icon rail and chat. */
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer:not(#left-nav-panel):not(#right-nav-panel):not(.remodel-workspace-panel) {
+  display: flex !important;
+  flex-direction: column !important;
+  position: fixed !important;
+  top: 0 !important;
+  right: auto !important;
+  bottom: 0 !important;
+  left: var(--rail-width) !important;
+  width: var(--remodel-left-width) !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: auto !important;
+  max-height: 100vh !important;
+  max-height: 100dvh !important;
+  margin: 0 !important;
+  overflow: auto !important;
+  z-index: 5200 !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  transition: none !important;
+  animation: none !important;
+  box-sizing: border-box !important;
+  background: rgba(22, 24, 31, 0.76) !important;
+  backdrop-filter: blur(14px) saturate(1.05) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.05) !important;
+  border-top: none !important;
+  border-right: 1px solid var(--border-color) !important;
+  border-bottom: none !important;
+  border-left: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+/* ==========================================
+   Far-Left Vertical Icon Sidebar
+   ========================================== */
+
+/* Main Settings Buttons Container (Starts at absolute top) */
+
+body.st-remodel-active #top-settings-holder {
+  display: flex !important;
+  position: fixed !important;
+  left: 0 !important;
+  top: 0 !important;
+  /* Touch top edge of viewport */
+  bottom: 0 !important;
+  width: var(--rail-width) !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  flex-direction: column !important;
+  justify-content: flex-start !important;
+  align-items: center !important;
+  margin: 0 !important;
+  padding: 15px 0 !important;
+  gap: 15px !important;
+  z-index: 5000 !important;
+  overflow: visible !important;
+  box-sizing: border-box !important;
+  /* Blurred Dark background style */
+  background: var(--surface-gloss), rgba(24, 26, 34, 0.88) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-right: 1px solid var(--border-color) !important;
+}
+
+/* Character List Toggle Button Area (Top Item of Sidebar Flex Stack) */
+
+body.st-remodel-active #top-settings-holder #unimportantYes {
+  display: flex !important;
+  width: 100% !important;
+  height: 32px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+body.st-remodel-active #top-settings-holder #unimportantYes .flexFlowColumn {
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+}
+
+/* Stylize Drawer items on Sidebar */
+
+body.st-remodel-active #top-settings-holder .drawer {
+  width: var(--rail-width) !important;
+  min-width: var(--rail-width) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+body.st-remodel-active #top-settings-holder .drawer.remodel-sidebar-hidden {
+  display: none !important;
+}
+
+body.st-remodel-active #top-settings-holder .drawer.remodel-sidebar-drawer {
+  flex: 0 0 var(--rail-width) !important;
+}
+
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content {
+  flex: none !important;
+  transition: none !important;
+  animation: none !important;
+  transform: none !important;
+}
+
+body.st-remodel-active #rightNavHolder {
+  order: -10 !important;
+}
+
+body.st-remodel-active #top-settings-holder .drawer-toggle {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  color: rgba(255, 255, 255, 0.6) !important;
+}
+
+/* Align and clean Icons on Sidebar */
+
+body.st-remodel-active #top-settings-holder .drawer-icon,
+body.st-remodel-active #rm_button_characters {
+  width: 32px !important;
+  height: 32px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 18px !important;
+  flex-shrink: 0 !important;
+  color: inherit !important;
+  opacity: 0.7 !important;
+  transition: opacity 0.2s, color 0.2s, background-color 0.2s !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 4px !important;
+}
+
+body.st-remodel-active #top-settings-holder .drawer-toggle:hover .drawer-icon,
+body.st-remodel-active #rm_button_characters:hover {
+  opacity: 1 !important;
+  color: #fff !important;
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+body.st-remodel-active #top-settings-holder .drawer-icon.openIcon {
+  opacity: 1 !important;
+  color: var(--remodel-accent) !important;
+  background: radial-gradient(circle at center, var(--nord-frost-soft) 0%, rgba(136, 192, 208, 0.07) 65%, transparent 100%) !important;
+  outline: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* ==========================================
+   Fixed Column Layout Setup
+   ========================================== */
+
+/* #rightNavHolder must stay in the DOM (unlike other unlisted drawers, it is
+   NOT force-closed in index.js) so #right-nav-panel inside it can still be
+   reached for the modal below. But it must not reappear as its own icon in
+   the rail: collapse its own box out of the flex layout and hide its toggle. */
+
+body.st-remodel-active #top-settings-holder > #rightNavHolder {
+  display: contents !important;
+}
+
+body.st-remodel-active #top-settings-holder > #rightNavHolder > .drawer-toggle {
+  display: none !important;
+}
+
+/* #right-nav-panel: Character browsing now lives entirely in the Tavern
+   Characters deck (see "Remodel-native Characters workspace" below). This node
+   is kept reachable purely so the native Create Character / Create Group forms
+   (triggered by our deck's toolbar) have somewhere to render — it stays hidden
+   until one of those forms is actually active, then appears as a centered
+   glass modal. */
+
+body.st-remodel-active #right-nav-panel {
+  display: none !important;
+  position: fixed !important;
+  inset: 0 !important;
+  left: 0 !important;
+  right: auto !important;
+  z-index: 8500 !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-height: none !important;
+  padding: 32px !important;
+  box-sizing: border-box !important;
+  margin: 0 !important;
+  background: rgba(6, 7, 10, 0.6) !important;
+  backdrop-filter: blur(6px) !important;
+  -webkit-backdrop-filter: blur(6px) !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+body.st-remodel-active #right-nav-panel:has(#rm_ch_create_block[style*="block"]),
+body.st-remodel-active #right-nav-panel:has(#rm_group_chats_block[style*="flex"]) {
+  display: flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+/* Core's own generateGroupWrapper() (group-chats.js) calls
+   select_group_chats() as an internal "auto-navigate back to group menu"
+   side effect on EVERY group turn — completely unrelated to the user
+   choosing to manage the group. Without this override, that flips
+   #rm_group_chats_block to display:flex mid-generation and the :has() rule
+   above adopts it as a full-screen modal, silently kicking the roleplay
+   user out of the chat on every send/trigger/impersonate. Confirmed live:
+   the same rule is needed (and correct) for the deliberate "+ add cast"
+   click, which is why this is scoped to the generating state specifically
+   rather than suppressed for roleplay outright. */
+body.st-remodel-active.remodel-roleplay-generating #right-nav-panel:has(#rm_group_chats_block[style*="flex"]) {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+body.st-remodel-active #right-nav-panel > #right-nav-panelheader,
+body.st-remodel-active #right-nav-panel > #CharListButtonAndHotSwaps {
+  display: none !important;
+}
+
+body.st-remodel-active #right-nav-panel > #rm_PinAndTabs {
+  flex: 0 0 auto !important;
+  width: 100% !important;
+  max-width: 720px !important;
+  margin: 0 auto !important;
+  padding: 0 0 10px !important;
+  border-bottom: 1px solid var(--tarot-gold-soft) !important;
+}
+
+/* Cancel/close button for the character editor modal — see
+   ensureCharacterEditorCancelButton in timeline-spine.js. Native ST never
+   had a close control here (the form was always inline beside the character
+   list, never a full-screen modal), so this restyled modal had no way out
+   until this button was added. */
+
+body.st-remodel-active .remodel-character-editor-cancel {
+  appearance: none !important;
+  margin-left: auto !important;
+  width: 30px !important;
+  height: 30px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: transparent !important;
+  border: 1px solid var(--tarot-gold-soft) !important;
+  border-radius: 50% !important;
+  color: var(--tarot-gold) !important;
+  cursor: pointer !important;
+  font-size: 13px !important;
+  flex: 0 0 auto !important;
+  transition: color 0.16s ease, border-color 0.16s ease !important;
+}
+
+body.st-remodel-active .remodel-character-editor-cancel:hover {
+  color: var(--tarot-gold-bright) !important;
+  border-color: var(--tarot-gold-bright) !important;
+}
+
+/* Core renders Advanced Definitions (#character_popup) as a body-level
+   legacy popup at z-index 4001. Our adopted character editor is a fixed
+   modal at z-index 8500, so the native popup otherwise opens underneath it
+   and its close/save controls cannot be reached. Keep the native node and
+   listeners intact; only lift its open state above the editor modal. */
+body.st-remodel-active #character_popup.open {
+  position: fixed !important;
+  z-index: 8600 !important;
+}
+
+body.st-remodel-active #right-nav-panel > .scrollableInner {
+  display: flex !important;
+  flex-direction: column !important;
+  width: min(720px, 100%) !important;
+  max-height: calc(100dvh - 64px) !important;
+  padding: 26px !important;
+  box-sizing: border-box !important;
+  overflow: auto !important;
+  border: 1px solid var(--tarot-gold-soft) !important;
+  border-radius: 14px !important;
+  background: rgba(12, 13, 17, 0.72) !important;
+  backdrop-filter: blur(14px) saturate(1.05) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.05) !important;
+  box-shadow: inset 0 0 0 4px transparent, inset 0 0 0 5px rgba(198, 164, 74, 0.24), 0 24px 60px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Column 2 (Center): Chat Canvas (Flush against bottom viewport edge) */
+
+body.st-remodel-active #sheld {
+  display: flex !important;
+  position: fixed !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  min-height: 100vh !important;
+  min-height: 100dvh !important;
+  max-height: 100vh !important;
+  max-height: 100dvh !important;
+  left: var(--remodel-left-edge) !important;
+  width: var(--remodel-chat-width) !important;
+  z-index: 1000 !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  /* Outlines and dark glossy transparency */
+  border: 1px solid var(--border-color) !important;
+  border-top: none !important;
+  border-bottom: none !important;
+  border-radius: 0 !important;
+  box-shadow: var(--card-shadow) !important;
+  background: var(--surface-gloss), rgba(12, 13, 17, 0.54) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Column 3 (Right): AI Settings / Slider Controls */
+
+body.st-remodel-active #left-nav-panel.openDrawer {
+  display: flex !important;
+  position: fixed !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  left: var(--remodel-right-edge) !important;
+  width: var(--remodel-right-width) !important;
+  transform: none !important;
+  pointer-events: auto !important;
+  z-index: 1000 !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  border-top: none !important;
+  border-right: none !important;
+  border-bottom: none !important;
+  border-left: 1px solid var(--border-color) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: rgba(22, 24, 31, 0.76) !important;
+  backdrop-filter: blur(14px) saturate(1.05) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.05) !important;
+}
+
+body.st-remodel-active #right-nav-panel:not(.remodel-workspace-panel):not(.remodel-tavern-adopted-panel),
+body.st-remodel-active #left-nav-panel:not(.openDrawer):not(.remodel-tavern-adopted-panel) {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* ==========================================
+   Chat Layout & Dynamic Height Tuning
+   ========================================== */
+
+body.st-remodel-active #chat {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: auto !important;
+  max-height: none !important;
+  margin-top: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  padding: 15px !important;
+  box-sizing: border-box !important;
+}
+
+/* Landing state — no character/chat active. Native ST fills #chat with a
+   greeting message, a "Docs / GitHub / Discord" header block (.welcomePanel,
+   appended as a raw #chat child, not a .mes — see sendWelcomePanel in
+   welcome-screen.js), and an "API Connections / Character Management /
+   Extensions" quickstart message; :has(.welcomePanel) is the reliable signal
+   that this exact screen (not a real chat) is showing. Reduced to just the
+   header + sidebar rail chrome — there's no real chat to act on here, so the
+   composer is hidden too rather than left with nothing to send to. */
+
+body.st-remodel-active #chat:has(.welcomePanel) > * {
+  display: none !important;
+}
+
+body.st-remodel-active #chat:has(.welcomePanel) ~ #form_sheld {
+  display: none !important;
+}
+
+/* Same intent as the rule above, but keyed on Remodel's own synchronous
+   remodel-no-chat-active body class (timeline-spine.js: syncNoChatComposerVisibility)
+   instead of .welcomePanel's presence in the DOM. Core's openWelcomeScreen()
+   is async and inserts .welcomePanel only after an awaited fetch completes,
+   so the rule above alone leaves a window where #form_sheld (and the
+   #options_button hamburger inside it) briefly renders, squeezed toward the
+   top of the fixed #sheld panel. This rule fires the instant CHAT_CHANGED/
+   CHAT_LOADED/APP_READY do, well before that race window even opens. The
+   rule above stays too, as harmless defense-in-depth once .welcomePanel
+   does land. */
+body.st-remodel-active.remodel-no-chat-active #form_sheld {
+  display: none !important;
+}
+
+/* Input Area Panel — #form_sheld is the only element here NOT also covered by
+   the .remodel-composer class scheme below, so it keeps its own rule. */
+
+body.st-remodel-active #form_sheld {
+  position: relative !important;
+  border-top: none !important;
+  margin: 0 !important;
+  padding: 26px 22px 18px !important;
+  flex: 0 0 auto !important;
+  box-sizing: border-box !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+body.st-remodel-active #form_sheld::before {
+  content: "";
+  position: absolute;
+  top: 9px;
+  left: 50%;
+  width: min(58%, 520px);
+  height: 1px;
+  transform: translateX(-50%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.12), transparent);
+}
+
+body.st-remodel-active #form_sheld::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  transform: translateX(-50%) rotate(45deg);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+body.st-remodel-active .drop_target {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* ==========================================
+   Dark glossy highlights for UI elements
+   ========================================== */
+
+body.st-remodel-active .menu_button,
+body.st-remodel-active .character_select,
+body.st-remodel-active .right_menu_button,
+body.st-remodel-active input[type="text"],
+body.st-remodel-active input[type="number"],
+body.st-remodel-active input[type="password"],
+body.st-remodel-active select {
+  background: var(--surface-gloss), rgba(255, 255, 255, 0.045) !important;
+  background-color: rgba(255, 255, 255, 0.045) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border: 1px solid var(--border-color) !important;
+  color: #e2e8f0 !important;
+  border-radius: 6px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+  text-shadow: none !important;
+}
+
+/* Hover and focus states */
+
+body.st-remodel-active .menu_button:hover,
+body.st-remodel-active .character_select:hover,
+body.st-remodel-active select:focus,
+body.st-remodel-active input[type="text"]:focus {
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  outline: none !important;
+}
+
+/* ==========================================
+   Centered Message Rows
+   ========================================== */
+
+body.st-remodel-active #chat {
+  gap: 20px !important;
+  padding: 18px 22px 24px !important;
+}
+
+body.st-remodel-active #chat .mes {
+  --message-accent: rgba(176, 126, 255, 0.82);
+  --message-accent-soft: rgba(176, 126, 255, 0.13);
+  width: min(var(--remodel-message-width), calc(100% - 44px)) !important;
+  max-width: calc(100% - 44px) !important;
+  align-self: center !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  border-left: 2px solid var(--message-accent) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  overflow: visible !important;
+  color: rgba(245, 247, 255, 0.92) !important;
+}
+
+body.st-remodel-active #chat .mes[is_user="true"] {
+  --message-accent: rgba(255, 255, 255, 0.92);
+  --message-accent-soft: rgba(255, 255, 255, 0.13);
+  color: #fff !important;
+}
+
+body.st-remodel-active #chat .mes[is_user="false"]:not([is_system="true"]) {
+  --message-accent: rgba(176, 126, 255, 0.86);
+  --message-accent-soft: rgba(176, 126, 255, 0.13);
+}
+
+body.st-remodel-active #chat .mes[is_system="true"] {
+  --message-accent: rgba(255, 196, 87, 0.84);
+  --message-accent-soft: rgba(255, 196, 87, 0.12);
+}
+
+body.st-remodel-active #chat .mes::before {
+  content: "";
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  width: min(58%, 520px);
+  height: 1px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--message-accent-soft), rgba(255, 255, 255, 0.42), var(--message-accent-soft), transparent);
+}
+
+body.st-remodel-active #chat .mes:first-of-type::before {
+  opacity: 0;
+}
+
+body.st-remodel-active #chat .mesAvatarWrapper,
+body.st-remodel-active #chat .mes .avatar,
+body.st-remodel-active #chat .mes_block .ch_name {
+  display: none !important;
+}
+
+body.st-remodel-active #chat .mes_block {
+  width: 100% !important;
+  padding: 24px 26px !important;
+  overflow: visible !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+
+body.st-remodel-active #chat .mes_text,
+body.st-remodel-active #chat .mes_reasoning {
+  padding: 0 !important;
+  text-shadow: none !important;
+  color: inherit !important;
+}
+
+body.st-remodel-active #chat .mes_buttons,
+body.st-remodel-active #chat .extraMesButtons {
+  position: absolute !important;
+  top: 8px !important;
+  right: 10px !important;
+  opacity: 0 !important;
+  max-width: calc(100% - 20px) !important;
+  padding: 4px !important;
+  border-radius: 999px !important;
+  background: rgba(0, 0, 0, 0.22) !important;
+  box-shadow: inset 0 0 14px var(--message-accent-soft) !important;
+}
+
+body.st-remodel-active #chat .mes:hover .mes_buttons,
+body.st-remodel-active #chat .mes:hover .extraMesButtons,
+body.st-remodel-active #chat .mes:focus-within .mes_buttons,
+body.st-remodel-active #chat .mes:focus-within .extraMesButtons {
+  opacity: 1 !important;
+}
+
+body.st-remodel-active #chat .swipe_left {
+  left: -11px !important;
+}
+
+body.st-remodel-active #chat .swipe_right {
+  right: -11px !important;
+}
+
+
+/* Remodel panels persist in the DOM between workspace changes. Keep the
+   current StoryDoc and Roleplay panels hidden until their active workspace
+   rules explicitly reveal them. */
+#remodel-story-editor,
+#remodel-rp-panelgroup,
+#remodel-rp-rules-panel,
+#remodel-rp-dice-panel,
+#remodel-rp-priortext-panel {
+  display: none !important;
+}
+
+/* ==========================================================================
+   Story Document Editor (redesigned Story mode) — a real manuscript page,
+   fully decoupled from #chat. Shown only while remodel-storydoc-active.
+   ========================================================================== */
+
+/* Hide the chat + native composer entirely — the editor owns the surface. */
+body.remodel-storydoc-active #chat > .mes { display: none !important; }
+body.remodel-storydoc-active #chat { padding: 0 !important; border: none !important; }
+body.remodel-storydoc-active #form_sheld { display: none !important; }
+
+body.remodel-storydoc-active #remodel-story-editor {
+  display: block !important;
+  position: relative !important;
+  height: calc(100vh - var(--topBarBlockSize, 40px)) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+/* The page: a centered manuscript column on the tarot-dark ground. */
+body.remodel-storydoc-active .remodel-storydoc-page {
+  width: min(760px, calc(100% - 48px)) !important;
+  margin: 0 auto !important;
+  padding: 48px 0 160px !important;
+  box-sizing: border-box !important;
+}
+
+body.remodel-storydoc-active .remodel-storydoc-prose {
+  outline: none !important;
+  min-height: 60vh !important;
+  font-family: var(--remodel-manuscript-font, Georgia) !important;
+  font-size: 18px !important;
+  line-height: 1.75 !important;
+  color: rgba(238, 235, 245, 0.94) !important;
+  caret-color: var(--tarot-gold, #c6a44a) !important;
+}
+
+/* Real paragraph rhythm — first line indented, spaced like a novel. */
+body.remodel-storydoc-active .remodel-storydoc-prose p {
+  margin: 0 0 1.1em !important;
+  text-indent: 1.6em !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-prose p:first-child {
+  text-indent: 0 !important;
+}
+
+/* Gold italic placeholder while the document is empty. */
+body.remodel-storydoc-active .remodel-storydoc-prose:empty::before,
+body.remodel-storydoc-active .remodel-storydoc-prose > p:only-child:empty::before {
+  content: attr(data-placeholder) !important;
+  color: rgba(198, 164, 74, 0.5) !important;
+  font-style: italic !important;
+  pointer-events: none !important;
+}
+
 /* =====================================================================
    ROLEPLAY WORKSPACE (timeline-spine.js: renderRoleplayScene)
    Counterpart to the manuscript overlay — same "hide the real #chat rows,
@@ -722,7 +1514,8 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
 }
 
 /* --- Prompt preview modal --- */
-#remodel-rp-preview-modal .remodel-rp-preview {
+#remodel-rp-preview-modal .remodel-rp-preview,
+#remodel-story-preview-modal .remodel-rp-preview {
   width: min(760px, 94vw) !important;
   max-height: 86vh !important;
   display: flex !important;
@@ -735,8 +1528,10 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   transition: transform 0.2s ease !important;
   overflow: hidden !important;
 }
-#remodel-rp-preview-modal.remodel-rp-picker-in .remodel-rp-preview { transform: translateY(0) !important; }
-#remodel-rp-preview-modal .remodel-rp-preview-warn {
+#remodel-rp-preview-modal.remodel-rp-picker-in .remodel-rp-preview,
+#remodel-story-preview-modal.remodel-rp-picker-in .remodel-rp-preview { transform: translateY(0) !important; }
+#remodel-rp-preview-modal .remodel-rp-preview-warn,
+#remodel-story-preview-modal .remodel-rp-preview-warn {
   margin: 12px 20px 0 !important;
   padding: 8px 12px !important;
   border-radius: 8px !important;
@@ -746,7 +1541,8 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   font-size: 12px !important;
   font-family: var(--remodel-manuscript-font, Georgia) !important;
 }
-#remodel-rp-preview-modal .remodel-rp-preview-body {
+#remodel-rp-preview-modal .remodel-rp-preview-body,
+#remodel-story-preview-modal .remodel-rp-preview-body {
   margin: 16px 20px 20px !important;
   padding: 16px !important;
   overflow: auto !important;
@@ -4341,15 +5137,2778 @@ body.st-remodel-active .remodel-docked-panel .drag-grabber {
   cursor: default !important;
   pointer-events: none !important;
 }
+/* Restored StoryDoc presentation. This block is visual only; manuscript
+   editing remains the original continuous contenteditable model. */
+body.remodel-storydoc-active #chat,
+body.remodel-storydoc-active #form_sheld { display:none !important; }
+body:not(.remodel-storydoc-active) #remodel-story-editor { display:none !important; }
 
-/* Final StoryDoc specificity overrides live at the end of the extension
-   stylesheet so the legacy manuscript rules above cannot repaint them. */
+body.remodel-storydoc-active #remodel-story-editor {
+  display:block !important;
+  position:absolute !important;
+  inset:0 !important;
+  overflow:auto !important;
+  scrollbar-width:none !important;
+  -ms-overflow-style:none !important;
+  color:#f2eee4 !important;
+}
+body.remodel-storydoc-active #remodel-story-editor::-webkit-scrollbar {
+  display:none !important;
+  width:0 !important;
+  height:0 !important;
+}
+
 body.remodel-storydoc-active .remodel-storydoc-header {
-  background:transparent !important;
-  border-bottom:0 !important;
-  backdrop-filter:none !important;
+  position:sticky !important;
+  z-index:12 !important;
+  top:0 !important;
+  display:grid !important;
+  grid-template-columns:auto minmax(0,1fr) auto auto !important;
+  align-items:center !important;
+  gap:16px !important;
+  min-height:76px !important;
+  padding:10px 22px 10px 28px !important;
+  box-sizing:border-box !important;
+  background:linear-gradient(180deg,rgba(12,11,17,.8),rgba(12,11,17,.3) 76%,transparent) !important;
+  pointer-events:none !important;
+}
+
+body.remodel-storydoc-active .remodel-storydoc-header > * { pointer-events:auto !important; }
+body.remodel-storydoc-active .remodel-storydoc-back {
+  width:38px !important; height:38px !important;
+  border:1px solid rgba(213,187,0,.45) !important; border-radius:50% !important;
+  background:rgba(8,8,12,.65) !important; color:#d6c500 !important; cursor:pointer !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-heading { display:flex !important; flex-direction:column !important; gap:3px !important; }
+body.remodel-storydoc-active .remodel-storydoc-kicker,
+body.remodel-storydoc-active .remodel-storydoc-author small {
+  color:rgba(212,190,33,.72) !important;
+  font:9px/1.2 var(--remodel-serif,Georgia) !important;
+  letter-spacing:.18em !important; text-transform:uppercase !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-title {
+  width:min(420px,50vw) !important; padding:0 !important; border:0 !important; outline:0 !important;
+  background:transparent !important; color:#f2eee4 !important;
+  font:20px/1.25 var(--remodel-serif,Georgia) !important;
+  letter-spacing:.04em !important; text-transform:uppercase !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-author { display:flex !important; align-items:center !important; gap:8px !important; }
+body.remodel-storydoc-active .remodel-storydoc-author > span:last-child { display:flex !important; flex-direction:column !important; }
+body.remodel-storydoc-active .remodel-storydoc-author strong {
+  color:#eee9dc !important; font:11px/1.3 var(--remodel-serif,Georgia) !important; text-transform:uppercase !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-avatar {
+  width:34px !important; height:34px !important;
+  border:1px solid rgba(213,187,0,.45) !important; border-radius:9px !important;
+  background:rgba(0,0,0,.6) center/cover no-repeat !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-save-state {
+  padding-left:15px !important; border-left:1px solid rgba(212,190,33,.2) !important;
+  color:rgba(242,238,228,.6) !important; font:italic 11px/1.3 var(--remodel-serif,Georgia) !important;
+}
+
+body.remodel-storydoc-active .remodel-storydoc-workbench {
+  position:relative !important; min-height:calc(100vh - 76px) !important;
+  padding:44px 92px 84px !important; box-sizing:border-box !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-page {
+  width:min(728px,calc(100vw - 260px)) !important; margin:0 auto !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-page-rule {
+  display:flex !important; align-items:center !important; gap:15px !important; margin-bottom:30px !important;
+  color:rgba(242,219,66,.84) !important; font:9px/1 var(--remodel-serif,Georgia) !important;
+  letter-spacing:.2em !important; text-transform:uppercase !important;
+  text-shadow:0 0 5px rgba(215,200,0,.48),0 0 12px rgba(215,200,0,.18) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-page-rule::after {
+  content:"" !important; flex:1 !important; height:1px !important;
+  background:linear-gradient(90deg,rgba(210,188,32,.36),transparent) !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-prose {
-  font-size:16px !important;
-  line-height:1.76 !important;
+  min-height:1.68em !important; outline:0 !important; color:#f4f0e6 !important;
+  font:15px/1.68 var(--remodel-manuscript-font,Georgia) !important;
+  text-shadow:0 1px 3px rgba(0,0,0,.95) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-prose > p {
+  min-height:1.68em !important; margin:0 0 .9em !important; outline:0 !important;
+  white-space:pre-wrap !important; overflow-wrap:anywhere !important; text-indent:0 !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-prose:empty::before {
+  content:attr(data-placeholder) !important; color:rgba(212,190,33,.55) !important; font-style:italic !important;
+}
+
+body.remodel-storydoc-active .remodel-storydoc-add-beat-marker {
+  display:grid !important;
+  grid-template-columns:auto minmax(24px,1fr) !important;
+  align-items:center !important;
+  gap:15px !important;
+  width:100% !important;
+  margin:22px 0 0 !important;
+  padding:8px 0 !important;
+  border:0 !important;
+  outline:0 !important;
+  background:transparent !important;
+  color:rgba(242,219,66,.92) !important;
+  cursor:text !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-add-beat-line {
+  height:1px !important;
+  background:linear-gradient(90deg,rgba(212,190,33,.32),transparent) !important;
+  transition:background .18s ease !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-add-beat-tag {
+  font:9px/1.2 var(--remodel-serif,Georgia) !important;
+  letter-spacing:.14em !important;
+  text-transform:uppercase !important;
+  opacity:0 !important;
+  transform:translateX(-6px) !important;
+  text-shadow:0 0 5px rgba(215,200,0,.68),0 0 13px rgba(215,200,0,.3) !important;
+  transition:opacity .18s ease,transform .18s ease,color .18s ease !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-add-beat-marker:is(:hover,:focus-visible) {
+  color:#fff07a !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-add-beat-marker:is(:hover,:focus-visible) .remodel-storydoc-add-beat-tag {
+  opacity:1 !important;
+  transform:translateX(0) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-add-beat-marker:is(:hover,:focus-visible) .remodel-storydoc-add-beat-line:last-child {
+  background:linear-gradient(90deg,rgba(255,240,122,.74),transparent) !important;
+}
+
+.remodel-scene-prompt-choice {
+  display:inline-flex !important;
+  align-items:center !important;
+  gap:9px !important;
+  min-width:0 !important;
+  max-width:310px !important;
+  padding:7px 10px !important;
+  border:1px solid rgba(215,200,0,.24) !important;
+  border-radius:8px !important;
+  background:rgba(7,7,12,.52) !important;
+  color:rgba(240,234,214,.78) !important;
+  cursor:pointer !important;
+  text-align:left !important;
+  box-shadow:0 6px 18px rgba(0,0,0,.14) !important;
+}
+.remodel-scene-prompt-choice:hover {
+  border-color:rgba(235,219,35,.62) !important;
+  color:#fff6a1 !important;
+  box-shadow:0 0 16px rgba(215,200,0,.12) !important;
+}
+.remodel-scene-prompt-choice > .fa-wand-magic-sparkles {
+  flex:0 0 auto !important;
+  color:#d7c800 !important;
+}
+.remodel-scene-prompt-choice-copy {
+  display:flex !important;
+  min-width:0 !important;
+  flex:1 !important;
+  flex-direction:column !important;
+}
+.remodel-scene-prompt-choice-copy small {
+  color:rgba(215,200,0,.66) !important;
+  font:8px/1.15 var(--remodel-serif,Georgia) !important;
+  letter-spacing:.12em !important;
+  text-transform:uppercase !important;
+}
+.remodel-scene-prompt-choice-copy strong {
+  overflow:hidden !important;
+  margin-top:2px !important;
+  font:11px/1.2 var(--remodel-serif,Georgia) !important;
+  font-weight:400 !important;
+  text-overflow:ellipsis !important;
+  white-space:nowrap !important;
+}
+.remodel-scene-prompt-choice-caret {
+  flex:0 0 auto !important;
+  color:rgba(215,200,0,.6) !important;
+  font-size:8px !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-prompt-choice {
+  display:flex !important;
+  justify-content:flex-start !important;
+  margin-top:5px !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-prompt-choice .remodel-scene-prompt-choice {
+  background:rgba(7,7,12,.32) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-action-row .remodel-scene-prompt-choice {
+  max-width:235px !important;
+  min-height:30px !important;
+  padding:5px 9px !important;
+  border-color:rgba(215,200,0,.18) !important;
+  background:transparent !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-action-row .remodel-scene-prompt-choice-copy {
+  max-width:170px !important;
+}
+
+body.remodel-storydoc-active .remodel-storydoc-beat-card {
+  position:relative !important; z-index:2 !important; display:block !important; width:100% !important;
+  margin:22px 0 28px !important; padding:0 0 16px !important; box-sizing:border-box !important;
+  border-bottom:1px solid rgba(212,190,33,.32) !important; color:#f2eee4 !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-beat-card header {
+  display:flex !important; justify-content:space-between !important; align-items:center !important;
+  margin-bottom:8px !important; color:rgba(212,190,33,.72) !important;
+  font:9px/1.2 var(--remodel-serif,Georgia) !important; letter-spacing:.12em !important; text-transform:uppercase !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-beat-card header button,
+body.remodel-storydoc-active .remodel-storydoc-beat-regenerate {
+  border:0 !important; background:transparent !important; color:rgba(212,190,33,.7) !important;
+  font:9px/1.2 var(--remodel-serif,Georgia) !important; text-transform:uppercase !important; cursor:pointer !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-beat-editor {
+  display:grid !important; grid-template-columns:minmax(0,1fr) 44px !important; gap:9px !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-beat-editor textarea {
+  width:100% !important; min-height:62px !important; padding:12px !important; resize:vertical !important;
+  box-sizing:border-box !important; border:1px solid rgba(212,190,33,.28) !important; border-radius:5px !important;
+  outline:0 !important; background:rgba(8,8,13,.52) !important; color:#f4f0e6 !important;
+  font:13px/1.5 var(--remodel-manuscript-font,Georgia) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-beat-editor > button {
+  border:1px solid rgba(212,190,33,.38) !important; border-radius:4px !important;
+  background:rgba(8,8,13,.66) !important; color:#d7c800 !important; cursor:pointer !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-beat-card.is-hidden .remodel-storydoc-beat-editor,
+body.remodel-storydoc-active .remodel-storydoc-beat-card.is-hidden .remodel-storydoc-beat-regenerate { display:none !important; }
+
+body.remodel-storydoc-active .remodel-storydoc-tools {
+  position:fixed !important; z-index:25 !important; top:174px !important; right:8px !important;
+  display:flex !important; flex-direction:column !important; gap:8px !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-tools button,
+body.remodel-storydoc-active .remodel-storydoc-tool-control {
+  flex:0 0 auto !important;
+  display:flex !important; align-items:center !important; justify-content:center !important;
+  width:34px !important; height:34px !important; min-height:34px !important; padding:0 !important;
+  border:1px solid rgba(198,164,74,.28) !important; border-radius:8px !important;
+  background:var(--solid-color,rgba(20,21,26,.95)) !important; color:var(--tarot-gold,#c6a44a) !important;
+  font-size:14px !important; cursor:pointer !important;
+  box-sizing:border-box !important;
+  box-shadow:var(--card-shadow,0 8px 32px rgba(0,0,0,.4)) !important;
+  transition:color .16s ease,border-color .16s ease,background .16s ease,box-shadow .16s ease !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-tools button span,
+body.remodel-storydoc-active .remodel-storydoc-tool-label {
+  position:absolute !important;
+  width:1px !important;
+  height:1px !important;
+  padding:0 !important;
+  margin:-1px !important;
+  overflow:hidden !important;
+  clip:rect(0,0,0,0) !important;
+  white-space:nowrap !important;
+  border:0 !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-tools button:is(:hover,.is-active),
+body.remodel-storydoc-active .remodel-storydoc-tool-control:hover {
+  color:var(--tarot-gold-bright,#f4e7c4) !important;
+  border-color:var(--tarot-gold-bright,#f4e7c4) !important;
+  background:rgba(198,164,74,.1) !important;
+  box-shadow:0 0 12px rgba(198,164,74,.22),var(--card-shadow,0 8px 32px rgba(0,0,0,.4)) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-tools button:disabled {
+  opacity:.36 !important;
+  cursor:default !important;
+  border-color:rgba(212,190,33,.18) !important;
+  background:rgba(8,8,13,.58) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-native-slot > #options_button,
+body.remodel-storydoc-active .remodel-storydoc-native-slot > #extensionsMenuButton {
+  order:0 !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  width:16px !important;
+  height:16px !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  margin:0 !important;
+  padding:0 !important;
+  color:inherit !important;
+  font-size:14px !important;
+  opacity:1 !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-tool-label {
+  order:1 !important;
+  pointer-events:none !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-indicator {
+  display:none !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-indicator:not(:empty) {
+  position:absolute !important;
+  right:54px !important;
+  bottom:0 !important;
+  display:block !important;
+  width:260px !important;
+  padding:9px 12px !important;
+  box-sizing:border-box !important;
+  border:1px solid rgba(212,190,33,.32) !important;
+  background:rgba(8,8,13,.92) !important;
+  color:#ece6d7 !important;
+  font:11px/1.35 var(--remodel-manuscript-font,Georgia) !important;
+  text-align:right !important;
+}
+
+body.remodel-storydoc-active .remodel-storydoc-panel {
+  position:fixed !important; z-index:24 !important; top:174px !important; right:81px !important; display:none !important;
+  width:min(390px,calc(100vw - 130px)) !important; max-height:calc(100vh - 210px) !important; overflow:hidden !important;
+  border:1px solid rgba(212,190,33,.45) !important; background:rgba(9,8,13,.96) !important;
+  box-shadow:0 18px 50px rgba(0,0,0,.45) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-panel.is-open { display:block !important; }
+body.remodel-storydoc-active .remodel-storydoc-panel-head {
+  display:flex !important; justify-content:space-between !important; align-items:center !important;
+  padding:18px 21px !important; border-bottom:1px solid rgba(212,190,33,.25) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-panel-head h3 {
+  margin:5px 0 0 !important; color:#f1ecdf !important;
+  font:18px/1.2 var(--remodel-serif,Georgia) !important; text-transform:uppercase !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-panel-head button {
+  width:30px !important; height:30px !important; border:1px solid rgba(212,190,33,.42) !important;
+  border-radius:50% !important; background:transparent !important; color:#d7c800 !important; cursor:pointer !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-panel-body {
+  max-height:calc(100vh - 300px) !important; padding:18px 22px 24px !important; overflow:auto !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-panel-body textarea,
+body.remodel-storydoc-active .remodel-storydoc-panel-body select {
+  width:100% !important; box-sizing:border-box !important; margin:7px 0 12px !important; padding:10px !important;
+  border:1px solid rgba(212,190,33,.25) !important; background:rgba(0,0,0,.3) !important; color:#f2eee4 !important;
+}
+
+/* =====================================================================
+   PROMPT STUDIO
+   A native Tavern workspace: fixed library/editor split, no legacy drawer.
+   ===================================================================== */
+.remodel-prompt-studio {
+  --prompt-gold:#d7c800;
+  --prompt-gold-soft:rgba(215,200,0,.38);
+  --prompt-ink:#f0ecdf;
+  display:grid;
+  grid-template-columns:minmax(250px,320px) minmax(0,1fr);
+  width:min(1460px,calc(100vw - 118px));
+  height:calc(100vh - 180px);
+  min-height:540px;
+  margin:0 auto;
+  overflow:hidden;
+  border:1px solid rgba(215,200,0,.24);
+  background:linear-gradient(135deg,rgba(8,8,13,.92),rgba(18,18,27,.78));
+  box-shadow:0 26px 80px rgba(0,0,0,.34);
+  color:var(--prompt-ink);
+}
+.remodel-prompt-studio *,
+.remodel-prompt-studio *::before,
+.remodel-prompt-studio *::after { box-sizing:border-box; }
+.remodel-prompt-kicker {
+  color:var(--prompt-gold);
+  font:9px/1.2 var(--remodel-serif,Georgia);
+  letter-spacing:.22em;
+  text-transform:uppercase;
+  text-shadow:0 0 9px rgba(215,200,0,.35);
+}
+.remodel-prompt-library {
+  display:flex;
+  min-width:0;
+  flex-direction:column;
+  overflow:hidden;
+  border-right:1px solid rgba(215,200,0,.22);
+  background:rgba(4,4,8,.45);
+}
+.remodel-prompt-library-head {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:27px 24px 18px;
+}
+.remodel-prompt-library h2,
+.remodel-prompt-stack-head h3 {
+  margin:5px 0 0;
+  color:#f4efe1;
+  font:22px/1.1 var(--remodel-serif,Georgia);
+  letter-spacing:.04em;
+  text-transform:uppercase;
+}
+.remodel-prompt-icon-button,
+.remodel-prompt-editor-actions button,
+.remodel-prompt-add-row button,
+.remodel-prompt-block-actions button {
+  border:1px solid rgba(215,200,0,.38);
+  background:rgba(8,8,12,.7);
+  color:var(--prompt-gold);
+  cursor:pointer;
+  transition:border-color .16s ease,background .16s ease,color .16s ease,box-shadow .16s ease;
+}
+.remodel-prompt-icon-button:hover,
+.remodel-prompt-editor-actions button:hover:not(:disabled),
+.remodel-prompt-add-row button:hover:not(:disabled),
+.remodel-prompt-block-actions button:hover:not(:disabled) {
+  border-color:#f1df18;
+  color:#fff7a8;
+  background:rgba(215,200,0,.1);
+  box-shadow:0 0 14px rgba(215,200,0,.13);
+}
+.remodel-prompt-icon-button {
+  display:grid;
+  width:34px;
+  height:34px;
+  place-items:center;
+  border-radius:50%;
+}
+.remodel-prompt-matrix { padding:0 18px 12px; }
+.remodel-prompt-filter-group {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:5px;
+  margin-top:6px;
+}
+.remodel-prompt-filter-group button {
+  min-width:0;
+  padding:8px 5px;
+  border:1px solid rgba(255,255,255,.08);
+  background:rgba(255,255,255,.025);
+  color:#9997a2;
+  font:10px/1 var(--remodel-serif,Georgia);
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  cursor:pointer;
+}
+.remodel-prompt-filter-group button.is-active {
+  border-color:rgba(215,200,0,.52);
+  color:#f5e94e;
+  background:rgba(215,200,0,.08);
+}
+.remodel-prompt-search {
+  display:flex;
+  align-items:center;
+  gap:9px;
+  margin:0 18px 14px;
+  padding:0 11px;
+  border:1px solid rgba(255,255,255,.1);
+  background:rgba(0,0,0,.23);
+  color:#8c8992;
+}
+.remodel-prompt-search input {
+  min-width:0;
+  width:100%;
+  height:36px;
+  border:0!important;
+  outline:0!important;
+  background:transparent!important;
+  color:#eee9dc!important;
+  box-shadow:none!important;
+}
+.remodel-prompt-recipe-list {
+  min-height:0;
+  padding:0 10px 18px;
+  overflow:auto;
+  scrollbar-width:thin;
+  scrollbar-color:rgba(215,200,0,.38) transparent;
+}
+.remodel-prompt-recipe-row {
+  position:relative;
+  display:block;
+  width:100%;
+  margin:0 0 5px;
+  padding:14px 35px 14px 13px;
+  overflow:hidden;
+  border:1px solid transparent;
+  background:transparent;
+  color:#aaa7ae;
+  text-align:left;
+  cursor:pointer;
+}
+.remodel-prompt-recipe-row:hover { background:rgba(255,255,255,.035); color:#e9e4d8; }
+.remodel-prompt-recipe-row.is-selected {
+  border-color:rgba(215,200,0,.28);
+  background:linear-gradient(90deg,rgba(215,200,0,.1),rgba(215,200,0,.015));
+  color:#f5f0e5;
+}
+.remodel-prompt-recipe-row strong {
+  display:block;
+  overflow:hidden;
+  font:13px/1.2 var(--remodel-serif,Georgia);
+  letter-spacing:.035em;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.remodel-prompt-recipe-row small {
+  display:block;
+  margin-top:5px;
+  overflow:hidden;
+  color:#77757e;
+  font-size:10px;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.remodel-prompt-active-dot {
+  position:absolute;
+  top:50%;
+  right:15px;
+  width:7px;
+  height:7px;
+  margin-top:-4px;
+  border-radius:50%;
+  background:#e5d700;
+  box-shadow:0 0 10px #e5d700;
+}
+.remodel-prompt-empty { padding:24px 12px; color:#77747d; font-style:italic; }
+.remodel-prompt-editor {
+  display:flex;
+  min-width:0;
+  min-height:0;
+  flex-direction:column;
+  overflow:hidden;
+}
+.remodel-prompt-editor-head {
+  display:flex;
+  flex:0 0 auto;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:22px;
+  padding:23px 28px 20px;
+  border-bottom:1px solid rgba(215,200,0,.19);
+  background:rgba(6,6,10,.36);
+}
+.remodel-prompt-editor-title { min-width:0; flex:1; }
+.remodel-prompt-editor-title input,
+.remodel-prompt-editor-title textarea {
+  display:block;
+  width:100%;
+  padding:0!important;
+  border:0!important;
+  outline:0!important;
+  background:transparent!important;
+  color:#f3eee2!important;
+  box-shadow:none!important;
+  resize:none;
+}
+.remodel-prompt-editor-title input {
+  height:35px;
+  margin-top:4px;
+  font:24px/1.2 var(--remodel-serif,Georgia);
+}
+.remodel-prompt-editor-title textarea {
+  height:28px;
+  color:#96939c!important;
+  font:12px/1.35 system-ui,sans-serif;
+}
+.remodel-prompt-editor-actions {
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:6px;
+  flex-wrap:wrap;
+}
+.remodel-prompt-editor-actions button {
+  min-height:32px;
+  padding:7px 10px;
+  border-radius:2px;
+  font:10px/1 system-ui,sans-serif;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+}
+.remodel-prompt-editor-actions button:disabled,
+.remodel-prompt-add-row button:disabled,
+.remodel-prompt-block-actions button:disabled { opacity:.32; cursor:default; }
+.remodel-prompt-editor-actions .remodel-prompt-activate {
+  padding-inline:13px;
+  background:rgba(215,200,0,.12);
+}
+.remodel-prompt-editor-actions .remodel-prompt-activate.is-active {
+  color:#13130a;
+  background:#cfc000;
+}
+.remodel-prompt-save-state {
+  margin-right:5px;
+  color:#8d8991;
+  font:italic 10px var(--remodel-serif,Georgia);
+}
+.remodel-prompt-editor-scroll {
+  min-width:0;
+  min-height:0;
+  padding:25px 28px 48px;
+  overflow:auto;
+  overscroll-behavior:contain;
+  scrollbar-width:thin;
+  scrollbar-color:rgba(215,200,0,.35) transparent;
+}
+.remodel-prompt-stack-head {
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:30px;
+  margin-bottom:18px;
+}
+.remodel-prompt-stack-head p {
+  max-width:430px;
+  margin:0;
+  color:#85828c;
+  font-size:11px;
+  line-height:1.45;
+  text-align:right;
+}
+.remodel-prompt-blocks { display:flex; flex-direction:column; gap:9px; }
+.remodel-prompt-block {
+  display:grid;
+  grid-template-columns:44px minmax(0,1fr);
+  min-width:0;
+  overflow:hidden;
+  border:1px solid rgba(255,255,255,.1);
+  background:rgba(9,9,14,.65);
+  box-shadow:0 8px 20px rgba(0,0,0,.12);
+  transition:opacity .16s ease,border-color .16s ease,transform .16s ease;
+}
+.remodel-prompt-block:hover { border-color:rgba(215,200,0,.28); }
+.remodel-prompt-block.is-source { background:linear-gradient(105deg,rgba(215,200,0,.055),rgba(9,9,14,.67) 35%); }
+.remodel-prompt-block.role-instruction { border-left:2px solid rgba(215,200,0,.6); }
+.remodel-prompt-block.role-instruction .remodel-prompt-block-head select {
+  color:#f0df5b!important;
+  box-shadow:inset 0 0 12px rgba(215,200,0,.05);
+}
+.remodel-prompt-block.is-disabled { opacity:.42; }
+.remodel-prompt-block.is-dragging { opacity:.35; transform:scale(.99); }
+.remodel-prompt-block-rail {
+  display:flex;
+  align-items:center;
+  flex-direction:column;
+  gap:9px;
+  padding:16px 6px;
+  border-right:1px solid rgba(255,255,255,.07);
+  color:#65636b;
+  font:9px/1 system-ui,sans-serif;
+  letter-spacing:.1em;
+}
+.remodel-prompt-block-main { min-width:0; padding:12px 14px 14px; }
+.remodel-prompt-block-head {
+  display:flex;
+  align-items:center;
+  gap:9px;
+  min-width:0;
+  margin-bottom:10px;
+}
+.remodel-prompt-block-head select {
+  width:115px;
+  height:29px;
+  padding:4px 8px!important;
+  border:1px solid rgba(215,200,0,.25)!important;
+  background:#111117!important;
+  color:#dfd8c8!important;
+  font:9px/1 system-ui,sans-serif;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+}
+.remodel-prompt-block-kind {
+  min-width:0;
+  overflow:hidden;
+  color:#77747d;
+  font:9px/1 system-ui,sans-serif;
+  letter-spacing:.08em;
+  text-overflow:ellipsis;
+  text-transform:uppercase;
+  white-space:nowrap;
+}
+.remodel-prompt-block-actions { display:flex; gap:3px; margin-left:auto; }
+.remodel-prompt-block-actions button {
+  display:grid;
+  width:27px;
+  height:27px;
+  padding:0;
+  place-items:center;
+  border-color:rgba(255,255,255,.08);
+  color:#88858e;
+  font-size:10px;
+}
+.remodel-prompt-block-main > textarea {
+  display:block;
+  width:100%;
+  min-height:88px;
+  padding:12px 13px!important;
+  border:1px solid rgba(255,255,255,.08)!important;
+  background:rgba(0,0,0,.22)!important;
+  color:#e8e3d7!important;
+  font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace!important;
+  resize:vertical;
+}
+.remodel-prompt-source-card {
+  position:relative;
+  min-height:65px;
+  padding:11px 13px;
+  border:1px solid rgba(215,200,0,.14);
+  background:rgba(215,200,0,.035);
+}
+.remodel-prompt-source-card strong {
+  color:#e8dfb0;
+  font:13px/1.25 var(--remodel-serif,Georgia);
+}
+.remodel-prompt-source-card p {
+  margin:5px 0 0;
+  color:#8d8992;
+  font-size:11px;
+  line-height:1.4;
+}
+.remodel-prompt-source-card span {
+  display:inline-block;
+  margin-top:8px;
+  color:#b5a900;
+  font-size:9px;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+}
+.remodel-prompt-source-card button {
+  position:absolute;
+  top:10px;
+  right:10px;
+  padding:5px 7px;
+  border:1px solid rgba(215,200,0,.2);
+  background:rgba(0,0,0,.2);
+  color:#aaa300;
+  font-size:8px;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  cursor:pointer;
+}
+.remodel-prompt-source-card button:hover { border-color:#d7c800; color:#fff36a; }
+.remodel-prompt-add-row {
+  display:grid;
+  grid-template-columns:minmax(110px,1fr) auto minmax(140px,1.2fr) auto;
+  gap:7px;
+  align-items:end;
+  margin-top:15px;
+  padding:13px;
+  border:1px dashed rgba(215,200,0,.22);
+}
+.remodel-prompt-add-row label { min-width:0; }
+.remodel-prompt-add-row label > span,
+.remodel-prompt-transport-grid label > span {
+  display:block;
+  margin-bottom:5px;
+  color:#77747e;
+  font-size:8px;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+}
+.remodel-prompt-add-row select,
+.remodel-prompt-transport-grid input,
+.remodel-prompt-transport-grid textarea {
+  width:100%;
+  border:1px solid rgba(255,255,255,.1)!important;
+  background:rgba(0,0,0,.3)!important;
+  color:#ddd7ca!important;
+}
+.remodel-prompt-add-row select { height:33px; }
+.remodel-prompt-add-row button { height:33px; padding:0 12px; white-space:nowrap; }
+.remodel-prompt-transport {
+  margin-top:18px;
+  border:1px solid rgba(215,200,0,.19);
+  background:rgba(5,5,9,.38);
+  transition:border-color .18s ease,box-shadow .18s ease,background .18s ease;
+}
+.remodel-prompt-transport[open] {
+  border-color:rgba(215,200,0,.34);
+  background:rgba(7,7,12,.54);
+  box-shadow:0 12px 28px rgba(0,0,0,.18);
+}
+.remodel-prompt-transport.is-updated {
+  border-color:rgba(238,222,37,.74);
+  box-shadow:0 0 0 1px rgba(238,222,37,.12),0 0 22px rgba(215,200,0,.13);
+}
+.remodel-prompt-transport summary {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:18px;
+  padding:15px 17px;
+  color:#d9d2c1;
+  cursor:pointer;
+}
+.remodel-prompt-transport summary small {
+  color:#77747d;
+  font-size:9px;
+  letter-spacing:.06em;
+  transition:color .18s ease,text-shadow .18s ease;
+}
+.remodel-prompt-transport.is-updated summary small {
+  color:#f0df3e;
+  text-shadow:0 0 9px rgba(215,200,0,.4);
+}
+.remodel-prompt-transport-intro {
+  margin:0 17px 16px;
+  padding:10px 12px;
+  border-left:2px solid rgba(215,200,0,.42);
+  background:rgba(215,200,0,.035);
+  color:#94919a;
+  font-size:10px;
+  line-height:1.5;
+}
+.remodel-prompt-transport-grid {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+  padding:2px 17px 18px;
+}
+.remodel-prompt-transport-grid .is-wide { grid-column:1/-1; }
+.remodel-prompt-transport-grid textarea { min-height:76px; padding:9px!important; resize:vertical; }
+.remodel-prompt-transport-grid input { height:34px; padding:7px!important; }
+.remodel-prompt-transport-grid textarea:focus,
+.remodel-prompt-transport-grid input[type="text"]:focus {
+  border-color:rgba(229,214,31,.62)!important;
+  outline:0!important;
+  box-shadow:0 0 0 2px rgba(215,200,0,.07),0 0 16px rgba(215,200,0,.08)!important;
+}
+.remodel-prompt-transport-check {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-height:42px;
+  padding:7px 10px;
+  border:1px solid rgba(255,255,255,.07);
+  background:rgba(0,0,0,.16);
+  cursor:pointer;
+  transition:border-color .15s ease,background .15s ease,color .15s ease;
+}
+.remodel-prompt-transport-check:hover {
+  border-color:rgba(215,200,0,.3);
+  background:rgba(215,200,0,.035);
+}
+.remodel-prompt-transport-check input[type="checkbox"] {
+  appearance:none!important;
+  -webkit-appearance:none!important;
+  position:relative!important;
+  display:grid!important;
+  flex:0 0 18px!important;
+  width:18px!important;
+  min-width:18px!important;
+  max-width:18px!important;
+  height:18px!important;
+  min-height:18px!important;
+  padding:0!important;
+  place-items:center!important;
+  border:1px solid rgba(215,200,0,.35)!important;
+  border-radius:3px!important;
+  background:rgba(0,0,0,.42)!important;
+  box-shadow:inset 0 0 0 2px rgba(0,0,0,.35)!important;
+  cursor:pointer!important;
+  transition:background .14s ease,border-color .14s ease,box-shadow .14s ease,transform .14s ease!important;
+}
+.remodel-prompt-transport-check input[type="checkbox"]::after {
+  content:"✓";
+  color:#111108;
+  font:bold 12px/1 system-ui,sans-serif;
+  opacity:0;
+  transform:scale(.6);
+  transition:opacity .12s ease,transform .12s ease;
+}
+.remodel-prompt-transport-check input[type="checkbox"]:checked {
+  border-color:#f0df27!important;
+  background:#d7c800!important;
+  box-shadow:0 0 0 2px rgba(215,200,0,.11),0 0 13px rgba(215,200,0,.3)!important;
+}
+.remodel-prompt-transport-check input[type="checkbox"]:checked::after {
+  opacity:1;
+  transform:scale(1);
+}
+.remodel-prompt-transport-check input[type="checkbox"]:active { transform:scale(.88)!important; }
+.remodel-prompt-transport-check:has(input:checked) {
+  border-color:rgba(215,200,0,.34);
+  background:linear-gradient(90deg,rgba(215,200,0,.075),rgba(215,200,0,.018));
+}
+.remodel-prompt-transport-check span { margin:0!important; color:#8b8891!important; }
+.remodel-prompt-transport-check:has(input:checked) span {
+  color:#e5db9c!important;
+  text-shadow:0 0 8px rgba(215,200,0,.16);
+}
+.remodel-prompt-editor-empty {
+  display:grid;
+  height:100%;
+  place-content:center;
+  padding:30px;
+  color:#77747d;
+  text-align:center;
+}
+.remodel-prompt-editor-empty i { color:#aa9f00; font-size:26px; }
+.remodel-prompt-editor-empty h2 { margin:13px 0 4px; color:#e7e0d2; font:20px var(--remodel-serif,Georgia); }
+.remodel-prompt-editor-empty p { margin:0; font-size:11px; }
+
+@media (max-width:900px) {
+  .remodel-prompt-studio {
+    grid-template-columns:1fr;
+    grid-template-rows:minmax(190px,34vh) minmax(0,1fr);
+    width:calc(100vw - 78px);
+    height:calc(100vh - 138px);
+    min-height:0;
+  }
+  .remodel-prompt-library { border-right:0; border-bottom:1px solid rgba(215,200,0,.22); }
+  .remodel-prompt-library-head { padding:16px 18px 11px; }
+  .remodel-prompt-library h2 { font-size:18px; }
+  .remodel-prompt-matrix { display:grid; grid-template-columns:1fr 1fr; gap:6px; padding:0 18px 10px; }
+  .remodel-prompt-search { margin-bottom:9px; }
+  .remodel-prompt-recipe-list { display:flex; gap:6px; padding:0 18px 10px; overflow:auto hidden; }
+  .remodel-prompt-recipe-row { min-width:190px; margin:0; }
+  .remodel-prompt-editor-head { padding:15px 18px; }
+  .remodel-prompt-editor-title input { font-size:19px; }
+  .remodel-prompt-editor-scroll { padding:18px 18px 40px; }
+}
+@media (max-width:620px) {
+  body.st-remodel-active .remodel-tavern-tabs {
+    flex-wrap:wrap !important;
+    gap:3px 5px !important;
+    padding-inline:8px !important;
+    overflow:visible !important;
+  }
+  body.st-remodel-active .remodel-tavern-tab {
+    min-width:0 !important;
+    padding:6px 8px !important;
+    font-size:.64rem !important;
+    letter-spacing:.08em !important;
+  }
+  .remodel-prompt-studio { width:calc(100vw - 62px); }
+  .remodel-prompt-editor-head { display:block; }
+  .remodel-prompt-editor-actions { justify-content:flex-start; margin-top:10px; }
+  .remodel-prompt-stack-head { display:block; }
+  .remodel-prompt-stack-head p { margin-top:8px; text-align:left; }
+  .remodel-prompt-block { grid-template-columns:32px minmax(0,1fr); }
+  .remodel-prompt-block-main { padding:10px; }
+  .remodel-prompt-block-kind { display:none; }
+  .remodel-prompt-add-row { grid-template-columns:1fr auto; }
+  .remodel-prompt-transport-grid { grid-template-columns:1fr; }
+  .remodel-prompt-transport-grid .is-wide { grid-column:auto; }
+}
+
+/* =====================================================================
+   PERSONAS WORKSPACE
+   Full-bleed layout adapter for the native Persona Management controls.
+   ===================================================================== */
+
+body.st-remodel-active .remodel-tavern-viewport.is-personas-workspace .remodel-tavern-body,
+body.st-remodel-active .remodel-personas-workspace,
+body.st-remodel-active .remodel-personas-outlet {
+  width:100% !important;
+  height:100% !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  margin:0 !important;
+  padding:0 !important;
+  overflow:hidden !important;
+}
+
+body.st-remodel-active .remodel-personas-workspace {
+  border-top:1px solid rgba(215,200,0,.2) !important;
+  background:linear-gradient(135deg,rgba(7,7,12,.72),rgba(17,17,25,.48)) !important;
+}
+
+body.st-remodel-active #PersonaManagement {
+  --persona-library-width:clamp(330px,29vw,430px);
+  gap:0 !important;
+  overflow:hidden !important;
+}
+
+body.st-remodel-active #PersonaManagement.remodel-tavern-adopted-panel {
+  overflow:hidden !important;
+}
+
+body.st-remodel-active #PersonaManagement > .flex-container:first-child {
+  display:grid !important;
+  grid-template-columns:minmax(0,1fr) !important;
+  grid-template-rows:auto minmax(0,1fr) !important;
+  justify-content:stretch !important;
+  width:100% !important;
+  height:100% !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  gap:0 !important;
+  padding:0 !important;
+  overflow:hidden !important;
+  border:0 !important;
+}
+
+body.st-remodel-active #PersonaManagement > .flex-container:first-child > .flex-container.alignItemsBaseline {
+  display:flex !important;
+  align-items:center !important;
+  justify-content:space-between !important;
+  flex-wrap:wrap !important;
+  gap:12px 24px !important;
+  min-height:76px !important;
+  padding:14px 28px !important;
+  border-bottom:1px solid rgba(215,200,0,.2) !important;
+  background:rgba(5,5,9,.42) !important;
+}
+
+body.st-remodel-active #PersonaManagement > .flex-container:first-child > .flex-container.alignItemsBaseline > .flex1 {
+  min-width:180px !important;
+}
+
+body.st-remodel-active #PersonaManagement h3 {
+  display:grid !important;
+  grid-template-columns:auto auto !important;
+  align-items:center !important;
+  justify-content:start !important;
+  gap:4px 7px !important;
+  margin:0 !important;
+  padding:0 !important;
+  border:0 !important;
+  font-size:1.35rem !important;
+  line-height:1 !important;
+}
+
+body.st-remodel-active #PersonaManagement h3::before {
+  content:"Persona studio" !important;
+  grid-column:1 / -1 !important;
+  color:#d7c800 !important;
+  font:.56rem/1.2 var(--remodel-serif) !important;
+  letter-spacing:.22em !important;
+  text-shadow:0 0 9px rgba(215,200,0,.35) !important;
+}
+
+body.st-remodel-active #PersonaManagement h3 span[data-i18n="Persona Management"] {
+  display:inline !important;
+  color:rgba(244,239,225,.96) !important;
+}
+
+body.st-remodel-active #PersonaManagement h3 .note-link-span {
+  margin-left:0 !important;
+  font-size:.7rem !important;
+  vertical-align:.2em !important;
+}
+
+body.st-remodel-active #PersonaManagement > .flex-container:first-child > .flex-container.alignItemsBaseline > .flex-container {
+  gap:6px !important;
+}
+
+body.st-remodel-active #PersonaManagement > .flex-container:first-child > .flex-container.alignItemsBaseline .menu_button {
+  min-height:32px !important;
+  padding:7px 10px !important;
+  border-radius:2px !important;
+  font-size:.67rem !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active #persona-management-block {
+  display:grid !important;
+  grid-template-columns:var(--persona-library-width) minmax(0,1fr) !important;
+  width:100% !important;
+  height:100% !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  gap:0 !important;
+  overflow:hidden !important;
+}
+
+body.st-remodel-active #PersonaManagement .persona_management_left_column {
+  display:grid !important;
+  grid-template-rows:auto auto minmax(0,1fr) !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  padding:23px 20px 0 !important;
+  overflow:hidden !important;
+  border-right:1px solid rgba(215,200,0,.22) !important;
+  background:rgba(4,4,8,.46) !important;
+}
+
+body.st-remodel-active #PersonaManagement .persona_management_left_column::before {
+  content:"Persona library" !important;
+  display:block !important;
+  margin:0 0 16px 2px !important;
+  color:rgba(244,239,225,.96) !important;
+  font:1.2rem/1.1 var(--remodel-serif) !important;
+  letter-spacing:.055em !important;
+  text-transform:uppercase !important;
+  text-shadow:0 2px 12px rgba(0,0,0,.5) !important;
+}
+
+body.st-remodel-active #PersonaManagement .persona_management_left_column > .flex-container:first-of-type {
+  display:grid !important;
+  grid-template-columns:auto minmax(105px,1fr) auto auto !important;
+  align-items:center !important;
+  gap:7px !important;
+  margin:0 0 15px !important;
+}
+
+body.st-remodel-active #create_dummy_persona,
+body.st-remodel-active #persona_grid_toggle {
+  width:34px !important;
+  min-width:34px !important;
+  height:34px !important;
+  min-height:34px !important;
+  padding:0 !important;
+  display:inline-flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+}
+
+body.st-remodel-active #create_dummy_persona > div { display:none !important; }
+
+body.st-remodel-active #persona_search_bar {
+  width:100% !important;
+  min-width:0 !important;
+  height:34px !important;
+  margin:0 !important;
+  padding-inline:11px !important;
+}
+
+body.st-remodel-active #persona_sort_order {
+  width:60px !important;
+  max-width:60px !important;
+  height:34px !important;
+  margin:0 !important;
+}
+
+body.st-remodel-active #persona_pagination_container {
+  grid-column:1 / -1 !important;
+  grid-row:2 !important;
+  min-width:0 !important;
+  margin-top:1px !important;
+}
+
+body.st-remodel-active #persona_grid_toggle {
+  grid-column:4 !important;
+  grid-row:1 !important;
+}
+
+body.st-remodel-active #user_avatar_block {
+  display:grid !important;
+  grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+  align-content:start !important;
+  justify-content:stretch !important;
+  gap:12px !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  padding:2px 4px 34px 2px !important;
+  overflow:hidden auto !important;
+  overscroll-behavior:contain !important;
+  scrollbar-width:thin !important;
+  scrollbar-color:rgba(215,200,0,.34) transparent !important;
+}
+
+body.st-remodel-active #user_avatar_block .avatar_upload {
+  width:100% !important;
+  height:100% !important;
+  min-height:166px !important;
+  display:flex !important;
+  flex-direction:column !important;
+  gap:7px !important;
+  border:1px dashed rgba(215,200,0,.38) !important;
+  border-radius:3px !important;
+  background:rgba(215,200,0,.025) !important;
+  color:rgba(215,200,0,.72) !important;
+  font:2rem/1 var(--remodel-serif) !important;
+  transition:border-color .16s ease,background-color .16s ease,color .16s ease,box-shadow .16s ease !important;
+}
+
+body.st-remodel-active #user_avatar_block .avatar_upload::after {
+  content:"Import persona" !important;
+  font:.58rem/1.2 var(--remodel-serif) !important;
+  letter-spacing:.12em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active #user_avatar_block .avatar_upload:hover {
+  border-color:rgba(215,200,0,.78) !important;
+  background:rgba(215,200,0,.07) !important;
+  color:#e5d700 !important;
+  box-shadow:inset 0 0 22px rgba(215,200,0,.05) !important;
+}
+
+body.st-remodel-active #user_avatar_block .avatar-container {
+  width:100% !important;
+  max-width:none !important;
+  min-width:0 !important;
+  min-height:166px !important;
+  justify-content:flex-start !important;
+  gap:7px !important;
+  padding:13px 10px 11px !important;
+  overflow:hidden !important;
+  border-radius:3px !important;
+  border-color:rgba(215,200,0,.28) !important;
+  background:linear-gradient(150deg,rgba(244,231,196,.045),rgba(0,0,0,.16)) !important;
+}
+
+body.st-remodel-active #user_avatar_block .avatar-container:hover {
+  transform:translateY(-2px) !important;
+  border-color:rgba(215,200,0,.7) !important;
+  background:linear-gradient(150deg,rgba(215,200,0,.075),rgba(0,0,0,.16)) !important;
+}
+
+body.st-remodel-active #user_avatar_block .avatar-container.selected {
+  border-color:#ded100 !important;
+  background:linear-gradient(150deg,rgba(215,200,0,.11),rgba(0,0,0,.15)) !important;
+  box-shadow:inset 0 0 0 3px transparent,inset 0 0 0 4px rgba(215,200,0,.32),0 0 18px rgba(215,200,0,.16) !important;
+}
+
+body.st-remodel-active #user_avatar_block .avatar-container.selected::after {
+  width:7px !important;
+  height:7px !important;
+  top:9px !important;
+  right:9px !important;
+  border:0 !important;
+  border-radius:50% !important;
+  background:#e5d700 !important;
+  box-shadow:0 0 10px #e5d700 !important;
+}
+
+body.st-remodel-active #user_avatar_block .avatar {
+  flex:0 0 auto !important;
+  width:68px !important;
+  height:68px !important;
+}
+
+body.st-remodel-active #user_avatar_block .character_select_container,
+body.st-remodel-active #user_avatar_block .character_name_block {
+  width:100% !important;
+  min-width:0 !important;
+  flex-direction:column !important;
+  align-items:center !important;
+  gap:2px !important;
+  text-align:center !important;
+}
+
+body.st-remodel-active #user_avatar_block .ch_name,
+body.st-remodel-active #user_avatar_block .ch_additional_info {
+  width:100% !important;
+  overflow:hidden !important;
+  text-overflow:ellipsis !important;
+  white-space:nowrap !important;
+}
+
+body.st-remodel-active #user_avatar_block .ch_additional_info {
+  color:rgba(215,200,0,.56) !important;
+  font-size:.58rem !important;
+  letter-spacing:.07em !important;
+}
+
+body.st-remodel-active #user_avatar_block.gridView {
+  grid-template-columns:repeat(auto-fill,minmax(96px,1fr)) !important;
+}
+
+body.st-remodel-active #user_avatar_block.gridView .avatar_upload,
+body.st-remodel-active #user_avatar_block.gridView .avatar-container {
+  width:100% !important;
+  max-width:none !important;
+  min-height:126px !important;
+  padding-inline:7px !important;
+}
+
+body.st-remodel-active #user_avatar_block.gridView .avatar {
+  width:56px !important;
+  height:56px !important;
+}
+
+body.st-remodel-active #user_avatar_block.gridView .character_select_container,
+body.st-remodel-active #user_avatar_block.gridView .character_name_block,
+body.st-remodel-active #user_avatar_block.gridView .ch_name,
+body.st-remodel-active #user_avatar_block.gridView .ch_additional_info {
+  width:100% !important;
+  max-width:none !important;
+}
+
+body.st-remodel-active #PersonaManagement .persona_management_right_column {
+  min-width:0 !important;
+  min-height:0 !important;
+  padding:0 30px 52px !important;
+  overflow:hidden auto !important;
+  overscroll-behavior:contain !important;
+  scrollbar-width:thin !important;
+  scrollbar-color:rgba(215,200,0,.34) transparent !important;
+  background:linear-gradient(145deg,rgba(18,18,26,.28),rgba(6,6,10,.08)) !important;
+}
+
+body.st-remodel-active #PersonaManagement .persona_management_current_persona,
+body.st-remodel-active #PersonaManagement .persona_management_global_settings {
+  width:100% !important;
+  max-width:980px !important;
+  margin-inline:auto !important;
+}
+
+body.st-remodel-active #PersonaManagement .persona_management_current_persona > .standoutHeader:first-child {
+  margin:0 -30px 20px !important;
+  padding:22px 30px 15px !important;
+  border-bottom:1px solid rgba(215,200,0,.18) !important;
+  background:rgba(5,5,9,.24) !important;
+  color:rgba(215,200,0,.76) !important;
+  font-size:.58rem !important;
+  letter-spacing:.2em !important;
+}
+
+body.st-remodel-active #PersonaManagement .persona_management_current_persona > .standoutHeader:first-child::after {
+  content:"  /  selected identity" !important;
+  color:rgba(255,255,255,.28) !important;
+  letter-spacing:.08em !important;
+}
+
+body.st-remodel-active #persona_controls {
+  display:grid !important;
+  grid-template-columns:minmax(140px,auto) auto minmax(150px,1fr) !important;
+  align-items:center !important;
+  gap:9px 15px !important;
+  margin-bottom:22px !important;
+}
+
+body.st-remodel-active #your_name.persona_name {
+  min-width:0 !important;
+  margin:0 !important;
+  padding:0 !important;
+  overflow:hidden !important;
+  border:0 !important;
+  color:rgba(244,239,225,.96) !important;
+  font-size:1.22rem !important;
+  opacity:1 !important;
+  text-overflow:ellipsis !important;
+}
+
+body.st-remodel-active .persona_controls_buttons_block {
+  display:flex !important;
+  flex-wrap:nowrap !important;
+  gap:5px !important;
+}
+
+body.st-remodel-active .persona_controls_buttons_block .menu_button {
+  min-width:30px !important;
+  min-height:30px !important;
+}
+
+body.st-remodel-active #persona-management-dropdown {
+  width:100% !important;
+  min-width:0 !important;
+  margin:0 !important;
+}
+
+body.st-remodel-active #persona_description {
+  width:100% !important;
+  min-height:180px !important;
+  max-height:40vh !important;
+  margin:0 !important;
+  padding:14px 15px !important;
+  resize:vertical !important;
+  background:rgba(7,7,12,.56) !important;
+}
+
+body.st-remodel-active .persona_management_description_position_container {
+  display:grid !important;
+  grid-template-columns:minmax(210px,1fr) minmax(220px,1fr) !important;
+  align-items:start !important;
+  gap:12px !important;
+}
+
+body.st-remodel-active #persona_description_position,
+body.st-remodel-active #persona_depth_position_settings input,
+body.st-remodel-active #persona_depth_position_settings select {
+  width:100% !important;
+  margin:0 !important;
+}
+
+body.st-remodel-active #persona_depth_position_settings:not([style*="display: none"]) {
+  display:grid !important;
+  grid-template-columns:1fr 1fr !important;
+  gap:10px !important;
+}
+
+body.st-remodel-active #persona_depth_position_settings[style*="display: none"] {
+  display:none !important;
+}
+
+body.st-remodel-active #PersonaManagement .persona_management_global_settings {
+  margin-top:30px !important;
+  padding-top:2px !important;
+  border-top:1px solid rgba(215,200,0,.16) !important;
+}
+
+body.st-remodel-active #PersonaManagement .persona_management_global_settings .range-block {
+  min-height:34px !important;
+  margin:0 !important;
+  padding:8px 0 !important;
+  border-bottom:1px solid rgba(255,255,255,.045) !important;
+}
+
+@media (max-width:900px) {
+  body.st-remodel-active #persona-management-block {
+    grid-template-columns:minmax(0,1fr) !important;
+    grid-template-rows:minmax(230px,38%) minmax(0,1fr) !important;
+  }
+  body.st-remodel-active #PersonaManagement .persona_management_left_column {
+    padding:16px 18px 0 !important;
+    border-right:0 !important;
+    border-bottom:1px solid rgba(215,200,0,.22) !important;
+  }
+  body.st-remodel-active #PersonaManagement .persona_management_left_column::before {
+    margin-bottom:10px !important;
+    font-size:1rem !important;
+  }
+  body.st-remodel-active #user_avatar_block {
+    grid-template-columns:repeat(auto-fill,minmax(126px,1fr)) !important;
+  }
+  body.st-remodel-active #user_avatar_block .avatar_upload,
+  body.st-remodel-active #user_avatar_block .avatar-container { min-height:138px !important; }
+}
+
+@media (max-width:620px) {
+  body.st-remodel-active #PersonaManagement > .flex-container:first-child > .flex-container.alignItemsBaseline {
+    min-height:0 !important;
+    padding:10px 14px !important;
+  }
+  body.st-remodel-active #PersonaManagement h3 { font-size:1rem !important; }
+  body.st-remodel-active #PersonaManagement > .flex-container:first-child > .flex-container.alignItemsBaseline .menu_button span {
+    display:none !important;
+  }
+  body.st-remodel-active #PersonaManagement > .flex-container:first-child > .flex-container.alignItemsBaseline .menu_button {
+    width:32px !important;
+    min-width:32px !important;
+    padding:0 !important;
+  }
+  body.st-remodel-active #PersonaManagement .persona_management_left_column > .flex-container:first-of-type {
+    grid-template-columns:auto minmax(90px,1fr) auto auto !important;
+  }
+  body.st-remodel-active #user_avatar_block { grid-template-columns:repeat(2,minmax(0,1fr)) !important; }
+  body.st-remodel-active #PersonaManagement .persona_management_right_column { padding-inline:16px !important; }
+  body.st-remodel-active #PersonaManagement .persona_management_current_persona > .standoutHeader:first-child {
+    margin-inline:-16px !important;
+    padding-inline:16px !important;
+  }
+  body.st-remodel-active #persona_controls { grid-template-columns:minmax(0,1fr) !important; }
+  body.st-remodel-active .persona_management_description_position_container {
+    grid-template-columns:minmax(0,1fr) !important;
+  }
+}
+
+/* =====================================================================
+   REMODEL CHECKBOXES
+   One native control treatment across adopted panels and Prompt Studio.
+   Explicitly replaces core's ::before tick so two glyphs never overlap.
+   ===================================================================== */
+
+body.st-remodel-active #remodel-timeline-drawer .remodel-tavern-adopted-panel input[type="checkbox"]:not(.del_checkbox),
+body.st-remodel-active #remodel-timeline-drawer .remodel-prompt-transport-check input[type="checkbox"] {
+  appearance:none !important;
+  -webkit-appearance:none !important;
+  position:relative !important;
+  display:inline-grid !important;
+  place-items:center !important;
+  flex:0 0 17px !important;
+  width:17px !important;
+  min-width:17px !important;
+  max-width:17px !important;
+  height:17px !important;
+  min-height:17px !important;
+  max-height:17px !important;
+  padding:0 !important;
+  overflow:visible !important;
+  border:1px solid rgba(215,200,0,.48) !important;
+  border-radius:3px !important;
+  outline:0 !important;
+  background:linear-gradient(145deg,rgba(18,18,24,.96),rgba(4,4,8,.96)) !important;
+  box-shadow:inset 0 0 0 2px rgba(0,0,0,.24),0 1px 4px rgba(0,0,0,.24) !important;
+  filter:none !important;
+  transform:none !important;
+  cursor:pointer !important;
+  transition:border-color .15s ease,background .15s ease,box-shadow .15s ease,transform .1s ease !important;
+}
+
+body.st-remodel-active #remodel-timeline-drawer .remodel-tavern-adopted-panel input[type="checkbox"]:not(.del_checkbox) {
+  margin:0 8px 0 0 !important;
+}
+
+body.st-remodel-active #remodel-timeline-drawer .remodel-prompt-transport-check input[type="checkbox"] {
+  margin:0 !important;
+}
+
+body.st-remodel-active #remodel-timeline-drawer .remodel-tavern-adopted-panel input[type="checkbox"]:not(.del_checkbox)::before,
+body.st-remodel-active #remodel-timeline-drawer .remodel-prompt-transport-check input[type="checkbox"]::before {
+  content:"" !important;
+  position:absolute !important;
+  left:5px !important;
+  top:2px !important;
+  width:4px !important;
+  height:8px !important;
+  border:0 !important;
+  border-right:2px solid #151508 !important;
+  border-bottom:2px solid #151508 !important;
+  background:transparent !important;
+  box-shadow:none !important;
+  clip-path:none !important;
+  opacity:0 !important;
+  transform:rotate(45deg) scale(.72) !important;
+  transform-origin:center !important;
+  transition:opacity .12s ease,transform .12s ease !important;
+}
+
+body.st-remodel-active #remodel-timeline-drawer .remodel-tavern-adopted-panel input[type="checkbox"]:not(.del_checkbox)::after,
+body.st-remodel-active #remodel-timeline-drawer .remodel-prompt-transport-check input[type="checkbox"]::after {
+  content:none !important;
+  display:none !important;
+}
+
+body.st-remodel-active #remodel-timeline-drawer .remodel-tavern-adopted-panel input[type="checkbox"]:not(.del_checkbox):hover,
+body.st-remodel-active #remodel-timeline-drawer .remodel-prompt-transport-check input[type="checkbox"]:hover {
+  border-color:rgba(238,222,39,.9) !important;
+  box-shadow:inset 0 0 0 2px rgba(0,0,0,.2),0 0 9px rgba(215,200,0,.18) !important;
+}
+
+body.st-remodel-active #remodel-timeline-drawer .remodel-tavern-adopted-panel input[type="checkbox"]:not(.del_checkbox):checked,
+body.st-remodel-active #remodel-timeline-drawer .remodel-prompt-transport-check input[type="checkbox"]:checked {
+  border-color:#f0df27 !important;
+  background:linear-gradient(145deg,#eee126,#bfb100) !important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,210,.22),0 0 10px rgba(215,200,0,.3) !important;
+}
+
+body.st-remodel-active #remodel-timeline-drawer .remodel-tavern-adopted-panel input[type="checkbox"]:not(.del_checkbox):checked::before,
+body.st-remodel-active #remodel-timeline-drawer .remodel-prompt-transport-check input[type="checkbox"]:checked::before {
+  opacity:1 !important;
+  transform:rotate(45deg) scale(1) !important;
+}
+
+body.st-remodel-active #remodel-timeline-drawer .remodel-tavern-adopted-panel input[type="checkbox"]:not(.del_checkbox):focus-visible,
+body.st-remodel-active #remodel-timeline-drawer .remodel-prompt-transport-check input[type="checkbox"]:focus-visible {
+  outline:1px solid rgba(245,235,92,.92) !important;
+  outline-offset:3px !important;
+}
+
+body.st-remodel-active #remodel-timeline-drawer .remodel-tavern-adopted-panel input[type="checkbox"]:not(.del_checkbox):active,
+body.st-remodel-active #remodel-timeline-drawer .remodel-prompt-transport-check input[type="checkbox"]:active {
+  transform:scale(.92) !important;
+}
+
+body.st-remodel-active #remodel-timeline-drawer .remodel-tavern-adopted-panel input[type="checkbox"]:not(.del_checkbox):disabled,
+body.st-remodel-active #remodel-timeline-drawer .remodel-prompt-transport-check input[type="checkbox"]:disabled {
+  opacity:.42 !important;
+  cursor:not-allowed !important;
+  box-shadow:none !important;
+}
+
+/* =====================================================================
+   LOREBOOKS WORKSPACE
+   Full-bleed notebook adapter around SillyTavern's native World Info DOM.
+   Every stock control remains the original live node; this layer only
+   changes geometry and presentation.
+   ===================================================================== */
+
+body.st-remodel-active .remodel-tavern-viewport.is-lorebooks-workspace .remodel-tavern-body,
+body.st-remodel-active .remodel-lorebooks-workspace,
+body.st-remodel-active .remodel-lorebooks-outlet {
+  width:100% !important;
+  height:100% !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  margin:0 !important;
+  padding:0 !important;
+  overflow:hidden !important;
+}
+
+body.st-remodel-active .remodel-lorebooks-workspace {
+  border-top:1px solid rgba(215,200,0,.2) !important;
+  background:
+    linear-gradient(90deg,rgba(4,4,8,.8),rgba(12,12,18,.52) 28%,rgba(7,7,12,.62)),
+    repeating-linear-gradient(0deg,transparent 0 31px,rgba(215,200,0,.025) 31px 32px) !important;
+}
+
+body.st-remodel-active #WorldInfo.remodel-tavern-adopted-panel {
+  --lore-ink:rgba(244,239,225,.94);
+  --lore-muted:rgba(244,239,225,.52);
+  --lore-gold:rgba(229,215,42,.9);
+  --lore-line:rgba(215,200,0,.24);
+  --lore-paper:rgba(12,12,18,.76);
+  display:grid !important;
+  grid-template-rows:auto minmax(0,1fr) !important;
+  gap:0 !important;
+  overflow:hidden !important;
+  color:var(--lore-ink) !important;
+}
+
+body.st-remodel-active #WorldInfo > #WorldInfoheader {
+  display:none !important;
+}
+
+/* Archive title and the native drawer pin. */
+body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px {
+  position:relative !important;
+  display:flex !important;
+  align-items:center !important;
+  gap:16px !important;
+  min-height:72px !important;
+  margin:0 !important;
+  padding:13px 28px 12px 72px !important;
+  border-bottom:1px solid var(--lore-line) !important;
+  background:linear-gradient(90deg,rgba(5,5,9,.92),rgba(15,15,22,.62)) !important;
+}
+
+body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px::before {
+  content:"" !important;
+  position:absolute !important;
+  left:26px !important;
+  top:0 !important;
+  bottom:0 !important;
+  width:17px !important;
+  border-left:1px solid rgba(215,200,0,.28) !important;
+  border-right:1px solid rgba(215,200,0,.15) !important;
+  background:repeating-linear-gradient(0deg,transparent 0 11px,rgba(215,200,0,.28) 11px 13px,transparent 13px 22px) !important;
+  opacity:.8 !important;
+}
+
+body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px h3 {
+  display:grid !important;
+  grid-template-columns:auto auto !important;
+  align-items:center !important;
+  justify-content:start !important;
+  gap:3px 8px !important;
+  margin:0 !important;
+  padding:0 !important;
+  border:0 !important;
+  font-size:1.35rem !important;
+  line-height:1 !important;
+}
+
+body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px h3::before {
+  content:"World archive" !important;
+  grid-column:1 / -1 !important;
+  color:rgba(215,200,0,.62) !important;
+  font-family:var(--remodel-serif) !important;
+  font-size:.56rem !important;
+  letter-spacing:.22em !important;
+  line-height:1 !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active #WI_panel_pin_div {
+  position:absolute !important;
+  left:48px !important;
+  top:8px !important;
+  width:27px !important;
+  height:54px !important;
+  margin:0 !important;
+  z-index:2 !important;
+}
+
+body.st-remodel-active #remodel-timeline-drawer #WorldInfo #WI_panel_pin {
+  position:absolute !important;
+  width:1px !important;
+  min-width:1px !important;
+  height:1px !important;
+  min-height:1px !important;
+  margin:-1px !important;
+  padding:0 !important;
+  overflow:hidden !important;
+  clip:rect(0 0 0 0) !important;
+  clip-path:inset(50%) !important;
+  border:0 !important;
+}
+
+body.st-remodel-active #WI_panel_pin_div label {
+  position:relative !important;
+  display:block !important;
+  width:27px !important;
+  height:54px !important;
+  color:rgba(244,239,225,.52) !important;
+  cursor:pointer !important;
+}
+
+body.st-remodel-active #WI_panel_pin_div label::before {
+  content:"" !important;
+  position:absolute !important;
+  left:8px !important;
+  top:20px !important;
+  width:2px !important;
+  height:31px !important;
+  border-radius:2px !important;
+  background:currentColor !important;
+  transform:rotate(17deg) !important;
+  transform-origin:top center !important;
+  box-shadow:0 0 4px rgba(0,0,0,.5) !important;
+}
+
+body.st-remodel-active #WI_panel_pin_div label::after {
+  content:"" !important;
+  position:absolute !important;
+  left:3px !important;
+  top:7px !important;
+  width:15px !important;
+  height:15px !important;
+  border:2px solid currentColor !important;
+  border-radius:50% !important;
+  background:rgba(7,7,12,.96) !important;
+  box-shadow:0 2px 8px rgba(0,0,0,.5) !important;
+}
+
+body.st-remodel-active #WI_panel_pin_div label .checked,
+body.st-remodel-active #WI_panel_pin_div label .unchecked {
+  display:none !important;
+}
+
+body.st-remodel-active #WI_panel_pin:checked + label {
+  color:var(--lore-gold) !important;
+}
+
+body.st-remodel-active #WI_panel_pin:checked + label::after {
+  background:var(--lore-gold) !important;
+  box-shadow:0 0 12px rgba(215,200,0,.38) !important;
+}
+
+body.st-remodel-active #WI_panel_pin:focus-visible + label {
+  outline:1px solid var(--lore-gold) !important;
+  outline-offset:2px !important;
+}
+
+/* The live native workspace fills the remaining height. */
+body.st-remodel-active #WorldInfo #wi-holder {
+  position:relative !important;
+  display:grid !important;
+  grid-template-rows:auto minmax(0,1fr) !important;
+  width:100% !important;
+  height:100% !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  margin:0 !important;
+  padding:0 !important;
+  overflow:hidden !important;
+}
+
+body.st-remodel-active #WorldInfo #wi-holder::before {
+  content:"" !important;
+  position:absolute !important;
+  left:42px !important;
+  top:0 !important;
+  bottom:0 !important;
+  width:1px !important;
+  background:rgba(215,200,0,.14) !important;
+  pointer-events:none !important;
+  z-index:3 !important;
+}
+
+/* Global activation lives on the notebook's inside cover. */
+body.st-remodel-active #WorldInfo #wiTopBlock {
+  display:grid !important;
+  grid-template-columns:minmax(280px,.78fr) minmax(440px,1.22fr) !important;
+  align-items:start !important;
+  gap:22px !important;
+  width:100% !important;
+  min-width:0 !important;
+  max-height:45vh !important;
+  margin:0 !important;
+  padding:16px 28px 16px 66px !important;
+  overflow-x:hidden !important;
+  overflow-y:auto !important;
+  scrollbar-width:thin !important;
+  scrollbar-color:rgba(215,200,0,.34) transparent !important;
+  border-bottom:1px solid var(--lore-line) !important;
+  background:linear-gradient(180deg,rgba(17,17,24,.58),rgba(7,7,12,.44)) !important;
+}
+
+body.st-remodel-active #WorldInfo #wiTopBlock > .range-block {
+  display:flex !important;
+  flex-direction:column !important;
+  align-items:stretch !important;
+  min-width:0 !important;
+  margin:0 !important;
+  padding:0 !important;
+  border:0 !important;
+  background:transparent !important;
+}
+
+body.st-remodel-active #WorldInfo #wiTopBlock .range-block-title {
+  min-height:20px !important;
+  margin:0 0 7px !important;
+  color:rgba(215,200,0,.68) !important;
+  font-family:var(--remodel-serif) !important;
+  font-size:.62rem !important;
+  letter-spacing:.13em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active #WIMultiSelector .select2-container,
+body.st-remodel-active #WIMultiSelector .select2-selection {
+  width:100% !important;
+  min-width:0 !important;
+}
+
+body.st-remodel-active #WorldInfo #wiTopBlock .standoutHeader.inline-drawer-header {
+  min-height:38px !important;
+  margin:0 !important;
+  padding:8px 12px !important;
+  border:1px solid rgba(215,200,0,.18) !important;
+  border-radius:0 !important;
+  background:rgba(5,5,9,.54) !important;
+  font-size:.72rem !important;
+}
+
+body.st-remodel-active #WorldInfo #wiActivationSettings {
+  display:grid !important;
+  grid-template-columns:minmax(0,2fr) minmax(180px,.75fr) !important;
+  gap:18px !important;
+  padding:14px !important;
+  border:1px solid rgba(215,200,0,.14) !important;
+  border-top:0 !important;
+  background:rgba(5,5,9,.38) !important;
+}
+
+body.st-remodel-active #WorldInfo #wiSliders {
+  display:grid !important;
+  grid-template-columns:repeat(4,minmax(92px,1fr)) !important;
+  gap:12px !important;
+}
+
+body.st-remodel-active #WorldInfo #wiSliders > div {
+  min-width:0 !important;
+}
+
+body.st-remodel-active #WorldInfo #wiCheckboxes {
+  display:grid !important;
+  grid-template-columns:minmax(0,1fr) !important;
+  align-content:start !important;
+  gap:4px 12px !important;
+}
+
+body.st-remodel-active #WorldInfo #wiCheckboxes .checkbox_label {
+  min-width:0 !important;
+  padding:5px 0 !important;
+}
+
+body.st-remodel-active #WorldInfo #wiCheckboxes small.whitespacenowrap {
+  min-width:0 !important;
+  white-space:normal !important;
+  overflow-wrap:anywhere !important;
+}
+
+/* Book shelf and entry index toolbars. */
+body.st-remodel-active #WorldInfo #world_popup {
+  display:grid !important;
+  grid-template-rows:auto auto minmax(0,1fr) !important;
+  width:100% !important;
+  height:100% !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  margin:0 !important;
+  padding:0 0 0 42px !important;
+  overflow:hidden !important;
+  background:linear-gradient(90deg,rgba(4,4,8,.38),transparent 26%) !important;
+}
+
+body.st-remodel-active #WorldInfo #world_popup > hr {
+  display:none !important;
+}
+
+body.st-remodel-active #WorldInfo #world_popup > .flex-container.alignitemscenter {
+  display:flex !important;
+  align-items:center !important;
+  flex-wrap:wrap !important;
+  gap:7px !important;
+  width:100% !important;
+  min-width:0 !important;
+  margin:0 !important;
+  padding:10px 24px !important;
+  border-bottom:1px solid rgba(215,200,0,.14) !important;
+  background:rgba(6,6,10,.5) !important;
+}
+
+body.st-remodel-active #WorldInfo #world_popup > .flex-container.alignitemscenter:first-of-type {
+  min-height:58px !important;
+  padding-block:9px !important;
+  background:linear-gradient(90deg,rgba(20,19,12,.58),rgba(6,6,10,.54)) !important;
+}
+
+body.st-remodel-active #WorldInfo #world_popup > .flex-container.alignitemscenter:nth-of-type(2) {
+  min-height:54px !important;
+}
+
+body.st-remodel-active #WorldInfo #world_create_button,
+body.st-remodel-active #WorldInfo #world_import_button,
+body.st-remodel-active #WorldInfo #world_popup_export,
+body.st-remodel-active #WorldInfo #world_popup_name_button,
+body.st-remodel-active #WorldInfo #world_duplicate,
+body.st-remodel-active #WorldInfo #world_popup_delete {
+  position:relative !important;
+  display:inline-flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  gap:7px !important;
+  width:auto !important;
+  min-width:36px !important;
+  min-height:34px !important;
+  padding:6px 10px !important;
+  border-radius:2px 2px 8px 2px !important;
+}
+
+body.st-remodel-active #WorldInfo #world_import_button::after,
+body.st-remodel-active #WorldInfo #world_popup_export::after,
+body.st-remodel-active #WorldInfo #world_popup_name_button::after,
+body.st-remodel-active #WorldInfo #world_duplicate::after,
+body.st-remodel-active #WorldInfo #world_popup_delete::after {
+  content:attr(title) !important;
+  font-family:var(--remodel-serif) !important;
+  font-size:.56rem !important;
+  font-weight:600 !important;
+  letter-spacing:.08em !important;
+  line-height:1 !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active #WorldInfo #world_popup_delete {
+  margin-left:auto !important;
+  color:rgba(255,188,180,.88) !important;
+}
+
+body.st-remodel-active #WorldInfo #world_editor_select + .select2-container,
+body.st-remodel-active #WorldInfo #world_editor_select {
+  flex:1 1 260px !important;
+  width:auto !important;
+  min-width:210px !important;
+  max-width:none !important;
+}
+
+body.st-remodel-active #WorldInfo #world_popup_new,
+body.st-remodel-active #WorldInfo #OpenAllWIEntries,
+body.st-remodel-active #WorldInfo #CloseAllWIEntries,
+body.st-remodel-active #WorldInfo #world_backfill_memos,
+body.st-remodel-active #WorldInfo #world_apply_current_sorting,
+body.st-remodel-active #WorldInfo #world_refresh {
+  flex:0 0 34px !important;
+  width:34px !important;
+  min-width:34px !important;
+  height:34px !important;
+  min-height:34px !important;
+  padding:0 !important;
+  border-radius:2px 2px 9px 2px !important;
+}
+
+body.st-remodel-active #WorldInfo #world_popup_new {
+  color:var(--lore-gold) !important;
+  border-color:rgba(215,200,0,.46) !important;
+  box-shadow:0 0 10px rgba(215,200,0,.08) !important;
+}
+
+@media (min-width:1101px) {
+  body.st-remodel-active #WorldInfo #world_popup_new {
+    flex:0 0 auto !important;
+    width:auto !important;
+    min-width:34px !important;
+    padding:0 9px !important;
+    gap:7px !important;
+  }
+
+  body.st-remodel-active #WorldInfo #world_popup_new::after {
+    font-family:var(--remodel-serif) !important;
+    font-size:.54rem !important;
+    font-weight:600 !important;
+    letter-spacing:.07em !important;
+    line-height:1 !important;
+    text-transform:uppercase !important;
+  }
+
+  body.st-remodel-active #WorldInfo #world_popup_new::after { content:"New entry" !important; }
+}
+
+body.st-remodel-active #WorldInfo #world_info_search {
+  flex:1 1 240px !important;
+  width:auto !important;
+  min-width:150px !important;
+  max-width:none !important;
+  margin:0 !important;
+}
+
+body.st-remodel-active #WorldInfo #world_info_sort_order {
+  flex:0 1 190px !important;
+  width:auto !important;
+  min-width:150px !important;
+  margin:0 !important;
+}
+
+body.st-remodel-active #WorldInfo #world_info_pagination {
+  flex:0 0 auto !important;
+  min-width:max-content !important;
+  margin-left:auto !important;
+}
+
+/* Entry pages. Each remains a native collapsible editor. */
+body.st-remodel-active #WorldInfo #world_popup_entries_list {
+  display:flex !important;
+  flex-direction:column !important;
+  gap:10px !important;
+  width:100% !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  margin:0 !important;
+  padding:18px 26px 56px 24px !important;
+  overflow-x:hidden !important;
+  overflow-y:auto !important;
+  scrollbar-width:thin !important;
+  scrollbar-color:rgba(215,200,0,.42) transparent !important;
+}
+
+body.st-remodel-active #WorldInfo #world_popup_entries_list::before {
+  content:"Entries  /  expand a page to edit every activation rule" !important;
+  display:block !important;
+  margin:0 0 2px !important;
+  color:rgba(215,200,0,.55) !important;
+  font-family:var(--remodel-serif) !important;
+  font-size:.6rem !important;
+  letter-spacing:.16em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry {
+  position:relative !important;
+  flex:0 0 auto !important;
+  width:100% !important;
+  min-width:0 !important;
+  margin:0 !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_form.wi-card-entry {
+  position:relative !important;
+  width:100% !important;
+  margin:0 !important;
+  padding:0 !important;
+  overflow:visible !important;
+  border:1px solid rgba(215,200,0,.18) !important;
+  border-left:3px solid rgba(215,200,0,.3) !important;
+  border-radius:1px 4px 4px 1px !important;
+  background:
+    linear-gradient(90deg,rgba(215,200,0,.035) 0 34px,transparent 34px),
+    repeating-linear-gradient(0deg,transparent 0 31px,rgba(255,255,255,.025) 31px 32px),
+    var(--lore-paper) !important;
+  box-shadow:0 7px 18px rgba(0,0,0,.2) !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_form.wi-card-entry:hover,
+body.st-remodel-active #WorldInfo .world_entry_form.wi-card-entry:focus-within {
+  border-color:rgba(215,200,0,.4) !important;
+  box-shadow:0 9px 25px rgba(0,0,0,.3),0 0 12px rgba(215,200,0,.05) !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_form > .inline-drawer > .inline-drawer-header {
+  display:grid !important;
+  grid-template-columns:22px minmax(0,1fr) auto auto auto !important;
+  align-items:center !important;
+  gap:8px !important;
+  min-height:52px !important;
+  padding:7px 9px 7px 8px !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .drag-handle {
+  color:rgba(215,200,0,.4) !important;
+  font-size:.88rem !important;
+  cursor:grab !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_form > .inline-drawer > .inline-drawer-header .world_entry_thin_controls {
+  min-width:0 !important;
+  gap:8px !important;
+}
+
+/* The stock active-state switch becomes the requested pushpin. */
+body.st-remodel-active #WorldInfo .world_entry .killSwitch {
+  position:relative !important;
+  flex:0 0 25px !important;
+  width:25px !important;
+  height:35px !important;
+  margin:-8px 2px 0 0 !important;
+  color:rgba(244,239,225,.34) !important;
+  font-size:0 !important;
+  cursor:pointer !important;
+  overflow:visible !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .killSwitch::before {
+  content:"" !important;
+  position:absolute !important;
+  left:9px !important;
+  top:15px !important;
+  width:2px !important;
+  height:24px !important;
+  border-radius:2px !important;
+  background:currentColor !important;
+  transform:rotate(18deg) !important;
+  transform-origin:top center !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .killSwitch::after {
+  content:"" !important;
+  position:absolute !important;
+  left:4px !important;
+  top:4px !important;
+  width:14px !important;
+  height:14px !important;
+  border:2px solid currentColor !important;
+  border-radius:50% !important;
+  background:rgba(8,8,12,.96) !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .killSwitch.fa-toggle-on {
+  color:var(--lore-gold) !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .killSwitch.fa-toggle-on::after {
+  background:var(--lore-gold) !important;
+  box-shadow:0 0 10px rgba(215,200,0,.32) !important;
+}
+
+body.st-remodel-active #WorldInfo .WIEntryTitleAndStatus {
+  min-width:180px !important;
+}
+
+body.st-remodel-active #WorldInfo .WIEntryTitleAndStatus textarea[name="comment"] {
+  min-height:34px !important;
+  margin:0 !important;
+  padding:7px 10px !important;
+  border:0 !important;
+  border-bottom:1px solid rgba(215,200,0,.16) !important;
+  border-radius:0 !important;
+  background:transparent !important;
+  color:var(--lore-ink) !important;
+  font-family:var(--remodel-serif) !important;
+  font-size:.88rem !important;
+  letter-spacing:.045em !important;
+}
+
+body.st-remodel-active #WorldInfo select[name="entryStateSelector"] {
+  width:38px !important;
+  min-width:38px !important;
+  padding-inline:6px !important;
+  border-color:rgba(215,200,0,.18) !important;
+  border-radius:1px 1px 8px 1px !important;
+}
+
+body.st-remodel-active #WorldInfo .WIEnteryHeaderControls {
+  flex:0 1 auto !important;
+  flex-wrap:wrap !important;
+  justify-content:flex-end !important;
+  gap:5px !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .move_entry_button,
+body.st-remodel-active #WorldInfo .world_entry .duplicate_entry_button,
+body.st-remodel-active #WorldInfo .world_entry .delete_entry_button {
+  width:31px !important;
+  min-width:31px !important;
+  height:31px !important;
+  min-height:31px !important;
+  padding:0 !important;
+  border-radius:2px 2px 8px 2px !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .inline-drawer-outlet:has(> *) {
+  width:100% !important;
+  margin:0 !important;
+  padding:8px 18px 24px 48px !important;
+  border-top:1px solid rgba(215,200,0,.14) !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_edit {
+  color:var(--lore-ink) !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_edit h4,
+body.st-remodel-active #WorldInfo .world_entry_edit h5,
+body.st-remodel-active #WorldInfo .world_entry_edit .standoutHeader {
+  color:rgba(229,215,42,.78) !important;
+  font-size:.68rem !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_edit textarea[name="content"] {
+  min-height:180px !important;
+  padding:13px !important;
+  line-height:1.55 !important;
+  background:rgba(4,4,8,.58) !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry.disabledWIEntry .world_entry_form.wi-card-entry {
+  opacity:.48 !important;
+  filter:saturate(.45) !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry.disabledWIEntry .killSwitch {
+  opacity:1 !important;
+  filter:none !important;
+}
+
+@media (max-width:1100px) {
+  body.st-remodel-active #WorldInfo #wiTopBlock {
+    grid-template-columns:minmax(0,1fr) !important;
+    gap:12px !important;
+  }
+  body.st-remodel-active #WorldInfo #wiActivationSettings {
+    grid-template-columns:minmax(0,1fr) !important;
+  }
+  body.st-remodel-active #WorldInfo #wiSliders {
+    grid-template-columns:repeat(3,minmax(92px,1fr)) !important;
+  }
+  body.st-remodel-active #WorldInfo #world_import_button::after,
+  body.st-remodel-active #WorldInfo #world_popup_export::after,
+  body.st-remodel-active #WorldInfo #world_popup_name_button::after,
+  body.st-remodel-active #WorldInfo #world_duplicate::after,
+  body.st-remodel-active #WorldInfo #world_popup_delete::after {
+    display:none !important;
+  }
+  body.st-remodel-active #WorldInfo #world_import_button,
+  body.st-remodel-active #WorldInfo #world_popup_export,
+  body.st-remodel-active #WorldInfo #world_popup_name_button,
+  body.st-remodel-active #WorldInfo #world_duplicate,
+  body.st-remodel-active #WorldInfo #world_popup_delete {
+    width:34px !important;
+    min-width:34px !important;
+    padding:0 !important;
+  }
+}
+
+@media (max-width:760px) {
+  body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px {
+    min-height:58px !important;
+    padding:10px 14px 9px 51px !important;
+  }
+  body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px::before {
+    left:15px !important;
+  }
+  body.st-remodel-active #WI_panel_pin_div {
+    left:28px !important;
+    top:2px !important;
+    transform:scale(.82) !important;
+  }
+  body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px h3 {
+    font-size:1.05rem !important;
+  }
+  body.st-remodel-active #WorldInfo #wi-holder::before {
+    left:20px !important;
+  }
+  body.st-remodel-active #WorldInfo #wiTopBlock {
+    padding:12px 12px 12px 35px !important;
+  }
+  body.st-remodel-active #WorldInfo #wiSliders {
+    grid-template-columns:repeat(2,minmax(92px,1fr)) !important;
+  }
+  body.st-remodel-active #WorldInfo #wiCheckboxes {
+    grid-template-columns:minmax(0,1fr) !important;
+  }
+  body.st-remodel-active #WorldInfo #world_popup {
+    padding-left:20px !important;
+  }
+  body.st-remodel-active #WorldInfo #world_popup > .flex-container.alignitemscenter {
+    padding:8px 10px !important;
+  }
+  body.st-remodel-active #WorldInfo #world_popup > .flex-container.alignitemscenter:first-of-type > small {
+    display:none !important;
+  }
+  body.st-remodel-active #WorldInfo #world_editor_select + .select2-container,
+  body.st-remodel-active #WorldInfo #world_editor_select {
+    order:-1 !important;
+    flex-basis:100% !important;
+  }
+  body.st-remodel-active #WorldInfo #world_info_pagination {
+    flex-basis:100% !important;
+    margin-left:0 !important;
+  }
+  body.st-remodel-active #WorldInfo #world_popup_entries_list {
+    padding:14px 11px 44px 10px !important;
+  }
+  body.st-remodel-active #WorldInfo .world_entry_form > .inline-drawer > .inline-drawer-header {
+    grid-template-columns:18px minmax(0,1fr) auto !important;
+  }
+  body.st-remodel-active #WorldInfo .world_entry .move_entry_button,
+  body.st-remodel-active #WorldInfo .world_entry .duplicate_entry_button,
+  body.st-remodel-active #WorldInfo .world_entry .delete_entry_button {
+    grid-row:2 !important;
+  }
+  body.st-remodel-active #WorldInfo .world_entry .inline-drawer-outlet:has(> *) {
+    padding:8px 10px 20px 28px !important;
+  }
+}
+
+/* =====================================================================
+   LOREBOOKS SPACE REFINEMENT
+   Administration moves into on-demand utilities; entries own the canvas.
+   ===================================================================== */
+
+body.st-remodel-active .remodel-lorebooks-workspace {
+  position:relative !important;
+}
+
+body.st-remodel-active .remodel-lorebooks-current {
+  position:absolute !important;
+  top:18px !important;
+  right:auto !important;
+  left:360px !important;
+  z-index:45 !important;
+  display:flex !important;
+  align-items:baseline !important;
+  gap:8px !important;
+  max-width:min(32vw,380px) !important;
+  color:rgba(244,239,225,.84) !important;
+  pointer-events:none !important;
+}
+
+body.st-remodel-active .remodel-lorebooks-current span {
+  color:rgba(215,200,0,.52) !important;
+  font-family:var(--remodel-serif) !important;
+  font-size:.52rem !important;
+  letter-spacing:.16em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active .remodel-lorebooks-current strong {
+  min-width:0 !important;
+  overflow:hidden !important;
+  color:rgba(244,239,225,.8) !important;
+  font-family:var(--remodel-serif) !important;
+  font-size:.68rem !important;
+  font-weight:500 !important;
+  letter-spacing:.06em !important;
+  text-overflow:ellipsis !important;
+  white-space:nowrap !important;
+}
+
+body.st-remodel-active .remodel-lorebooks-dock {
+  position:absolute !important;
+  top:9px !important;
+  right:59px !important;
+  z-index:50 !important;
+  display:flex !important;
+  align-items:center !important;
+  gap:6px !important;
+}
+
+body.st-remodel-active .remodel-lorebooks-dock button {
+  appearance:none !important;
+  display:inline-flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  gap:7px !important;
+  min-height:34px !important;
+  padding:0 10px !important;
+  border:1px solid rgba(215,200,0,.22) !important;
+  border-radius:3px !important;
+  background:rgba(7,7,12,.72) !important;
+  color:rgba(244,239,225,.62) !important;
+  font-family:var(--remodel-serif) !important;
+  font-size:.55rem !important;
+  letter-spacing:.08em !important;
+  text-transform:uppercase !important;
+  cursor:pointer !important;
+  transition:border-color .15s ease,color .15s ease,background .15s ease,box-shadow .15s ease !important;
+}
+
+body.st-remodel-active .remodel-lorebooks-dock button:hover,
+body.st-remodel-active .remodel-lorebooks-dock button:focus-visible,
+body.st-remodel-active .remodel-lorebooks-dock button[aria-expanded="true"] {
+  border-color:rgba(229,215,42,.62) !important;
+  background:rgba(23,22,12,.86) !important;
+  color:rgba(238,225,52,.94) !important;
+  box-shadow:0 0 12px rgba(215,200,0,.1) !important;
+}
+
+/* Remove the ornamental spine and pin drawing. The native lock remains as a
+   compact, legible control at the far right of the title bar. */
+body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px {
+  min-height:54px !important;
+  padding:10px 270px 9px 26px !important;
+}
+
+body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px::before,
+body.st-remodel-active #WorldInfo #wi-holder::before {
+  content:none !important;
+  display:none !important;
+}
+
+body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px h3 {
+  font-size:1.12rem !important;
+}
+
+body.st-remodel-active #WI_panel_pin_div {
+  left:auto !important;
+  right:18px !important;
+  top:10px !important;
+  width:32px !important;
+  height:32px !important;
+  transform:none !important;
+}
+
+body.st-remodel-active #WI_panel_pin_div label {
+  display:grid !important;
+  place-items:center !important;
+  width:32px !important;
+  height:32px !important;
+  border:1px solid rgba(215,200,0,.22) !important;
+  border-radius:3px !important;
+  background:rgba(7,7,12,.72) !important;
+  color:rgba(244,239,225,.54) !important;
+}
+
+body.st-remodel-active #WI_panel_pin_div label::before,
+body.st-remodel-active #WI_panel_pin_div label::after {
+  content:none !important;
+  display:none !important;
+}
+
+body.st-remodel-active #WI_panel_pin_div label .checked,
+body.st-remodel-active #WI_panel_pin_div label .unchecked {
+  grid-area:1 / 1 !important;
+  align-items:center !important;
+  justify-content:center !important;
+  width:30px !important;
+  height:30px !important;
+  font-size:.8rem !important;
+}
+
+body.st-remodel-active #WI_panel_pin:not(:checked) + label .unchecked {
+  display:flex !important;
+}
+
+body.st-remodel-active #WI_panel_pin:not(:checked) + label .checked,
+body.st-remodel-active #WI_panel_pin:checked + label .unchecked {
+  display:none !important;
+}
+
+body.st-remodel-active #WI_panel_pin:checked + label .checked {
+  display:flex !important;
+  color:rgba(229,215,42,.94) !important;
+}
+
+/* The settings and file-management bands are now floating utility sheets.
+   They leave normal flow entirely, so the entry list receives their height. */
+body.st-remodel-active #WorldInfo #wi-holder {
+  display:block !important;
+  position:relative !important;
+}
+
+body.st-remodel-active #WorldInfo #wiTopBlock {
+  position:absolute !important;
+  top:10px !important;
+  right:16px !important;
+  left:auto !important;
+  z-index:3050 !important;
+  grid-template-columns:minmax(0,1fr) !important;
+  gap:14px !important;
+  width:min(1080px,calc(100% - 32px)) !important;
+  max-height:calc(100% - 20px) !important;
+  padding:16px !important;
+  border:1px solid rgba(215,200,0,.3) !important;
+  background:linear-gradient(145deg,rgba(8,8,13,.98),rgba(18,18,25,.96)) !important;
+  box-shadow:0 18px 48px rgba(0,0,0,.52) !important;
+  opacity:0 !important;
+  visibility:hidden !important;
+  pointer-events:none !important;
+  transform:translateY(-8px) !important;
+  transition:opacity .16s ease,transform .16s ease !important;
+}
+
+body.st-remodel-active .remodel-lorebooks-workspace.is-settings-open #WorldInfo #wiTopBlock {
+  opacity:1 !important;
+  visibility:visible !important;
+  pointer-events:auto !important;
+  transform:translateY(0) !important;
+}
+
+body.st-remodel-active #WorldInfo #wiTopBlock #wiActivationSettings {
+  grid-template-columns:minmax(0,1fr) 220px !important;
+  gap:24px !important;
+  padding:18px !important;
+}
+
+body.st-remodel-active #WorldInfo #wiTopBlock #wiSliders {
+  grid-template-columns:repeat(4,minmax(112px,1fr)) !important;
+  gap:16px 18px !important;
+}
+
+body.st-remodel-active #WorldInfo #wiTopBlock #wiCheckboxes {
+  gap:6px !important;
+}
+
+body.st-remodel-active #WorldInfo #world_popup {
+  position:relative !important;
+  grid-template-rows:auto minmax(0,1fr) !important;
+  height:100% !important;
+  padding-left:0 !important;
+}
+
+body.st-remodel-active #WorldInfo #world_popup > .flex-container.alignitemscenter:first-of-type {
+  position:absolute !important;
+  top:10px !important;
+  right:16px !important;
+  left:auto !important;
+  z-index:32 !important;
+  width:min(1180px,calc(100% - 32px)) !important;
+  min-height:54px !important;
+  padding:9px 12px !important;
+  border:1px solid rgba(215,200,0,.3) !important;
+  background:linear-gradient(145deg,rgba(8,8,13,.98),rgba(18,18,25,.96)) !important;
+  box-shadow:0 18px 48px rgba(0,0,0,.52) !important;
+  opacity:0 !important;
+  visibility:hidden !important;
+  pointer-events:none !important;
+  transform:translateY(-8px) !important;
+  transition:opacity .16s ease,transform .16s ease !important;
+}
+
+body.st-remodel-active .remodel-lorebooks-workspace.is-library-open #WorldInfo #world_popup > .flex-container.alignitemscenter:first-of-type {
+  opacity:1 !important;
+  visibility:visible !important;
+  pointer-events:auto !important;
+  transform:translateY(0) !important;
+}
+
+body.st-remodel-active #WorldInfo #world_import_button::after { content:"Import" !important; }
+body.st-remodel-active #WorldInfo #world_popup_export::after { content:"Export" !important; }
+body.st-remodel-active #WorldInfo #world_popup_name_button::after { content:"Rename" !important; }
+body.st-remodel-active #WorldInfo #world_duplicate::after { content:"Duplicate" !important; }
+body.st-remodel-active #WorldInfo #world_popup_delete::after { content:"Delete" !important; }
+
+body.st-remodel-active #WorldInfo #world_popup > .flex-container.alignitemscenter:nth-of-type(2) {
+  min-height:52px !important;
+  padding:8px 20px !important;
+  flex-wrap:nowrap !important;
+}
+
+body.st-remodel-active #WorldInfo #world_popup_entries_list {
+  padding:12px 24px 50px !important;
+}
+
+/* Compact native entry header. The same real controls are laid out as one
+   information row instead of allowing the stock flex wrappers to wrap each
+   field onto a separate line. */
+body.st-remodel-active #WorldInfo .world_entry_form > .inline-drawer > .inline-drawer-header {
+  grid-template-columns:minmax(0,1fr) 31px 31px 31px !important;
+  gap:7px !important;
+  min-height:58px !important;
+  padding:7px 9px !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_form > .inline-drawer > .inline-drawer-header:has(> .drag-handle) {
+  grid-template-columns:18px minmax(0,1fr) 31px 31px 31px !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_form > .inline-drawer > .inline-drawer-header .world_entry_thin_controls {
+  display:grid !important;
+  grid-template-columns:27px 31px minmax(0,1fr) !important;
+  align-items:center !important;
+  gap:7px !important;
+  width:100% !important;
+  min-width:0 !important;
+  flex-wrap:nowrap !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_form > .inline-drawer > .inline-drawer-header .world_entry_thin_controls > .inline-drawer-toggle {
+  grid-column:1 !important;
+  margin:0 !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .killSwitch {
+  grid-column:2 !important;
+  position:relative !important;
+  width:30px !important;
+  min-width:30px !important;
+  height:18px !important;
+  margin:0 !important;
+  color:rgba(244,239,225,.38) !important;
+  font-size:0 !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .killSwitch::before {
+  content:"" !important;
+  position:absolute !important;
+  inset:1px !important;
+  width:auto !important;
+  height:auto !important;
+  border:1px solid currentColor !important;
+  border-radius:999px !important;
+  background:rgba(4,4,8,.8) !important;
+  box-shadow:none !important;
+  transform:none !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .killSwitch::after {
+  content:"" !important;
+  position:absolute !important;
+  left:5px !important;
+  top:5px !important;
+  width:8px !important;
+  height:8px !important;
+  border:0 !important;
+  border-radius:50% !important;
+  background:currentColor !important;
+  box-shadow:none !important;
+  transition:left .14s ease,background .14s ease,box-shadow .14s ease !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .killSwitch.fa-toggle-on {
+  color:rgba(229,215,42,.9) !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .killSwitch.fa-toggle-on::after {
+  left:17px !important;
+  background:rgba(238,226,55,.96) !important;
+  box-shadow:0 0 7px rgba(215,200,0,.35) !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_form > .inline-drawer > .inline-drawer-header .world_entry_thin_controls > .flex-container.alignitemscenter.wide100p {
+  grid-column:3 !important;
+  display:grid !important;
+  grid-template-columns:minmax(190px,1fr) auto !important;
+  align-items:center !important;
+  gap:12px !important;
+  width:100% !important;
+  min-width:0 !important;
+  flex-wrap:nowrap !important;
+}
+
+body.st-remodel-active #WorldInfo .WIEntryTitleAndStatus {
+  display:grid !important;
+  grid-template-columns:minmax(0,1fr) 40px !important;
+  align-items:center !important;
+  gap:7px !important;
+  width:100% !important;
+  min-width:0 !important;
+  flex-wrap:nowrap !important;
+}
+
+body.st-remodel-active #WorldInfo .WIEntryTitleAndStatus > .flex-container {
+  min-width:0 !important;
+  flex-wrap:nowrap !important;
+}
+
+body.st-remodel-active #WorldInfo .WIEnteryHeaderControls {
+  display:grid !important;
+  grid-template-columns:112px 58px 58px 62px !important;
+  align-items:center !important;
+  justify-content:end !important;
+  gap:6px !important;
+  min-width:0 !important;
+  flex-wrap:nowrap !important;
+}
+
+body.st-remodel-active #WorldInfo .WIEnteryHeaderControls .world_entry_form_control {
+  display:flex !important;
+  align-items:center !important;
+  min-width:0 !important;
+  width:auto !important;
+  margin:0 !important;
+}
+
+body.st-remodel-active #WorldInfo .WIEnteryHeaderControls .WIEntryHeaderTitleMobile {
+  display:none !important;
+}
+
+body.st-remodel-active #WorldInfo .WIEnteryHeaderControls select,
+body.st-remodel-active #WorldInfo .WIEnteryHeaderControls input[type="number"] {
+  width:100% !important;
+  min-width:0 !important;
+  max-width:none !important;
+  margin:0 !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .inline-drawer-outlet {
+  padding:0 !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry .inline-drawer-outlet:has(> *) {
+  padding:18px 22px 28px 52px !important;
+}
+
+body.st-remodel-active #WorldInfo #world_popup_entries_list {
+  gap:16px !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_edit > .flex-container {
+  row-gap:16px !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_edit [name="keywordsAndLogicBlock"],
+body.st-remodel-active #WorldInfo .world_entry_edit [name="perEntryOverridesBlock"] {
+  gap:12px !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_edit [name="contentAndCharFilterBlock"] {
+  margin-top:4px !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_edit [name="contentAndCharFilterBlock"] label > small > .wide100p {
+  min-height:44px !important;
+  padding:4px 2px 8px !important;
+}
+
+body.st-remodel-active #WorldInfo .world_entry_edit > .flex-container:not(:first-child) {
+  margin-top:15px !important;
+  padding-top:13px !important;
+  border-top:1px solid rgba(215,200,0,.1) !important;
+}
+
+@media (max-width:980px) {
+  body.st-remodel-active .remodel-lorebooks-current {
+    display:none !important;
+  }
+  body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px {
+    padding-right:250px !important;
+  }
+  body.st-remodel-active #WorldInfo .world_entry_form > .inline-drawer > .inline-drawer-header .world_entry_thin_controls > .flex-container.alignitemscenter.wide100p {
+    grid-template-columns:minmax(160px,1fr) !important;
+    gap:6px !important;
+  }
+  body.st-remodel-active #WorldInfo .WIEnteryHeaderControls {
+    grid-template-columns:112px repeat(3,58px) !important;
+    justify-content:start !important;
+  }
+}
+
+@media (max-width:760px) {
+  body.st-remodel-active .remodel-lorebooks-dock {
+    top:9px !important;
+    right:52px !important;
+  }
+  body.st-remodel-active .remodel-lorebooks-dock button {
+    width:32px !important;
+    min-width:32px !important;
+    padding:0 !important;
+  }
+  body.st-remodel-active .remodel-lorebooks-dock button span {
+    display:none !important;
+  }
+  body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px {
+    min-height:54px !important;
+    padding:10px 132px 9px 14px !important;
+  }
+  body.st-remodel-active #WI_panel_pin_div {
+    right:12px !important;
+  }
+  body.st-remodel-active #WorldInfo #wiTopBlock,
+  body.st-remodel-active #WorldInfo #world_popup > .flex-container.alignitemscenter:first-of-type {
+    right:10px !important;
+    width:calc(100% - 20px) !important;
+  }
+  body.st-remodel-active #WorldInfo #wiTopBlock #wiActivationSettings {
+    grid-template-columns:minmax(0,1fr) !important;
+    gap:16px !important;
+    padding:14px !important;
+  }
+  body.st-remodel-active #WorldInfo #wiTopBlock #wiSliders {
+    grid-template-columns:repeat(2,minmax(92px,1fr)) !important;
+    gap:14px !important;
+  }
+  body.st-remodel-active #WorldInfo #world_popup > .flex-container.alignitemscenter:nth-of-type(2) {
+    flex-wrap:wrap !important;
+    padding-inline:10px !important;
+  }
+  body.st-remodel-active #WorldInfo #world_popup_entries_list {
+    padding:10px 10px 42px !important;
+  }
+  body.st-remodel-active #WorldInfo .world_entry_form > .inline-drawer > .inline-drawer-header {
+    grid-template-columns:minmax(0,1fr) 28px 28px 28px !important;
+    gap:5px !important;
+  }
+  body.st-remodel-active #WorldInfo .world_entry_form > .inline-drawer > .inline-drawer-header:has(> .drag-handle) {
+    grid-template-columns:16px minmax(0,1fr) 28px 28px 28px !important;
+  }
+  body.st-remodel-active #WorldInfo .world_entry_form > .inline-drawer > .inline-drawer-header .world_entry_thin_controls {
+    grid-template-columns:24px 30px minmax(0,1fr) !important;
+    gap:5px !important;
+  }
+  body.st-remodel-active #WorldInfo .WIEnteryHeaderControls {
+    grid-template-columns:minmax(86px,1fr) repeat(3,minmax(50px,.55fr)) !important;
+    width:100% !important;
+  }
+  body.st-remodel-active #WorldInfo .world_entry .move_entry_button,
+  body.st-remodel-active #WorldInfo .world_entry .duplicate_entry_button,
+  body.st-remodel-active #WorldInfo .world_entry .delete_entry_button {
+    grid-row:auto !important;
+  }
+  body.st-remodel-active #WorldInfo .world_entry .inline-drawer-outlet:has(> *) {
+    padding:14px 12px 22px 28px !important;
+  }
 }

@@ -198,6 +198,9 @@ export function createScene(arcId, mode = 'roleplay', title = 'New Scene') {
         // Story scenes bind to a StoryDoc (redesigned document Story mode);
         // roleplay scenes use linkedChat. Null until bound.
         storyDocId: null,
+        // Optional per-Scene Prompt Studio overrides. Null means inherit the
+        // account-wide default for this Scene mode and API boundary.
+        promptRecipeIds: { chat: null, text: null },
         status: 'unbound',
         summary: '',
         summaryUpdatedAt: null,
@@ -338,6 +341,7 @@ function normalizeStore(store) {
         // Backward-compat for scenes saved before story scenes bound to a
         // StoryDoc instead of a chat.
         scene.storyDocId ??= null;
+        scene.promptRecipeIds = normalizePromptRecipeIds(scene.promptRecipeIds);
     }
 }
 
@@ -367,6 +371,14 @@ function sanitizeScenePatch(patch) {
         // Story scenes bind to a StoryDoc (the redesigned document-editor Story
         // mode) instead of a chat file; roleplay scenes keep linkedChat.
         ...(patch.storyDocId !== undefined ? { storyDocId: patch.storyDocId || null } : {}),
+        ...(patch.promptRecipeIds !== undefined ? { promptRecipeIds: normalizePromptRecipeIds(patch.promptRecipeIds) } : {}),
+    };
+}
+
+function normalizePromptRecipeIds(value) {
+    return {
+        chat: value?.chat ? String(value.chat) : null,
+        text: value?.text ? String(value.text) : null,
     };
 }
 

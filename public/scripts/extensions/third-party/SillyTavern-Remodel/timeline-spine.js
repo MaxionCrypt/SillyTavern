@@ -34,6 +34,20 @@ import {
     updateStoryDoc,
 } from './story-doc.js';
 import {
+    applyPromptStudioRuntimeRecipe,
+    capturePromptStudioRuntimeSettings,
+    compilePromptRecipe,
+    formatPromptStudioPreview,
+    getCurrentPromptStudioRecipe,
+    getDefaultPromptStudioRecipe,
+    getPromptApiType,
+    getPromptStudioRecipe,
+    getPromptStudioRecipes,
+    initPromptStudio,
+    renderPromptStudioWorkspace,
+    syncPromptStudioForCurrentMode,
+} from './prompt-studio.js';
+import {
     advanceWizardToPersonaStep,
     armGenerationWatchdog,
     armSceneSummarySaveDebounce,
@@ -89,6 +103,11 @@ const TAVERN_TABS = [
         icon: 'fa-address-card',
     },
     {
+        id: 'prompts',
+        label: 'Prompts',
+        icon: 'fa-wand-magic-sparkles',
+    },
+    {
         id: 'personas',
         label: 'Personas',
         icon: 'fa-face-smile',
@@ -133,7 +152,9 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindDrawerToggle(drawer);
     bindTimelineEvents(drawer);
     bindSillyTavernEvents();
+    bindStoryLockInterceptor();
     observeTavernPanelState();
+    bindExternalSidebarWindowSwitch();
     bindStoryEditorEvents();
     bindRoleplayComposerEvents();
     bindRoleplayGenerationFeedback();
@@ -143,6 +164,18 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     registerCharacterFieldMacro();
     registerAllInsertedTextSlotMacros();
     ensureCharacterEditorCancelButton();
+    initPromptStudio({
+        requestRender: queueRender,
+        getRuntimeMode: () => isRealStoryDocSceneActive() ? 'story' : 'roleplay',
+        getRuntimeRecipeId: (mode, apiType) => {
+            const scene = getActiveScene();
+            return scene?.mode === mode ? scene.promptRecipeIds?.[apiType] || null : null;
+        },
+        isRecipeInUse: (recipeId) => Object.values(getTimelineStore().scenes)
+            .some((scene) => Object.values(scene.promptRecipeIds || {}).includes(recipeId)),
+        previewRecipe: previewPromptStudioRecipe,
+        openSource: openPromptStudioSource,
+    });
     setInitialized(true);
 
     // Belt-and-suspenders: Remodel's own init isn't guaranteed to run before
@@ -246,6 +279,16 @@ async function transitionToWindow(next) {
             }
         }
     }
+
+    // Core closes every other .drawer-content while opening Tavern. If the
+    // render happened before that sweep, the adopted native workspace is one
+    // of those descendants; restore its visible state after the sweep without
+    // replacing the native node or any of its listeners.
+    if (next.kind === 'tavern') {
+        const { adoptedPanel } = getSessionState();
+        adoptedPanel?.classList.add('openDrawer');
+        adoptedPanel?.classList.remove('closedDrawer');
+    }
 }
 
 // SillyTavern's own doNavbarIconClick closes every other unpinned open drawer
@@ -285,6 +328,21 @@ function observeTavernPanelState() {
     reconcileExternalDrawerClose();
 }
 
+// Tavern is intentionally pinned, so core does not include it in the normal
+// "close other unpinned drawers" sweep. Treat every other native sidebar
+// drawer toggle as a window switch: close Tavern synchronously before core's
+// own handler opens the requested drawer.
+function bindExternalSidebarWindowSwitch() {
+    document.addEventListener('click', (event) => {
+        if (getSessionState().currentWindow.kind !== 'tavern') return;
+        const toggle = event.target instanceof Element
+            ? event.target.closest('#top-settings-holder > .drawer > .drawer-toggle')
+            : null;
+        if (!toggle || toggle.closest(`#${DRAWER_ID}`)) return;
+        transitionToWindow({ kind: 'native' });
+    }, true);
+}
+
 function bindTimelineEvents(drawer) {
     drawer.addEventListener('click', async (event) => {
         const tavernTab = event.target instanceof Element
@@ -295,6 +353,17 @@ function bindTimelineEvents(drawer) {
             event.preventDefault();
             event.stopPropagation();
             await transitionToWindow({ kind: 'tavern', tab: tavernTab.dataset.remodelTavernTab || 'timeline' });
+            return;
+        }
+
+        const lorebooksPanelToggle = event.target instanceof Element
+            ? event.target.closest('[data-remodel-lorebooks-panel]')
+            : null;
+
+        if (lorebooksPanelToggle) {
+            event.preventDefault();
+            event.stopPropagation();
+            toggleLorebooksUtilityPanel(lorebooksPanelToggle.dataset.remodelLorebooksPanel);
             return;
         }
 
@@ -328,7 +397,7 @@ function bindTimelineEvents(drawer) {
         event.preventDefault();
         event.stopPropagation();
         await handleAction(actionElement);
-    });
+    }, true);
 
     drawer.addEventListener('input', (event) => {
         const field = event.target instanceof Element
@@ -446,6 +515,18 @@ function bindSillyTavernEvents() {
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, syncNoChatComposerVisibility);
     context.eventSource.on(context.eventTypes.CHAT_LOADED, syncNoChatComposerVisibility);
     context.eventSource.on(context.eventTypes.APP_READY, syncNoChatComposerVisibility);
+    context.eventSource.on(context.eventTypes.MAIN_API_CHANGED, refreshScenePromptChoice);
+}
+
+function refreshScenePromptChoice() {
+    if (isRealStoryDocSceneActive()) {
+        renderStoryEditor();
+        return;
+    }
+    if (isRealRoleplayWorkspaceActive()) {
+        const root = getRealRoleplayRoot();
+        if (root) renderRoleplayComposer(root);
+    }
 }
 
 // Core's own #form_sheld (composer bar, including the #options_button
@@ -2764,8 +2845,11 @@ function renderTimelinePanel() {
     const isTimelineFocused = activeTavernTab === 'timeline' && Boolean(focusedTimelineId);
     const isHeaderCollapsed = isTimelineFocused
         || activeTavernTab === 'characters'
+        || activeTavernTab === 'prompts'
         || Boolean(TAVERN_TABS.find((tab) => tab.id === activeTavernTab)?.panelId);
     viewport.classList.toggle('is-header-collapsed', isHeaderCollapsed);
+    viewport.classList.toggle('is-personas-workspace', activeTavernTab === 'personas');
+    viewport.classList.toggle('is-lorebooks-workspace', activeTavernTab === 'lorebooks');
 
     // Header and tabs are persistent so their collapse/slide animates; only their
     // active state and the body content are re-rendered on each pass.
@@ -2775,7 +2859,7 @@ function renderTimelinePanel() {
     const body = viewport.querySelector('.remodel-tavern-body');
     body.innerHTML = renderActiveWorkspace(store);
 
-    if (activeTavernTab === 'timeline' || activeTavernTab === 'characters') {
+    if (activeTavernTab === 'timeline' || activeTavernTab === 'characters' || activeTavernTab === 'prompts') {
         restoreAdoptedPanel();
     } else {
         adoptLegacyPanel(activeTavernTab);
@@ -2835,6 +2919,18 @@ function renderActiveWorkspace(store) {
 
     if (activeTavernTab === 'characters') {
         return renderCharactersWorkspace();
+    }
+
+    if (activeTavernTab === 'prompts') {
+        return renderPromptStudioWorkspace();
+    }
+
+    if (activeTavernTab === 'personas') {
+        return renderPersonasWorkspace();
+    }
+
+    if (activeTavernTab === 'lorebooks') {
+        return renderLorebooksWorkspace();
     }
 
     return renderLegacyWorkspace();
@@ -3329,6 +3425,112 @@ function renderLegacyWorkspace() {
     `;
 }
 
+function renderPersonasWorkspace() {
+    return `
+        <section class="remodel-personas-workspace" aria-label="Personas workspace">
+            <div id="${LEGACY_OUTLET_ID}" class="remodel-tavern-legacy-outlet remodel-personas-outlet"></div>
+        </section>
+    `;
+}
+
+function renderLorebooksWorkspace() {
+    return `
+        <section class="remodel-lorebooks-workspace" aria-label="Lorebooks workspace">
+            <div class="remodel-lorebooks-current" aria-live="polite">
+                <span>Editing</span>
+                <strong data-remodel-lorebooks-current>No lorebook selected</strong>
+            </div>
+            <nav class="remodel-lorebooks-dock" aria-label="Lorebook utilities">
+                <button type="button" data-remodel-lorebooks-panel="library" aria-expanded="false" title="Lorebook library and file actions">
+                    <i class="fa-solid fa-book-bookmark" aria-hidden="true"></i>
+                    <span>Library</span>
+                </button>
+                <button type="button" data-remodel-lorebooks-panel="settings" aria-expanded="false" title="Global World Info settings">
+                    <i class="fa-solid fa-sliders" aria-hidden="true"></i>
+                    <span>World settings</span>
+                </button>
+            </nav>
+            <div id="${LEGACY_OUTLET_ID}" class="remodel-tavern-legacy-outlet remodel-lorebooks-outlet"></div>
+        </section>
+    `;
+}
+
+function toggleLorebooksUtilityPanel(panelName) {
+    const workspace = document.querySelector('.remodel-lorebooks-workspace');
+
+    if (!workspace || !['library', 'settings'].includes(panelName)) {
+        return;
+    }
+
+    const activeClass = panelName === 'library' ? 'is-library-open' : 'is-settings-open';
+    const shouldOpen = !workspace.classList.contains(activeClass);
+    workspace.classList.remove('is-library-open', 'is-settings-open');
+
+    if (shouldOpen) {
+        workspace.classList.add(activeClass);
+    }
+
+    workspace.querySelectorAll('[data-remodel-lorebooks-panel]').forEach((button) => {
+        const buttonClass = button.dataset.remodelLorebooksPanel === 'library' ? 'is-library-open' : 'is-settings-open';
+        button.setAttribute('aria-expanded', String(workspace.classList.contains(buttonClass)));
+    });
+}
+
+function syncLorebooksWorkspaceMeta(panel) {
+    const label = document.querySelector('[data-remodel-lorebooks-current]');
+    const select = panel?.querySelector('#world_editor_select');
+
+    if (!label || !(select instanceof HTMLSelectElement)) {
+        return;
+    }
+
+    const selected = select.selectedOptions?.[0];
+    const hasSelection = Boolean(selected?.value);
+    label.textContent = hasSelection ? selected.textContent?.trim() || 'Untitled lorebook' : 'No lorebook selected';
+}
+
+function attachLorebooksWorkspaceAdapter(panel) {
+    syncLorebooksWorkspaceMeta(panel);
+
+    if (panel.dataset.remodelLorebooksAdapterBound === 'true') {
+        return;
+    }
+
+    const select = panel.querySelector('#world_editor_select');
+    if (select) {
+        $(select).off('change.remodelLorebooks').on('change.remodelLorebooks', () => syncLorebooksWorkspaceMeta(panel));
+    }
+    panel.dataset.remodelLorebooksAdapterBound = 'true';
+}
+
+function hasRequiredPersonaWorkspaceAnchors(panel) {
+    const requiredSelectors = [
+        '#persona-management-block',
+        '.persona_management_left_column',
+        '.persona_management_right_column',
+        '#user_avatar_block',
+        '#persona_controls',
+        '#persona_description',
+    ];
+
+    return requiredSelectors.every((selector) => panel.querySelector(selector));
+}
+
+function hasRequiredLorebooksWorkspaceAnchors(panel) {
+    const requiredSelectors = [
+        '#wi-holder',
+        '#wiTopBlock',
+        '#WIMultiSelector',
+        '#world_info',
+        '#world_popup',
+        '#world_editor_select',
+        '#world_info_search',
+        '#world_popup_entries_list',
+    ];
+
+    return requiredSelectors.every((selector) => panel.querySelector(selector));
+}
+
 function adoptLegacyPanel(tabId) {
     const tab = TAVERN_TABS.find((item) => item.id === tabId);
     const outlet = document.getElementById(LEGACY_OUTLET_ID);
@@ -3337,6 +3539,18 @@ function adoptLegacyPanel(tabId) {
     if (!outlet || !panel) {
         restoreAdoptedPanel();
         outlet?.append(renderMissingLegacyPanel(tab?.label || 'Panel'));
+        return;
+    }
+
+    if (tabId === 'personas' && !hasRequiredPersonaWorkspaceAnchors(panel)) {
+        restoreAdoptedPanel();
+        outlet.append(renderMissingLegacyPanel('Personas'));
+        return;
+    }
+
+    if (tabId === 'lorebooks' && !hasRequiredLorebooksWorkspaceAnchors(panel)) {
+        restoreAdoptedPanel();
+        outlet.append(renderMissingLegacyPanel('Lorebooks'));
         return;
     }
 
@@ -3359,6 +3573,10 @@ function adoptLegacyPanel(tabId) {
     panel.classList.add('remodel-tavern-adopted-panel', 'openDrawer');
     panel.classList.remove('closedDrawer', 'remodel-side-left', 'remodel-side-right');
     outlet.append(panel);
+
+    if (tabId === 'lorebooks') {
+        attachLorebooksWorkspaceAdapter(panel);
+    }
 }
 
 function restoreAdoptedPanel() {
@@ -4200,6 +4418,8 @@ function syncStoryWorkspaceClass(scene) {
         // works again outside roleplay.
         restoreRoleplayPriorTextPanel();
     }
+
+    syncPromptStudioForCurrentMode({ apply: true });
 }
 
 // The native hamburger (#options_button) and Extensions wand
@@ -4225,7 +4445,7 @@ function relocateStoryDocNativeButtons() {
         if (!getOriginalPanelHomes().has(el)) {
             getOriginalPanelHomes().set(el, { parent: el.parentElement, nextSibling: el.nextSibling });
         }
-        slot.appendChild(el);
+        slot.insertBefore(el, slot.querySelector('.remodel-storydoc-tool-label'));
     }
 }
 
@@ -4454,6 +4674,79 @@ function isRealStoryDocSceneActive() {
     return Boolean(scene && scene.mode === 'story' && scene.storyDocId);
 }
 
+function getScenePromptChoice(scene = getActiveScene()) {
+    const apiType = getPromptApiType();
+    const selectedId = scene?.promptRecipeIds?.[apiType] || null;
+    const selected = getPromptStudioRecipe(selectedId);
+    const validSelection = selected?.mode === scene?.mode && selected?.apiType === apiType;
+    const recipe = validSelection
+        ? selected
+        : getDefaultPromptStudioRecipe(scene?.mode || 'roleplay', apiType);
+    return {
+        apiType,
+        recipe,
+        inherited: !validSelection,
+    };
+}
+
+function renderScenePromptChoice(scene = getActiveScene(), compact = false) {
+    const { apiType, recipe, inherited } = getScenePromptChoice(scene);
+    const completion = apiType === 'chat' ? 'Chat' : 'Text';
+    return `
+        <button type="button" class="remodel-scene-prompt-choice ${compact ? 'is-compact' : ''}" data-remodel-scene-prompt-choice title="Choose the prompt recipe for this Scene">
+            <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+            <span class="remodel-scene-prompt-choice-copy">
+                <small>${inherited ? `${completion} default` : `${completion} recipe`}</small>
+                <strong>${escapeHtml(recipe?.name || 'No prompt recipe')}</strong>
+            </span>
+            <i class="fa-solid fa-chevron-down remodel-scene-prompt-choice-caret" aria-hidden="true"></i>
+        </button>
+    `;
+}
+
+function openScenePromptRecipeMenu(anchor) {
+    const scene = getActiveScene();
+    if (!scene) return;
+    const { apiType, recipe: current, inherited } = getScenePromptChoice(scene);
+    const defaultRecipe = getDefaultPromptStudioRecipe(scene.mode, apiType);
+    const recipes = getPromptStudioRecipes(scene.mode, apiType);
+    const items = [
+        {
+            id: '__default__',
+            label: `Use default · ${defaultRecipe?.name || 'None'}`,
+            sublabel: `Follow the account ${scene.mode} ${apiType} default`,
+            active: inherited,
+        },
+        ...recipes.map((recipe) => ({
+            id: recipe.id,
+            label: recipe.name,
+            sublabel: recipe.description || `${capitalizePromptLabel(scene.mode)} · ${apiType === 'chat' ? 'Chat Completion' : 'Text Completion'}`,
+            active: !inherited && current?.id === recipe.id,
+        })),
+    ];
+    openRoleplayMenu(anchor, items, (recipeId) => {
+        const latestScene = getActiveScene();
+        if (!latestScene) return;
+        capturePromptStudioRuntimeSettings();
+        updateScene(latestScene.id, {
+            promptRecipeIds: {
+                ...(latestScene.promptRecipeIds || {}),
+                [apiType]: recipeId === '__default__' ? null : recipeId,
+            },
+        });
+        applyPromptStudioRuntimeRecipe();
+        if (latestScene.mode === 'story') renderStoryEditor();
+        else {
+            const root = getRealRoleplayRoot();
+            if (root) renderRoleplayComposer(root);
+        }
+    });
+}
+
+function capitalizePromptLabel(value) {
+    return String(value || '').charAt(0).toUpperCase() + String(value || '').slice(1);
+}
+
 function ensureStoryEditor() {
     let editor = getRealStoryEditor();
     if (editor) {
@@ -4484,12 +4777,26 @@ function ensureStoryEditor() {
             <section class="remodel-storydoc-page" aria-label="Manuscript">
                 <div class="remodel-storydoc-page-rule"><span>Manuscript</span></div>
                 <div class="remodel-storydoc-prose" data-remodel-storydoc-prose contenteditable="true" spellcheck="true"></div>
+                <button type="button" class="remodel-storydoc-add-beat-marker" data-remodel-storydoc-add-beat>
+                    <span class="remodel-storydoc-add-beat-tag"><i class="fa-solid fa-feather" aria-hidden="true"></i> Add Scene Beat</span>
+                    <span class="remodel-storydoc-add-beat-line" aria-hidden="true"></span>
+                </button>
+                <div class="remodel-storydoc-prompt-choice" data-remodel-storydoc-prompt-choice></div>
             </section>
             <aside class="remodel-storydoc-tools" aria-label="Story tools">
                 <button type="button" data-remodel-storydoc-tool="summary" title="Scene Summary"><i class="fa-solid fa-scroll" aria-hidden="true"></i><span>Summary</span></button>
                 <button type="button" data-remodel-storydoc-tool="prior" title="Prior Scene Text"><i class="fa-solid fa-book-open" aria-hidden="true"></i><span>Prior</span></button>
                 <button type="button" data-remodel-storydoc-tool="prompt" title="Final Prompt Preview"><i class="fa-solid fa-eye" aria-hidden="true"></i><span>Prompt</span></button>
                 <button type="button" data-remodel-storydoc-tool="guidance" title="Author guidance"><i class="fa-solid fa-compass" aria-hidden="true"></i><span>Guide</span></button>
+                <span class="remodel-storydoc-tool-control remodel-storydoc-native-slot" data-remodel-storydoc-native-slot="options_button" title="Story options">
+                    <span class="remodel-storydoc-tool-label">Menu</span>
+                </span>
+                <span class="remodel-storydoc-tool-control remodel-storydoc-native-slot" data-remodel-storydoc-native-slot="extensionsMenuButton" title="Extensions">
+                    <span class="remodel-storydoc-tool-label">Tools</span>
+                </span>
+                <button type="button" data-remodel-storydoc-continue title="Continue story"><i class="fa-solid fa-play" aria-hidden="true"></i><span>Continue</span></button>
+                <button type="button" data-remodel-storydoc-stop title="Stop generation" disabled><i class="fa-solid fa-stop" aria-hidden="true"></i><span>Stop</span></button>
+                <span class="remodel-storydoc-indicator" data-remodel-storydoc-indicator aria-live="polite"></span>
             </aside>
             <aside class="remodel-storydoc-panel" data-remodel-storydoc-panel aria-hidden="true">
                 <div class="remodel-storydoc-panel-head">
@@ -4499,16 +4806,6 @@ function ensureStoryEditor() {
                 <div class="remodel-storydoc-panel-body" data-remodel-storydoc-panel-body></div>
             </aside>
         </main>
-        <div class="remodel-storydoc-dock-shell">
-            <div class="remodel-storydoc-toolbar" aria-label="Story controls">
-                <span class="remodel-storydoc-native-slot" data-remodel-storydoc-native-slot="options_button"></span>
-                <span class="remodel-storydoc-native-slot" data-remodel-storydoc-native-slot="extensionsMenuButton"></span>
-                <button type="button" class="remodel-storydoc-add-beat" data-remodel-storydoc-add-beat><i class="fa-solid fa-feather"></i><span>Add Scene Beat</span></button>
-                <button type="button" data-remodel-storydoc-continue title="Continue story"><i class="fa-solid fa-play"></i></button>
-                <button type="button" data-remodel-storydoc-stop title="Stop generation"><i class="fa-solid fa-stop"></i></button>
-                <span class="remodel-storydoc-indicator" data-remodel-storydoc-indicator aria-live="polite"></span>
-            </div>
-        </div>
     `;
     chatEl.after(editor);
     return editor;
@@ -4541,6 +4838,8 @@ function renderStoryEditor(force = false) {
     }
     const title = editor.querySelector('[data-remodel-storydoc-title]');
     if (title && document.activeElement !== title) title.value = doc.title || 'Untitled Story';
+    const promptChoice = editor.querySelector('[data-remodel-storydoc-prompt-choice]');
+    if (promptChoice) promptChoice.innerHTML = renderScenePromptChoice(getActiveScene(), true);
     const character = (getContext().characters || [])[Number(doc.boundCharacterId)];
     const characterName = editor.querySelector('[data-remodel-storydoc-character]');
     if (characterName) characterName.textContent = character?.name || 'Unbound character';
@@ -4658,13 +4957,36 @@ function bindStoryEditorEvents() {
         setStorySaveState('Saved');
     });
 
-    // Generation controls (Continue / Stop) in the editor dock.
+    // Story editor controls, including the right-side Continue / Stop rail.
     document.addEventListener('click', (event) => {
         if (!isRealStoryDocSceneActive()) {
             return;
         }
         const target = event.target instanceof Element ? event.target : null;
         if (!target) {
+            return;
+        }
+
+        const promptMenu = document.getElementById('remodel-rp-menu');
+        if (promptMenu) {
+            const pick = target.closest('[data-remodel-rp-menu-pick]');
+            if (pick && promptMenu.contains(pick)) {
+                event.preventDefault();
+                const onPick = promptMenu._remodelOnPick;
+                const id = pick.getAttribute('data-remodel-rp-menu-pick');
+                closeRoleplayMenu();
+                onPick?.(id);
+                return;
+            }
+            if (!promptMenu.contains(target) && !target.closest('[data-remodel-scene-prompt-choice]')) {
+                closeRoleplayMenu();
+            }
+        }
+
+        const previewOverlay = document.getElementById(STORY_PREVIEW_ID);
+        if (previewOverlay && (target.closest('[data-remodel-storydoc-preview-close]') || target === previewOverlay)) {
+            event.preventDefault();
+            closeStoryPromptPreview();
             return;
         }
 
@@ -4679,9 +5001,24 @@ function bindStoryEditorEvents() {
             transitionToWindow({ kind: 'tavern', tab: 'timeline' });
             return;
         }
+        const promptChoice = target.closest('[data-remodel-scene-prompt-choice]');
+        if (promptChoice) {
+            event.preventDefault();
+            openScenePromptRecipeMenu(promptChoice);
+            return;
+        }
         if (target.closest('[data-remodel-storydoc-add-beat]')) {
             event.preventDefault();
             createStoryDocBeat();
+            return;
+        }
+        const nativeSlot = target.closest('[data-remodel-storydoc-native-slot]');
+        if (nativeSlot) {
+            const nativeButton = nativeSlot.querySelector('#options_button, #extensionsMenuButton');
+            if (nativeButton && target !== nativeButton) {
+                event.preventDefault();
+                nativeButton.click();
+            }
             return;
         }
         if (target.closest('[data-remodel-storydoc-continue]')) {
@@ -4692,7 +5029,7 @@ function bindStoryEditorEvents() {
         const tool = target.closest('[data-remodel-storydoc-tool]');
         if (tool) {
             event.preventDefault();
-            openStoryToolPanel(tool.dataset.remodelStorydocTool);
+            openStoryToolPanel(tool.dataset.remodelStorydocTool, tool);
             return;
         }
         if (target.closest('[data-remodel-storydoc-panel-close]')) {
@@ -4712,7 +5049,7 @@ function bindStoryEditorEvents() {
         const generateBtn = target.closest('[data-remodel-storydoc-generate]');
         if (generateBtn) {
             event.preventDefault();
-            triggerStoryGenerationFromDock();
+            triggerStoryBeatGeneration();
             return;
         }
 
@@ -4750,6 +5087,11 @@ function bindStoryEditorEvents() {
             event.preventDefault();
             return;
         }
+        if (paragraph && event.key === 'Delete' && isCaretAtEnd(paragraph)
+            && paragraph.nextElementSibling?.matches('[data-remodel-storydoc-beat-id]')) {
+            event.preventDefault();
+            return;
+        }
 
         // Enter in the beat input triggers a beat generation.
         if (event.key !== 'Enter' || event.shiftKey) return;
@@ -4758,7 +5100,7 @@ function bindStoryEditorEvents() {
             : null;
         if (!beatInput) return;
         event.preventDefault();
-        triggerStoryGenerationFromDock();
+        triggerStoryBeatGeneration();
     });
 
     document.addEventListener('input', (event) => {
@@ -4766,6 +5108,26 @@ function bindStoryEditorEvents() {
         const card = field?.closest('[data-remodel-storydoc-beat-id]');
         if (!field || !card) return;
         patchStoryDocBeat(card.dataset.remodelStorydocBeatId, { instruction: field.value });
+    }, true);
+
+    document.addEventListener('beforeinput', (event) => {
+        if (!isRealStoryDocSceneActive() || !String(event.inputType).startsWith('deleteContent')) return;
+        const prose = event.target instanceof Element
+            ? event.target.closest('[data-remodel-storydoc-prose]')
+            : null;
+        if (!prose) return;
+        const selection = window.getSelection();
+        const anchor = selection?.anchorNode;
+        const paragraph = anchor instanceof Element
+            ? anchor.closest('[data-remodel-storydoc-prose] > p')
+            : anchor?.parentElement?.closest('[data-remodel-storydoc-prose] > p');
+        if (!paragraph || paragraph.parentElement !== prose) return;
+        const backward = event.inputType === 'deleteContentBackward';
+        const forward = event.inputType === 'deleteContentForward';
+        if ((backward && isCaretAtStart(paragraph) && paragraph.previousElementSibling?.matches('[data-remodel-storydoc-beat-id]'))
+            || (forward && isCaretAtEnd(paragraph) && paragraph.nextElementSibling?.matches('[data-remodel-storydoc-beat-id]'))) {
+            event.preventDefault();
+        }
     });
 }
 
@@ -4790,7 +5152,24 @@ function isCaretAtStart(element) {
     return before.toString().length === 0;
 }
 
+function isCaretAtEnd(element) {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) return false;
+    const range = selection.getRangeAt(0);
+    if (range.endContainer !== element && !element.contains(range.endContainer)) return false;
+    const after = range.cloneRange();
+    after.selectNodeContents(element);
+    after.setStart(range.endContainer, range.endOffset);
+    return after.toString().length === 0;
+}
+
 function createStoryDocBeat() {
+    const prose = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-prose]');
+    if (prose) {
+        clearTimeout(storyEditorSaveTimer);
+        updateStoryDoc(activeStoryDocId, readStoryEditorState(prose));
+        setStorySaveState('Saved');
+    }
     const doc = getStoryDoc(activeStoryDocId);
     if (!doc) return;
     const beat = {
@@ -4804,9 +5183,9 @@ function createStoryDocBeat() {
     };
     updateStoryDoc(activeStoryDocId, { beats: [...(doc.beats || []), beat] });
     renderStoryEditor(true);
+    const card = getRealStoryEditor()?.querySelector(`[data-remodel-storydoc-beat-id="${beat.id}"]`);
+    card?.querySelector('[data-remodel-storydoc-beat-instruction]')?.focus({ preventScroll: true });
     requestAnimationFrame(() => {
-        const card = getRealStoryEditor()?.querySelector(`[data-remodel-storydoc-beat-id="${beat.id}"]`);
-        card?.querySelector('[data-remodel-storydoc-beat-instruction]')?.focus();
         card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
 }
@@ -4900,19 +5279,195 @@ function setStorySaveState(label) {
     if (el) el.textContent = label;
 }
 
-function closeStoryToolPanel() {
-    const panel = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-panel]');
-    panel?.classList.remove('is-open');
-    panel?.setAttribute('aria-hidden', 'true');
+const STORY_PREVIEW_ID = 'remodel-story-preview-modal';
+const STUDIO_PREVIEW_ID = 'remodel-prompt-studio-preview-modal';
+
+async function openPromptStudioSource(recipe, sourceKey) {
+    if (['worldInfoBefore', 'worldInfoAfter'].includes(sourceKey)) {
+        await transitionToWindow({ kind: 'tavern', tab: 'lorebooks' });
+        return;
+    }
+    if (['persona', 'personaDescription'].includes(sourceKey)) {
+        await transitionToWindow({ kind: 'tavern', tab: 'personas' });
+        return;
+    }
+    if (['characterCard', 'charDescription', 'charPersonality', 'scenario', 'dialogueExamples'].includes(sourceKey)) {
+        await transitionToWindow({ kind: 'tavern', tab: 'characters' });
+        return;
+    }
+    await transitionToWindow({ kind: 'native' });
+    if (recipe?.mode === 'roleplay') {
+        requestAnimationFrame(() => {
+            const root = getRealRoleplayRoot();
+            if (sourceKey === 'currentInput') {
+                root?.querySelector('[data-remodel-rp-input]')?.focus();
+            } else if (sourceKey === 'chatHistory') {
+                const stream = root?.querySelector('[data-remodel-rp-stream]');
+                stream?.scrollTo?.({ top: stream.scrollHeight, behavior: 'smooth' });
+            }
+        });
+        return;
+    }
+    if (recipe?.mode !== 'story' || !isRealStoryDocSceneActive()) return;
+    requestAnimationFrame(() => {
+        if (sourceKey === 'authorGuidance') {
+            const trigger = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-tool="guidance"]');
+            openStoryToolPanel('guidance', trigger);
+        } else if (sourceKey === 'priorText') {
+            const trigger = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-tool="prior"]');
+            openStoryToolPanel('prior', trigger);
+        } else if (sourceKey === 'manuscript') {
+            getRealStoryEditor()?.querySelector('[data-remodel-storydoc-prose]')?.focus();
+        }
+    });
 }
 
-async function openStoryToolPanel(tool) {
+async function previewPromptStudioRecipe(recipe) {
+    const overlay = openPromptStudioPreviewModal(recipe?.name || 'Prompt preview');
+    const body = overlay.querySelector('[data-remodel-prompt-studio-preview-body]');
+    const warning = overlay.querySelector('[data-remodel-prompt-studio-preview-warning]');
+    try {
+        const activeRecipe = getCurrentPromptStudioRecipe(recipe.mode, recipe.apiType);
+        const isCurrentRoleplayRecipe = recipe.mode === 'roleplay'
+            && recipe.apiType === getPromptApiType()
+            && activeRecipe?.id === recipe.id
+            && !isRealStoryDocSceneActive();
+        if (isCurrentRoleplayRecipe) {
+            const { generateData, warnings } = await runPromptPreviewDryRun('normal');
+            body.textContent = formatPromptPreview(generateData);
+            if (warnings?.length) {
+                warning.hidden = false;
+                warning.textContent = warnings.join(' · ');
+            }
+            return;
+        }
+        if (recipe.mode === 'story' && activeStoryDocId) {
+            const doc = getStoryDoc(activeStoryDocId);
+            const assembled = await assembleStoryContext(doc?.body || '');
+            body.textContent = formatPromptStudioPreview(compilePromptRecipe(
+                recipe,
+                buildStoryPromptSources(doc, assembled, { mode: 'continue' }),
+                { includeUnresolved: true },
+            ));
+            return;
+        }
+        body.textContent = formatPromptStudioPreview(compilePromptRecipe(recipe, {}, { includeUnresolved: true }));
+        warning.hidden = false;
+        warning.textContent = 'Live sources are shown as labels because no matching Story document or active Roleplay request is available.';
+    } catch (error) {
+        body.textContent = `Could not assemble a preview.\n\n${String(error)}`;
+    }
+}
+
+function openPromptStudioPreviewModal(title) {
+    document.getElementById(STUDIO_PREVIEW_ID)?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = STUDIO_PREVIEW_ID;
+    overlay.className = 'remodel-rp-picker-scrim';
+    overlay.innerHTML = `
+        <div class="remodel-rp-preview">
+            <div class="remodel-rp-picker-head">
+                <div>
+                    <div class="remodel-rp-picker-title">${escapeHtml(title)}</div>
+                    <div class="remodel-rp-picker-hint">Compiled preview only — nothing is sent or added to the manuscript.</div>
+                </div>
+                <button type="button" class="remodel-rp-picker-x" data-remodel-prompt-studio-preview-close aria-label="Close">×</button>
+            </div>
+            <div class="remodel-rp-preview-warn" data-remodel-prompt-studio-preview-warning hidden></div>
+            <pre class="remodel-rp-preview-body" data-remodel-prompt-studio-preview-body>Assembling prompt…</pre>
+        </div>
+    `;
+    const close = () => {
+        overlay.classList.remove('remodel-rp-picker-in');
+        setTimeout(() => overlay.remove(), 200);
+    };
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay || event.target.closest('[data-remodel-prompt-studio-preview-close]')) close();
+    });
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
+    return overlay;
+}
+
+async function openStoryPromptPreview() {
+    document.getElementById(STORY_PREVIEW_ID)?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = STORY_PREVIEW_ID;
+    overlay.className = 'remodel-rp-picker-scrim';
+    overlay.innerHTML = `
+        <div class="remodel-rp-preview" data-remodel-storydoc-preview-stop>
+            <div class="remodel-rp-picker-head">
+                <div>
+                    <div class="remodel-rp-picker-title">Prompt preview</div>
+                    <div class="remodel-rp-picker-hint">Exactly what the model will receive on the next turn — nothing is sent.</div>
+                </div>
+                <button type="button" class="remodel-rp-picker-x" data-remodel-storydoc-preview-close aria-label="Close">×</button>
+            </div>
+            <pre class="remodel-rp-preview-body" data-remodel-storydoc-preview-body>Assembling prompt…</pre>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
+
+    const body = overlay.querySelector('[data-remodel-storydoc-preview-body]');
+    const doc = getStoryDoc(activeStoryDocId);
+    if (!body || !doc) return;
+    try {
+        const assembled = await assembleStoryContext(doc.body || '');
+        const recipe = getCurrentPromptStudioRecipe('story', getPromptApiType());
+        const sources = buildStoryPromptSources(doc, assembled, { mode: 'continue' });
+        const compiled = compilePromptRecipe(recipe, sources);
+        body.textContent = formatPromptStudioPreview(compiled);
+    } catch (error) {
+        body.textContent = `Could not assemble a preview.\n\n${String(error)}`;
+    }
+}
+
+function closeStoryPromptPreview() {
+    const overlay = document.getElementById(STORY_PREVIEW_ID);
+    if (overlay) {
+        overlay.classList.remove('remodel-rp-picker-in');
+        setTimeout(() => overlay.remove(), 200);
+    }
+    getRealStoryEditor()?.querySelector('[data-remodel-storydoc-tool="prompt"]')?.classList.remove('is-active');
+}
+
+function closeStoryToolPanel() {
     const editor = getRealStoryEditor();
+    const panel = editor?.querySelector('[data-remodel-storydoc-panel]');
+    panel?.classList.remove('is-open');
+    panel?.setAttribute('aria-hidden', 'true');
+    if (panel) delete panel.dataset.activeTool;
+    editor?.querySelectorAll('[data-remodel-storydoc-tool].is-active').forEach((button) => button.classList.remove('is-active'));
+}
+
+async function openStoryToolPanel(tool, trigger = null) {
+    const editor = getRealStoryEditor();
+    if (tool === 'prompt') {
+        const existing = document.getElementById(STORY_PREVIEW_ID);
+        if (existing) {
+            closeStoryPromptPreview();
+            return;
+        }
+        closeStoryToolPanel();
+        trigger?.classList.add('is-active');
+        await openStoryPromptPreview();
+        return;
+    }
+    if (document.getElementById(STORY_PREVIEW_ID)) closeStoryPromptPreview();
     const panel = editor?.querySelector('[data-remodel-storydoc-panel]');
     const title = editor?.querySelector('[data-remodel-storydoc-panel-title]');
     const body = editor?.querySelector('[data-remodel-storydoc-panel-body]');
     const doc = getStoryDoc(activeStoryDocId);
     if (!panel || !title || !body || !doc) return;
+    if (panel.classList.contains('is-open') && panel.dataset.activeTool === tool) {
+        closeStoryToolPanel();
+        return;
+    }
+    panel.dataset.activeTool = tool;
+    editor.querySelectorAll('[data-remodel-storydoc-tool]').forEach((button) => {
+        button.classList.toggle('is-active', button === trigger || button.dataset.remodelStorydocTool === tool);
+    });
     panel.classList.add('is-open');
     panel.setAttribute('aria-hidden', 'false');
     if (tool === 'summary') {
@@ -4942,15 +5497,6 @@ async function openStoryToolPanel(tool) {
             select.value = '';
             preview.value = '';
         });
-        return;
-    }
-    if (tool === 'prompt') {
-        title.textContent = 'Final prompt';
-        body.innerHTML = '<p class="remodel-storydoc-panel-copy">The final system and user messages passed to Story generation.</p>';
-        const assembled = await assembleStoryContext(doc.body || '');
-        const prompt = buildStoryGenerationPrompt({ docText: doc.body || '', contextBlock: assembled.contextBlock, mode: 'continue' });
-        appendStoryPreviewSection(body, 'System', assembled.systemPrompt);
-        appendStoryPreviewSection(body, 'User', prompt);
         return;
     }
     if (tool === 'type') {
@@ -5040,7 +5586,7 @@ function formatStoryDocSelection(format) {
 
 // Reads the beat input; if it has text, generate that beat and clear it,
 // otherwise Continue.
-async function triggerStoryGenerationFromDock() {
+async function triggerStoryBeatGeneration() {
     const beatInput = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-beat]');
     const beat = (beatInput?.value || '').trim();
     if (beat) {
@@ -5081,26 +5627,64 @@ async function assembleStoryContext(docText) {
             wi = await ctx.getWorldInfoPrompt([docText], 8192, false) || wi;
         }
 
-        const systemPrompt = (ctx.substituteParams || ((s) => s))(
+        const characterCard = (ctx.substituteParams || ((s) => s))(
             [
-                'You are the prose engine inside a fiction manuscript editor. Write only the requested story prose. Continue naturally from the manuscript, preserve continuity and point of view, and do not explain your work.',
                 card.system,
                 card.description,
                 card.personality,
                 card.scenario,
-                card.persona,
-                guidance,
             ]
                 .filter(Boolean).join('\n\n'),
         );
+        const persona = (ctx.substituteParams || ((s) => s))(card.persona || '');
+        const systemPrompt = [
+            'You are the prose engine inside a fiction manuscript editor. Write only the requested story prose. Continue naturally from the manuscript, preserve continuity and point of view, and do not explain your work.',
+            characterCard,
+            persona,
+            guidance,
+        ].filter(Boolean).join('\n\n');
         const contextBlock = [wi.worldInfoBefore, wi.worldInfoAfter].filter(Boolean).join('\n');
-        return { systemPrompt, contextBlock };
+        return {
+            systemPrompt,
+            contextBlock,
+            characterCard,
+            persona,
+            worldInfoBefore: wi.worldInfoBefore || '',
+            worldInfoAfter: wi.worldInfoAfter || '',
+            authorGuidance: guidance,
+        };
     } catch (err) {
         console.warn('Remodel Story: context seam failed — generating without WI/card context.', err);
         // Graceful fallback: the guidance field is ours (no core dependency),
         // so authorial steering still applies even if the core seam breaks.
-        return { systemPrompt: guidance, contextBlock: '' };
+        return {
+            systemPrompt: guidance,
+            contextBlock: '',
+            characterCard: '',
+            persona: '',
+            worldInfoBefore: '',
+            worldInfoAfter: '',
+            authorGuidance: guidance,
+        };
     }
+}
+
+function buildStoryPromptSources(doc, assembled, { mode = 'continue', beat = '' } = {}) {
+    const body = doc?.body || '';
+    const manuscript = body.length > 12000 ? body.slice(-12000) : body;
+    const direction = mode === 'beat' && beat.trim()
+        ? `[Write the next part of the story following this scene beat: ${beat.trim()}]`
+        : '[Continue the manuscript with the next passage.]';
+    return {
+        characterCard: assembled?.characterCard || '',
+        persona: assembled?.persona || '',
+        worldInfoBefore: assembled?.worldInfoBefore || '',
+        worldInfoAfter: assembled?.worldInfoAfter || '',
+        authorGuidance: assembled?.authorGuidance || '',
+        priorText: doc?.priorText ? `=== PRIOR SCENE TEXT ===\n${doc.priorText}` : '',
+        manuscript,
+        sceneBeat: direction,
+    };
 }
 
 // True while a story generation is in flight, so the controls can flip to a
@@ -5134,18 +5718,20 @@ async function generateStory({ mode = 'continue', beat = '', beatId = null } = {
     setStoryGeneratingUI(true);
 
     try {
-        const { systemPrompt, contextBlock } = await assembleStoryContext(docText);
-
-        const prompt = buildStoryGenerationPrompt({ docText, contextBlock, mode, beat });
+        const assembled = await assembleStoryContext(docText);
+        const recipe = getCurrentPromptStudioRecipe('story', getPromptApiType());
+        const prompt = compilePromptRecipe(
+            recipe,
+            buildStoryPromptSources(getStoryDoc(activeStoryDocId), assembled, { mode, beat }),
+        ).messages;
 
         const generated = await ctx.generateRaw({
             prompt,
-            systemPrompt,
             // A passage, not a full chapter. Keeping this at Horde's anonymous
             // threshold also avoids a configured 2k-token chat response turning
             // one editor click into an unexpectedly expensive request.
             responseLength: 512,
-            instructOverride: true,
+            instructOverride: false,
         });
 
         if (generated && generated.trim()) {
@@ -5210,7 +5796,12 @@ function appendStoryProse(text) {
 // (Continue / Stop) are CSS-driven off this class.
 function setStoryGeneratingUI(on) {
     document.body.classList.toggle('remodel-storydoc-generating', Boolean(on));
-    const indicator = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-indicator]');
+    const editor = getRealStoryEditor();
+    const continueButton = editor?.querySelector('[data-remodel-storydoc-continue]');
+    const stopButton = editor?.querySelector('[data-remodel-storydoc-stop]');
+    if (continueButton) continueButton.disabled = Boolean(on);
+    if (stopButton) stopButton.disabled = !on;
+    const indicator = editor?.querySelector('[data-remodel-storydoc-indicator]');
     if (indicator) {
         if (on) {
             indicator.classList.remove('remodel-storydoc-indicator-error');
@@ -5366,6 +5957,7 @@ function renderRoleplayComposer(root) {
             <button type="button" class="remodel-rp-act" ${triggerAttrs}><span class="remodel-rp-g">✦</span> Trigger…</button>
             <button type="button" class="remodel-rp-act" data-remodel-rp-action="impersonate"><span class="remodel-rp-g">✎</span> Write for me</button>
             <button type="button" class="remodel-rp-act" data-remodel-rp-action="preview"><span class="remodel-rp-g">◉</span> Preview</button>
+            ${renderScenePromptChoice(getActiveScene(), true)}
             <span class="remodel-rp-spacer"></span>
             ${memberToggles}
         </div>
@@ -5755,7 +6347,7 @@ function bindRoleplayComposerEvents() {
             }
             // A click anywhere that isn't the menu itself (or the trigger that
             // would reopen it) closes it.
-            if (!menu.contains(target) && !target.closest('[data-remodel-rp-persona-menu], [data-remodel-rp-nextspeaker-menu]')) {
+            if (!menu.contains(target) && !target.closest('[data-remodel-rp-persona-menu], [data-remodel-rp-nextspeaker-menu], [data-remodel-scene-prompt-choice]')) {
                 closeRoleplayMenu();
                 // fall through — the click may also be a real control.
             }
@@ -5811,6 +6403,13 @@ function bindRoleplayComposerEvents() {
 
         // Persona (speak-as) menu — both the turn-bar pill and the composer
         // chip open it.
+        const promptChoice = target.closest('[data-remodel-scene-prompt-choice]');
+        if (promptChoice) {
+            event.preventDefault();
+            openScenePromptRecipeMenu(promptChoice);
+            return;
+        }
+
         const personaTrigger = target.closest('[data-remodel-rp-persona-menu]');
         if (personaTrigger) {
             event.preventDefault();
