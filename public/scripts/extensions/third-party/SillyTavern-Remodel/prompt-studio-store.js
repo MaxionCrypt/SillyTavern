@@ -2,7 +2,7 @@ import { getContext } from '../../../st-context.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 1;
+const STORE_VERSION = 4;
 
 export const PROMPT_MODES = ['story', 'roleplay'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
@@ -14,6 +14,8 @@ export const PROMPT_SOURCE_DEFINITIONS = Object.freeze({
         { key: 'persona', label: 'Persona', role: 'system' },
         { key: 'worldInfoBefore', label: 'World Info (before)', role: 'system' },
         { key: 'worldInfoAfter', label: 'World Info (after)', role: 'system' },
+        { key: 'worldInfoExamples', label: 'World Info Examples', role: 'system' },
+        { key: 'worldInfoDepth', label: 'World Info at Depth', role: 'system', structured: true },
         { key: 'authorGuidance', label: 'Author Guidance', role: 'instruction' },
         { key: 'priorText', label: 'Prior Scene', role: 'system' },
         { key: 'manuscript', label: 'Manuscript', role: 'user' },
@@ -27,6 +29,7 @@ export const PROMPT_SOURCE_DEFINITIONS = Object.freeze({
         { key: 'scenario', label: 'Scenario', role: 'system', nativeIdentifier: 'scenario' },
         { key: 'worldInfoAfter', label: 'World Info (after)', role: 'system', nativeIdentifier: 'worldInfoAfter' },
         { key: 'dialogueExamples', label: 'Dialogue Examples', role: 'user', nativeIdentifier: 'dialogueExamples' },
+        { key: 'storyGoals', label: 'Story Goals', role: 'system', nativeIdentifier: 'remodel_story_goals' },
         { key: 'chatHistory', label: 'Chat History', role: 'user', nativeIdentifier: 'chatHistory' },
         // Native Chat Completion keeps the latest input inside chatHistory;
         // exposing it as an alias preserves that real marker boundary.
@@ -45,6 +48,7 @@ const nativeMarkerToSource = Object.freeze({
     worldInfoAfter: 'worldInfoAfter',
     dialogueExamples: 'dialogueExamples',
     chatHistory: 'chatHistory',
+    remodel_story_goals: 'storyGoals',
     quietPrompt: 'generationNudge',
 });
 
@@ -54,7 +58,7 @@ export function initializePromptStudioStore(seed = {}) {
         namespace[SETTINGS_KEY] = createSeededStore(seed);
         savePromptStudioStore();
     }
-    normalizeStore(namespace[SETTINGS_KEY], seed);
+    if (normalizeStore(namespace[SETTINGS_KEY], seed)) savePromptStudioStore();
     return namespace[SETTINGS_KEY];
 }
 
@@ -227,7 +231,7 @@ function createSeededStore(seed) {
             description: 'Imported from the native Chat Completion prompt manager.',
             mode: 'roleplay',
             apiType: 'chat',
-            blocks: blocksFromNativeChat(seed.chatPrompts || [], seed.chatPromptOrder || []),
+            blocks: withStoryGoalsSource(blocksFromNativeChat(seed.chatPrompts || [], seed.chatPromptOrder || [])),
             transport: null,
         },
         {
@@ -258,9 +262,13 @@ function defaultStoryBlocks() {
             enabled: true,
         }),
         createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'characterCard' }),
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'persona' }),
+        // No persona block: in a Story the user is the author, not a character
+        // in the fiction, so "who the user is playing" is not part of the
+        // prompt. Roleplay recipes still carry one.
         createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoBefore' }),
         createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoAfter' }),
+        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoExamples' }),
+        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoDepth', locked: true }),
         createPromptBlock({ kind: 'source', role: 'instruction', sourceKey: 'authorGuidance' }),
         createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'priorText' }),
         createPromptBlock({ kind: 'source', role: 'user', sourceKey: 'manuscript' }),
@@ -312,9 +320,22 @@ function findGlobalPromptOrder(promptOrder) {
 }
 
 function normalizeStore(store, seed) {
+    const previousVersion = Number(store.version) || 1;
+    let changed = previousVersion < STORE_VERSION;
     store.version = STORE_VERSION;
     store.recipes = store.recipes && typeof store.recipes === 'object' ? store.recipes : {};
     store.recipeIds = Array.isArray(store.recipeIds) ? store.recipeIds.filter((id) => store.recipes[id]) : [];
+    for (const [id, recipe] of Object.entries(store.recipes)) {
+        if (recipe?.purpose === 'goalDirector') {
+            delete store.recipes[id];
+            store.recipeIds = store.recipeIds.filter((recipeId) => recipeId !== id);
+            changed = true;
+        }
+    }
+    if (store.active?.goalDirector) {
+        delete store.active.goalDirector;
+        changed = true;
+    }
     for (const id of [...store.recipeIds]) {
         const recipe = normalizeRecipe(store.recipes[id]);
         if (!recipe) {
@@ -323,6 +344,9 @@ function normalizeStore(store, seed) {
             continue;
         }
         store.recipes[id] = recipe;
+        if (previousVersion < 2 && recipe.mode === 'story') {
+            changed = migrateStoryWorldInfoSources(recipe) || changed;
+        }
     }
     store.active ??= {};
     for (const mode of PROMPT_MODES) {
@@ -333,6 +357,7 @@ function normalizeStore(store, seed) {
                 const fallback = store.recipeIds.map((id) => store.recipes[id]).find((recipe) => recipe?.mode === mode && recipe.apiType === apiType);
                 if (fallback) {
                     store.active[mode][apiType] = fallback.id;
+                    changed = true;
                 } else {
                     const created = createPromptRecipeWithoutSave(store, {
                         name: `Current ${capitalize(mode)} · ${capitalize(apiType)}`,
@@ -342,10 +367,47 @@ function normalizeStore(store, seed) {
                         transport: apiType === 'text' ? clone(seed.textTransport || {}) : null,
                     });
                     store.active[mode][apiType] = created.id;
+                    changed = true;
                 }
             }
         }
     }
+    if (previousVersion < 3) {
+        for (const recipe of Object.values(store.recipes)) {
+            if (recipe?.mode === 'roleplay' && recipe.apiType === 'chat') {
+                changed = ensureStoryGoalsSource(recipe.blocks) || changed;
+            }
+        }
+    }
+    return changed;
+}
+
+function ensureStoryGoalsSource(blocks) {
+    if (!Array.isArray(blocks) || blocks.some((block) => block.kind === 'source' && block.sourceKey === 'storyGoals')) return false;
+    const source = createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'storyGoals', nativeIdentifier: 'remodel_story_goals' });
+    const historyIndex = blocks.findIndex((block) => block.kind === 'source' && ['chatHistory', 'currentInput'].includes(block.sourceKey));
+    blocks.splice(historyIndex >= 0 ? historyIndex : blocks.length, 0, source);
+    return true;
+}
+
+function withStoryGoalsSource(blocks) {
+    ensureStoryGoalsSource(blocks);
+    return blocks;
+}
+
+function migrateStoryWorldInfoSources(recipe) {
+    const blocks = recipe.blocks || [];
+    const sourceKeys = new Set(blocks.filter((block) => block.kind === 'source').map((block) => block.sourceKey));
+    const usesWorldInfo = sourceKeys.has('worldInfoBefore') || sourceKeys.has('worldInfoAfter');
+    if (!usesWorldInfo) return false;
+    const additions = [];
+    if (!sourceKeys.has('worldInfoExamples')) additions.push(createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoExamples' }));
+    if (!sourceKeys.has('worldInfoDepth')) additions.push(createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoDepth', locked: true }));
+    if (!additions.length) return false;
+    const manuscriptIndex = blocks.findIndex((block) => block.kind === 'source' && block.sourceKey === 'manuscript');
+    blocks.splice(manuscriptIndex >= 0 ? manuscriptIndex : blocks.length, 0, ...additions);
+    recipe.updatedAt = now();
+    return true;
 }
 
 function createPromptRecipeWithoutSave(store, input) {

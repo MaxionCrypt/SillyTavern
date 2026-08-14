@@ -18,6 +18,39 @@
   src: url('./fonts/cinzel-latin-400-normal.woff2') format('woff2');
 }
 
+.remodel-goal-create-button { position: absolute; left: 50%; bottom: 34px; transform: translateX(-50%); padding: 9px 15px; color: #dfd936; border: 1px solid rgba(218,207,0,.45); background: rgba(8,7,13,.72); border-radius: 999px; }
+.remodel-goal-create-form { position: absolute; z-index: 8; inset: 50% auto auto 50%; transform: translate(-50%,-50%); width: min(520px,calc(100% - 40px)); display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 25px; background: rgba(10,8,16,.98); border: 1px solid rgba(218,207,0,.6); box-shadow: 0 30px 90px rgba(0,0,0,.7); }
+.remodel-goal-create-form > span, .remodel-goal-create-form > textarea, .remodel-goal-create-form > button[type="submit"] { grid-column: 1/-1; }
+.remodel-goal-create-form > span { color: #eee9f2; font: 400 24px Georgia,serif; }
+.remodel-goal-create-form input, .remodel-goal-create-form textarea, .remodel-goal-create-form select { width: 100%; padding: 10px; color: #eeeaf4; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.14); }
+.remodel-goal-create-form > button:first-child { position: absolute; right: 10px; top: 8px; font-size: 21px; }
+.remodel-goal-create-form > button[type="submit"] { padding: 10px; color: #09080d; background: #c9be00; }
+
+/* Typed Variables workspace ------------------------------------------------ */
+.remodel-tavern-viewport:has(.remodel-variables-workspace) .remodel-tavern-body { overflow: hidden; }
+.remodel-variables-workspace { width: 100%; height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(250px, 320px) minmax(0, 1fr); background: rgba(7, 6, 13, .88); color: var(--SmartThemeBodyColor); }
+.remodel-variable-library { min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); border-right: 1px solid rgba(201, 190, 0, .38); background: linear-gradient(160deg, rgba(8, 7, 13, .97), rgba(12, 10, 19, .86)); }
+.remodel-variable-library > header, .remodel-variable-pane-header { padding: 28px 26px 20px; position: relative; border-bottom: 1px solid rgba(201, 190, 0, .23); }
+.remodel-variable-library header > span, .remodel-variable-pane-header > span, .remodel-variable-review > span { display: block; color: #c9be00; font: 600 10px/1.3 serif; letter-spacing: .18em; text-transform: uppercase; }
+.remodel-variable-library h2, .remodel-variable-pane-header h2 { margin: 4px 0 0; color: #f1eee4; font: 400 clamp(24px, 2.4vw, 38px)/1.05 Georgia, serif; letter-spacing: .02em; }
+.remodel-variable-library header > button { position: absolute; right: 22px; top: 32px; color: #e9e5f4; font-size: 17px; }
+.remodel-variable-tabs { padding: 12px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; border-bottom: 1px solid rgba(255,255,255,.06); }
+.remodel-variable-tabs button { min-width: 0; padding: 9px 3px; display: grid; justify-items: center; gap: 5px; color: rgba(235,232,244,.54); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid transparent; }
+.remodel-variable-tabs button i { font-size: 13px; }.remodel-variable-tabs button.is-active { color: #e9df53; border-color: #c9be00; background: rgba(201,190,0,.05); }
+.remodel-variable-library-list { min-height: 0; overflow: auto; scrollbar-width: thin; padding: 12px; }
+.remodel-variable-library-list > button { width: 100%; display: grid; grid-template-columns: 22px minmax(0,1fr) 16px; align-items: center; gap: 10px; padding: 13px 10px; text-align: left; color: rgba(242,239,248,.72); border-left: 2px solid transparent; }
+.remodel-variable-library-list > button span { min-width: 0; display: grid; }.remodel-variable-library-list > button strong { overflow: hidden; text-overflow: ellipsis; color: #f0edf4; font: 500 14px/1.2 Georgia, serif; }.remodel-variable-library-list > button small { margin-top: 4px; color: rgba(235,232,244,.4); font-size: 10px; text-transform: capitalize; }
+.remodel-variable-library-list > button.is-active { border-left-color: #d6cc00; background: linear-gradient(90deg, rgba(201,190,0,.12), transparent); }.remodel-variable-library-list > button.is-active > i:first-child { color: #ecf500; }
+.remodel-variable-editor { min-width: 0; min-height: 0; overflow: auto; scrollbar-width: thin; background: radial-gradient(circle at 62% 30%, rgba(77,61,96,.15), transparent 44%); }
+.remodel-variable-pane { min-height: 100%; padding-bottom: 40px; }.remodel-variable-pane-header { padding-left: 30px; }.remodel-variable-pane-header p { max-width: 760px; margin: 10px 0 0; color: rgba(235,232,244,.5); font-size: 12px; }
+.remodel-variable-form { max-width: 1050px; padding: 26px 30px; }.remodel-variable-form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px 18px; }.remodel-variable-form label, .remodel-variable-form-grid label { display: grid; gap: 7px; color: rgba(231,227,240,.6); font-size: 10px; letter-spacing: .11em; text-transform: uppercase; }.remodel-variable-form input, .remodel-variable-form select, .remodel-variable-form textarea, .remodel-variable-instance-create input, .remodel-variable-instance-create select { width: 100%; min-width: 0; color: #f2eff7; background: rgba(7,6,12,.72); border: 1px solid rgba(255,255,255,.12); border-radius: 8px; padding: 10px 12px; text-transform: none; letter-spacing: 0; }.remodel-variable-form input:focus, .remodel-variable-form textarea:focus, .remodel-variable-form select:focus { border-color: rgba(218,207,0,.7); box-shadow: 0 0 0 2px rgba(201,190,0,.08); }.remodel-variable-field-note,.remodel-variable-instance-help { color: rgba(231,227,240,.46); font: 400 11px/1.45 system-ui,sans-serif; letter-spacing: 0; text-transform: none; }.remodel-variable-instance-help { margin: 0; padding: 0 30px 12px; border-bottom: 1px solid rgba(201,190,0,.17); }
+.remodel-variable-form .is-wide { margin-top: 18px; }.remodel-variable-form fieldset { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; margin: 18px 0; padding: 16px; border: 1px solid rgba(201,190,0,.22); }.remodel-variable-form legend { padding: 0 8px; color: #c9be00; font-size: 10px; text-transform: uppercase; letter-spacing: .14em; }.remodel-variable-form footer { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }.remodel-variable-form footer button, .remodel-variable-instance-create button { padding: 10px 15px; color: #09080d; background: #c9be00; border-radius: 8px; font-weight: 700; }.remodel-variable-form footer button:not(:first-child) { color: #e5e1ec; background: transparent; border: 1px solid rgba(255,255,255,.16); }.remodel-variable-form footer button.is-danger { color: #ff8e91; border-color: rgba(255,80,84,.3); }
+.remodel-variable-instance-create { display: grid; grid-template-columns: 1.25fr .8fr repeat(5,minmax(90px,1fr)) auto; gap: 8px; padding: 20px 30px 12px; }.remodel-variable-instance-list, .remodel-variable-record-list { padding: 12px 30px; display: grid; gap: 9px; }.remodel-variable-instance-list article { display: grid; grid-template-columns: 24px minmax(180px,1fr) minmax(100px,150px) 90px 34px; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid rgba(255,255,255,.09); border-left-color: rgba(201,190,0,.55); background: rgba(11,9,17,.68); }.remodel-variable-instance-list article > div { display: grid; }.remodel-variable-instance-list article span, .remodel-variable-instance-list article small { color: rgba(235,232,244,.45); font-size: 10px; }.remodel-variable-instance-list article strong { color: #f2eff6; font: 500 15px Georgia,serif; }.remodel-variable-instance-list output { color: #eae338; font-family: monospace; }
+.remodel-variable-record-list article { display: grid; grid-template-columns: minmax(170px,.7fr) minmax(0,1.4fr) auto; gap: 18px; padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,.08); }.remodel-variable-record-list article strong { color: #f1edf5; text-transform: capitalize; }.remodel-variable-record-list article span, .remodel-variable-record-list article small { color: rgba(235,232,244,.5); }.remodel-variable-empty, .remodel-variable-warning { padding: 30px; color: rgba(235,232,244,.45); font-style: italic; }.remodel-variable-review { margin: 0 30px; padding: 18px; border: 1px solid rgba(219,151,44,.32); background: rgba(83,50,15,.13); }.remodel-variable-toggle { grid-template-columns: auto minmax(0,1fr) !important; align-items: center; }
+.remodel-mechanics-failure { position: absolute; z-index: 30; left: 50%; bottom: 92px; transform: translateX(-50%); width: min(760px,calc(100% - 40px)); display: flex; align-items: center; gap: 10px; padding: 12px 15px; color: #ede8f4; background: rgba(17,12,24,.97); border: 1px solid rgba(218,207,0,.65); box-shadow: 0 16px 50px rgba(0,0,0,.45); }.remodel-mechanics-failure span { flex: 1; }.remodel-mechanics-failure button { padding: 8px 11px; border: 1px solid rgba(218,207,0,.4); color: #e8e239; }
+.remodel-rp-goal-chips { display: flex; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }.remodel-rp-goal-chips:empty { display: none; }.remodel-rp-goal-chips > button { display: flex; align-items: center; gap: 6px; max-width: 190px; padding: 5px 8px; color: rgba(235,232,244,.55); background: rgba(8,7,13,.62); border: 1px solid rgba(255,255,255,.1); border-radius: 999px; }.remodel-rp-goal-chips > button span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }.remodel-rp-goal-chips > button small { color: #d2c900; }.remodel-rp-goal-chips > button.is-attached { color: #f4eff8; border-color: rgba(218,207,0,.75); box-shadow: 0 0 14px rgba(201,190,0,.16); }
+@media (max-width: 850px) { .remodel-variables-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(210px,36vh) minmax(0,1fr); overflow: hidden; }.remodel-variable-library { border-right: 0; border-bottom: 1px solid rgba(201,190,0,.38); }.remodel-variable-form-grid { grid-template-columns: 1fr; }.remodel-variable-form fieldset { grid-template-columns: repeat(2,minmax(0,1fr)); }.remodel-variable-instance-create { grid-template-columns: repeat(2,minmax(0,1fr)); }.remodel-variable-instance-list article { grid-template-columns: 22px minmax(0,1fr) 90px; }.remodel-variable-instance-list article output, .remodel-variable-instance-list article > button { display: none; }.remodel-variable-record-list article { grid-template-columns: 1fr; gap: 5px; }.remodel-mechanics-failure { align-items: stretch; flex-direction: column; } }
+
 @font-face {
   font-family: 'Cinzel';
   font-style: normal;
@@ -346,7 +379,9 @@ body.st-remodel-active #right-nav-panel:has(#rm_group_chats_block[style*="flex"]
    user out of the chat on every send/trigger/impersonate. Confirmed live:
    the same rule is needed (and correct) for the deliberate "+ add cast"
    click, which is why this is scoped to the generating state specifically
-   rather than suppressed for roleplay outright. */
+   rather than suppressed for roleplay outright. timeline-spine.js also
+   closes this core-opened page before it removes the generating class, so
+   the adopted modal cannot flash into view once narration has settled. */
 body.st-remodel-active.remodel-roleplay-generating #right-nav-panel:has(#rm_group_chats_block[style*="flex"]) {
   display: none !important;
   visibility: hidden !important;
@@ -1354,6 +1389,60 @@ body.remodel-roleplay-workspace-active .remodel-rp-narrator .remodel-rp-body {
   font-size: 14px !important;
 }
 
+body.remodel-roleplay-workspace-active .remodel-rp-narrator.remodel-rp-typing {
+  width:min(100%,920px) !important;
+  max-width:88% !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-narrator.remodel-rp-typing .remodel-rp-bubble {
+  width:100% !important;
+  box-sizing:border-box !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-trace {
+  margin:10px 0 2px !important;
+  border-top:1px solid rgba(215,200,0,.16) !important;
+  color:rgba(236,232,212,.68) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-trace summary {
+  padding:9px 0 5px !important;
+  color:rgba(232,222,90,.76) !important;
+  cursor:pointer !important;
+  font-size:.56rem !important;
+  letter-spacing:.12em !important;
+  text-transform:uppercase !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-trace > p {
+  margin:2px 0 7px !important;
+  color:rgba(236,232,212,.42) !important;
+  font:italic .67rem/1.4 var(--remodel-serif,Georgia,serif) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-trace ul {
+  display:grid !important;
+  gap:5px !important;
+  margin:0 !important;
+  padding:0 !important;
+  list-style:none !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-trace li {
+  display:grid !important;
+  grid-template-columns:70px minmax(0,1fr) !important;
+  gap:8px !important;
+  font-size:.7rem !important;
+  line-height:1.45 !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-trace li span {
+  color:rgba(215,200,0,.48) !important;
+  font-size:.5rem !important;
+  letter-spacing:.1em !important;
+  text-transform:uppercase !important;
+}
+
 /* --- Composer zone: turn bar + action row + input --- */
 
 /* Roleplay provides its own composer, so the native input form is hidden
@@ -1370,6 +1459,198 @@ body.remodel-roleplay-workspace-active .remodel-rp-composer-zone {
   display: flex !important;
   flex-direction: column !important;
   gap: 10px !important;
+}
+
+/* Live Direction sits between the floating command icons and the composer.
+   It stays compact: state first, pacing tucked to the edge, and controls only
+   appear when their current reveal state can actually use them. */
+body.remodel-roleplay-workspace-active .remodel-live-flow {
+  position:relative !important;
+  z-index:9 !important;
+  display:flex !important;
+  align-items:center !important;
+  gap:8px !important;
+  min-height:28px !important;
+  margin:0 10px -2px !important;
+  padding:3px 8px !important;
+  border-top:1px solid rgba(215,200,0,.12) !important;
+  color:rgba(239,234,215,.55) !important;
+  font:9px/1.2 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.06em !important;
+}
+body.remodel-roleplay-workspace-active .remodel-live-flow.is-directed {
+  color:rgba(255,247,172,.88) !important;
+  text-shadow:0 0 9px rgba(215,200,0,.18) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-live-flow button,
+body.remodel-roleplay-workspace-active .remodel-live-flow select {
+  min-height:24px !important;
+  border:1px solid rgba(215,200,0,.2) !important;
+  border-radius:999px !important;
+  background:rgba(8,8,12,.5) !important;
+  color:inherit !important;
+  box-shadow:none !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-live-diagnostics {
+  opacity: .52 !important;
+  margin-left: 2px !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-live-diagnostics:hover {
+  opacity: 1 !important;
+}
+
+.remodel-live-diagnostics-modal {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 12000 !important;
+  display: grid !important;
+  place-items: center !important;
+  padding: 24px !important;
+  background: rgba(4, 5, 8, .76) !important;
+  backdrop-filter: blur(10px) !important;
+}
+
+.remodel-live-diagnostics-modal > section {
+  width: min(1100px, 96vw) !important;
+  height: min(780px, 92vh) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  border: 1px solid rgba(215, 200, 0, .45) !important;
+  background: rgba(8, 8, 13, .97) !important;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .68) !important;
+}
+
+.remodel-live-diagnostics-modal header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 16px !important;
+  padding: 16px 20px !important;
+  border-bottom: 1px solid rgba(215, 200, 0, .28) !important;
+}
+
+.remodel-live-diagnostics-modal header small,
+.remodel-live-diagnostics-modal summary strong {
+  color: var(--tarot-gold) !important;
+  letter-spacing: .14em !important;
+  text-transform: uppercase !important;
+}
+
+.remodel-live-diagnostics-modal h2 { margin: 2px 0 0 !important; font-family: var(--remodel-serif) !important; }
+.remodel-live-diagnostics-modal header button { margin-left: 8px !important; }
+.remodel-live-diagnostics-body { overflow: auto !important; padding: 14px 20px 28px !important; }
+.remodel-live-diagnostics-body details { border-bottom: 1px solid rgba(215, 200, 0, .16) !important; padding: 12px 0 !important; }
+.remodel-live-diagnostics-body summary { display: grid !important; grid-template-columns: 110px minmax(0, 1fr) auto !important; gap: 14px !important; cursor: pointer !important; }
+.remodel-live-diagnostics-body summary span { overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; }
+.remodel-live-diagnostics-counts { display: flex !important; flex-wrap: wrap !important; gap: 6px !important; margin: 12px 0 !important; }
+.remodel-live-diagnostics-counts span { padding: 3px 7px !important; border: 1px solid rgba(215, 200, 0, .18) !important; font-size: 11px !important; }
+.remodel-live-diagnostics-body ol { margin: 0 !important; padding-left: 28px !important; }
+.remodel-live-diagnostics-body li { display: grid !important; grid-template-columns: 72px 190px minmax(0, 1fr) !important; gap: 10px !important; align-items: start !important; margin: 6px 0 !important; }
+.remodel-live-diagnostics-body pre { margin: 0 !important; max-height: 150px !important; overflow: auto !important; white-space: pre-wrap !important; color: rgba(235, 233, 240, .72) !important; font-size: 11px !important; }
+
+@media (max-width: 720px) {
+  .remodel-live-diagnostics-modal { padding: 8px !important; }
+  .remodel-live-diagnostics-modal > section { width: 100% !important; height: 96vh !important; }
+  .remodel-live-diagnostics-body summary,
+  .remodel-live-diagnostics-body li { grid-template-columns: 1fr !important; }
+}
+body.remodel-roleplay-workspace-active .remodel-live-mode {
+  display:inline-flex !important;
+  align-items:center !important;
+  gap:7px !important;
+  padding:0 10px !important;
+  text-transform:uppercase !important;
+  letter-spacing:.11em !important;
+}
+body.remodel-roleplay-workspace-active .remodel-live-mode i { color:rgba(215,200,0,.92) !important; }
+body.remodel-roleplay-workspace-active .remodel-live-flow small { opacity:.58 !important; }
+body.remodel-roleplay-workspace-active .remodel-live-flow em {
+  min-width:0 !important;
+  overflow:hidden !important;
+  color:#fff4a0 !important;
+  font-style:italic !important;
+  text-overflow:ellipsis !important;
+  white-space:nowrap !important;
+}
+body.remodel-roleplay-workspace-active .remodel-live-pacing {
+  display:inline-flex !important;
+  align-items:center !important;
+  gap:6px !important;
+  margin-left:auto !important;
+  color:rgba(235,229,202,.44) !important;
+  text-transform:uppercase !important;
+}
+body.remodel-roleplay-workspace-active .remodel-live-pacing select {
+  width:auto !important;
+  padding:0 22px 0 9px !important;
+  font-size:9px !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-msg.remodel-rp-interrupted .remodel-rp-bubble::after {
+  content:'interrupted' !important;
+  position:absolute !important;
+  right:10px !important;
+  bottom:5px !important;
+  color:rgba(215,200,0,.42) !important;
+  font:7px/1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.12em !important;
+  text-transform:uppercase !important;
+}
+body.remodel-roleplay-workspace-active .remodel-direction-failure {
+  position:absolute !important;
+  left:50% !important;
+  bottom:96px !important;
+  z-index:80 !important;
+  transform:translateX(-50%) !important;
+}
+
+@media (max-width:620px) {
+  body.remodel-roleplay-workspace-active .remodel-live-flow { flex-wrap:wrap !important; margin-inline:0 !important; }
+  body.remodel-roleplay-workspace-active .remodel-live-pacing { margin-left:0 !important; }
+  body.remodel-roleplay-workspace-active .remodel-live-flow em { order:4; flex-basis:100% !important; }
+}
+
+/* Story Goals launcher: a pill above the composer input, left-aligned. */
+body.remodel-roleplay-workspace-active .remodel-rp-composer-tools {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-goals-pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 6px 14px !important;
+  border: 1px solid var(--tarot-gold-soft, rgba(215, 200, 0, 0.3)) !important;
+  border-radius: 999px !important;
+  background: rgba(215, 200, 0, 0.06) !important;
+  color: rgba(233, 224, 183, 0.85) !important;
+  font-family: var(--remodel-serif, Georgia, serif) !important;
+  font-size: 10px !important;
+  letter-spacing: 0.18em !important;
+  text-transform: uppercase !important;
+  cursor: pointer !important;
+  transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-goals-pill i {
+  font-size: 12px !important;
+  color: rgba(215, 200, 0, 0.8) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-goals-pill:hover {
+  border-color: rgba(215, 200, 0, 0.55) !important;
+  background: rgba(215, 200, 0, 0.1) !important;
+  color: #f6ea62 !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-goals-pill.is-active {
+  border-color: #d7c800 !important;
+  background: rgba(215, 200, 0, 0.14) !important;
+  color: #f6ea62 !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-turn-bar {
@@ -1540,6 +1821,36 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   color: var(--nord-aurora-red, #bf616a) !important;
   font-size: 12px !important;
   font-family: var(--remodel-manuscript-font, Georgia) !important;
+}
+
+#remodel-prompt-studio-preview-modal .remodel-story-resolver-report,
+#remodel-story-preview-modal .remodel-story-resolver-report {
+  margin: 10px 20px 0 !important;
+  border: 1px solid rgba(205, 194, 32, 0.34) !important;
+  border-radius: 7px !important;
+  background: rgba(9, 9, 14, 0.62) !important;
+  color: rgba(241, 236, 205, 0.82) !important;
+}
+
+#remodel-prompt-studio-preview-modal .remodel-story-resolver-report summary,
+#remodel-story-preview-modal .remodel-story-resolver-report summary {
+  padding: 8px 11px !important;
+  color: #d9d22e !important;
+  cursor: pointer !important;
+  font: 600 10px/1.2 var(--remodel-manuscript-font, Georgia) !important;
+  letter-spacing: 0.12em !important;
+  text-transform: uppercase !important;
+}
+
+#remodel-prompt-studio-preview-modal .remodel-story-resolver-report pre,
+#remodel-story-preview-modal .remodel-story-resolver-report pre {
+  max-height: 180px !important;
+  margin: 0 !important;
+  padding: 0 11px 11px !important;
+  overflow: auto !important;
+  white-space: pre-wrap !important;
+  color: inherit !important;
+  font: 11px/1.5 var(--monoFontFamily, monospace) !important;
 }
 #remodel-rp-preview-modal .remodel-rp-preview-body,
 #remodel-story-preview-modal .remodel-rp-preview-body {
@@ -2142,12 +2453,12 @@ body.remodel-roleplay-workspace-active .remodel-rp-typing-body:empty::after {
    flight — the arrow is swapped for a spinning ring via ::after, and the
    button is disabled so a second send can't stack. */
 body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-send {
-  color: transparent !important;
-  pointer-events: none !important;
+  color:var(--tarot-ink) !important;
+  pointer-events:auto !important;
   position: relative !important;
 }
 body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-send::after {
-  content: '' !important;
+  content:none !important;
   position: absolute !important;
   inset: 0 !important;
   margin: auto !important;
@@ -2165,7 +2476,7 @@ body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-s
 /* While generating, the roleplay input dims and Regenerate/Next dim too —
    they'd just queue behind the in-flight run. */
 body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-input {
-  opacity: 0.55 !important;
+  opacity:1 !important;
 }
 body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-act[data-remodel-rp-action="regenerate"],
 body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-act[data-remodel-rp-action="next"],
@@ -5481,6 +5792,13 @@ body.remodel-storydoc-active .remodel-storydoc-panel-body select {
   width:100% !important; box-sizing:border-box !important; margin:7px 0 12px !important; padding:10px !important;
   border:1px solid rgba(212,190,33,.25) !important; background:rgba(0,0,0,.3) !important; color:#f2eee4 !important;
 }
+body.remodel-storydoc-active .remodel-storydoc-check {
+  display:flex !important; align-items:center !important; gap:9px !important; margin:2px 0 13px !important;
+  color:rgba(240,235,220,.78) !important; font:10px/1.35 system-ui,sans-serif !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-check input {
+  flex:0 0 auto !important; margin:0 !important;
+}
 
 /* =====================================================================
    PROMPT STUDIO
@@ -7351,6 +7669,243 @@ body.st-remodel-active #WorldInfo .world_entry.disabledWIEntry .killSwitch {
   }
 }
 
+/* Roleplay scene identity: the Story manuscript's fading top treatment,
+   adapted for chat. The roster is still the original live cast component;
+   it is simply disclosed from this header instead of permanently consuming
+   a column beside every message. */
+body.remodel-roleplay-workspace-active #remodel-roleplay-root {
+  grid-template-columns:minmax(0,1fr) !important;
+  grid-template-rows:minmax(0,1fr) auto !important;
+  grid-template-areas:
+    "stream"
+    "composer" !important;
+  padding-top:90px !important;
+  height:100% !important;
+  max-height:100% !important;
+  box-sizing:border-box !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-scene-header {
+  position:fixed !important;
+  z-index:22 !important;
+  top:0 !important;
+  left:var(--remodel-left-edge) !important;
+  display:grid !important;
+  grid-template-columns:auto minmax(0,1fr) !important;
+  align-items:center !important;
+  gap:16px !important;
+  width:var(--remodel-chat-width) !important;
+  min-height:90px !important;
+  padding:10px 28px 14px !important;
+  box-sizing:border-box !important;
+  background:linear-gradient(180deg,rgba(12,11,17,.86),rgba(12,11,17,.38) 72%,transparent) !important;
+  pointer-events:none !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-scene-header > * {
+  pointer-events:auto !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-scene-back {
+  display:grid !important;
+  place-items:center !important;
+  width:38px !important;
+  min-width:38px !important;
+  height:38px !important;
+  min-height:38px !important;
+  margin:0 !important;
+  padding:0 !important;
+  border:1px solid rgba(213,187,0,.45) !important;
+  border-radius:50% !important;
+  background:rgba(8,8,12,.58) !important;
+  color:#d6c500 !important;
+  box-shadow:0 0 14px rgba(215,200,0,.04) !important;
+  cursor:pointer !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-scene-back:is(:hover,:focus-visible) {
+  border-color:rgba(231,216,36,.78) !important;
+  color:#fff266 !important;
+  box-shadow:0 0 14px rgba(215,200,0,.14) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-scene-heading {
+  display:flex !important;
+  min-width:0 !important;
+  flex-direction:column !important;
+  align-items:flex-start !important;
+  gap:2px !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-scene-kicker {
+  color:rgba(212,190,33,.72) !important;
+  font:9px/1.2 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.18em !important;
+  text-transform:uppercase !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-scene-title {
+  display:block !important;
+  max-width:min(620px,62vw) !important;
+  overflow:hidden !important;
+  color:#f2eee4 !important;
+  font:20px/1.2 var(--remodel-serif,Georgia,serif) !important;
+  font-weight:400 !important;
+  letter-spacing:.04em !important;
+  text-overflow:ellipsis !important;
+  text-transform:uppercase !important;
+  white-space:nowrap !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-cast-toggle {
+  appearance:none !important;
+  display:flex !important;
+  align-items:center !important;
+  gap:6px !important;
+  width:min(340px,calc(100vw - 150px)) !important;
+  min-height:34px !important;
+  margin:1px 0 0 !important;
+  padding:4px 8px 4px 0 !important;
+  border:0 !important;
+  border-bottom:1px solid transparent !important;
+  border-radius:0 !important;
+  background:transparent !important;
+  color:rgba(225,215,177,.58) !important;
+  box-shadow:none !important;
+  cursor:pointer !important;
+  font:8px/1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.15em !important;
+  text-transform:uppercase !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-cast-toggle-copy {
+  display:grid !important;
+  flex:1 1 auto !important;
+  min-width:0 !important;
+  gap:3px !important;
+  text-align:left !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-cast-toggle-copy strong {
+  color:inherit !important;
+  font:inherit !important;
+  letter-spacing:inherit !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-cast-toggle-copy em {
+  overflow:hidden !important;
+  color:rgba(242,238,216,.82) !important;
+  font:10px/1.15 var(--remodel-serif,Georgia,serif) !important;
+  font-style:normal !important;
+  letter-spacing:.06em !important;
+  text-overflow:ellipsis !important;
+  text-transform:none !important;
+  white-space:nowrap !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-cast-toggle small {
+  display:grid !important;
+  place-items:center !important;
+  min-width:16px !important;
+  height:16px !important;
+  border:1px solid rgba(215,200,0,.22) !important;
+  border-radius:50% !important;
+  color:rgba(237,224,94,.78) !important;
+  font:8px/1 var(--remodel-manuscript-font,Georgia,serif) !important;
+  letter-spacing:0 !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-cast-toggle:is(:hover,:focus-visible),
+body.remodel-roleplay-workspace-active #remodel-roleplay-root.is-cast-open .remodel-rp-cast-toggle {
+  border-bottom-color:rgba(215,200,0,.42) !important;
+  color:#f0e56a !important;
+  text-shadow:0 0 7px rgba(215,200,0,.28) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-cast-toggle-caret {
+  font-size:7px !important;
+  transition:transform .2s ease !important;
+}
+
+body.remodel-roleplay-workspace-active #remodel-roleplay-root.is-cast-open .remodel-rp-cast-toggle-caret {
+  transform:rotate(180deg) !important;
+}
+
+body.remodel-roleplay-workspace-active #remodel-roleplay-root .remodel-rp-cast {
+  position:absolute !important;
+  z-index:18 !important;
+  top:90px !important;
+  bottom:116px !important;
+  left:0 !important;
+  display:flex !important;
+  width:230px !important;
+  padding:16px 14px !important;
+  box-sizing:border-box !important;
+  overflow-x:hidden !important;
+  overflow-y:auto !important;
+  border-right:1px solid rgba(198,164,74,.18) !important;
+  background:linear-gradient(90deg,rgba(10,10,15,.76),rgba(10,10,15,.3) 72%,transparent) !important;
+  opacity:0 !important;
+  visibility:hidden !important;
+  pointer-events:none !important;
+  transform:translateY(-14px) !important;
+  transition:opacity .2s ease,transform .24s cubic-bezier(.2,.75,.25,1),visibility 0s linear .24s !important;
+  scrollbar-width:none !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-performer-plaque {
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  gap:5px !important;
+  width:100% !important;
+  margin-top:5px !important;
+  padding:4px 5px !important;
+  border:1px solid rgba(166,211,255,.22) !important;
+  color:rgba(195,222,246,.74) !important;
+  font:7px/1.1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.08em !important;
+  text-transform:uppercase !important;
+}
+
+body.remodel-roleplay-workspace-active #remodel-roleplay-root .remodel-rp-cast::-webkit-scrollbar {
+  display:none !important;
+}
+
+body.remodel-roleplay-workspace-active #remodel-roleplay-root.is-cast-open .remodel-rp-cast {
+  opacity:1 !important;
+  visibility:visible !important;
+  pointer-events:auto !important;
+  transform:translateY(0) !important;
+  transition-delay:0s !important;
+}
+
+body.remodel-roleplay-workspace-active #remodel-rp-panelgroup {
+  top:106px !important;
+}
+
+@media (max-width:620px) {
+  body.remodel-roleplay-workspace-active #remodel-roleplay-root {
+    padding-top:82px !important;
+  }
+  body.remodel-roleplay-workspace-active .remodel-rp-scene-header {
+    min-height:82px !important;
+    padding:8px 12px 12px !important;
+    gap:10px !important;
+  }
+  body.remodel-roleplay-workspace-active .remodel-rp-scene-title {
+    max-width:68vw !important;
+    font-size:16px !important;
+  }
+  body.remodel-roleplay-workspace-active #remodel-roleplay-root .remodel-rp-cast {
+    top:82px !important;
+    width:96px !important;
+  }
+  body.remodel-roleplay-workspace-active #remodel-rp-panelgroup {
+    top:94px !important;
+  }
+}
+
 @media (max-width:760px) {
   body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px {
     min-height:58px !important;
@@ -7411,6 +7966,1343 @@ body.st-remodel-active #WorldInfo .world_entry.disabledWIEntry .killSwitch {
   body.st-remodel-active #WorldInfo .world_entry .inline-drawer-outlet:has(> *) {
     padding:8px 10px 20px 28px !important;
   }
+}
+
+/* =====================================================================
+   Story Goals — timeline-owned goal deck
+   ===================================================================== */
+
+body.remodel-roleplay-workspace-active .remodel-rp-panel-icon[data-remodel-rp-panel-toggle="goals"].is-active {
+  color:#fff76c !important;
+  border-color:rgba(231,216,36,.78) !important;
+  background:rgba(18,17,8,.88) !important;
+  box-shadow:0 0 18px rgba(215,200,0,.18) !important;
+}
+
+/* ---- Increment 1: the floating Story Goals viewport (tarot-card deck) ----
+
+   Clicking the GOALS pill opens a floating viewport that replaces the center
+   chat stream. It carries a deck of self-contained tarot goal cards, or a
+   single goal's facet-card group. While open, a root class hides the message
+   stream; the ordinary composer remains available beneath the board. */
+body.remodel-roleplay-workspace-active #remodel-roleplay-root.remodel-goals-viewport-open .remodel-rp-stream {
+  display:none !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goals-viewport {
+  position:relative !important;
+  z-index:16 !important;
+  grid-area:stream !important;
+  display:flex !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  flex-direction:column !important;
+  overflow:hidden !important;
+  animation:remodel-goal-viewport-in .3s cubic-bezier(.2,.8,.25,1) both !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goals-viewport[hidden] {
+  display:none !important;
+}
+
+@keyframes remodel-goal-viewport-in {
+  from { opacity:0; transform:translateY(14px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-viewport-close {
+  position:absolute !important;
+  top:14px !important;
+  right:16px !important;
+  z-index:6 !important;
+  display:grid !important;
+  place-items:center !important;
+  width:34px !important;
+  height:34px !important;
+  border:1px solid rgba(215,200,0,.3) !important;
+  border-radius:50% !important;
+  background:rgba(10,10,16,.7) !important;
+  color:rgba(233,224,183,.82) !important;
+  cursor:pointer !important;
+  transition:border-color .16s ease,color .16s ease !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-viewport-close:hover {
+  border-color:rgba(215,200,0,.6) !important;
+  color:#f6ea62 !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-deck-view,
+body.remodel-roleplay-workspace-active .remodel-goal-detail-view {
+  display:flex !important;
+  min-height:0 !important;
+  flex:1 1 auto !important;
+  flex-direction:column !important;
+  overflow-y:auto !important;
+  overflow-x:hidden !important;
+  padding:22px clamp(20px,4vw,54px) 34px !important;
+  scrollbar-width:none !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-deck-view::-webkit-scrollbar,
+body.remodel-roleplay-workspace-active .remodel-goal-detail-view::-webkit-scrollbar {
+  width:0 !important;
+}
+
+/* Deck header: stacked. Detail header: back button + title in a row. */
+body.remodel-roleplay-workspace-active .remodel-goal-deck-head {
+  display:flex !important;
+  flex-direction:column !important;
+  margin:0 60px 22px 0 !important;
+}
+
+/* Goal detail — the codex/archive layout (mirrors the timeline archive view):
+   the goal's card rendered large at the left, an editorial column at the right
+   with the big display title and numbered record rows. */
+body.remodel-roleplay-workspace-active .remodel-goal-detail-layout {
+  display:flex !important;
+  align-items:flex-start !important;
+  flex-wrap:wrap !important;
+  gap:clamp(26px,4.5vw,56px) !important;
+  width:100% !important;
+  max-width:880px !important;
+  margin:6px auto 0 !important;
+}
+
+/* The large display card at the left: same tarot face, no interaction. */
+body.remodel-roleplay-workspace-active .remodel-goal-card.is-display {
+  flex:0 0 clamp(200px,23vw,258px) !important;
+  width:clamp(200px,23vw,258px) !important;
+  cursor:default !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-card.is-display:hover {
+  transform:none !important;
+  border-color:rgba(150,120,50,.75) !important;
+  box-shadow:0 12px 28px rgba(0,0,0,.52) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-detail-info {
+  display:flex !important;
+  min-width:280px !important;
+  flex:1 1 320px !important;
+  flex-direction:column !important;
+  /* Soft borderless scrim so the records read over any scene backdrop. */
+  padding:20px 24px !important;
+  border-radius:10px !important;
+  background:linear-gradient(180deg,rgba(8,8,13,.6),rgba(8,8,13,.34)) !important;
+  backdrop-filter:blur(3px) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-detail-topline {
+  display:flex !important;
+  align-items:center !important;
+  gap:13px !important;
+  margin-bottom:12px !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-detail-topline .remodel-goal-kicker {
+  margin-bottom:0 !important;
+}
+
+/* The display title — same voice as the archive's "THE ACCIDENTAL ADEPT". */
+body.remodel-roleplay-workspace-active .remodel-goal-detail-name {
+  margin:0 0 10px !important;
+  color:#fdfaf2 !important;
+  font:600 clamp(26px,3.2vw,40px)/1.05 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.02em !important;
+  text-transform:uppercase !important;
+  text-wrap:balance !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-detail-summary {
+  margin:0 0 20px !important;
+  max-width:54ch !important;
+  color:rgba(240,234,216,.62) !important;
+  font:italic 13px/1.55 var(--remodel-manuscript-font,Georgia,serif) !important;
+}
+
+/* Numbered record rows, ruled like the archive's scene record. */
+body.remodel-roleplay-workspace-active .remodel-goal-detail-records {
+  display:flex !important;
+  flex-direction:column !important;
+  border-top:1px solid rgba(215,200,0,.18) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-detail-row {
+  display:grid !important;
+  grid-template-columns:38px minmax(0,1fr) auto !important;
+  grid-template-areas:
+    "num label value"
+    ".   sub   sub" !important;
+  align-items:baseline !important;
+  column-gap:10px !important;
+  padding:13px 2px !important;
+  border-bottom:1px solid rgba(215,200,0,.14) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-detail-num {
+  grid-area:num !important;
+  color:rgba(215,200,0,.8) !important;
+  font:12px/1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.08em !important;
+  font-variant-numeric:tabular-nums !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-detail-label {
+  grid-area:label !important;
+  color:#f2ecdd !important;
+  font:600 12px/1.2 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.14em !important;
+  text-transform:uppercase !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-detail-value {
+  grid-area:value !important;
+  color:#f6ea62 !important;
+  font:17px/1 var(--remodel-serif,Georgia,serif) !important;
+  font-variant-numeric:tabular-nums !important;
+  text-align:right !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-detail-sub {
+  grid-area:sub !important;
+  margin-top:4px !important;
+  color:rgba(238,233,214,.5) !important;
+  font:11px/1.45 var(--remodel-manuscript-font,Georgia,serif) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-deck-head h2 {
+  margin:0 !important;
+  color:#f7f2e6 !important;
+  font:clamp(20px,2.4vw,32px)/1.05 var(--remodel-serif,Georgia,serif) !important;
+  font-weight:400 !important;
+  letter-spacing:.04em !important;
+  text-transform:uppercase !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-deck-head p {
+  margin:7px 0 0 !important;
+  color:rgba(240,234,216,.55) !important;
+  font:12px/1.4 var(--remodel-manuscript-font,Georgia,serif) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-kicker {
+  display:block !important;
+  margin-bottom:5px !important;
+  color:rgba(215,200,0,.75) !important;
+  font:8px/1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.2em !important;
+  text-transform:uppercase !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-back {
+  display:inline-flex !important;
+  align-items:center !important;
+  gap:7px !important;
+  flex:0 0 auto !important;
+  min-height:31px !important;
+  padding:0 13px !important;
+  border:1px solid rgba(215,200,0,.3) !important;
+  border-radius:4px !important;
+  background:rgba(215,200,0,.06) !important;
+  color:rgba(233,224,183,.82) !important;
+  font:9px/1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.16em !important;
+  text-transform:uppercase !important;
+  cursor:pointer !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-back:hover {
+  border-color:rgba(215,200,0,.55) !important;
+  color:#f6ea62 !important;
+}
+
+/* The deck grid: compact roster cards (the original size). */
+body.remodel-roleplay-workspace-active .remodel-goal-tarot-deck {
+  display:grid !important;
+  grid-template-columns:repeat(auto-fill,minmax(128px,148px)) !important;
+  justify-content:center !important;
+  gap:22px 18px !important;
+  align-items:start !important;
+}
+
+/* Self-contained tarot card — a real card box, NOT dependent on timeline-card.
+   Layered: a hue base, a deep vignette, a scatter of "star" sparkles, and a
+   faint engraved sunburst behind the glyph (the ::before). */
+body.remodel-roleplay-workspace-active .remodel-goal-card {
+  position:relative !important;
+  display:flex !important;
+  width:100% !important;
+  min-height:0 !important;
+  aspect-ratio:100 / 158 !important;
+  flex-direction:column !important;
+  padding:0 !important;
+  border:1px solid rgba(150,120,50,.75) !important;
+  border-radius:11px !important;
+  overflow:hidden !important;
+  background:
+    /* sparkles */
+    radial-gradient(circle at 26% 20%, rgba(255,250,224,.55) 0, rgba(255,250,224,.55) .8px, transparent 1.6px),
+    radial-gradient(circle at 74% 30%, rgba(255,250,224,.4) 0, rgba(255,250,224,.4) .7px, transparent 1.4px),
+    radial-gradient(circle at 20% 66%, rgba(255,250,224,.35) 0, rgba(255,250,224,.35) .7px, transparent 1.4px),
+    radial-gradient(circle at 82% 72%, rgba(255,250,224,.45) 0, rgba(255,250,224,.45) .8px, transparent 1.6px),
+    radial-gradient(circle at 54% 14%, rgba(255,250,224,.4) 0, rgba(255,250,224,.4) .6px, transparent 1.3px),
+    /* corner vignette */
+    radial-gradient(120% 100% at 50% 120%, rgba(0,0,0,.55), transparent 55%),
+    /* central hue glow */
+    radial-gradient(70% 50% at 50% 40%, hsla(var(--goal-hue,44),72%,60%,.4), transparent 72%),
+    /* hue base */
+    linear-gradient(160deg, hsla(var(--goal-hue,44),48%,42%,.6) 0%, #0e0d09 84%) !important;
+  box-shadow:0 12px 28px rgba(0,0,0,.52) !important;
+  cursor:pointer !important;
+  transition:transform .24s cubic-bezier(.2,.8,.2,1),box-shadow .24s ease,border-color .24s ease !important;
+}
+
+/* Engraved sunburst rays radiating from behind the glyph, masked to a ring. */
+body.remodel-roleplay-workspace-active .remodel-goal-card::before {
+  content:'' !important;
+  position:absolute !important;
+  z-index:0 !important;
+  top:34% !important;
+  left:50% !important;
+  width:150% !important;
+  aspect-ratio:1 !important;
+  transform:translate(-50%,-50%) !important;
+  background:repeating-conic-gradient(from 0deg at 50% 50%, hsla(var(--goal-hue,44),60%,72%,.14) 0deg 4deg, transparent 4deg 12deg) !important;
+  -webkit-mask:radial-gradient(circle, transparent 0 24%, #000 34%, #000 46%, transparent 60%) !important;
+  mask:radial-gradient(circle, transparent 0 24%, #000 34%, #000 46%, transparent 60%) !important;
+  pointer-events:none !important;
+}
+
+/* Inner gold frame + corner accents (double rule via layered box-shadow). */
+body.remodel-roleplay-workspace-active .remodel-goal-card::after {
+  content:'' !important;
+  position:absolute !important;
+  inset:6px !important;
+  border:1px solid rgba(205,171,80,.6) !important;
+  border-radius:6px !important;
+  box-shadow:inset 0 0 0 3px rgba(10,9,6,.35),inset 0 0 14px rgba(0,0,0,.4) !important;
+  pointer-events:none !important;
+  z-index:3 !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-card:hover,
+body.remodel-roleplay-workspace-active .remodel-goal-card:focus-visible {
+  outline:none !important;
+  transform:translateY(-8px) scale(1.04) !important;
+  border-color:rgba(235,205,95,.95) !important;
+  box-shadow:
+    0 0 0 1px hsl(var(--goal-hue,44),72%,64%),
+    0 0 24px 5px hsla(var(--goal-hue,44),72%,64%,.45),
+    0 22px 42px rgba(0,0,0,.58) !important;
+  z-index:4 !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-card.is-secret {
+  filter:saturate(.5) brightness(.82) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-card-numeral {
+  position:relative !important;
+  z-index:1 !important;
+  padding:9px 0 0 !important;
+  text-align:center !important;
+  color:rgba(247,242,230,.85) !important;
+  font:11px/1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.14em !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-card-glyph {
+  position:relative !important;
+  z-index:1 !important;
+  display:grid !important;
+  flex:1 1 auto !important;
+  place-items:center !important;
+  color:rgba(250,245,232,.95) !important;
+  font-size:28px !important;
+  filter:drop-shadow(0 2px 8px rgba(0,0,0,.7)) !important;
+}
+
+/* Golden medallion behind the glyph. */
+body.remodel-roleplay-workspace-active .remodel-goal-card-glyph::before {
+  content:'' !important;
+  position:absolute !important;
+  z-index:-1 !important;
+  width:58px !important;
+  height:58px !important;
+  border-radius:50% !important;
+  border:1px solid rgba(210,176,84,.55) !important;
+  background:radial-gradient(circle, hsla(var(--goal-hue,44),40%,30%,.7) 0%, rgba(8,8,13,.55) 72%) !important;
+  box-shadow:0 0 0 4px rgba(10,9,6,.35),inset 0 0 12px rgba(0,0,0,.5) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-card-plate {
+  position:relative !important;
+  z-index:1 !important;
+  display:flex !important;
+  flex-direction:column !important;
+  gap:2px !important;
+  margin:6px !important;
+  padding:7px 9px !important;
+  border-radius:5px !important;
+  background:linear-gradient(180deg,rgba(8,8,13,.15),rgba(8,8,13,.85)) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-card-rate {
+  color:#f6ea62 !important;
+  font:20px/1 var(--remodel-serif,Georgia,serif) !important;
+  font-variant-numeric:tabular-nums !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-card-rate small {
+  font-size:10px !important;
+  opacity:.6 !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-card-holder {
+  overflow:hidden !important;
+  color:rgba(240,234,216,.72) !important;
+  font:8px/1.2 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.1em !important;
+  text-transform:uppercase !important;
+  text-overflow:ellipsis !important;
+  white-space:nowrap !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-empty {
+  grid-column:1 / -1 !important;
+  color:rgba(240,234,216,.55) !important;
+  font:13px/1.4 var(--remodel-manuscript-font,Georgia,serif) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-empty strong {
+  display:block !important;
+  margin:8px 0 4px !important;
+  color:rgba(246,240,216,.88) !important;
+  font-family:Georgia,serif !important;
+  font-size:clamp(18px,2vw,28px) !important;
+  font-weight:400 !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-empty p {
+  max-width:520px !important;
+  margin:0 auto !important;
+  color:rgba(238,233,214,.52) !important;
+  font-size:12px !important;
+  line-height:1.65 !important;
+  text-transform:none !important;
+  letter-spacing:.03em !important;
+}
+
+/* Floating name shown while hovering a deck card. */
+body.remodel-roleplay-workspace-active .remodel-goal-hover-name {
+  position:absolute !important;
+  z-index:5 !important;
+  bottom:24px !important;
+  left:0 !important;
+  right:0 !important;
+  text-align:center !important;
+  color:#f7f2e6 !important;
+  font:clamp(18px,2.2vw,26px)/1.1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.05em !important;
+  text-shadow:0 2px 14px rgba(0,0,0,.85) !important;
+  opacity:0 !important;
+  transform:translateY(6px) !important;
+  transition:opacity .18s ease,transform .18s ease !important;
+  pointer-events:none !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-goal-hover-name.is-visible {
+  opacity:1 !important;
+  transform:translateY(0) !important;
+}
+
+@media (prefers-reduced-motion:reduce) {
+  body.remodel-roleplay-workspace-active .remodel-goals-viewport,
+  body.remodel-roleplay-workspace-active .remodel-goal-card,
+  body.remodel-roleplay-workspace-active .remodel-goal-hover-name {
+    animation:none !important;
+    transition:none !important;
+  }
+}
+
+/* =====================================================================
+   TIMELINE ROUTE OVERVIEW
+   Full-bleed visual-novel route reader with a cover and arc carousel.
+   ===================================================================== */
+
+body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-tavern-body {
+  overflow:hidden !important;
+}
+
+body.st-remodel-active .remodel-route-overview {
+  --route-gold:var(--tarot-gold-bright,#d7c800);
+  --route-line:rgba(215,200,0,.24);
+  --route-paper:rgba(10,10,16,.82);
+  position:relative !important;
+  display:flex !important;
+  flex-direction:column !important;
+  width:100% !important;
+  height:100% !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  overflow:hidden !important;
+  background:#090a0f !important;
+  isolation:isolate !important;
+}
+
+body.st-remodel-active .remodel-route-overview .remodel-focus-backdrop {
+  position:absolute !important;
+  inset:0 !important;
+  z-index:-2 !important;
+  background:
+    radial-gradient(ellipse at 28% 18%,color-mix(in srgb,var(--card-color) 22%,transparent),transparent 48%),
+    linear-gradient(120deg,#11121a,#07080c 72%) !important;
+  background-position:center !important;
+  background-size:cover !important;
+  filter:saturate(.76) contrast(.96) !important;
+  transform:none !important;
+}
+
+body.st-remodel-active .remodel-route-overview.has-image .remodel-focus-backdrop {
+  background-image:var(--card-image) !important;
+}
+
+body.st-remodel-active .remodel-route-overview .remodel-focus-backdrop::after {
+  content:"" !important;
+  position:absolute !important;
+  inset:0 !important;
+  background:
+    linear-gradient(90deg,rgba(6,7,11,.92) 0%,rgba(7,8,13,.75) 32%,rgba(7,8,13,.59) 70%,rgba(5,6,10,.78) 100%),
+    linear-gradient(180deg,rgba(8,9,14,.54),rgba(6,7,11,.86)) !important;
+  backdrop-filter:blur(9px) !important;
+  -webkit-backdrop-filter:blur(9px) !important;
+}
+
+body.st-remodel-active .remodel-route-toolbar {
+  position:relative !important;
+  z-index:4 !important;
+  display:grid !important;
+  grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) !important;
+  align-items:center !important;
+  gap:18px !important;
+  flex:0 0 58px !important;
+  min-height:58px !important;
+  padding:0 clamp(18px,2.3vw,36px) !important;
+  border-top:1px solid rgba(215,200,0,.16) !important;
+  border-bottom:1px solid var(--route-line) !important;
+  background:linear-gradient(90deg,rgba(7,7,12,.92),rgba(14,13,20,.76),rgba(7,7,12,.92)) !important;
+  box-sizing:border-box !important;
+}
+
+body.st-remodel-active .remodel-route-toolbar-leading,
+body.st-remodel-active .remodel-route-toolbar-actions,
+body.st-remodel-active .remodel-route-toolbar-meta {
+  display:flex !important;
+  align-items:center !important;
+}
+
+body.st-remodel-active .remodel-route-toolbar-leading { gap:12px !important; min-width:0 !important; }
+body.st-remodel-active .remodel-route-toolbar-actions { justify-content:flex-end !important; gap:7px !important; }
+body.st-remodel-active .remodel-route-toolbar-meta { justify-content:center !important; gap:18px !important; }
+
+body.st-remodel-active .remodel-route-toolbar-meta span {
+  color:rgba(244,231,196,.55) !important;
+  font:600 .64rem/1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.14em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active .remodel-route-toolbar-meta span + span::before {
+  content:"" !important;
+  display:inline-block !important;
+  width:3px !important;
+  height:3px !important;
+  margin:0 18px 2px 0 !important;
+  border:1px solid var(--route-gold) !important;
+  transform:rotate(45deg) !important;
+}
+
+body.st-remodel-active .remodel-route-round-button {
+  appearance:none !important;
+  display:grid !important;
+  place-items:center !important;
+  width:34px !important;
+  min-width:34px !important;
+  height:34px !important;
+  margin:0 !important;
+  padding:0 !important;
+  border:1px solid rgba(215,200,0,.25) !important;
+  border-radius:50% !important;
+  background:rgba(7,8,12,.68) !important;
+  color:rgba(245,238,208,.76) !important;
+  cursor:pointer !important;
+  transition:border-color .16s ease,color .16s ease,box-shadow .16s ease,transform .16s ease !important;
+}
+
+body.st-remodel-active .remodel-route-round-button:hover,
+body.st-remodel-active .remodel-route-round-button:focus-visible {
+  border-color:var(--route-gold) !important;
+  color:var(--route-gold) !important;
+  box-shadow:0 0 13px rgba(215,200,0,.14) !important;
+  transform:translateY(-1px) !important;
+}
+
+body.st-remodel-active .remodel-route-round-button.danger:hover { color:#ef9696 !important; border-color:rgba(239,150,150,.62) !important; }
+
+body.st-remodel-active .remodel-route-breadcrumb {
+  display:flex !important;
+  flex-direction:column !important;
+  min-width:0 !important;
+  gap:2px !important;
+}
+
+body.st-remodel-active .remodel-route-breadcrumb span {
+  color:rgba(215,200,0,.58) !important;
+  font:600 .53rem/1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.2em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active .remodel-route-breadcrumb strong {
+  color:rgba(245,238,218,.86) !important;
+  font:600 .72rem/1.25 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.11em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active .remodel-route-layout {
+  position:relative !important;
+  z-index:1 !important;
+  display:grid !important;
+  grid-template-columns:clamp(230px,23vw,310px) minmax(0,1fr) !important;
+  flex:1 1 auto !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  overflow:hidden !important;
+}
+
+body.st-remodel-active .remodel-route-side {
+  display:flex !important;
+  flex-direction:column !important;
+  align-items:center !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  padding:clamp(18px,2.5vh,28px) clamp(18px,2.2vw,30px) 15px !important;
+  border-right:1px solid var(--route-line) !important;
+  background:linear-gradient(180deg,rgba(7,8,13,.66),rgba(8,8,14,.84)) !important;
+  box-sizing:border-box !important;
+}
+
+body.st-remodel-active .remodel-route-cover {
+  position:relative !important;
+  display:block !important;
+  flex:0 1 auto !important;
+  width:min(100%,220px) !important;
+  max-height:min(47vh,360px) !important;
+  aspect-ratio:5/8 !important;
+  overflow:hidden !important;
+  border:1px solid rgba(215,200,0,.62) !important;
+  background:linear-gradient(150deg,color-mix(in srgb,var(--card-color) 16%,#11121a),#08090d) !important;
+  box-shadow:0 18px 42px rgba(0,0,0,.42),inset 0 0 0 4px rgba(5,5,8,.72),inset 0 0 0 5px rgba(215,200,0,.22) !important;
+  cursor:pointer !important;
+}
+
+body.st-remodel-active .remodel-route-cover::after {
+  content:"" !important;
+  position:absolute !important;
+  inset:8px !important;
+  z-index:3 !important;
+  border:1px solid rgba(215,200,0,.32) !important;
+  pointer-events:none !important;
+}
+
+body.st-remodel-active .remodel-route-cover-art {
+  position:absolute !important;
+  inset:0 !important;
+  background:
+    radial-gradient(circle at 50% 35%,color-mix(in srgb,var(--card-color) 35%,transparent),transparent 45%),
+    repeating-linear-gradient(135deg,rgba(255,255,255,.025) 0 9px,transparent 9px 18px) !important;
+  background-position:center !important;
+  background-size:cover !important;
+  filter:saturate(.92) contrast(1.03) !important;
+  transition:filter .2s ease,transform .24s ease !important;
+}
+
+body.st-remodel-active .remodel-route-cover-art.has-image { background-image:var(--card-image) !important; }
+body.st-remodel-active .remodel-route-cover:hover .remodel-route-cover-art { filter:saturate(1.05) contrast(1.04) !important; transform:scale(1.015) !important; }
+
+body.st-remodel-active .remodel-route-cover-index {
+  position:absolute !important;
+  z-index:5 !important;
+  top:14px !important;
+  left:50% !important;
+  transform:translateX(-50%) !important;
+  color:#fff8dc !important;
+  font:700 .8rem/1 var(--remodel-serif,Georgia,serif) !important;
+  text-shadow:0 1px 9px #000 !important;
+}
+
+body.st-remodel-active .remodel-route-cover-plate {
+  position:absolute !important;
+  z-index:5 !important;
+  left:8px !important;
+  right:8px !important;
+  bottom:8px !important;
+  display:flex !important;
+  flex-direction:column !important;
+  gap:5px !important;
+  padding:15px 10px 11px !important;
+  border-top:1px solid rgba(215,200,0,.44) !important;
+  background:linear-gradient(180deg,rgba(6,6,10,.7),rgba(5,5,8,.96)) !important;
+  text-align:center !important;
+  box-sizing:border-box !important;
+}
+
+body.st-remodel-active .remodel-route-cover-plate strong {
+  overflow:hidden !important;
+  color:#fff7dc !important;
+  font:700 .74rem/1.25 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.1em !important;
+  text-overflow:ellipsis !important;
+  text-transform:uppercase !important;
+  white-space:nowrap !important;
+}
+
+body.st-remodel-active .remodel-route-cover-plate small {
+  color:rgba(215,200,0,.68) !important;
+  font:600 .52rem/1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.1em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active .remodel-route-cover-empty {
+  position:absolute !important;
+  inset:0 !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  flex-direction:column !important;
+  gap:8px !important;
+  color:rgba(215,200,0,.54) !important;
+}
+
+body.st-remodel-active .remodel-route-cover-empty i { font-size:1.35rem !important; }
+body.st-remodel-active .remodel-route-cover-empty small { font:.58rem var(--remodel-serif,Georgia,serif) !important; letter-spacing:.14em !important; text-transform:uppercase !important; }
+
+body.st-remodel-active .remodel-route-main {
+  display:flex !important;
+  flex-direction:column !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  padding:clamp(18px,2.8vh,32px) clamp(24px,4vw,64px) 0 !important;
+  background:linear-gradient(115deg,rgba(9,9,15,.72),rgba(13,13,20,.46)) !important;
+  box-sizing:border-box !important;
+}
+
+body.st-remodel-active .remodel-route-identity {
+  flex:0 0 auto !important;
+  min-width:0 !important;
+  max-width:1100px !important;
+}
+
+body.st-remodel-active .remodel-route-kicker,
+body.st-remodel-active .remodel-route-description-field > span,
+body.st-remodel-active .remodel-route-arc-summary > span,
+body.st-remodel-active .remodel-route-scenes-head span {
+  display:block !important;
+  color:rgba(215,200,0,.64) !important;
+  font:600 .56rem/1.2 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.2em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active .remodel-route-title,
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-route-title,
+body.st-remodel-active #top-settings-holder > .drawer > #remodel-timeline-panel.openDrawer input[type="text"].remodel-route-title,
+body.st-remodel-active .remodel-route-title:focus {
+  display:block !important;
+  width:100% !important;
+  height:auto !important;
+  margin:4px 0 10px !important;
+  padding:0 !important;
+  border:0 !important;
+  border-radius:0 !important;
+  outline:0 !important;
+  background:transparent !important;
+  box-shadow:none !important;
+  color:#f4eddd !important;
+  font:700 clamp(1.7rem,3vw,3rem)/1.05 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.045em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active .remodel-route-description-field { display:block !important; max-width:1050px !important; }
+
+body.st-remodel-active .remodel-route-description-field textarea,
+body.st-remodel-active .remodel-route-arc-summary textarea,
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-route-description-field textarea,
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-route-arc-summary textarea {
+  display:block !important;
+  width:100% !important;
+  min-height:0 !important;
+  margin:5px 0 0 !important;
+  padding:0 !important;
+  overflow:hidden !important;
+  border:0 !important;
+  border-radius:0 !important;
+  outline:0 !important;
+  background:transparent !important;
+  box-shadow:none !important;
+  color:rgba(245,240,229,.77) !important;
+  font:400 .88rem/1.6 system-ui,sans-serif !important;
+  text-transform:none !important;
+  resize:none !important;
+  field-sizing:content !important;
+}
+
+body.st-remodel-active .remodel-route-description-field textarea:focus,
+body.st-remodel-active .remodel-route-arc-summary textarea:focus { color:rgba(255,255,255,.94) !important; }
+
+body.st-remodel-active .remodel-route-rule {
+  position:relative !important;
+  flex:0 0 1px !important;
+  height:1px !important;
+  margin:clamp(13px,2vh,20px) 0 0 !important;
+  /* A divider that carries across the column and fades at both ends, rather
+     than trailing off after the first fifth. */
+  background:linear-gradient(90deg,transparent,rgba(215,200,0,.34) 12%,rgba(215,200,0,.34) 88%,transparent) !important;
+}
+
+/* Timeline lorebook picker, opened from the archive toolbar. */
+body.st-remodel-active .remodel-route-round-button.is-bound {
+  border-color:rgba(215,200,0,.62) !important;
+  color:#f6ea62 !important;
+}
+
+body.st-remodel-active .remodel-lorebook-picker h3 {
+  margin:0 0 8px !important;
+  color:#f7f2e6 !important;
+  font:18px/1.15 var(--remodel-serif,Georgia,serif) !important;
+  font-weight:400 !important;
+  letter-spacing:.04em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active .remodel-lorebook-picker p {
+  margin:0 0 14px !important;
+  color:rgba(240,234,216,.62) !important;
+  font:12px/1.45 var(--remodel-manuscript-font,Georgia,serif) !important;
+}
+
+body.st-remodel-active .remodel-lorebook-picker select {
+  width:100% !important;
+  min-height:32px !important;
+  padding:5px 8px !important;
+  border:1px solid rgba(215,200,0,.3) !important;
+  border-radius:4px !important;
+  background:rgba(10,10,16,.7) !important;
+  color:#efe9d6 !important;
+}
+
+/* The premise/arc separator reads as a plain divider. It used to carry a small
+   rotated square that looked like a stray glyph rather than a rule; the element
+   is still the premise toggle, so the whole line stays clickable. */
+body.st-remodel-active .remodel-route-rule span {
+  display:none !important;
+}
+
+body.st-remodel-active .remodel-route-arc-stage {
+  display:flex !important;
+  flex-direction:column !important;
+  flex:1 1 auto !important;
+  min-width:0 !important;
+  min-height:0 !important;
+  overflow:hidden !important;
+  padding-top:clamp(14px,2vh,22px) !important;
+}
+
+body.st-remodel-active .remodel-route-arc-head {
+  display:flex !important;
+  align-items:flex-end !important;
+  justify-content:space-between !important;
+  gap:20px !important;
+  flex:0 0 auto !important;
+}
+
+body.st-remodel-active .remodel-route-arc-heading { min-width:0 !important; flex:1 1 auto !important; }
+body.st-remodel-active .remodel-route-arc-number { display:block !important; color:rgba(215,200,0,.64) !important; font:600 .56rem var(--remodel-serif,Georgia,serif) !important; letter-spacing:.18em !important; text-transform:uppercase !important; }
+
+body.st-remodel-active .remodel-route-arc-title,
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-route-arc-title,
+body.st-remodel-active #top-settings-holder > .drawer > #remodel-timeline-panel.openDrawer input[type="text"].remodel-route-arc-title {
+  display:block !important;
+  width:100% !important;
+  height:auto !important;
+  margin:3px 0 0 !important;
+  padding:0 !important;
+  border:0 !important;
+  border-radius:0 !important;
+  outline:0 !important;
+  background:transparent !important;
+  box-shadow:none !important;
+  color:#f2ead8 !important;
+  font:600 clamp(1.15rem,2vw,1.7rem)/1.15 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.08em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active .remodel-route-arc-actions { display:flex !important; align-items:center !important; justify-content:flex-end !important; gap:6px !important; flex-wrap:wrap !important; }
+
+body.st-remodel-active .remodel-route-arc-actions button,
+body.st-remodel-active .remodel-route-scenes-empty button,
+body.st-remodel-active .remodel-route-empty-arc > button {
+  appearance:none !important;
+  display:inline-flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  gap:7px !important;
+  min-height:30px !important;
+  padding:6px 10px !important;
+  border:1px solid rgba(215,200,0,.22) !important;
+  border-radius:2px !important;
+  background:rgba(7,7,11,.48) !important;
+  color:rgba(245,238,213,.7) !important;
+  font:600 .58rem var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.09em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active .remodel-route-arc-actions button:hover,
+body.st-remodel-active .remodel-route-scenes-empty button:hover,
+body.st-remodel-active .remodel-route-empty-arc > button:hover { border-color:rgba(215,200,0,.7) !important; color:var(--route-gold) !important; }
+body.st-remodel-active .remodel-route-arc-actions button.danger { width:30px !important; padding:0 !important; }
+body.st-remodel-active .remodel-route-arc-actions button.danger:hover { border-color:rgba(239,150,150,.5) !important; color:#ef9696 !important; }
+
+body.st-remodel-active .remodel-route-arc-summary {
+  display:block !important;
+  flex:0 0 auto !important;
+  margin-top:11px !important;
+  padding:10px 12px !important;
+  border-left:1px solid rgba(215,200,0,.35) !important;
+  background:linear-gradient(90deg,rgba(215,200,0,.035),transparent 72%) !important;
+}
+
+body.st-remodel-active .remodel-route-arc-summary textarea { font-family:var(--remodel-serif,Georgia,serif) !important; font-size:.8rem !important; font-style:italic !important; line-height:1.5 !important; }
+
+body.st-remodel-active .remodel-route-scenes-head {
+  display:flex !important;
+  align-items:flex-end !important;
+  justify-content:space-between !important;
+  gap:18px !important;
+  flex:0 0 auto !important;
+  margin-top:14px !important;
+  padding-bottom:7px !important;
+  border-bottom:1px solid rgba(215,200,0,.18) !important;
+}
+
+body.st-remodel-active .remodel-route-scenes-head > div { display:flex !important; align-items:baseline !important; gap:10px !important; }
+body.st-remodel-active .remodel-route-scenes-head strong { color:rgba(245,238,213,.72) !important; font:600 .64rem var(--remodel-serif,Georgia,serif) !important; letter-spacing:.1em !important; text-transform:uppercase !important; }
+body.st-remodel-active .remodel-route-scenes-head small { color:rgba(255,255,255,.37) !important; font-size:.64rem !important; }
+
+body.st-remodel-active .remodel-route-scenes {
+  display:flex !important;
+  flex-direction:column !important;
+  flex:1 1 auto !important;
+  min-height:0 !important;
+  overflow-x:hidden !important;
+  overflow-y:auto !important;
+  padding:8px 3px 36px 0 !important;
+  scrollbar-width:thin !important;
+  scrollbar-color:rgba(215,200,0,.34) transparent !important;
+}
+
+body.st-remodel-active .remodel-route-scenes::-webkit-scrollbar { width:6px !important; }
+body.st-remodel-active .remodel-route-scenes::-webkit-scrollbar-track { background:transparent !important; }
+body.st-remodel-active .remodel-route-scenes::-webkit-scrollbar-thumb { background:rgba(215,200,0,.28) !important; border-radius:10px !important; }
+
+body.st-remodel-active .remodel-route-scene {
+  position:relative !important;
+  display:grid !important;
+  grid-template-columns:minmax(0,1fr) auto !important;
+  flex:0 0 auto !important;
+  min-width:0 !important;
+  border-bottom:1px solid rgba(255,255,255,.075) !important;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.012),transparent) !important;
+  box-shadow:inset 0 0 0 0 transparent !important;
+  transition:background-color .16s ease,box-shadow .16s ease !important;
+}
+
+body.st-remodel-active .remodel-route-scene:hover { background:linear-gradient(90deg,rgba(215,200,0,.035),rgba(255,255,255,.012),transparent) !important; }
+body.st-remodel-active .remodel-route-scene.is-active { box-shadow:inset 2px 0 0 var(--route-gold) !important; }
+body.st-remodel-active .remodel-route-scene.is-missing { box-shadow:inset 2px 0 0 #e79078 !important; }
+
+body.st-remodel-active .remodel-route-scene-select {
+  appearance:none !important;
+  display:grid !important;
+  grid-template-columns:44px minmax(0,1fr) !important;
+  gap:13px !important;
+  width:100% !important;
+  min-width:0 !important;
+  margin:0 !important;
+  padding:15px 12px !important;
+  border:0 !important;
+  border-radius:0 !important;
+  outline:0 !important;
+  background:transparent !important;
+  box-shadow:none !important;
+  color:inherit !important;
+  text-align:left !important;
+}
+
+body.st-remodel-active .remodel-route-scene-index {
+  padding-top:2px !important;
+  color:rgba(215,200,0,.52) !important;
+  font:600 .72rem/1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.1em !important;
+}
+
+body.st-remodel-active .remodel-route-scene-copy { display:flex !important; flex-direction:column !important; min-width:0 !important; gap:5px !important; }
+body.st-remodel-active .remodel-route-scene-heading { display:flex !important; align-items:center !important; min-width:0 !important; gap:8px !important; }
+
+body.st-remodel-active .remodel-route-scene-title {
+  color:rgba(250,245,232,.9) !important;
+  font:600 .86rem/1.3 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.055em !important;
+  text-transform:uppercase !important;
+}
+
+body.st-remodel-active .remodel-route-scene.is-active .remodel-route-scene-title { color:#fff8dc !important; text-shadow:0 0 10px rgba(215,200,0,.1) !important; }
+body.st-remodel-active .remodel-route-scene-binding { color:rgba(255,255,255,.36) !important; font-size:.62rem !important; }
+
+body.st-remodel-active .remodel-route-scene-summary {
+  display:block !important;
+  max-width:100% !important;
+  color:rgba(239,235,226,.66) !important;
+  font:400 .78rem/1.55 system-ui,sans-serif !important;
+  text-transform:none !important;
+  white-space:pre-wrap !important;
+}
+
+body.st-remodel-active .remodel-route-scene-summary.is-empty { color:rgba(255,255,255,.3) !important; font-style:italic !important; }
+
+body.st-remodel-active .remodel-route-scene-actions {
+  display:flex !important;
+  align-items:flex-start !important;
+  gap:3px !important;
+  padding:13px 9px 0 0 !important;
+}
+
+body.st-remodel-active .remodel-route-scene-actions button {
+  appearance:none !important;
+  display:grid !important;
+  place-items:center !important;
+  width:28px !important;
+  height:28px !important;
+  padding:0 !important;
+  border:1px solid transparent !important;
+  border-radius:50% !important;
+  background:transparent !important;
+  color:rgba(255,255,255,.38) !important;
+  opacity:.62 !important;
+}
+
+body.st-remodel-active .remodel-route-scene:hover .remodel-route-scene-actions button,
+body.st-remodel-active .remodel-route-scene:focus-within .remodel-route-scene-actions button { opacity:1 !important; }
+body.st-remodel-active .remodel-route-scene-actions button:hover { border-color:rgba(215,200,0,.24) !important; color:var(--route-gold) !important; }
+body.st-remodel-active .remodel-route-scene-actions button.danger:hover { border-color:rgba(239,150,150,.28) !important; color:#ef9696 !important; }
+
+body.st-remodel-active .remodel-route-scene .remodel-scene-rename-input,
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-route-scene .remodel-scene-rename-input {
+  flex:1 1 auto !important;
+  min-width:0 !important;
+  height:auto !important;
+  margin:0 !important;
+  padding:0 0 3px !important;
+  border:0 !important;
+  border-bottom:1px solid rgba(215,200,0,.55) !important;
+  border-radius:0 !important;
+  outline:0 !important;
+  background:transparent !important;
+  box-shadow:none !important;
+  color:#fff8dc !important;
+  font:600 .86rem/1.3 var(--remodel-serif,Georgia,serif) !important;
+}
+
+body.st-remodel-active .remodel-route-scenes-empty,
+body.st-remodel-active .remodel-route-empty-arc {
+  display:flex !important;
+  flex-direction:column !important;
+  align-items:center !important;
+  justify-content:center !important;
+  flex:1 1 auto !important;
+  min-height:150px !important;
+  gap:10px !important;
+  color:rgba(255,255,255,.4) !important;
+  text-align:center !important;
+}
+
+body.st-remodel-active .remodel-route-scenes-empty > i { color:rgba(215,200,0,.48) !important; font-size:1.25rem !important; }
+body.st-remodel-active .remodel-route-scenes-empty p,
+body.st-remodel-active .remodel-route-empty-arc p { margin:0 !important; font:italic .78rem/1.5 var(--remodel-serif,Georgia,serif) !important; }
+body.st-remodel-active .remodel-route-scenes-empty > div { display:flex !important; gap:7px !important; }
+
+body.st-remodel-active .remodel-route-empty-arc { border:1px solid rgba(215,200,0,.16) !important; background:rgba(7,7,11,.3) !important; }
+body.st-remodel-active .remodel-route-empty-arc h2 { margin:4px 0 5px !important; color:#eee7d9 !important; font:600 1.35rem var(--remodel-serif,Georgia,serif) !important; text-transform:uppercase !important; }
+body.st-remodel-active .remodel-route-empty-symbol { display:grid !important; place-items:center !important; width:48px !important; height:48px !important; border:1px solid rgba(215,200,0,.28) !important; border-radius:50% !important; color:rgba(215,200,0,.64) !important; }
+
+@media (max-width:980px) {
+  body.st-remodel-active .remodel-route-toolbar { grid-template-columns:minmax(0,1fr) auto !important; }
+  body.st-remodel-active .remodel-route-toolbar-meta { display:none !important; }
+  body.st-remodel-active .remodel-route-layout { grid-template-columns:210px minmax(0,1fr) !important; }
+  body.st-remodel-active .remodel-route-side { padding-inline:16px !important; }
+  body.st-remodel-active .remodel-route-main { padding-inline:24px !important; }
+  body.st-remodel-active .remodel-route-scenes-head small { display:none !important; }
+}
+
+@media (max-width:720px) {
+  body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-tavern-body { overflow:auto !important; }
+  body.st-remodel-active .remodel-route-overview { height:auto !important; min-height:100% !important; overflow:visible !important; }
+  body.st-remodel-active .remodel-route-layout { display:flex !important; flex-direction:column !important; overflow:visible !important; }
+  body.st-remodel-active .remodel-route-side { display:grid !important; grid-template-columns:130px minmax(0,1fr) !important; gap:16px !important; align-items:center !important; min-height:220px !important; border-right:0 !important; border-bottom:1px solid var(--route-line) !important; }
+  body.st-remodel-active .remodel-route-main { overflow:visible !important; padding:22px 18px 0 !important; }
+  body.st-remodel-active .remodel-route-arc-stage { overflow:visible !important; }
+  body.st-remodel-active .remodel-route-scenes { overflow:visible !important; }
+  body.st-remodel-active .remodel-route-title { font-size:1.65rem !important; }
+  body.st-remodel-active .remodel-route-arc-head { align-items:flex-start !important; flex-direction:column !important; gap:10px !important; }
+  body.st-remodel-active .remodel-route-arc-actions { justify-content:flex-start !important; }
+  body.st-remodel-active .remodel-route-scene { grid-template-columns:minmax(0,1fr) !important; }
+  body.st-remodel-active .remodel-route-scene-actions { justify-content:flex-end !important; padding:0 8px 8px !important; }
+}
+
+/* Roleplay Director seat and out-of-chat operation feed. The card remains a
+   native group member, but direction records live solely in Remodel UI. */
+body.remodel-roleplay-workspace-active .remodel-rp-cast-member.is-roleplay-director {
+  border-color:rgba(215,200,0,.56) !important;
+  background:linear-gradient(180deg,rgba(215,200,0,.09),rgba(7,7,11,.5)) !important;
+  box-shadow:0 0 18px rgba(215,200,0,.12) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-director-plaque {
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  gap:4px !important;
+  width:100% !important;
+  margin-top:5px !important;
+  padding:3px 4px !important;
+  border:1px solid rgba(215,200,0,.2) !important;
+  border-radius:3px !important;
+  background:rgba(5,5,8,.68) !important;
+  color:rgba(235,229,207,.5) !important;
+  font:600 .45rem/1.1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.06em !important;
+  text-transform:uppercase !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-director-plaque[aria-pressed="true"] {
+  border-color:rgba(215,200,0,.58) !important;
+  color:#ece32d !important;
+  text-shadow:0 0 8px rgba(236,227,45,.35) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-feed {
+  position:absolute !important;
+  z-index:13 !important;
+  top:86px !important;
+  left:50% !important;
+  width:min(760px,calc(100% - 220px)) !important;
+  transform:translateX(-50%) !important;
+  pointer-events:none !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-director-chooser {
+  display:flex !important;
+  align-items:center !important;
+  gap:10px !important;
+  width:100% !important;
+  padding:9px 13px !important;
+  border:1px solid rgba(215,200,0,.34) !important;
+  background:linear-gradient(110deg,rgba(8,8,13,.94),rgba(18,16,25,.82)) !important;
+  color:#ece32d !important;
+  box-shadow:0 12px 35px rgba(0,0,0,.24) !important;
+  backdrop-filter:blur(12px) !important;
+  pointer-events:auto !important;
+  text-align:left !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-director-chooser > span {
+  display:grid !important;
+  flex:1 !important;
+  gap:2px !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-director-chooser small {
+  color:rgba(215,200,0,.58) !important;
+  font-size:.5rem !important;
+  letter-spacing:.13em !important;
+  text-transform:uppercase !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-director-chooser strong {
+  color:#f2ecd8 !important;
+  font:600 .73rem/1.2 var(--remodel-serif,Georgia,serif) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-stream-card {
+  display:flex !important;
+  justify-content:center !important;
+  width:100% !important;
+  margin:12px 0 !important;
+  pointer-events:auto !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-stream-inner {
+  width:min(760px,82%) !important;
+  padding:12px 15px !important;
+  border:1px solid rgba(215,200,0,.34) !important;
+  border-left:3px solid rgba(215,200,0,.78) !important;
+  background:linear-gradient(112deg,rgba(8,8,13,.86),rgba(22,18,29,.72)) !important;
+  box-shadow:0 10px 30px rgba(0,0,0,.2) !important;
+  backdrop-filter:blur(9px) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-stream-inner header {
+  display:flex !important;
+  align-items:center !important;
+  gap:9px !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-stream-inner header strong {
+  color:#f2ecd8 !important;
+  font:600 .75rem/1.2 var(--remodel-serif,Georgia,serif) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-stream-inner header small {
+  margin-left:auto !important;
+  color:rgba(239,234,219,.32) !important;
+  font-size:.56rem !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-stream-inner p {
+  margin:9px 0 6px !important;
+  color:rgba(250,246,232,.9) !important;
+  font:italic .82rem/1.48 var(--remodel-serif,Georgia,serif) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-stream-inner ul {
+  margin:0 0 8px 18px !important;
+  color:rgba(239,234,219,.62) !important;
+  font-size:.68rem !important;
+  line-height:1.45 !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-stream-inner footer {
+  display:flex !important;
+  flex-wrap:wrap !important;
+  gap:12px !important;
+  color:rgba(215,200,0,.62) !important;
+  font-size:.56rem !important;
+  letter-spacing:.04em !important;
+  text-transform:uppercase !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-empty,
+body.remodel-roleplay-workspace-active .remodel-rp-direction-card {
+  border:1px solid rgba(215,200,0,.24) !important;
+  background:linear-gradient(110deg,rgba(8,8,13,.88),rgba(18,16,25,.72)) !important;
+  color:rgba(239,234,219,.72) !important;
+  box-shadow:0 12px 35px rgba(0,0,0,.24) !important;
+  backdrop-filter:blur(12px) !important;
+  pointer-events:auto !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-empty {
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  gap:10px !important;
+  padding:8px 14px !important;
+  font-size:.72rem !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-card > summary {
+  display:grid !important;
+  grid-template-columns:auto auto 1fr auto !important;
+  align-items:center !important;
+  gap:9px !important;
+  padding:8px 12px !important;
+  cursor:pointer !important;
+  list-style:none !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-card > summary::-webkit-details-marker { display:none !important; }
+body.remodel-roleplay-workspace-active .remodel-rp-direction-card > summary > i { transition:transform .18s ease !important; }
+body.remodel-roleplay-workspace-active .remodel-rp-direction-card[open] > summary > i { transform:rotate(180deg) !important; }
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-badge {
+  color:#ece32d !important;
+  font:600 .55rem/1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.08em !important;
+  text-transform:uppercase !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-card summary strong {
+  color:#f1ead4 !important;
+  font:600 .73rem/1.2 var(--remodel-serif,Georgia,serif) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-route {
+  color:rgba(239,234,219,.45) !important;
+  font-size:.64rem !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-body {
+  padding:0 14px 11px 14px !important;
+  border-top:1px solid rgba(215,200,0,.12) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-body p {
+  margin:10px 0 7px !important;
+  color:rgba(250,246,232,.88) !important;
+  font:italic .8rem/1.45 var(--remodel-serif,Georgia,serif) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-body ul {
+  margin:0 0 8px 18px !important;
+  color:rgba(239,234,219,.64) !important;
+  font-size:.68rem !important;
+  line-height:1.45 !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-body footer {
+  display:flex !important;
+  flex-wrap:wrap !important;
+  gap:12px !important;
+  color:rgba(215,200,0,.65) !important;
+  font-size:.58rem !important;
+  letter-spacing:.04em !important;
+  text-transform:uppercase !important;
+}
+
+@media (max-width:720px) {
+  body.remodel-roleplay-workspace-active .remodel-rp-direction-feed {
+    top:78px !important;
+    width:calc(100% - 24px) !important;
+  }
+  body.remodel-roleplay-workspace-active .remodel-rp-direction-card > summary {
+    grid-template-columns:auto 1fr auto !important;
+  }
+  body.remodel-roleplay-workspace-active .remodel-rp-direction-route { display:none !important; }
+}
+
+@media (max-width:480px) {
+  body.st-remodel-active .remodel-route-toolbar { padding-inline:10px !important; }
+  body.st-remodel-active .remodel-route-breadcrumb span { display:none !important; }
+  body.st-remodel-active .remodel-route-side { display:flex !important; flex-direction:column !important; }
+  body.st-remodel-active .remodel-route-scene-select { grid-template-columns:32px minmax(0,1fr) !important; gap:8px !important; padding-inline:7px !important; }
+  body.st-remodel-active .remodel-route-arc-actions button span { display:none !important; }
 }
 
 /* =====================================================================
@@ -7847,6 +9739,189 @@ body.st-remodel-active #WorldInfo .world_entry_edit > .flex-container:not(:first
   }
 }
 
+/* Compact roleplay composer: the command surface floats above the input
+   instead of occupying three opaque toolbar rows. Controls keep their real
+   handlers and disclose their full labels on hover or keyboard focus. */
+body.remodel-roleplay-workspace-active .remodel-rp-composer-zone {
+  position:relative !important;
+  display:flex !important;
+  flex-direction:column !important;
+  gap:6px !important;
+  padding:0 clamp(12px,2.6vw,26px) 13px !important;
+  border-top:0 !important;
+  background:transparent !important;
+  overflow:visible !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-command-dock {
+  position:relative !important;
+  z-index:8 !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:flex-end !important;
+  gap:4px !important;
+  min-width:0 !important;
+  min-height:34px !important;
+  padding:0 8px !important;
+  overflow:visible !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-command,
+body.remodel-roleplay-workspace-active .remodel-rp-command-dock .remodel-scene-prompt-choice {
+  appearance:none !important;
+  position:relative !important;
+  display:inline-flex !important;
+  align-items:center !important;
+  flex:0 0 auto !important;
+  gap:7px !important;
+  width:auto !important;
+  min-width:32px !important;
+  max-width:32px !important;
+  height:32px !important;
+  min-height:32px !important;
+  margin:0 !important;
+  padding:0 !important;
+  overflow:hidden !important;
+  border:1px solid transparent !important;
+  border-radius:999px !important;
+  background:rgba(8,8,12,.18) !important;
+  color:rgba(236,230,205,.66) !important;
+  box-shadow:none !important;
+  cursor:pointer !important;
+  white-space:nowrap !important;
+  transition:max-width .24s cubic-bezier(.2,.75,.25,1),padding .24s cubic-bezier(.2,.75,.25,1),border-color .16s ease,background-color .16s ease,color .16s ease,box-shadow .16s ease !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-command:is(:hover,:focus-visible,:focus-within),
+body.remodel-roleplay-workspace-active .remodel-rp-command-dock .remodel-scene-prompt-choice:is(:hover,:focus-visible) {
+  max-width:245px !important;
+  padding-right:11px !important;
+  border-color:rgba(215,200,0,.32) !important;
+  background:rgba(10,10,15,.86) !important;
+  color:#fff6a1 !important;
+  box-shadow:0 8px 22px rgba(0,0,0,.25),0 0 13px rgba(215,200,0,.08) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-command-icon,
+body.remodel-roleplay-workspace-active .remodel-rp-command-dock .remodel-scene-prompt-choice > .fa-wand-magic-sparkles {
+  display:grid !important;
+  place-items:center !important;
+  flex:0 0 30px !important;
+  width:30px !important;
+  height:30px !important;
+  color:rgba(215,200,0,.82) !important;
+  font-size:12px !important;
+  text-align:center !important;
+  filter:drop-shadow(0 0 5px rgba(215,200,0,.16)) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-command-label,
+body.remodel-roleplay-workspace-active .remodel-rp-command-stack,
+body.remodel-roleplay-workspace-active .remodel-rp-command-caret,
+body.remodel-roleplay-workspace-active .remodel-rp-command-dock .remodel-scene-prompt-choice-copy,
+body.remodel-roleplay-workspace-active .remodel-rp-command-dock .remodel-scene-prompt-choice-caret {
+  opacity:0 !important;
+  transform:translateX(-4px) !important;
+  transition:opacity .14s ease .04s,transform .18s ease .04s !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-command:is(:hover,:focus-visible,:focus-within) :is(.remodel-rp-command-label,.remodel-rp-command-stack,.remodel-rp-command-caret),
+body.remodel-roleplay-workspace-active .remodel-rp-command-dock .remodel-scene-prompt-choice:is(:hover,:focus-visible) :is(.remodel-scene-prompt-choice-copy,.remodel-scene-prompt-choice-caret) {
+  opacity:1 !important;
+  transform:translateX(0) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-command-label {
+  color:rgba(245,239,218,.88) !important;
+  font:11px/1 var(--remodel-manuscript-font,Georgia,serif) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-command-stack {
+  display:flex !important;
+  min-width:0 !important;
+  flex-direction:column !important;
+  align-items:flex-start !important;
+  line-height:1.05 !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-command-stack small {
+  color:rgba(215,200,0,.62) !important;
+  font:7px/1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.1em !important;
+  text-transform:uppercase !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-command-stack strong {
+  margin-top:3px !important;
+  color:rgba(245,239,218,.9) !important;
+  font:10px/1 var(--remodel-serif,Georgia,serif) !important;
+  font-weight:400 !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-command-caret {
+  flex:0 0 auto !important;
+  color:rgba(215,200,0,.62) !important;
+  font-size:7px !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-command-prompt {
+  display:inline-flex !important;
+  flex:0 0 auto !important;
+  width:auto !important;
+  height:32px !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-command-dock .remodel-scene-prompt-choice-copy {
+  flex:0 1 180px !important;
+  width:180px !important;
+  max-width:180px !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-composer {
+  position:relative !important;
+  z-index:4 !important;
+  gap:12px !important;
+  padding:10px 13px !important;
+  border-color:rgba(215,200,0,.42) !important;
+  background:rgba(9,9,13,.62) !important;
+  box-shadow:0 12px 28px rgba(0,0,0,.24),0 0 18px rgba(215,200,0,.035) !important;
+  backdrop-filter:blur(9px) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-composer-meta,
+body.remodel-roleplay-workspace-active .remodel-rp-turn-bar,
+body.remodel-roleplay-workspace-active .remodel-rp-action-row {
+  display:none !important;
+}
+
+@media (max-width:620px) {
+  body.remodel-roleplay-workspace-active .remodel-rp-composer-zone {
+    padding-inline:8px !important;
+  }
+  body.remodel-roleplay-workspace-active .remodel-rp-command-dock {
+    justify-content:center !important;
+    gap:2px !important;
+    padding-inline:0 !important;
+  }
+  body.remodel-roleplay-workspace-active .remodel-rp-command,
+  body.remodel-roleplay-workspace-active .remodel-rp-command-dock .remodel-scene-prompt-choice {
+    min-width:30px !important;
+    max-width:30px !important;
+    height:30px !important;
+    min-height:30px !important;
+  }
+  body.remodel-roleplay-workspace-active .remodel-rp-command:is(:hover,:focus-visible,:focus-within),
+  body.remodel-roleplay-workspace-active .remodel-rp-command-dock .remodel-scene-prompt-choice:is(:hover,:focus-visible) {
+    max-width:190px !important;
+  }
+  body.remodel-roleplay-workspace-active .remodel-rp-as-txt {
+    display:none !important;
+  }
+  body.remodel-roleplay-workspace-active .remodel-rp-as-chip {
+    padding-inline:6px !important;
+  }
+}
+
 @media (max-width:760px) {
   body.st-remodel-active .remodel-lorebooks-dock {
     top:9px !important;
@@ -7911,4 +9986,517 @@ body.st-remodel-active #WorldInfo .world_entry_edit > .flex-container:not(:first
   body.st-remodel-active #WorldInfo .world_entry .inline-drawer-outlet:has(> *) {
     padding:14px 12px 22px 28px !important;
   }
+}
+
+/* Timeline route corrections: reuse the deck card, collapse the premise into
+   the title, and replace the orbital control with a quiet vertical arc index. */
+
+body.st-remodel-active .remodel-route-side {
+  justify-content:center !important;
+  padding-block:20px !important;
+}
+
+body.st-remodel-active .remodel-route-cover-card {
+  flex:0 0 auto !important;
+  width:min(100%,260px) !important;
+  max-width:calc((100dvh - 154px) / 1.72) !important;
+  margin:0 !important;
+}
+
+body.st-remodel-active .remodel-route-cover-card .remodel-timeline-card-frame {
+  display:block !important;
+  width:100% !important;
+}
+
+body.st-remodel-active .remodel-route-cover-card .remodel-route-cover-empty {
+  z-index:2 !important;
+}
+
+body.st-remodel-active .remodel-route-main {
+  padding-right:clamp(58px,5.2vw,78px) !important;
+}
+
+body.st-remodel-active .remodel-route-title {
+  margin-top:0 !important;
+}
+
+body.st-remodel-active .remodel-route-premise-reveal {
+  display:grid !important;
+  grid-template-rows:1fr !important;
+  opacity:1 !important;
+  transition:grid-template-rows .28s cubic-bezier(.2,.75,.25,1),opacity .18s ease,transform .28s cubic-bezier(.2,.75,.25,1) !important;
+}
+
+body.st-remodel-active .remodel-route-premise-reveal > * {
+  min-height:0 !important;
+  overflow:hidden !important;
+}
+
+body.st-remodel-active .remodel-route-main.is-premise-collapsed .remodel-route-premise-reveal {
+  grid-template-rows:0fr !important;
+  opacity:0 !important;
+  transform:translateY(-8px) !important;
+  pointer-events:none !important;
+}
+
+body.st-remodel-active .remodel-route-main.is-premise-collapsed .remodel-route-title {
+  margin-bottom:0 !important;
+}
+
+body.st-remodel-active .remodel-route-main .remodel-route-rule {
+  appearance:none !important;
+  display:block !important;
+  width:100% !important;
+  min-height:1px !important;
+  padding:0 !important;
+  border:0 !important;
+  border-radius:0 !important;
+  outline:0 !important;
+  cursor:pointer !important;
+}
+
+body.st-remodel-active .remodel-route-main .remodel-route-rule:hover,
+body.st-remodel-active .remodel-route-main .remodel-route-rule:focus-visible {
+  background:linear-gradient(90deg,rgba(215,200,0,.72),rgba(215,200,0,.14) 82%,transparent) !important;
+  box-shadow:none !important;
+}
+
+body.st-remodel-active .remodel-route-main.is-premise-collapsed .remodel-route-rule {
+  margin-top:7px !important;
+}
+
+body.st-remodel-active .remodel-route-arc-summary-reveal {
+  display:grid !important;
+  grid-template-rows:1fr !important;
+  flex:0 0 auto !important;
+  min-height:0 !important;
+  opacity:1 !important;
+  transform:translateY(0) !important;
+  transition:grid-template-rows .28s cubic-bezier(.2,.75,.25,1),opacity .18s ease,transform .28s cubic-bezier(.2,.75,.25,1) !important;
+}
+
+body.st-remodel-active .remodel-route-arc-summary-reveal > * {
+  min-height:0 !important;
+  overflow:hidden !important;
+}
+
+body.st-remodel-active .remodel-route-main.is-synopsis-collapsed .remodel-route-arc-summary-reveal {
+  grid-template-rows:0fr !important;
+  opacity:0 !important;
+  transform:translateY(-8px) !important;
+  pointer-events:none !important;
+}
+
+body.st-remodel-active .remodel-route-main.is-synopsis-collapsed .remodel-route-arc-stage {
+  padding-top:4px !important;
+}
+
+body.st-remodel-active .remodel-route-main.is-synopsis-collapsed .remodel-route-arc-summary {
+  margin-top:0 !important;
+  padding-block:0 !important;
+}
+
+body.st-remodel-active .remodel-route-main.is-synopsis-collapsed .remodel-route-scenes-head {
+  margin-top:7px !important;
+}
+
+body.st-remodel-active .remodel-route-arc-index {
+  position:absolute !important;
+  z-index:20 !important;
+  top:50% !important;
+  right:10px !important;
+  display:flex !important;
+  flex-direction:column !important;
+  align-items:flex-end !important;
+  gap:10px !important;
+  max-height:calc(100% - 54px) !important;
+  transform:translateY(-50%) !important;
+}
+
+body.st-remodel-active .remodel-route-arc-index-list {
+  display:flex !important;
+  flex-direction:column !important;
+  align-items:flex-end !important;
+  gap:3px !important;
+  max-height:calc(100% - 28px) !important;
+  overflow-y:auto !important;
+  scrollbar-width:none !important;
+}
+
+body.st-remodel-active .remodel-route-arc-index-list::-webkit-scrollbar {
+  display:none !important;
+}
+
+body.st-remodel-active .remodel-route-arc-index-item {
+  appearance:none !important;
+  position:relative !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:flex-end !important;
+  width:48px !important;
+  min-width:48px !important;
+  height:8px !important;
+  min-height:8px !important;
+  margin:0 !important;
+  padding:0 !important;
+  border:0 !important;
+  border-radius:0 !important;
+  background:transparent !important;
+  box-shadow:none !important;
+  cursor:pointer !important;
+}
+
+body.st-remodel-active .remodel-route-arc-index-tick {
+  display:block !important;
+  width:14px !important;
+  height:1px !important;
+  background:rgba(238,235,224,.38) !important;
+  transition:width .18s ease,background-color .18s ease,box-shadow .18s ease !important;
+}
+
+body.st-remodel-active .remodel-route-arc-index-item:nth-child(4n + 2) .remodel-route-arc-index-tick,
+body.st-remodel-active .remodel-route-arc-index-item:nth-child(4n + 3) .remodel-route-arc-index-tick {
+  width:20px !important;
+}
+
+body.st-remodel-active .remodel-route-arc-index-item:hover .remodel-route-arc-index-tick,
+body.st-remodel-active .remodel-route-arc-index-item:focus-visible .remodel-route-arc-index-tick {
+  width:31px !important;
+  background:rgba(215,200,0,.76) !important;
+}
+
+body.st-remodel-active .remodel-route-arc-index-item.is-active .remodel-route-arc-index-tick {
+  width:40px !important;
+  height:2px !important;
+  background:var(--route-gold) !important;
+  box-shadow:0 0 9px rgba(215,200,0,.52) !important;
+}
+
+body.st-remodel-active .remodel-route-arc-index-name {
+  position:absolute !important;
+  top:50% !important;
+  right:55px !important;
+  display:block !important;
+  width:max-content !important;
+  max-width:230px !important;
+  padding:5px 8px !important;
+  border:1px solid rgba(215,200,0,.2) !important;
+  background:rgba(7,7,11,.92) !important;
+  color:rgba(245,238,213,.78) !important;
+  font:600 .58rem/1.2 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.08em !important;
+  opacity:0 !important;
+  overflow:hidden !important;
+  pointer-events:none !important;
+  text-overflow:ellipsis !important;
+  text-transform:uppercase !important;
+  transform:translate(6px,-50%) !important;
+  transition:opacity .14s ease,transform .14s ease !important;
+  white-space:nowrap !important;
+}
+
+body.st-remodel-active .remodel-route-arc-index-item:hover .remodel-route-arc-index-name,
+body.st-remodel-active .remodel-route-arc-index-item:focus-visible .remodel-route-arc-index-name {
+  opacity:1 !important;
+  transform:translate(0,-50%) !important;
+}
+
+body.st-remodel-active .remodel-route-arc-index-add {
+  appearance:none !important;
+  display:grid !important;
+  place-items:center !important;
+  width:24px !important;
+  min-width:24px !important;
+  height:24px !important;
+  min-height:24px !important;
+  margin-right:8px !important;
+  padding:0 !important;
+  border:1px solid rgba(215,200,0,.25) !important;
+  border-radius:50% !important;
+  background:rgba(7,7,11,.72) !important;
+  color:rgba(245,238,213,.55) !important;
+  font-size:.62rem !important;
+}
+
+body.st-remodel-active .remodel-route-arc-index-add:hover,
+body.st-remodel-active .remodel-route-arc-index-add:focus-visible {
+  border-color:var(--route-gold) !important;
+  color:var(--route-gold) !important;
+  box-shadow:0 0 10px rgba(215,200,0,.16) !important;
+}
+
+body.st-remodel-active .remodel-route-scenes,
+body.st-remodel-active .remodel-route-main,
+body.st-remodel-active .remodel-route-overview,
+body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-tavern-body {
+  scrollbar-width:none !important;
+}
+
+body.st-remodel-active .remodel-route-scenes::-webkit-scrollbar,
+body.st-remodel-active .remodel-route-main::-webkit-scrollbar,
+body.st-remodel-active .remodel-route-overview::-webkit-scrollbar,
+body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-tavern-body::-webkit-scrollbar {
+  display:none !important;
+}
+
+@media (max-width:720px) {
+  body.st-remodel-active .remodel-route-side {
+    display:flex !important;
+    min-height:auto !important;
+    padding:16px !important;
+  }
+  body.st-remodel-active .remodel-route-cover-card {
+    width:150px !important;
+    max-width:150px !important;
+  }
+  body.st-remodel-active .remodel-route-main {
+    padding-right:46px !important;
+  }
+  body.st-remodel-active .remodel-route-arc-index {
+    right:3px !important;
+  }
+  body.st-remodel-active .remodel-route-arc-index-name {
+    display:none !important;
+  }
+}
+/* Application-wide Debug Console ----------------------------------------- */
+.remodel-tavern-viewport.is-debug-workspace .remodel-tavern-body {
+    overflow: hidden;
+}
+
+.remodel-debug-workspace {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    display: grid;
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    color: #e7e4dc;
+    background:
+        linear-gradient(180deg, rgba(12, 11, 18, .96), rgba(5, 5, 9, .94)),
+        radial-gradient(circle at 72% 16%, rgba(201, 190, 0, .06), transparent 38%);
+    border-top: 1px solid rgba(201, 190, 0, .32);
+    font-family: var(--mainFontFamily);
+}
+
+.remodel-debug-header {
+    min-height: 76px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 13px 24px 12px;
+    border-bottom: 1px solid rgba(201, 190, 0, .28);
+    background: rgba(6, 5, 10, .6);
+}
+
+.remodel-debug-header span {
+    display: block;
+    color: #bbb200;
+    font: 600 9px/1.2 var(--mainFontFamily);
+    letter-spacing: .2em;
+    text-transform: uppercase;
+}
+
+.remodel-debug-header h2 {
+    margin: 2px 0 0;
+    color: #f4f0e6;
+    font: 400 27px/1.05 Georgia, serif;
+    letter-spacing: .035em;
+}
+
+.remodel-debug-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 7px;
+}
+
+.remodel-debug-actions button,
+.remodel-debug-filters select,
+.remodel-debug-filters input {
+    min-height: 32px;
+    border: 1px solid rgba(201, 190, 0, .25);
+    border-radius: 2px;
+    color: #dedbd1;
+    background: rgba(14, 13, 20, .92);
+    box-shadow: none;
+}
+
+.remodel-debug-actions button {
+    padding: 0 12px;
+    color: #c8c3b5;
+    font-size: 11px;
+    letter-spacing: .05em;
+}
+
+.remodel-debug-actions button:hover {
+    border-color: rgba(222, 211, 0, .72);
+    color: #f5f05c;
+}
+
+.remodel-debug-safety {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 8px 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, .07);
+    color: #8f8b83;
+    background: rgba(20, 19, 27, .72);
+    font-size: 10px;
+}
+
+.remodel-debug-safety label {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: #c8c4b9;
+    cursor: pointer;
+}
+
+.remodel-debug-safety.is-sensitive {
+    border-bottom-color: rgba(255, 155, 62, .42);
+    background: rgba(58, 29, 12, .38);
+}
+
+.remodel-debug-safety.is-sensitive label {
+    color: #ffc070;
+}
+
+.remodel-debug-filters {
+    display: grid;
+    grid-template-columns: 170px 140px 140px minmax(220px, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px;
+    border-bottom: 1px solid rgba(201, 190, 0, .22);
+    background: rgba(8, 8, 13, .75);
+}
+
+.remodel-debug-filters select,
+.remodel-debug-filters input {
+    width: 100%;
+    padding: 0 10px;
+    font: 11px/1.2 Consolas, monospace;
+}
+
+.remodel-debug-filters output {
+    min-width: 116px;
+    color: #858178;
+    font: 10px/1.2 Consolas, monospace;
+    text-align: right;
+}
+
+.remodel-debug-filters output b {
+    color: #88d5a0;
+    font-weight: 600;
+    letter-spacing: .08em;
+}
+
+.remodel-debug-grid {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(430px, 58%) minmax(300px, 42%);
+    overflow: hidden;
+}
+
+.remodel-debug-stream,
+.remodel-debug-detail {
+    min-height: 0;
+    overflow: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(201, 190, 0, .5) transparent;
+}
+
+.remodel-debug-stream {
+    border-right: 1px solid rgba(201, 190, 0, .28);
+    background: rgba(4, 4, 8, .42);
+}
+
+.remodel-debug-row {
+    width: 100%;
+    min-height: 39px;
+    display: grid;
+    grid-template-columns: 84px 58px 92px minmax(150px, .8fr) minmax(180px, 1.5fr);
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    border: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, .045);
+    border-left: 2px solid transparent;
+    border-radius: 0;
+    color: #aaa69d;
+    background: transparent;
+    text-align: left;
+    font: 10px/1.25 Consolas, monospace;
+}
+
+.remodel-debug-row:hover,
+.remodel-debug-row.is-selected {
+    background: rgba(201, 190, 0, .075);
+    border-left-color: #c9be00;
+}
+
+.remodel-debug-row.is-warn { border-left-color: #d99232; }
+.remodel-debug-row.is-error { border-left-color: #d84a4a; background: rgba(111, 18, 24, .11); }
+.remodel-debug-row time { color: #716e68; }
+.remodel-debug-row strong { overflow: hidden; color: #ddd9cf; text-overflow: ellipsis; white-space: nowrap; }
+.remodel-debug-source {
+    overflow: hidden;
+    padding: 3px 5px;
+    border: 1px solid rgba(114, 191, 202, .25);
+    color: #8fc6ce;
+    background: rgba(45, 91, 99, .13);
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 8px;
+    letter-spacing: .05em;
+}
+.remodel-debug-category { color: #c1b900; text-transform: uppercase; letter-spacing: .06em; }
+.remodel-debug-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.remodel-debug-detail {
+    padding: 14px 16px 30px;
+    background: rgba(10, 9, 15, .72);
+}
+
+.remodel-debug-detail-heading {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 10px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(201, 190, 0, .22);
+}
+
+.remodel-debug-detail-heading span { color: #c1b900; font: 9px Consolas, monospace; text-transform: uppercase; }
+.remodel-debug-detail-heading strong { color: #f0ede5; font: 12px Consolas, monospace; }
+.remodel-debug-detail-heading time { grid-column: 1 / -1; color: #716e68; font: 10px Consolas, monospace; }
+
+.remodel-debug-detail pre {
+    margin: 14px 0 0;
+    border: 0;
+    color: #c8c5bc;
+    background: transparent;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: 11px/1.55 Consolas, monospace;
+}
+
+.remodel-debug-empty {
+    margin: 0;
+    padding: 28px;
+    color: #716e68;
+    font: italic 12px Georgia, serif;
+}
+
+@media (max-width: 900px) {
+    .remodel-debug-header { align-items: flex-start; flex-direction: column; gap: 10px; }
+    .remodel-debug-actions { justify-content: flex-start; }
+    .remodel-debug-safety { align-items: flex-start; flex-direction: column; gap: 5px; }
+    .remodel-debug-filters { grid-template-columns: 1fr 1fr; }
+    .remodel-debug-filters input { grid-column: 1 / -1; }
+    .remodel-debug-grid { grid-template-columns: 1fr; grid-template-rows: minmax(260px, 55%) minmax(180px, 45%); }
+    .remodel-debug-stream { border-right: 0; border-bottom: 1px solid rgba(201, 190, 0, .28); }
+    .remodel-debug-row { grid-template-columns: 68px 48px 70px minmax(100px, .8fr) minmax(120px, 1.2fr); }
 }

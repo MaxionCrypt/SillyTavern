@@ -1,4 +1,6 @@
 import { getContext } from '../../../st-context.js';
+import { detachStoryGoalsFromScene, deleteStoryGoalsForTimeline } from './story-goals-store.js';
+import { deleteVariablesForTimeline } from './story-variables-store.js';
 
 export const CHAT_METADATA_KEY = 'remodelScene';
 
@@ -39,6 +41,11 @@ export function createTimeline(title = 'New Timeline') {
         // saved (see the Prior Text drawer in timeline-spine.js), each exposed
         // as a synchronous {{inserted_text_<slotName>}} macro.
         insertedTextSlots: {},
+        // A lorebook bound to the whole timeline, so every Scene in it shares
+        // the same world without binding the book to each document by hand.
+        // Null means the timeline adds none of its own; global, character and
+        // persona lorebooks still apply as usual.
+        lorebookName: null,
         createdAt: now(),
         updatedAt: now(),
     };
@@ -107,12 +114,15 @@ export function deleteTimeline(timelineId) {
 
         for (const sceneId of arc?.sceneIds || []) {
             delete store.scenes[sceneId];
+            detachStoryGoalsFromScene(sceneId);
         }
 
         delete store.arcs[arcId];
     }
 
     delete store.timelines[timelineId];
+    deleteStoryGoalsForTimeline(timelineId);
+    deleteVariablesForTimeline(timelineId);
     store.timelineIds = store.timelineIds.filter((id) => id !== timelineId);
     store.activeTimelineId = store.activeTimelineId === timelineId ? store.timelineIds[0] || null : store.activeTimelineId;
     saveTimelineStore();
@@ -169,6 +179,7 @@ export function deleteArc(arcId) {
 
     for (const sceneId of arc.sceneIds) {
         delete store.scenes[sceneId];
+        detachStoryGoalsFromScene(sceneId);
     }
 
     delete store.arcs[arcId];
@@ -201,6 +212,21 @@ export function createScene(arcId, mode = 'roleplay', title = 'New Scene') {
         // Optional per-Scene Prompt Studio overrides. Null means inherit the
         // account-wide default for this Scene mode and API boundary.
         promptRecipeIds: { chat: null, text: null },
+        // How the Scene is staged — who speaks, and in what order.
+        //   'free'     : today's behaviour. The group's own activation strategy
+        //                decides; no pipeline, no injections.
+        //   'directed' : the bound roles run in order each turn.
+        // Defaults to 'free' so nothing about an ordinary Scene changes.
+        staging: 'free',
+        // Ordered job -> cast-member bindings for a directed Scene, e.g.
+        // [{ job: 'director', characterId: 3 }, { job: 'narrator', characterId: 1 }].
+        // Bound explicitly by the user; never matched by character name.
+        roles: [],
+        // Continuous direction state. A native character card may occupy the
+        // non-speaking Roleplay Director seat while narratorRef points at a
+        // stable visible performer identity. Direction records are extension
+        // UI state only; they are never native chat messages.
+        liveDirection: normalizeLiveDirection(),
         status: 'unbound',
         summary: '',
         summaryUpdatedAt: null,
@@ -245,6 +271,7 @@ export function deleteScene(sceneId) {
     }
 
     delete store.scenes[sceneId];
+    detachStoryGoalsFromScene(sceneId);
     arc.sceneIds = arc.sceneIds.filter((id) => id !== sceneId);
     timeline.activeSceneId = timeline.activeSceneId === sceneId ? arc.sceneIds[0] || null : timeline.activeSceneId;
     arc.updatedAt = now();
@@ -262,6 +289,22 @@ export function setActiveTimeline(timelineId) {
     store.activeTimelineId = timelineId;
     saveTimelineStore();
     return store.timelines[timelineId];
+}
+
+export function setActiveArc(arcId) {
+    const store = getTimelineStore();
+    const arc = store.arcs[arcId];
+    const timeline = store.timelines[arc?.timelineId];
+
+    if (!arc || !timeline || !timeline.arcIds.includes(arcId)) {
+        return null;
+    }
+
+    store.activeTimelineId = timeline.id;
+    timeline.activeArcId = arcId;
+    timeline.updatedAt = now();
+    saveTimelineStore();
+    return arc;
 }
 
 export function setActiveScene(sceneId) {
@@ -331,6 +374,8 @@ function normalizeStore(store) {
         timeline.activeArcId = timeline.arcIds.includes(timeline.activeArcId) ? timeline.activeArcId : timeline.arcIds[0] || null;
         timeline.activeSceneId = store.scenes[timeline.activeSceneId]?.timelineId === timeline.id ? timeline.activeSceneId : null;
         timeline.insertedTextSlots ??= {}; // backward-compat for Timelines saved before this field existed
+        // Backward-compat for Timelines saved before they could carry a lorebook.
+        timeline.lorebookName = timeline.lorebookName ? String(timeline.lorebookName) : null;
     }
 
     for (const arc of Object.values(store.arcs)) {
@@ -342,6 +387,12 @@ function normalizeStore(store) {
         // StoryDoc instead of a chat.
         scene.storyDocId ??= null;
         scene.promptRecipeIds = normalizePromptRecipeIds(scene.promptRecipeIds);
+        // Backward-compat for scenes saved before staging existed. Every one of
+        // them must keep behaving exactly as it did, so they default to 'free'.
+        scene.staging = normalizeStaging(scene.staging);
+        scene.roles = normalizeSceneRoles(scene.roles);
+        scene.liveDirection = normalizeLiveDirection(scene.liveDirection, scene.roles);
+        scene.roles = scene.roles.filter((binding) => binding.job === 'narrator');
     }
 }
 
@@ -350,6 +401,7 @@ function sanitizeTimelinePatch(patch) {
         ...(patch.title !== undefined ? { title: normalizeText(patch.title, 'Untitled Timeline') } : {}),
         ...(patch.description !== undefined ? { description: String(patch.description) } : {}),
         ...(patch.thumbnail !== undefined ? { thumbnail: patch.thumbnail ? String(patch.thumbnail) : null } : {}),
+        ...(patch.lorebookName !== undefined ? { lorebookName: patch.lorebookName ? String(patch.lorebookName) : null } : {}),
     };
 }
 
@@ -372,6 +424,9 @@ function sanitizeScenePatch(patch) {
         // mode) instead of a chat file; roleplay scenes keep linkedChat.
         ...(patch.storyDocId !== undefined ? { storyDocId: patch.storyDocId || null } : {}),
         ...(patch.promptRecipeIds !== undefined ? { promptRecipeIds: normalizePromptRecipeIds(patch.promptRecipeIds) } : {}),
+        ...(patch.staging !== undefined ? { staging: normalizeStaging(patch.staging) } : {}),
+        ...(patch.roles !== undefined ? { roles: normalizeSceneRoles(patch.roles) } : {}),
+        ...(patch.liveDirection !== undefined ? { liveDirection: normalizeLiveDirection(patch.liveDirection) } : {}),
     };
 }
 
@@ -380,6 +435,118 @@ function normalizePromptRecipeIds(value) {
         chat: value?.chat ? String(value.chat) : null,
         text: value?.text ? String(value.text) : null,
     };
+}
+
+/** The jobs a bound cast member can hold in a directed Scene. */
+export const SCENE_STAGINGS = Object.freeze(['free', 'directed']);
+export const SCENE_ROLE_JOBS = Object.freeze(['director', 'narrator']);
+
+function normalizeStaging(value) {
+    return SCENE_STAGINGS.includes(value) ? value : 'free';
+}
+
+/**
+ * Role bindings are an ordered list, one entry per job at most. A binding with
+ * no resolvable cast member is kept (the character may simply not be loaded
+ * yet) but carries a null characterId, and the pipeline skips it.
+ */
+function normalizeSceneRoles(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const seen = new Set();
+    const roles = [];
+    for (const entry of value) {
+        const job = SCENE_ROLE_JOBS.includes(entry?.job) ? entry.job : null;
+        if (!job || seen.has(job)) {
+            continue;
+        }
+        seen.add(job);
+        const characterId = entry?.characterId == null || entry.characterId === ''
+            ? null
+            : Number(entry.characterId);
+        roles.push({ job, characterId: Number.isInteger(characterId) ? characterId : null });
+    }
+    return roles;
+}
+
+export const LIVE_DIRECTION_PACING = Object.freeze(['slow', 'natural', 'fast', 'instant']);
+
+function normalizeLiveDirection(value = {}, legacyRoles = []) {
+    const pacing = LIVE_DIRECTION_PACING.includes(value?.pacing) ? value.pacing : 'natural';
+    const limit = Math.max(1, Math.min(10, Math.round(Number(value?.autonomousResponseLimit) || 3)));
+    let narratorRef = normalizeDirectionPerformerRef(value?.narratorRef);
+    if (!narratorRef) {
+        const legacy = legacyRoles.find((binding) => binding.job === 'narrator' && Number.isInteger(binding.characterId));
+        if (legacy) narratorRef = { kind: 'legacy-character-index', id: String(legacy.characterId), label: 'Narrator' };
+    }
+    let directorRef = normalizeDirectionPerformerRef(value?.directorRef);
+    if (!directorRef) {
+        const legacy = legacyRoles.find((binding) => binding.job === 'director' && Number.isInteger(binding.characterId));
+        if (legacy) directorRef = { kind: 'legacy-character-index', id: String(legacy.characterId), label: 'Roleplay Director' };
+    }
+    const directionLog = (Array.isArray(value?.directionLog) ? value.directionLog : [])
+        .map(normalizeDirectionRecord)
+        .filter(Boolean)
+        .slice(-60);
+    return {
+        enabled: value?.enabled !== false,
+        pacing,
+        autoplay: value?.autoplay !== false,
+        autonomousResponseLimit: limit,
+        narratorRef,
+        directorRef,
+        directionLog,
+    };
+}
+
+function normalizeDirectionRecord(value) {
+    if (!value || typeof value !== 'object') return null;
+    const id = String(value.id || '').trim();
+    const objective = String(value.objective || '').trim();
+    if (!id || !objective) return null;
+    return {
+        id,
+        createdAt: String(value.createdAt || new Date().toISOString()),
+        directorRef: normalizeDirectionPerformerRef(value.directorRef),
+        directorLabel: String(value.directorLabel || 'Game Director').trim() || 'Game Director',
+        performerRef: normalizeDirectionPerformerRef(value.performerRef),
+        performerLabel: String(value.performerLabel || 'Performer').trim() || 'Performer',
+        objective,
+        decisionTrace: {
+            observations: (Array.isArray(value.decisionTrace?.observations) ? value.decisionTrace.observations : []).map(String).filter(Boolean).slice(0, 8),
+            intent: String(value.decisionTrace?.intent || '').trim(),
+            performerReason: String(value.decisionTrace?.performerReason || '').trim(),
+        },
+        constraints: (Array.isArray(value.constraints) ? value.constraints : []).map(String).filter(Boolean).slice(0, 20),
+        openings: (Array.isArray(value.openings) ? value.openings : []).map((item) => ({
+            id: String(item?.id || ''),
+            label: String(item?.label || ''),
+        })).filter((item) => item.id && item.label).slice(0, 20),
+        immediateCount: Math.max(0, Math.round(Number(value.immediateCount) || 0)),
+        checkpointCount: Math.max(0, Math.round(Number(value.checkpointCount) || 0)),
+        continueAfter: Boolean(value.continueAfter),
+        hardPauseAfter: Boolean(value.hardPauseAfter),
+    };
+}
+
+function normalizeDirectionPerformerRef(value) {
+    if (!value || typeof value !== 'object') return null;
+    const kind = ['character', 'narrator', 'legacy-character-index'].includes(value.kind) ? value.kind : null;
+    const id = String(value.id || '').trim();
+    if (!kind || !id) return null;
+    return { kind, id, label: String(value.label || 'Narrator').trim() || 'Narrator' };
+}
+
+/**
+ * Assigns (or clears) the extension-only Roleplay Director seat. The card
+ * remains a native group member; no native chat role or character data moves.
+ */
+export function setSceneRoleplayDirector(sceneId, directorRef) {
+    const scene = getTimelineStore().scenes[sceneId];
+    if (!scene || scene.mode !== 'roleplay') return null;
+    const normalized = directorRef ? normalizeDirectionPerformerRef(directorRef) : null;
+    return updateScene(sceneId, { liveDirection: { ...scene.liveDirection, directorRef: normalized } });
 }
 
 function touchTimeline(timelineId) {

@@ -180,28 +180,35 @@ export function syncPromptStudioForCurrentMode({ apply = false } = {}) {
     }
 }
 
-export function compilePromptRecipe(recipe, sources = {}, { includeUnresolved = false } = {}) {
+export function compilePromptRecipe(recipe, sources = {}, { includeUnresolved = false, macroOptions = {}, outlets = {} } = {}) {
     if (!recipe) return { apiType: 'chat', messages: [], text: '' };
     const messages = [];
-    for (const block of recipe.blocks || []) {
-        if (!block.enabled) continue;
-        let content = '';
-        if (block.kind === 'message') {
-            content = block.content || '';
-        } else {
-            const resolved = sources[block.sourceKey];
-            if (resolved == null && includeUnresolved) {
-                content = `[Source: ${getSourceLabel(recipe.mode, block.sourceKey)}]`;
-            } else {
-                content = String(resolved || '');
-            }
-        }
-        content = substituteParams(String(content || '')).trim();
-        if (!content) continue;
-        const role = block.role === 'instruction' ? 'system' : block.role;
+    const appendMessage = (role, rawContent) => {
+        let content = resolvePromptOutlets(String(rawContent || ''), outlets);
+        content = substituteParams(content, macroOptions).trim();
+        if (!content) return;
+        role = role === 'instruction' ? 'system' : role;
         const previous = messages[messages.length - 1];
         if (previous && previous.role === role) previous.content += `\n\n${content}`;
         else messages.push({ role, content });
+    };
+    for (const block of recipe.blocks || []) {
+        if (!block.enabled) continue;
+        if (block.kind === 'message') {
+            appendMessage(block.role, block.content || '');
+            continue;
+        }
+        const resolved = sources[block.sourceKey];
+        if (resolved && typeof resolved === 'object' && Array.isArray(resolved.messages)) {
+            for (const message of resolved.messages) {
+                appendMessage(message?.role || block.role, message?.content || '');
+            }
+            continue;
+        }
+        const content = resolved == null && includeUnresolved
+            ? `[Source: ${getSourceLabel(recipe, block.sourceKey)}]`
+            : String(resolved || '');
+        appendMessage(block.role, content);
     }
 
     if (recipe.apiType === 'chat') {
@@ -228,6 +235,13 @@ export function compilePromptRecipe(recipe, sources = {}, { includeUnresolved = 
         replaceObject(power_user.instruct, nativeTransport.instruct);
     }
     return { apiType: 'text', messages, text };
+}
+
+function resolvePromptOutlets(content, outlets) {
+    return String(content || '').replace(/{{outlet::(.+?)}}/gi, (_, name) => {
+        const value = outlets?.[String(name).trim()];
+        return Array.isArray(value) ? value.join('\n') : String(value || '');
+    });
 }
 
 export function formatPromptStudioPreview(compiled) {
@@ -350,7 +364,7 @@ function renderRecipeEditor(recipe) {
 }
 
 function renderPromptBlock(recipe, block, index) {
-    const source = block.kind === 'source' ? getSourceDefinition(recipe.mode, block.sourceKey) : null;
+    const source = block.kind === 'source' ? getSourceDefinition(recipe, block.sourceKey) : null;
     const bindingNote = sourceBindingNote(recipe, block);
     return `
         <article class="remodel-prompt-block role-${escapeAttribute(block.role)} ${block.kind === 'source' ? 'is-source' : ''} ${block.enabled ? '' : 'is-disabled'}" draggable="${block.locked ? 'false' : 'true'}" data-remodel-prompt-block="${escapeAttribute(block.id)}">
@@ -373,7 +387,7 @@ function renderPromptBlock(recipe, block, index) {
                     </div>
                 </div>
                 ${block.kind === 'source'
-                    ? `<div class="remodel-prompt-source-card"><strong>${escapeHtml(source?.label || block.sourceKey)}</strong><p>${escapeHtml(sourceDescription(recipe.mode, block.sourceKey))}</p>${bindingNote ? `<span>${escapeHtml(bindingNote)}</span>` : ''}${canOpenSource(block.sourceKey) ? '<button type="button" data-remodel-prompt-source-open><i class="fa-solid fa-arrow-up-right-from-square"></i> Open source</button>' : ''}</div>`
+                    ? `<div class="remodel-prompt-source-card"><strong>${escapeHtml(source?.label || block.sourceKey)}</strong><p>${escapeHtml(sourceDescription(recipe, block.sourceKey))}</p>${bindingNote ? `<span>${escapeHtml(bindingNote)}</span>` : ''}${canOpenSource(block.sourceKey) ? '<button type="button" data-remodel-prompt-source-open><i class="fa-solid fa-arrow-up-right-from-square"></i> Open source</button>' : ''}</div>`
                     : `<textarea data-remodel-prompt-block-content placeholder="Write the ${escapeAttribute(roleLabels[block.role].toLowerCase())} message…">${escapeHtml(block.content)}</textarea>`}
             </div>
         </article>
@@ -497,7 +511,7 @@ function bindPromptStudioEvents() {
         }
         if (target.closest('[data-remodel-prompt-add-context]')) {
             const sourceKey = studio.querySelector('[data-remodel-prompt-add-source]')?.value;
-            const source = getSourceDefinition(recipe.mode, sourceKey);
+            const source = getSourceDefinition(recipe, sourceKey);
             if (source) patchRecipeBlocks(recipe, [...recipe.blocks, createPromptBlock({ kind: 'source', role: source.role, sourceKey, locked: source.locked })]);
             return;
         }
@@ -676,7 +690,7 @@ function applyRoleplayChatRecipe(recipe) {
     const promptMap = new Map(oai_settings.prompts.filter(Boolean).map((prompt) => [prompt.identifier, prompt]));
     const order = [];
     for (const block of recipe.blocks || []) {
-        const source = block.kind === 'source' ? getSourceDefinition('roleplay', block.sourceKey) : null;
+        const source = block.kind === 'source' ? getSourceDefinition({ mode: 'roleplay' }, block.sourceKey) : null;
         const identifier = block.nativeIdentifier || source?.nativeIdentifier || `remodel-${block.id}`;
         block.nativeIdentifier = identifier;
         let prompt = promptMap.get(identifier);
@@ -807,26 +821,35 @@ function getAvailableSources(recipe) {
     const existing = new Set((recipe.blocks || []).filter((block) => block.kind === 'source').map((block) => block.sourceKey));
     const existingNativeIdentifiers = new Set((recipe.blocks || [])
         .filter((block) => block.kind === 'source')
-        .map((block) => block.nativeIdentifier || getSourceDefinition(recipe.mode, block.sourceKey)?.nativeIdentifier)
+        .map((block) => block.nativeIdentifier || getSourceDefinition(recipe, block.sourceKey)?.nativeIdentifier)
         .filter(Boolean));
-    return (PROMPT_SOURCE_DEFINITIONS[recipe.mode] || [])
+    return getSourceDefinitions(recipe)
         .filter((source) => !source.textOnly || recipe.apiType === 'text')
         .filter((source) => recipe.apiType !== 'text' || recipe.mode !== 'roleplay' || source.key === 'nativeContext')
         .filter((source) => !existing.has(source.key))
         .filter((source) => !source.nativeIdentifier || !existingNativeIdentifiers.has(source.nativeIdentifier));
 }
 
-function getSourceDefinition(mode, key) {
-    return (PROMPT_SOURCE_DEFINITIONS[mode] || []).find((source) => source.key === key) || null;
+function getSourceDefinitions(recipe) {
+    return PROMPT_SOURCE_DEFINITIONS[recipe?.mode] || [];
 }
 
-function getSourceLabel(mode, key) {
-    return getSourceDefinition(mode, key)?.label || key;
+function getSourceDefinition(recipe, key) {
+    return getSourceDefinitions(recipe).find((source) => source.key === key) || null;
 }
 
-function sourceDescription(mode, key) {
+function getSourceLabel(recipe, key) {
+    return getSourceDefinition(recipe, key)?.label || key;
+}
+
+function sourceDescription(recipe, key) {
+    const mode = recipe?.mode;
     if (key === 'nativeContext') return 'SillyTavern’s complete token-budgeted Roleplay prompt, including character, World Info, examples, history, and current turn.';
-    if (mode === 'story') return 'Resolved from the active Story document and its bound SillyTavern context immediately before generation.';
+    if (mode === 'story') {
+        if (key === 'worldInfoExamples') return 'Lorebook entries using Example placement, resolved by the active Story document immediately before generation.';
+        if (key === 'worldInfoDepth') return 'Lorebook depth injections with their configured Chat Completion roles, resolved by the active Story document.';
+        return 'Resolved from the active Story document and its bound SillyTavern context immediately before generation.';
+    }
     const descriptions = {
         worldInfoBefore: 'World Info entries activated before the character and scenario portions of the active Roleplay prompt.',
         worldInfoAfter: 'World Info entries activated after the character and scenario portions of the active Roleplay prompt.',
@@ -835,6 +858,7 @@ function sourceDescription(mode, key) {
         charPersonality: 'The Personality field from the character card bound to the active Roleplay scene.',
         scenario: 'The Scenario field from the character card bound to the active Roleplay scene.',
         dialogueExamples: 'Example Dialogue from the bound character card, formatted by SillyTavern at generation time.',
+        storyGoals: 'The active Scene’s public goals plus private NPC instructions and the latest resolved Goal events.',
         chatHistory: 'The token-budgeted messages from the active Roleplay conversation, including the newest user turn.',
         currentInput: 'The newest user message, carried through SillyTavern’s native Chat History marker.',
         generationNudge: 'The generation-specific quiet prompt or nudge supplied by SillyTavern for the current request.',
@@ -852,9 +876,12 @@ function canOpenSource(key) {
         'personaDescription',
         'worldInfoBefore',
         'worldInfoAfter',
+        'worldInfoExamples',
+        'worldInfoDepth',
         'dialogueExamples',
         'chatHistory',
         'currentInput',
+        'storyGoals',
         'authorGuidance',
         'priorText',
         'manuscript',

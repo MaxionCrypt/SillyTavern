@@ -2,9 +2,14 @@ import { getContext } from '../../../st-context.js';
 import {
     doNavbarIconClick,
     doNewChat,
+    extension_prompt_roles,
+    extension_prompt_types,
     getPastCharacterChats,
     select_selected_character as selectCharacterForEditingOnly,
+    selectRightMenuWithAnimation,
     setCharacterId,
+    setCharacterName,
+    setExtensionPrompt,
 } from '../../../../script.js';
 import { openGroupById } from '../../../group-chats.js';
 import { setUserAvatar } from '../../../personas.js';
@@ -21,9 +26,11 @@ import {
     getScene,
     getSceneFromMetadata,
     getTimelineStore,
+    setActiveArc,
     setActiveScene,
     setActiveTimeline,
     setInsertedTextSlot,
+    setSceneRoleplayDirector,
     updateArc,
     updateScene,
     updateTimeline,
@@ -33,6 +40,13 @@ import {
     getStoryDoc,
     updateStoryDoc,
 } from './story-doc.js';
+import { generateProse } from './story-generate.js';
+import {
+    advanceStoryWorldInfoState,
+    getStoryLorebookNames,
+    getStoryWorldInfoMaxContext,
+    resolveStoryWorldInfo,
+} from './story-world-info.js';
 import {
     applyPromptStudioRuntimeRecipe,
     capturePromptStudioRuntimeSettings,
@@ -47,6 +61,52 @@ import {
     renderPromptStudioWorkspace,
     syncPromptStudioForCurrentMode,
 } from './prompt-studio.js';
+import {
+    decorateStoryGoalStream,
+    formatStoryGoalsPrompt,
+    getStoryGoalComposerIntents,
+    handleGoalAwareRoleplaySend,
+    initStoryGoals,
+    isStoryPipelineRunning,
+    renderStoryGoalsForRoleplay,
+} from './story-goals.js';
+import { getSceneGoals, updateSceneGoalState } from './story-goals-store.js';
+import {
+    handleVariableWorkspaceChange,
+    handleVariableWorkspaceClick,
+    renderVariablesWorkspace,
+    selectVariableLoreRef,
+} from './story-variables-ui.js';
+import { clearMechanicsReceiptInjection } from './mechanics-runtime.js';
+import { listDefinitionsForLoreRef } from './story-variables-store.js';
+import {
+    clearLiveDirectionFailure,
+    continueLiveDirection,
+    getLiveDirectionRun,
+    getLiveDirectionUiState,
+    handleLiveDirectionDraft,
+    initLiveDirection,
+    isDirectedLiveScene,
+    ownsLiveDirectionGeneration,
+    regenerateLastDirectedResponse,
+    requestNextDirection,
+    retryLiveDirection,
+    sendWithoutLiveDirection,
+    setLiveDirectionEnabled,
+    setLiveDirectionPacing,
+    setNextPerformerOverride,
+    stopLiveDirection,
+    submitDirectedRoleplay,
+} from './live-direction.js';
+import { sanitizeDirectionText } from './live-direction-markers.js';
+import { downloadDirectionFlights, getDirectionFlights } from './live-direction-diagnostics.js';
+import {
+    handleDebugConsoleChange,
+    handleDebugConsoleClick,
+    handleDebugConsoleInput,
+    initDebugConsole,
+    renderDebugConsoleWorkspace,
+} from './debug-console.js';
 import {
     advanceWizardToPersonaStep,
     armGenerationWatchdog,
@@ -91,6 +151,10 @@ const DRAWER_ID = 'remodel-timeline-drawer';
 const PANEL_ID = 'remodel-timeline-panel';
 const CONTENT_ID = 'remodel-timeline-content';
 const LEGACY_OUTLET_ID = 'remodel-tavern-legacy-outlet';
+const timelineChromeStages = new Map();
+const timelineScrollIntent = new Map();
+const TIMELINE_SCROLL_RESISTANCE = 160;
+const TIMELINE_SCROLL_INTENT_WINDOW_MS = 650;
 const TAVERN_TABS = [
     {
         id: 'timeline',
@@ -108,6 +172,11 @@ const TAVERN_TABS = [
         icon: 'fa-wand-magic-sparkles',
     },
     {
+        id: 'variables',
+        label: 'Variables',
+        icon: 'fa-chart-simple',
+    },
+    {
         id: 'personas',
         label: 'Personas',
         icon: 'fa-face-smile',
@@ -118,6 +187,11 @@ const TAVERN_TABS = [
         label: 'Lorebooks',
         icon: 'fa-book-atlas',
         panelId: 'WorldInfo',
+    },
+    {
+        id: 'debug',
+        label: 'Debug',
+        icon: 'fa-terminal',
     },
 ];
 
@@ -148,6 +222,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
         return;
     }
 
+    initDebugConsole();
     const drawer = ensureTimelineDrawer();
     bindDrawerToggle(drawer);
     bindTimelineEvents(drawer);
@@ -176,6 +251,30 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
         previewRecipe: previewPromptStudioRecipe,
         openSource: openPromptStudioSource,
     });
+    initStoryGoals({
+        getActiveScene,
+        getCast: () => roleplaySceneMembers(getContext()).map((member) => ({ kind: 'character', id: getContext().characters?.[member.characterId]?.avatar || String(member.characterId), label: member.name })),
+        getPersona: () => ({ kind: 'persona', id: currentPersonaAvatarId() || getContext().name1 || 'user', label: getContext().name1 || 'You' }),
+        requestRender: renderRoleplayScene,
+        showToast: showRoleplayToast,
+    });
+    initLiveDirection({
+        getActiveScene,
+        getCast: getLiveDirectionCast,
+        getPersona: () => ({ kind: 'persona', id: currentPersonaAvatarId() || getContext().name1 || 'user', label: getContext().name1 || 'You' }),
+        ensureSceneReady: ensureRoleplaySceneChatReady,
+        getComposerDraft: () => getRealRoleplayRoot()?.querySelector('[data-remodel-rp-input]')?.value || '',
+        clearComposer: clearRoleplayComposerDraft,
+        sendNormally: sendRoleplayNormally,
+        onStateChange: refreshLiveDirectionChrome,
+        onSettled: () => { setRoleplayGenerating(false); renderRoleplayScene(); },
+        onFailure: showLiveDirectionFailure,
+    });
+    // Initial extension startup can occur after core has already loaded a
+    // linked chat, so no CHAT_CHANGED event remains to paint the correct
+    // workspace. Reconcile from the live metadata immediately.
+    syncStoryWorkspaceClass(getActiveScene());
+    renderRoleplayScene();
     setInitialized(true);
 
     // Belt-and-suspenders: Remodel's own init isn't guaranteed to run before
@@ -345,6 +444,11 @@ function bindExternalSidebarWindowSwitch() {
 
 function bindTimelineEvents(drawer) {
     drawer.addEventListener('click', async (event) => {
+        if (event.target instanceof Element && handleDebugConsoleClick(event.target, queueRender)) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+        }
         const tavernTab = event.target instanceof Element
             ? event.target.closest('[data-remodel-tavern-tab]')
             : null;
@@ -364,6 +468,21 @@ function bindTimelineEvents(drawer) {
             event.preventDefault();
             event.stopPropagation();
             toggleLorebooksUtilityPanel(lorebooksPanelToggle.dataset.remodelLorebooksPanel);
+            return;
+        }
+
+        const variableLoreLink = event.target instanceof Element ? event.target.closest('[data-remodel-variable-lore-link]') : null;
+        if (variableLoreLink) {
+            event.preventDefault();
+            event.stopPropagation();
+            selectVariableLoreRef({ book: variableLoreLink.dataset.book, uid: variableLoreLink.dataset.uid });
+            await transitionToWindow({ kind: 'tavern', tab: 'variables' });
+            return;
+        }
+
+        if (event.target instanceof Element && handleVariableWorkspaceClick(event.target, queueRender)) {
+            event.preventDefault();
+            event.stopPropagation();
             return;
         }
 
@@ -400,6 +519,7 @@ function bindTimelineEvents(drawer) {
     }, true);
 
     drawer.addEventListener('input', (event) => {
+        if (event.target instanceof Element && handleDebugConsoleInput(event.target)) return;
         const field = event.target instanceof Element
             ? event.target.closest('[data-remodel-character-field]')
             : null;
@@ -413,6 +533,8 @@ function bindTimelineEvents(drawer) {
     });
 
     drawer.addEventListener('change', async (event) => {
+        if (event.target instanceof Element && handleDebugConsoleChange(event.target, queueRender)) return;
+        if (event.target instanceof Element && handleVariableWorkspaceChange(event.target, queueRender)) return;
         const photoInput = event.target instanceof Element
             ? event.target.closest('[data-remodel-timeline-photo-input]')
             : null;
@@ -497,6 +619,67 @@ function bindTimelineEvents(drawer) {
         event.preventDefault();
         actionable.click();
     });
+
+    drawer.addEventListener('wheel', (event) => {
+        const main = event.target instanceof Element
+            ? event.target.closest('[data-remodel-route-main]')
+            : null;
+
+        if (!main || !event.deltaY) return;
+
+        const timelineId = main.dataset.timelineId;
+        const scenes = main.querySelector('.remodel-route-scenes');
+        const stage = getTimelineChromeStage(timelineId);
+        const direction = Math.sign(event.deltaY);
+        const shouldCollapse = direction > 0 && stage < 2;
+        const shouldExpand = direction < 0 && stage > 0 && (!scenes || scenes.scrollTop <= 1);
+
+        if (!shouldCollapse && !shouldExpand) return;
+
+        event.preventDefault();
+        if (!hasTimelineScrollIntentReachedThreshold(timelineId, direction, event)) return;
+        setTimelineChromeStage(timelineId, stage + direction);
+    }, { passive: false });
+}
+
+function getTimelineChromeStage(timelineId) {
+    return timelineChromeStages.get(timelineId) || 0;
+}
+
+function hasTimelineScrollIntentReachedThreshold(timelineId, direction, event) {
+    const now = performance.now();
+    const prior = timelineScrollIntent.get(timelineId);
+    const multiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? 100 : 1;
+    const delta = Math.abs(event.deltaY) * multiplier;
+    const continuesPriorIntent = prior
+        && prior.direction === direction
+        && now - prior.updatedAt <= TIMELINE_SCROLL_INTENT_WINDOW_MS;
+    const amount = (continuesPriorIntent ? prior.amount : 0) + delta;
+
+    if (amount < TIMELINE_SCROLL_RESISTANCE) {
+        timelineScrollIntent.set(timelineId, { direction, amount, updatedAt: now });
+        return false;
+    }
+
+    timelineScrollIntent.delete(timelineId);
+    return true;
+}
+
+function setTimelineChromeStage(timelineId, requestedStage) {
+    if (!timelineId) return;
+
+    const stage = Math.max(0, Math.min(2, Number(requestedStage) || 0));
+    if (stage) timelineChromeStages.set(timelineId, stage);
+    else timelineChromeStages.delete(timelineId);
+    timelineScrollIntent.delete(timelineId);
+
+    const main = document.querySelector(`[data-remodel-route-main][data-timeline-id="${CSS.escape(timelineId)}"]`);
+    main?.classList.toggle('is-premise-collapsed', stage >= 1);
+    main?.classList.toggle('is-synopsis-collapsed', stage >= 2);
+    main?.querySelector('[data-remodel-timeline-action="toggle-premise"]')
+        ?.setAttribute('aria-expanded', String(stage === 0));
 }
 
 function bindSillyTavernEvents() {
@@ -516,6 +699,18 @@ function bindSillyTavernEvents() {
     context.eventSource.on(context.eventTypes.CHAT_LOADED, syncNoChatComposerVisibility);
     context.eventSource.on(context.eventTypes.APP_READY, syncNoChatComposerVisibility);
     context.eventSource.on(context.eventTypes.MAIN_API_CHANGED, refreshScenePromptChoice);
+    if (context.eventTypes.WORLDINFO_SETTINGS_UPDATED) {
+        context.eventSource.on(context.eventTypes.WORLDINFO_SETTINGS_UPDATED, refreshStoryLorebookBindings);
+    }
+}
+
+function refreshStoryLorebookBindings() {
+    const doc = activeStoryDocId ? getStoryDoc(activeStoryDocId) : null;
+    if (!doc) return;
+    for (const select of document.querySelectorAll('[data-remodel-storydoc-lorebook]')) {
+        select.innerHTML = renderStoryLorebookOptions(doc);
+        select.value = doc.lorebookName || '';
+    }
 }
 
 function refreshScenePromptChoice() {
@@ -825,7 +1020,7 @@ async function finishStoryGuidedCreation() {
 
     await getContext().selectCharacterById(chosenCharacterId, { switchMenu: false });
     await createNewChatForScene(sceneId);
-    await enterSceneViewport();
+    await enterSceneViewport(getScene(sceneId));
 }
 
 function cancelStoryGuidedCreation() {
@@ -1010,6 +1205,7 @@ function handleStoryUserMessageRendered() {
 // every other render trigger point already does.
 function handleStoryAiMessageReceived() {
     refreshStoryMessageDecorations();
+    if (ownsLiveDirectionGeneration()) return;
     renderRoleplayScene(); // no-ops unless the current scene is a roleplay scene
 }
 
@@ -2074,6 +2270,10 @@ function registerAllInsertedTextSlotMacros() {
 
 async function runPromptPreviewDryRun(generationType) {
     const context = getContext();
+    const previousCharacterId = context.characterId;
+    const previousCharacterName = context.name2;
+    const groupPreviewSpeaker = getGroupPreviewSpeaker(context);
+    const restoreGroupPreviewName = bridgeGroupPreviewSpeakerName(groupPreviewSpeaker);
 
     // Splice a synthetic, temporary user message reflecting whatever's
     // currently TYPED but not yet sent, so the preview matches what would
@@ -2126,9 +2326,20 @@ async function runPromptPreviewDryRun(generationType) {
     }
 
     try {
-        await context.generate(generationType, {}, true);
+        if (groupPreviewSpeaker) {
+            setCharacterId(groupPreviewSpeaker.characterId);
+            setCharacterName(groupPreviewSpeaker.name);
+        }
+
+        await context.generate(generationType, groupPreviewSpeaker
+            ? { force_chid: groupPreviewSpeaker.characterId }
+            : {}, true);
     } finally {
         context.eventSource.removeListener(context.eventTypes.GENERATE_AFTER_DATA, captureListener);
+
+        restoreGroupPreviewName();
+        setCharacterId(previousCharacterId);
+        setCharacterName(previousCharacterName);
 
         if (originalToastrError) {
             window.toastr.error = originalToastrError;
@@ -2148,6 +2359,71 @@ async function runPromptPreviewDryRun(generationType) {
     return { generateData: capturedPrompt, warnings: toastrErrors };
 }
 
+// Core's group dry-run path selects the first enabled member but then clears
+// name2 before resolving card fields and prompt macros. Real group generation
+// does not: generateGroupWrapper keeps both the drafted character id and name
+// active throughout assembly. Determine the same member core's dry run will
+// choose so Preview can reproduce the real generation context.
+function getGroupPreviewSpeaker(context) {
+    if (!context.groupId) return null;
+
+    const group = (context.groups || []).find((candidate) => String(candidate.id) === String(context.groupId));
+    if (!group || !Array.isArray(group.members)) return null;
+
+    const disabledMembers = new Set(Array.isArray(group.disabled_members) ? group.disabled_members : []);
+    const seenMembers = new Set();
+
+    for (const avatar of group.members) {
+        if (seenMembers.has(avatar) || disabledMembers.has(avatar)) continue;
+        seenMembers.add(avatar);
+        const characterId = (context.characters || []).findIndex((character) => character?.avatar === avatar);
+        const character = context.characters?.[characterId];
+        if (characterId !== -1 && character?.name) {
+            return { group, characterId, name: character.name };
+        }
+    }
+
+    return null;
+}
+
+// getCharacterCardFields() consults generation_mode immediately after core's
+// dry-run branch clears name2. Temporarily preserving that ordinary property
+// behind an accessor gives us one precise extension-side seam to restore the
+// drafted name before any card text, World Info scan data, or {{char}} macros
+// are resolved. The original descriptor and any value written during the dry
+// run are restored in finally, so the group object is unchanged afterward.
+function bridgeGroupPreviewSpeakerName(speaker) {
+    if (!speaker?.group || !speaker.name) return () => {};
+
+    const group = speaker.group;
+    const property = 'generation_mode';
+    const originalDescriptor = Object.getOwnPropertyDescriptor(group, property);
+    if (originalDescriptor && (!originalDescriptor.configurable || originalDescriptor.get || originalDescriptor.set)) {
+        return () => {};
+    }
+
+    let value = originalDescriptor?.value ?? group[property];
+    Object.defineProperty(group, property, {
+        configurable: true,
+        enumerable: originalDescriptor?.enumerable ?? true,
+        get() {
+            setCharacterName(speaker.name);
+            return value;
+        },
+        set(nextValue) {
+            value = nextValue;
+        },
+    });
+
+    return () => {
+        if (originalDescriptor) {
+            Object.defineProperty(group, property, { ...originalDescriptor, value });
+        } else {
+            delete group[property];
+        }
+    };
+}
+
 function formatPromptPreview(generateData) {
     if (!generateData) {
         return '(No prompt was assembled — check that a character is selected and an API connection is configured.)';
@@ -2161,7 +2437,12 @@ function formatPromptPreview(generateData) {
 
     if (Array.isArray(prompt)) {
         return prompt
-            .map((entry) => `=== ${String(entry.role || 'unknown').toUpperCase()} ===\n${entry.content ?? ''}`)
+            .map((entry) => {
+                const role = String(entry.role || 'unknown').toUpperCase();
+                const name = String(entry.name || '').trim();
+                const heading = name ? `${role} · ${name}` : role;
+                return `=== ${heading} ===\n${entry.content ?? ''}`;
+            })
             .join('\n\n');
     }
 
@@ -2556,6 +2837,49 @@ function isStoryButtonDisabled(element) {
     return Boolean(element?.classList.contains('remodel-story-disabled'));
 }
 
+/**
+ * Pick the lorebook bound to a whole Timeline.
+ *
+ * Until now the only story lorebook control was the per-document one buried in
+ * the story editor's guidance panel, so a book shared by every Scene in a
+ * Timeline had to be re-selected on each document. This binds it once, at the
+ * level people actually think about it.
+ */
+async function chooseTimelineLorebook(timelineId) {
+    const timeline = getTimelineStore().timelines[timelineId];
+    if (!timeline) {
+        return;
+    }
+    const context = getContext();
+    const names = getStoryLorebookNames();
+    const current = String(timeline.lorebookName || '');
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'remodel-lorebook-picker';
+    const options = ['<option value="">No timeline lorebook</option>'];
+    // Keep a book that has since been renamed or deleted visible, so opening
+    // the picker can never silently discard an existing binding.
+    if (current && !names.includes(current)) {
+        options.push(`<option value="${escapeAttribute(current)}">${escapeHtml(current)} (unavailable)</option>`);
+    }
+    options.push(...names.map((name) => `<option value="${escapeAttribute(name)}">${escapeHtml(name)}</option>`));
+    wrapper.innerHTML = `
+        <h3>Timeline lorebook</h3>
+        <p>Entries from this book are offered to every Scene in this Timeline. Global, character and persona lorebooks keep working as they always do.</p>
+        <select data-remodel-timeline-lorebook>${options.join('')}</select>`;
+    const select = wrapper.querySelector('select');
+    select.value = current;
+
+    const result = await context.callGenericPopup(wrapper, context.POPUP_TYPE.CONFIRM, '', {
+        okButton: 'Save',
+        cancelButton: 'Cancel',
+    });
+    if (!result) {
+        return;
+    }
+    updateTimeline(timelineId, { lorebookName: select.value || null });
+}
+
 async function handleAction(element) {
     const action = element.dataset.remodelTimelineAction;
     const { createModalDraft, focusedTimelineId } = getSessionState();
@@ -2583,9 +2907,13 @@ async function handleAction(element) {
             break;
         case 'open-timeline':
             setActiveTimeline(element.dataset.timelineId);
+            timelineChromeStages.delete(element.dataset.timelineId);
+            timelineScrollIntent.delete(element.dataset.timelineId);
             setFocusedTimelineId(element.dataset.timelineId);
             break;
         case 'close-timeline':
+            timelineChromeStages.delete(focusedTimelineId);
+            timelineScrollIntent.delete(focusedTimelineId);
             setFocusedTimelineId(null);
             break;
         case 'delete-timeline':
@@ -2593,8 +2921,18 @@ async function handleAction(element) {
                 if (focusedTimelineId === element.dataset.timelineId) {
                     setFocusedTimelineId(null);
                 }
+                timelineChromeStages.delete(element.dataset.timelineId);
+                timelineScrollIntent.delete(element.dataset.timelineId);
                 deleteTimeline(element.dataset.timelineId);
             }
+            break;
+        case 'toggle-premise': {
+            const timelineId = element.dataset.timelineId;
+            setTimelineChromeStage(timelineId, getTimelineChromeStage(timelineId) === 0 ? 1 : 0);
+            return;
+        }
+        case 'choose-lorebook':
+            await chooseTimelineLorebook(element.dataset.timelineId);
             break;
         case 'create-arc': {
             const title = askForTitle('Arc title?', 'New Arc');
@@ -2603,6 +2941,9 @@ async function handleAction(element) {
             }
             break;
         }
+        case 'select-arc':
+            setActiveArc(element.dataset.arcId);
+            break;
         case 'delete-arc':
             if (confirm('Delete this Arc and all of its Scenes?')) {
                 deleteArc(element.dataset.arcId);
@@ -2618,6 +2959,9 @@ async function handleAction(element) {
         }
         case 'select-scene':
             setActiveScene(element.dataset.sceneId);
+            break;
+        case 'rename-scene':
+            setRenamingSceneId(element.dataset.sceneId);
             break;
         case 'delete-scene':
             if (confirm('Delete this Scene? The underlying SillyTavern chat will not be deleted.')) {
@@ -2846,10 +3190,14 @@ function renderTimelinePanel() {
     const isHeaderCollapsed = isTimelineFocused
         || activeTavernTab === 'characters'
         || activeTavernTab === 'prompts'
+        || activeTavernTab === 'variables'
+        || activeTavernTab === 'debug'
         || Boolean(TAVERN_TABS.find((tab) => tab.id === activeTavernTab)?.panelId);
     viewport.classList.toggle('is-header-collapsed', isHeaderCollapsed);
+    viewport.classList.toggle('is-timeline-focus', isTimelineFocused);
     viewport.classList.toggle('is-personas-workspace', activeTavernTab === 'personas');
     viewport.classList.toggle('is-lorebooks-workspace', activeTavernTab === 'lorebooks');
+    viewport.classList.toggle('is-debug-workspace', activeTavernTab === 'debug');
 
     // Header and tabs are persistent so their collapse/slide animates; only their
     // active state and the body content are re-rendered on each pass.
@@ -2859,7 +3207,7 @@ function renderTimelinePanel() {
     const body = viewport.querySelector('.remodel-tavern-body');
     body.innerHTML = renderActiveWorkspace(store);
 
-    if (activeTavernTab === 'timeline' || activeTavernTab === 'characters' || activeTavernTab === 'prompts') {
+    if (activeTavernTab === 'timeline' || activeTavernTab === 'characters' || activeTavernTab === 'prompts' || activeTavernTab === 'variables' || activeTavernTab === 'debug') {
         restoreAdoptedPanel();
     } else {
         adoptLegacyPanel(activeTavernTab);
@@ -2925,12 +3273,20 @@ function renderActiveWorkspace(store) {
         return renderPromptStudioWorkspace();
     }
 
+    if (activeTavernTab === 'variables') {
+        return renderVariablesWorkspace(store);
+    }
+
     if (activeTavernTab === 'personas') {
         return renderPersonasWorkspace();
     }
 
     if (activeTavernTab === 'lorebooks') {
         return renderLorebooksWorkspace();
+    }
+
+    if (activeTavernTab === 'debug') {
+        return renderDebugConsoleWorkspace();
     }
 
     return renderLegacyWorkspace();
@@ -3313,100 +3669,272 @@ function renderFloatingField({ value, label, fieldName, dataAttr = '', multiline
 function renderTimelineFocus(timeline, store) {
     const hasImage = Boolean(timeline.thumbnail);
     const rootStyle = `--card-hue: ${hashHue(timeline.id)};${hasImage ? ` --card-image: url('${escapeAttribute(timeline.thumbnail)}');` : ''}`;
+    const activeArc = store.arcs[timeline.activeArcId] || store.arcs[timeline.arcIds[0]] || null;
+    const timelineOrder = Math.max(1, store.timelineIds.indexOf(timeline.id) + 1);
+    const sceneCount = timeline.arcIds.reduce((total, arcId) => total + (store.arcs[arcId]?.sceneIds.length || 0), 0);
+    const chromeStage = getTimelineChromeStage(timeline.id);
 
     return `
-        <div class="remodel-timeline-focus ${hasImage ? 'has-image' : ''}" style="${rootStyle}">
+        <section class="remodel-timeline-focus remodel-route-overview ${hasImage ? 'has-image' : ''}" style="${rootStyle}" aria-label="Timeline ${escapeAttribute(timeline.title)}">
             <div class="remodel-focus-backdrop" aria-hidden="true"></div>
-            <article class="remodel-bigcard">
-                <span class="remodel-card-corner remodel-card-corner-tl" aria-hidden="true"></span>
-                <span class="remodel-card-corner remodel-card-corner-tr" aria-hidden="true"></span>
-                <span class="remodel-card-corner remodel-card-corner-bl" aria-hidden="true"></span>
-                <span class="remodel-card-corner remodel-card-corner-br" aria-hidden="true"></span>
-                <div class="remodel-bigcard-toolbar">
-                    <button type="button" class="remodel-icon-button" title="Back to Timelines" aria-label="Back to Timelines" data-remodel-timeline-action="close-timeline">
+            <header class="remodel-route-toolbar">
+                <div class="remodel-route-toolbar-leading">
+                    <button type="button" class="remodel-route-round-button" title="Back to Timelines" aria-label="Back to Timelines" data-remodel-timeline-action="close-timeline">
                         <i class="fa-solid fa-arrow-left" aria-hidden="true"></i>
                     </button>
-                    <div class="remodel-bigcard-toolbar-right">
-                        <label class="remodel-icon-button remodel-bigcard-photo" title="Change photo">
-                            <input type="file" accept="image/*" data-remodel-timeline-photo-input data-timeline-id="${escapeAttribute(timeline.id)}" hidden>
-                            <i class="fa-solid fa-image" aria-hidden="true"></i>
-                        </label>
-                        <button type="button" class="remodel-icon-button danger" title="Delete Timeline" aria-label="Delete Timeline" data-remodel-timeline-action="delete-timeline" data-timeline-id="${escapeAttribute(timeline.id)}">
-                            <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
-                        </button>
+                    <div class="remodel-route-breadcrumb">
+                        <span>Timeline Archive</span>
+                        <strong>Route ${toRoman(timelineOrder)}</strong>
                     </div>
                 </div>
-                <div class="remodel-bigcard-body">
-                    <header class="remodel-bigcard-head">
-                        ${renderFloatingField({
-        value: timeline.title,
-        label: 'Timeline Name',
-        fieldName: 'timeline-title',
-        dataAttr: `data-timeline-id="${escapeAttribute(timeline.id)}"`,
-        inputClass: 'remodel-bigcard-title',
-    })}
-                        ${renderFloatingField({
-        value: timeline.description,
-        label: 'Description',
-        fieldName: 'timeline-description',
-        dataAttr: `data-timeline-id="${escapeAttribute(timeline.id)}"`,
-        multiline: true,
-        rows: 2,
-        inputClass: 'remodel-bigcard-description',
-    })}
-                    </header>
-                    <div class="remodel-bigcard-divider" aria-hidden="true"></div>
-                    <div class="remodel-bigcard-arcs">
-                        ${timeline.arcIds.map((arcId) => renderArcCol(store.arcs[arcId], store, timeline)).join('')}
-                        ${renderAddArcCol(timeline)}
-                    </div>
+                <div class="remodel-route-toolbar-meta" aria-label="Timeline statistics">
+                    <span>${timeline.arcIds.length} Arc${timeline.arcIds.length === 1 ? '' : 's'}</span>
+                    <span>${sceneCount} Scene${sceneCount === 1 ? '' : 's'}</span>
                 </div>
-            </article>
-        </div>
-    `;
-}
-
-function renderArcCol(arc, store, timeline) {
-    if (!arc) {
-        return '';
-    }
-
-    return `
-        <section class="remodel-arc-col ${timeline.activeArcId === arc.id ? 'is-active' : ''}">
-            <button type="button" class="remodel-icon-button remodel-arc-del" title="Delete Arc" aria-label="Delete Arc" data-remodel-timeline-action="delete-arc" data-arc-id="${escapeAttribute(arc.id)}">
-                <i class="fa-solid fa-xmark" aria-hidden="true"></i>
-            </button>
-            ${renderFloatingField({
-        value: arc.title,
-        label: 'Arc',
-        fieldName: 'arc-title',
-        dataAttr: `data-arc-id="${escapeAttribute(arc.id)}"`,
-        inputClass: 'remodel-arc-col-title',
-    })}
-            <div class="remodel-scene-list">
-                ${arc.sceneIds.map((sceneId) => renderSceneRow(store.scenes[sceneId], timeline)).join('')}
-            </div>
-            <div class="remodel-arc-col-actions">
-                <button type="button" class="remodel-text-button" data-remodel-timeline-action="create-scene" data-mode="roleplay" data-arc-id="${escapeAttribute(arc.id)}">+ Roleplay</button>
-                <button type="button" class="remodel-text-button" data-remodel-timeline-action="create-scene" data-mode="story" data-arc-id="${escapeAttribute(arc.id)}">+ Story</button>
+                <div class="remodel-route-toolbar-actions">
+                    <button
+                        type="button"
+                        class="remodel-route-round-button ${timeline.lorebookName ? 'is-bound' : ''}"
+                        title="${timeline.lorebookName ? `Timeline lorebook: ${escapeAttribute(timeline.lorebookName)}` : 'Choose a lorebook for this timeline'}"
+                        aria-label="Timeline lorebook"
+                        data-remodel-timeline-action="choose-lorebook"
+                        data-timeline-id="${escapeAttribute(timeline.id)}"
+                    >
+                        <i class="fa-solid fa-book-open" aria-hidden="true"></i>
+                    </button>
+                    <label class="remodel-route-round-button" title="Change timeline cover">
+                        <input type="file" accept="image/*" data-remodel-timeline-photo-input data-timeline-id="${escapeAttribute(timeline.id)}" hidden>
+                        <i class="fa-solid fa-image" aria-hidden="true"></i>
+                    </label>
+                    <button type="button" class="remodel-route-round-button danger" title="Delete Timeline" aria-label="Delete Timeline" data-remodel-timeline-action="delete-timeline" data-timeline-id="${escapeAttribute(timeline.id)}">
+                        <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </header>
+            <div class="remodel-route-layout">
+                <aside class="remodel-route-side">
+                    <label class="remodel-timeline-card remodel-route-cover-card" title="Change timeline cover">
+                        <input type="file" accept="image/*" data-remodel-timeline-photo-input data-timeline-id="${escapeAttribute(timeline.id)}" hidden>
+                        <span class="remodel-timeline-card-frame">
+                            <span class="remodel-timeline-card-art ${hasImage ? 'has-image' : ''}" aria-hidden="true"></span>
+                            <span class="remodel-timeline-card-numeral">${toRoman(timelineOrder)}</span>
+                            ${renderCardFlourishes()}
+                            <span class="remodel-timeline-card-plate">
+                                <span class="remodel-timeline-card-title">${escapeHtml(timeline.title)}</span>
+                                <span class="remodel-timeline-card-meta">${timeline.arcIds.length} Arc${timeline.arcIds.length === 1 ? '' : 's'} &middot; ${sceneCount} Scene${sceneCount === 1 ? '' : 's'}</span>
+                            </span>
+                            ${hasImage ? '' : '<span class="remodel-route-cover-empty"><i class="fa-solid fa-image" aria-hidden="true"></i><small>Add cover art</small></span>'}
+                        </span>
+                    </label>
+                </aside>
+                <main class="remodel-route-main ${chromeStage >= 1 ? 'is-premise-collapsed' : ''} ${chromeStage >= 2 ? 'is-synopsis-collapsed' : ''}" data-remodel-route-main data-timeline-id="${escapeAttribute(timeline.id)}">
+                    <section class="remodel-route-identity">
+                        <input
+                            type="text"
+                            class="remodel-route-title"
+                            value="${escapeAttribute(timeline.title)}"
+                            data-remodel-timeline-field="timeline-title"
+                            data-timeline-id="${escapeAttribute(timeline.id)}"
+                            aria-label="Timeline name"
+                        >
+                        <div class="remodel-route-premise-reveal">
+                            <label class="remodel-route-description-field">
+                                <span>Timeline premise</span>
+                                <textarea
+                                    rows="${estimateTextareaRows(timeline.description, 78, 3)}"
+                                    placeholder="Describe the premise, tone, and direction of this timeline..."
+                                    data-remodel-timeline-field="timeline-description"
+                                    data-timeline-id="${escapeAttribute(timeline.id)}"
+                                >${escapeHtml(timeline.description || '')}</textarea>
+                            </label>
+                        </div>
+                    </section>
+                    <button
+                        type="button"
+                        class="remodel-route-rule"
+                        title="${chromeStage >= 1 ? 'Show timeline premise' : 'Hide timeline premise'}"
+                        aria-label="${chromeStage >= 1 ? 'Show timeline premise' : 'Hide timeline premise'}"
+                        aria-expanded="${String(chromeStage === 0)}"
+                        data-remodel-timeline-action="toggle-premise"
+                        data-timeline-id="${escapeAttribute(timeline.id)}"
+                    ><span></span></button>
+                    <section class="remodel-route-arc-stage">
+                        ${activeArc ? renderActiveArc(activeArc, timeline, store) : renderEmptyArcStage(timeline)}
+                    </section>
+                </main>
+                ${renderArcIndex(timeline, store, activeArc)}
             </div>
         </section>
     `;
 }
 
-function renderAddArcCol(timeline) {
+function renderArcIndex(timeline, store, activeArc) {
+    const arcButtons = timeline.arcIds.map((arcId, index) => {
+        const arc = store.arcs[arcId];
+        if (!arc) return '';
+
+        const active = arc.id === activeArc?.id;
+        return `
+            <button
+                type="button"
+                class="remodel-route-arc-index-item ${active ? 'is-active' : ''}"
+                title="Arc ${toRoman(index + 1)}: ${escapeAttribute(arc.title)}"
+                aria-label="Open Arc ${toRoman(index + 1)}: ${escapeAttribute(arc.title)}"
+                aria-current="${active ? 'true' : 'false'}"
+                data-remodel-timeline-action="select-arc"
+                data-arc-id="${escapeAttribute(arc.id)}"
+            >
+                <span class="remodel-route-arc-index-name">${toRoman(index + 1)} &middot; ${escapeHtml(arc.title)}</span>
+                <span class="remodel-route-arc-index-tick" aria-hidden="true"></span>
+            </button>
+        `;
+    }).join('');
+
     return `
-        <button
-            type="button"
-            class="remodel-arc-col remodel-arc-col-add"
-            aria-label="Add Arc"
-            data-remodel-timeline-action="create-arc"
-            data-timeline-id="${escapeAttribute(timeline.id)}"
-        >
-            <span class="remodel-arc-col-add-icon"><i class="fa-solid fa-plus" aria-hidden="true"></i></span>
-            <span class="remodel-arc-col-add-label">Add Arc</span>
-        </button>
+        <nav class="remodel-route-arc-index" aria-label="Timeline arcs">
+            <div class="remodel-route-arc-index-list">
+                ${arcButtons}
+            </div>
+            <button
+                type="button"
+                class="remodel-route-arc-index-add"
+                title="Add arc"
+                aria-label="Add arc"
+                data-remodel-timeline-action="create-arc"
+                data-timeline-id="${escapeAttribute(timeline.id)}"
+            ><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
+        </nav>
     `;
+}
+
+function renderEmptyArcStage(timeline) {
+    return `
+        <div class="remodel-route-empty-arc">
+            <span class="remodel-route-empty-symbol"><i class="fa-solid fa-route" aria-hidden="true"></i></span>
+            <div>
+                <div class="remodel-route-kicker">No chapters yet</div>
+                <h2>Begin the first arc</h2>
+                <p>Arcs hold the Roleplay and Story scenes that make up this route.</p>
+            </div>
+            <button type="button" data-remodel-timeline-action="create-arc" data-timeline-id="${escapeAttribute(timeline.id)}">
+                <i class="fa-solid fa-plus" aria-hidden="true"></i>
+                Create Arc
+            </button>
+        </div>
+    `;
+}
+
+function renderActiveArc(arc, timeline, store) {
+    const sceneCards = arc.sceneIds
+        .map((sceneId, index) => renderRouteScene(store.scenes[sceneId], timeline, index + 1))
+        .join('');
+
+    return `
+        <header class="remodel-route-arc-head">
+            <div class="remodel-route-arc-heading">
+                <input
+                    type="text"
+                    class="remodel-route-arc-title"
+                    value="${escapeAttribute(arc.title)}"
+                    data-remodel-timeline-field="arc-title"
+                    data-arc-id="${escapeAttribute(arc.id)}"
+                    aria-label="Arc title"
+                >
+            </div>
+            <div class="remodel-route-arc-actions">
+                <button type="button" data-remodel-timeline-action="create-scene" data-mode="roleplay" data-arc-id="${escapeAttribute(arc.id)}">
+                    <i class="fa-solid fa-masks-theater" aria-hidden="true"></i>
+                    Roleplay Scene
+                </button>
+                <button type="button" data-remodel-timeline-action="create-scene" data-mode="story" data-arc-id="${escapeAttribute(arc.id)}">
+                    <i class="fa-solid fa-feather-pointed" aria-hidden="true"></i>
+                    Story Scene
+                </button>
+                <button type="button" class="danger" title="Delete arc" aria-label="Delete arc" data-remodel-timeline-action="delete-arc" data-arc-id="${escapeAttribute(arc.id)}">
+                    <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
+                </button>
+            </div>
+        </header>
+        <div class="remodel-route-arc-summary-reveal">
+            <label class="remodel-route-arc-summary">
+                <span>Arc synopsis</span>
+                <textarea
+                    rows="${estimateTextareaRows(arc.summary, 104, 2)}"
+                    placeholder="Describe the conflict, turning point, or promise of this arc..."
+                    data-remodel-timeline-field="arc-summary"
+                    data-arc-id="${escapeAttribute(arc.id)}"
+                >${escapeHtml(arc.summary || '')}</textarea>
+            </label>
+        </div>
+        <div class="remodel-route-scenes-head">
+            <div>
+                <span>Scene Record</span>
+                <strong>${arc.sceneIds.length} Scene${arc.sceneIds.length === 1 ? '' : 's'}</strong>
+            </div>
+            <small>Select a scene to mark it current; open it to enter the writing view.</small>
+        </div>
+        <div class="remodel-route-scenes ${arc.sceneIds.length ? '' : 'is-empty'}">
+            ${sceneCards || `
+                <div class="remodel-route-scenes-empty">
+                    <i class="fa-regular fa-compass" aria-hidden="true"></i>
+                    <p>This arc is waiting for its first scene.</p>
+                    <div>
+                        <button type="button" data-remodel-timeline-action="create-scene" data-mode="roleplay" data-arc-id="${escapeAttribute(arc.id)}">+ Roleplay</button>
+                        <button type="button" data-remodel-timeline-action="create-scene" data-mode="story" data-arc-id="${escapeAttribute(arc.id)}">+ Story</button>
+                    </div>
+                </div>
+            `}
+        </div>
+    `;
+}
+
+function renderRouteScene(scene, timeline, order) {
+    if (!scene) return '';
+
+    const isActive = timeline.activeSceneId === scene.id;
+    const isRenaming = scene.id === getSessionState().renamingSceneId;
+    const bindingLabel = getLinkedChatLabel(scene);
+    const summary = String(scene.summary || '').trim();
+    const titleMarkup = isRenaming
+        ? `<input type="text" class="remodel-scene-rename-input" value="${escapeAttribute(scene.title)}" data-scene-id="${escapeAttribute(scene.id)}" aria-label="Scene name">`
+        : `<span class="remodel-route-scene-title">${escapeHtml(scene.title)}</span>`;
+    const selectOpen = isRenaming
+        ? '<div class="remodel-route-scene-select is-renaming">'
+        : `<button type="button" class="remodel-route-scene-select" data-remodel-timeline-action="select-scene" data-scene-id="${escapeAttribute(scene.id)}" aria-label="Select ${escapeAttribute(scene.title)}">`;
+    const selectClose = isRenaming ? '</div>' : '</button>';
+
+    return `
+        <article class="remodel-route-scene ${isActive ? 'is-active' : ''} ${scene.status === 'missing' ? 'is-missing' : ''}">
+            ${selectOpen}
+                <span class="remodel-route-scene-index">${String(order).padStart(2, '0')}</span>
+                <span class="remodel-route-scene-copy">
+                    <span class="remodel-route-scene-heading">
+                        ${titleMarkup}
+                        <span class="remodel-mode-pill ${escapeAttribute(scene.mode)}">${escapeHtml(scene.mode)}</span>
+                    </span>
+                    <span class="remodel-route-scene-binding">${escapeHtml(bindingLabel)}</span>
+                    <span class="remodel-route-scene-summary ${summary ? '' : 'is-empty'}">${escapeHtml(summary || 'No scene summary yet. Open this scene to write, then return here to see its synopsis.')}</span>
+                </span>
+            ${selectClose}
+            <div class="remodel-route-scene-actions">
+                <button type="button" title="Rename scene" aria-label="Rename scene" data-remodel-timeline-action="rename-scene" data-scene-id="${escapeAttribute(scene.id)}">
+                    <i class="fa-solid fa-pen" aria-hidden="true"></i>
+                </button>
+                <button type="button" title="Open scene" aria-label="Open scene" data-remodel-timeline-action="open-scene" data-scene-id="${escapeAttribute(scene.id)}">
+                    <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
+                </button>
+                <button type="button" class="danger" title="Delete scene" aria-label="Delete scene" data-remodel-timeline-action="delete-scene" data-scene-id="${escapeAttribute(scene.id)}">
+                    <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
+                </button>
+            </div>
+        </article>
+    `;
+}
+
+function estimateTextareaRows(value, charactersPerLine, minimumRows) {
+    const text = String(value || '');
+    const rows = text.split('\n').reduce((total, line) => total + Math.max(1, Math.ceil(line.length / charactersPerLine)), 0);
+    return Math.max(minimumRows, rows);
 }
 
 function renderLegacyWorkspace() {
@@ -3489,8 +4017,32 @@ function syncLorebooksWorkspaceMeta(panel) {
     label.textContent = hasSelection ? selected.textContent?.trim() || 'Untitled lorebook' : 'No lorebook selected';
 }
 
+function setRemodeledLorebooksGlobalLabel(panel) {
+    const label = panel?.querySelector('#WIMultiSelector .range-block-title small');
+    if (!(label instanceof HTMLElement)) return;
+    if (!label.dataset.remodelOriginalLorebooksLabel) {
+        label.dataset.remodelOriginalLorebooksLabel = label.textContent || 'Active World(s) for all chats';
+        label.dataset.remodelOriginalLorebooksI18n = label.getAttribute('data-i18n') || '';
+    }
+    label.textContent = 'Active Lorebooks for Roleplay & Story';
+    label.removeAttribute('data-i18n');
+}
+
+function restoreNativeLorebooksGlobalLabel(panel) {
+    const label = panel?.querySelector('#WIMultiSelector .range-block-title small');
+    if (!(label instanceof HTMLElement) || !label.dataset.remodelOriginalLorebooksLabel) return;
+    label.textContent = label.dataset.remodelOriginalLorebooksLabel;
+    const i18n = label.dataset.remodelOriginalLorebooksI18n;
+    if (i18n) label.setAttribute('data-i18n', i18n);
+    else label.removeAttribute('data-i18n');
+    delete label.dataset.remodelOriginalLorebooksLabel;
+    delete label.dataset.remodelOriginalLorebooksI18n;
+}
+
 function attachLorebooksWorkspaceAdapter(panel) {
     syncLorebooksWorkspaceMeta(panel);
+    setRemodeledLorebooksGlobalLabel(panel);
+    decorateLorebookVariableLinks(panel);
 
     if (panel.dataset.remodelLorebooksAdapterBound === 'true') {
         return;
@@ -3498,9 +4050,34 @@ function attachLorebooksWorkspaceAdapter(panel) {
 
     const select = panel.querySelector('#world_editor_select');
     if (select) {
-        $(select).off('change.remodelLorebooks').on('change.remodelLorebooks', () => syncLorebooksWorkspaceMeta(panel));
+        $(select).off('change.remodelLorebooks').on('change.remodelLorebooks', () => { syncLorebooksWorkspaceMeta(panel); decorateLorebookVariableLinks(panel); });
     }
+    const observer = new MutationObserver(() => decorateLorebookVariableLinks(panel));
+    const entries = panel.querySelector('#world_popup_entries_list');
+    if (entries) observer.observe(entries, { childList: true, subtree: true });
     panel.dataset.remodelLorebooksAdapterBound = 'true';
+}
+
+function decorateLorebookVariableLinks(panel) {
+    const book = panel.querySelector('#world_editor_select')?.value || '';
+    if (!book) return;
+    panel.querySelectorAll('#world_popup_entries_list .world_entry').forEach((entry) => {
+        if (!(entry instanceof HTMLElement) || entry.querySelector('[data-remodel-variable-lore-link]')) return;
+        const uidNode = entry.matches('[data-uid]') ? entry : entry.querySelector('[data-uid]');
+        const uid = entry.dataset.uid || uidNode?.getAttribute('data-uid') || entry.getAttribute('uid');
+        if (uid == null || uid === '') return;
+        const anchor = entry.querySelector('.world_entry_form_control') || entry.querySelector('.world_entry_thin_controls') || entry;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'menu_button fa-solid fa-chart-simple remodel-variable-lore-link';
+        button.dataset.remodelVariableLoreLink = '';
+        button.dataset.book = book;
+        button.dataset.uid = String(uid);
+        const linked = listDefinitionsForLoreRef({ book, uid }, { timelineId: getTimelineStore().activeTimelineId || '' });
+        button.title = linked.length ? `${linked.length} linked Variable definition${linked.length === 1 ? '' : 's'} · open Variables` : 'Create a Variable definition linked to this entry';
+        button.dataset.linkedCount = String(linked.length);
+        anchor.append(button);
+    });
 }
 
 function hasRequiredPersonaWorkspaceAnchors(panel) {
@@ -3589,6 +4166,7 @@ function restoreAdoptedPanel() {
     const panel = adoptedPanel;
     const home = getOriginalPanelHomes().get(panel);
 
+    restoreNativeLorebooksGlobalLabel(panel);
     panel.classList.remove('remodel-tavern-adopted-panel', 'openDrawer');
     panel.classList.add('closedDrawer');
 
@@ -3653,18 +4231,31 @@ function renderSceneRow(scene, timeline) {
     `;
 }
 
-async function enterSceneViewport() {
+async function enterSceneViewport(scene = getActiveScene()) {
     // Loading a chat (doNewChat/openCharacterChat/openGroupChat) incidentally flips
     // SillyTavern's native right-menu panel to the character-edit or group-chats
-    // block as a side effect unrelated to us. Reset it to the (hidden) character
-    // list so our own #right-nav-panel reveal rule — which reacts to that native
-    // state — never mistakes the side effect for a deliberate Create Character click.
-    clickVanillaControl('rm_button_characters');
+    // block as a side effect unrelated to us. Close that incidental panel directly.
+    // Do NOT click rm_button_characters here: that is a real navigation action,
+    // emits character_page_loaded, and opens the Characters workspace over the
+    // Scene that was just selected. Native sidebar panels remain user-controlled
+    // overlays; selecting a different Scene replaces the Scene underneath them.
+    selectRightMenuWithAnimation(null);
+
+    // Do not rely on CHAT_CHANGED to paint the selected Scene. Core correctly
+    // skips that event when the requested Scene is backed by the chat that is
+    // already loaded (a common StoryDoc -> Roleplay switch), but the workspace
+    // still has to change. Make Scene selection authoritative even on that
+    // no-op chat path, and leave the previous Scene mounted only as dormant DOM.
+    syncStoryWorkspaceClass(scene);
 
     // Story and Roleplay scenes both just drop into plain native chat for now
     // — the dedicated Story Viewport (manuscript/adopted-chat screen) was
     // removed; scene.mode still exists as data for when that's rebuilt.
     await transitionToWindow({ kind: 'native' });
+
+    if (scene?.mode === 'roleplay') {
+        renderRoleplayScene();
+    }
 }
 
 async function openScene(sceneId) {
@@ -3718,13 +4309,14 @@ async function openScene(sceneId) {
             await context.openGroupChat(group.id, chatMatch);
         }
         await waitForChatIdSettled();
+        dismissProgrammaticGroupEditor();
         writeSceneMetadata(scene);
         updateScene(sceneId, { status: 'active' });
         if (scene.mode === 'story') {
             migrateLoadedLegacyStoryScene(sceneId);
             await openStoryDocScene(sceneId);
         } else {
-            await enterSceneViewport();
+            await enterSceneViewport(getScene(sceneId));
         }
         return;
     }
@@ -3753,7 +4345,7 @@ async function openScene(sceneId) {
         migrateLoadedLegacyStoryScene(sceneId);
         await openStoryDocScene(sceneId);
     } else {
-        await enterSceneViewport();
+        await enterSceneViewport(getScene(sceneId));
     }
 }
 
@@ -3780,7 +4372,7 @@ async function beginRoleplaySceneWithCast(sceneId, avatars) {
         if (!getScene(sceneId)?.linkedChat) {
             return;
         }
-        await enterSceneViewport();
+        await enterSceneViewport(getScene(sceneId));
         return;
     }
 
@@ -3813,11 +4405,12 @@ async function beginRoleplaySceneWithCast(sceneId, avatars) {
     // openGroupById opens.
     await openGroupById(nativeGroupId);
     await waitForChatIdSettled();
+    dismissProgrammaticGroupEditor();
     writeSceneMetadata(getScene(sceneId));
     // openGroupById's CHAT_CHANGED can land before the scene metadata write
     // settles, so set the workspace class directly here too (idempotent).
     syncStoryWorkspaceClass(getScene(sceneId));
-    await enterSceneViewport();
+    await enterSceneViewport(getScene(sceneId));
     renderRoleplayScene();
 }
 
@@ -4046,6 +4639,7 @@ async function addCharacterToRoleplayScene(newAvatar) {
     setActiveScene(scene.id);
     await openGroupById(nativeGroupId);
     await waitForChatIdSettled();
+    dismissProgrammaticGroupEditor();
     writeSceneMetadata(getScene(scene.id));
     syncStoryWorkspaceClass(getScene(scene.id));
     renderRoleplayScene();
@@ -4348,6 +4942,7 @@ function writeSceneMetadata(scene) {
 // or discard an in-progress "create timeline" draft.
 function syncActiveSceneFromChatMetadata() {
     const scene = getActiveScene();
+    setRoleplayCastOpen(getRealRoleplayRoot(), false);
 
     // Captured before resetAllChatScopedState() clears wizard.sceneCreationFlow
     // below — the reset only clears the state itself, not the wizard's DOM-
@@ -4401,11 +4996,16 @@ function syncStoryWorkspaceClass(scene) {
     document.body.classList.remove('remodel-story-workspace-active', 'remodel-manuscript-editing');
     document.body.classList.toggle('remodel-storydoc-active', enteringStoryDoc);
     document.body.classList.toggle('remodel-roleplay-workspace-active', enteringRoleplay);
+    if (enteringRoleplay) document.getElementById('remodel-direction-failure')?.remove();
 
     if (enteringStoryDoc) {
         activeStoryDocId = scene.storyDocId;
         ensureStoryEditor();
         renderStoryEditor();
+    } else {
+        // The editor node is retained for cheap reopening, but it no longer
+        // owns a document once another Scene type becomes authoritative.
+        activeStoryDocId = null;
     }
 
     if (enteringRoleplay) {
@@ -4420,6 +5020,16 @@ function syncStoryWorkspaceClass(scene) {
     }
 
     syncPromptStudioForCurrentMode({ apply: true });
+}
+
+// openGroupById() selects the native Group Controls page as a side effect.
+// Scene navigation uses it only to load the linked chat, never to ask the
+// user to edit the group, so dismiss that page before exposing Roleplay.
+function dismissProgrammaticGroupEditor() {
+    const groupPanel = document.getElementById('rm_group_chats_block');
+    if (groupPanel && getComputedStyle(groupPanel).display !== 'none') {
+        selectRightMenuWithAnimation(null);
+    }
 }
 
 // The native hamburger (#options_button) and Extensions wand
@@ -4570,7 +5180,7 @@ async function openStoryDocScene(sceneId) {
     activeStoryDocId = scene.storyDocId;
     writeSceneMetadata(scene);
     enterStoryDocWorkspace();
-    await enterSceneViewport();
+    await enterSceneViewport(scene);
 }
 
 // Creates the StoryDoc for a new story scene, binds the scene to it, and
@@ -4593,7 +5203,7 @@ async function beginStoryDocScene(sceneId, avatars) {
     activeStoryDocId = doc.id;
     writeSceneMetadata(getScene(sceneId));
     enterStoryDocWorkspace();
-    await enterSceneViewport();
+    await enterSceneViewport(getScene(sceneId));
 }
 
 // One-time, idempotent migration for Story scenes created before StoryDocs.
@@ -5238,7 +5848,8 @@ async function generateStoryDocBeat(beatId) {
     const doc = getStoryDoc(activeStoryDocId);
     const beat = doc?.beats?.find((item) => item.id === beatId);
     if (!doc || !beat || !beat.instruction.trim()) return;
-    if (beat.generatedText) {
+    const isRegeneration = Boolean(beat.generatedText);
+    if (isRegeneration) {
         const removed = removeGeneratedBeatText(doc, beat);
         updateStoryDoc(activeStoryDocId, {
             body: removed.body,
@@ -5246,7 +5857,7 @@ async function generateStoryDocBeat(beatId) {
         });
         renderStoryEditor(true);
     }
-    await generateStory({ mode: 'beat', beat: beat.instruction, beatId });
+    await generateStory({ mode: isRegeneration ? 'regenerate' : 'beat', beat: beat.instruction, beatId });
 }
 
 function buildStoryDocBeat(beat) {
@@ -5283,7 +5894,16 @@ const STORY_PREVIEW_ID = 'remodel-story-preview-modal';
 const STUDIO_PREVIEW_ID = 'remodel-prompt-studio-preview-modal';
 
 async function openPromptStudioSource(recipe, sourceKey) {
-    if (['worldInfoBefore', 'worldInfoAfter'].includes(sourceKey)) {
+    if (sourceKey === 'storyGoals') {
+        await transitionToWindow({ kind: 'native' });
+        const scene = getActiveScene();
+        if (scene?.mode === 'roleplay') {
+            updateSceneGoalState(scene.id, { boardOpen: true }, { timelineId: scene.timelineId });
+            requestAnimationFrame(() => renderRoleplayScene());
+        }
+        return;
+    }
+    if (['worldInfoBefore', 'worldInfoAfter', 'worldInfoExamples', 'worldInfoDepth'].includes(sourceKey)) {
         await transitionToWindow({ kind: 'tavern', tab: 'lorebooks' });
         return;
     }
@@ -5343,12 +5963,21 @@ async function previewPromptStudioRecipe(recipe) {
         }
         if (recipe.mode === 'story' && activeStoryDocId) {
             const doc = getStoryDoc(activeStoryDocId);
-            const assembled = await assembleStoryContext(doc?.body || '');
+            const request = getStoryPreviewRequest(doc);
+            const assembled = await assembleStoryContext({ doc, ...request, dryRun: true });
             body.textContent = formatPromptStudioPreview(compilePromptRecipe(
                 recipe,
-                buildStoryPromptSources(doc, assembled, { mode: 'continue' }),
-                { includeUnresolved: true },
+                buildStoryPromptSources(doc, assembled, request),
+                { includeUnresolved: true, macroOptions: assembled.macroOptions, outlets: assembled.outlets },
             ));
+            populateStoryWorldInfoReport(
+                overlay.querySelector('[data-remodel-prompt-studio-story-report]'),
+                assembled,
+            );
+            if (assembled.diagnostics?.length) {
+                warning.hidden = false;
+                warning.textContent = assembled.diagnostics.join(' · ');
+            }
             return;
         }
         body.textContent = formatPromptStudioPreview(compilePromptRecipe(recipe, {}, { includeUnresolved: true }));
@@ -5374,6 +6003,7 @@ function openPromptStudioPreviewModal(title) {
                 <button type="button" class="remodel-rp-picker-x" data-remodel-prompt-studio-preview-close aria-label="Close">×</button>
             </div>
             <div class="remodel-rp-preview-warn" data-remodel-prompt-studio-preview-warning hidden></div>
+            <details class="remodel-story-resolver-report" data-remodel-prompt-studio-story-report hidden><summary>World Info resolution</summary><pre></pre></details>
             <pre class="remodel-rp-preview-body" data-remodel-prompt-studio-preview-body>Assembling prompt…</pre>
         </div>
     `;
@@ -5403,6 +6033,8 @@ async function openStoryPromptPreview() {
                 </div>
                 <button type="button" class="remodel-rp-picker-x" data-remodel-storydoc-preview-close aria-label="Close">×</button>
             </div>
+            <div class="remodel-rp-preview-warn" data-remodel-storydoc-preview-warning hidden></div>
+            <details class="remodel-story-resolver-report" data-remodel-storydoc-preview-report hidden><summary>World Info resolution</summary><pre></pre></details>
             <pre class="remodel-rp-preview-body" data-remodel-storydoc-preview-body>Assembling prompt…</pre>
         </div>
     `;
@@ -5413,14 +6045,57 @@ async function openStoryPromptPreview() {
     const doc = getStoryDoc(activeStoryDocId);
     if (!body || !doc) return;
     try {
-        const assembled = await assembleStoryContext(doc.body || '');
+        const request = getStoryPreviewRequest(doc);
+        const assembled = await assembleStoryContext({ doc, ...request, dryRun: true });
         const recipe = getCurrentPromptStudioRecipe('story', getPromptApiType());
-        const sources = buildStoryPromptSources(doc, assembled, { mode: 'continue' });
-        const compiled = compilePromptRecipe(recipe, sources);
+        const sources = buildStoryPromptSources(doc, assembled, request);
+        const compiled = compilePromptRecipe(recipe, sources, { macroOptions: assembled.macroOptions, outlets: assembled.outlets });
         body.textContent = formatPromptStudioPreview(compiled);
+        populateStoryWorldInfoReport(overlay.querySelector('[data-remodel-storydoc-preview-report]'), assembled);
+        const warning = overlay.querySelector('[data-remodel-storydoc-preview-warning]');
+        if (warning && assembled.diagnostics?.length) {
+            warning.hidden = false;
+            warning.textContent = assembled.diagnostics.join(' · ');
+        }
     } catch (error) {
         body.textContent = `Could not assemble a preview.\n\n${String(error)}`;
     }
+}
+
+function getStoryPreviewRequest(doc) {
+    const activeInput = document.activeElement instanceof HTMLTextAreaElement
+        && document.activeElement.matches('[data-remodel-storydoc-beat-instruction]')
+        ? document.activeElement
+        : null;
+    if (activeInput) {
+        const beatId = activeInput.closest('[data-remodel-storydoc-beat-id]')?.dataset.remodelStorydocBeatId;
+        const beat = doc?.beats?.find((item) => item.id === beatId);
+        const instruction = activeInput.value.trim();
+        if (instruction) return { mode: beat?.generatedText ? 'regenerate' : 'beat', beat: instruction };
+    }
+    const pendingBeat = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-beat]')?.value?.trim() || '';
+    return pendingBeat ? { mode: 'beat', beat: pendingBeat } : { mode: 'continue', beat: '' };
+}
+
+function populateStoryWorldInfoReport(element, assembled) {
+    if (!(element instanceof HTMLDetailsElement)) return;
+    const bookLines = Object.entries(assembled?.books || {})
+        .flatMap(([source, names]) => (names || []).map((name) => `${source}: ${name}`));
+    const entryLines = (assembled?.activatedEntries || [])
+        .map((entry) => `${entry.world} #${entry.uid} · ${entry.title} → ${entry.destination || 'prompt'}`);
+    const budget = assembled?.budget
+        ? `${assembled.budget.used} / ${assembled.budget.maximum} tokens`
+        : 'unavailable';
+    const lines = [
+        `Books\n${bookLines.length ? bookLines.join('\n') : '(none)'}`,
+        `Activated entries\n${entryLines.length ? entryLines.join('\n') : '(none)'}`,
+        `Budget\n${budget}`,
+    ];
+    if (assembled?.diagnostics?.length) lines.push(`Warnings\n${assembled.diagnostics.join('\n')}`);
+    if (assembled?.notes?.length) lines.push(`Compatibility\n${assembled.notes.join('\n')}`);
+    const pre = element.querySelector('pre');
+    if (pre) pre.textContent = lines.join('\n\n');
+    element.hidden = false;
 }
 
 function closeStoryPromptPreview() {
@@ -5510,20 +6185,62 @@ async function openStoryToolPanel(tool, trigger = null) {
     }
     if (tool === 'guidance') {
         title.textContent = 'Author guidance';
-        body.innerHTML = `<p class="remodel-storydoc-panel-copy">Set tone, point of view, pacing, and boundaries. This is sent as authorial direction with every passage.</p><textarea data-remodel-storydoc-guidance placeholder="Example: Close third-person, restrained prose, slow-burn tension…"></textarea><p class="remodel-storydoc-panel-foot">Saved automatically</p>`;
+        body.innerHTML = `<p class="remodel-storydoc-panel-copy">Set tone, point of view, pacing, boundaries, and the lorebook attached directly to this manuscript.</p><p class="remodel-storydoc-panel-copy">Lorebook keys scan the current Scene Beat first, then newest manuscript paragraphs and prior-scene text. Author Guidance joins only when enabled below. Generated prose becomes eligible on the next request.</p><label class="remodel-storydoc-field-label">Document lorebook<select data-remodel-storydoc-lorebook>${renderStoryLorebookOptions(doc)}</select></label><label class="remodel-storydoc-check"><input type="checkbox" data-remodel-storydoc-scan-guidance><span>Allow Author Guidance to activate lorebook entries</span></label><textarea data-remodel-storydoc-guidance placeholder="Example: Close third-person, restrained prose, slow-burn tension…"></textarea><p class="remodel-storydoc-panel-foot">Saved automatically · Timeline, global and character lorebooks stay active automatically · Persona lorebooks are not used in Story Scenes</p>`;
         const field = body.querySelector('[data-remodel-storydoc-guidance]');
+        const lorebook = body.querySelector('[data-remodel-storydoc-lorebook]');
+        const scanGuidance = body.querySelector('[data-remodel-storydoc-scan-guidance]');
         field.value = doc.guidance || '';
+        lorebook.value = doc.lorebookName || '';
+        scanGuidance.checked = Boolean(doc.scanGuidanceForLore);
         field.addEventListener('input', () => {
             updateStoryDoc(activeStoryDocId, { guidance: field.value });
+            setStorySaveState('Saved');
+        });
+        lorebook.addEventListener('change', () => {
+            updateStoryDoc(activeStoryDocId, { lorebookName: lorebook.value || null });
+            setStorySaveState('Saved');
+        });
+        scanGuidance.addEventListener('change', () => {
+            updateStoryDoc(activeStoryDocId, { scanGuidanceForLore: scanGuidance.checked });
             setStorySaveState('Saved');
         });
         return;
     }
     title.textContent = 'Generation context';
     body.innerHTML = '<p class="remodel-storydoc-panel-copy">Assembling the exact Story context…</p>';
-    const assembled = await assembleStoryContext(doc.body || '');
+    const assembled = await assembleStoryContext({ doc, mode: 'continue', dryRun: true });
     body.textContent = '';
-    for (const [label, value] of [['Character, persona & guidance', assembled.systemPrompt], ['Prior scene text', doc.priorText], ['World Info', assembled.contextBlock], ['Manuscript tail', (doc.body || '').slice(-12000)]]) appendStoryPreviewSection(body, label, value);
+    const bookSummary = Object.entries(assembled.books || {}).flatMap(([kind, names]) => (names || []).map((name) => `${kind}: ${name}`)).join('\n');
+    const activationSummary = (assembled.activatedEntries || []).map((entry) => `${entry.world} #${entry.uid} · ${entry.title} → ${entry.destination || 'prompt'}`).join('\n');
+    const scanSummary = [
+        '1. Current Scene Beat — scanned for Beat and Regenerate requests',
+        '2. Manuscript — newest paragraphs first',
+        '3. Prior scene — loaded prose after the manuscript',
+        `4. Author Guidance — ${doc.scanGuidanceForLore ? 'enabled' : 'disabled'}`,
+        'Generated prose joins the manuscript scan on the next request.',
+    ].join('\n');
+    for (const [label, value] of [
+        ['Character, persona & guidance', assembled.systemPrompt],
+        ['Prior scene text', doc.priorText],
+        ['Lorebook keyword scan', scanSummary],
+        ['Resolved lorebook sources', bookSummary],
+        ['Activated entries', activationSummary],
+        ['World Info prompt content', assembled.contextBlock],
+        ['Resolver notes', (assembled.diagnostics || []).join('\n')],
+        ['Compatibility notes', (assembled.notes || []).join('\n')],
+        ['Manuscript tail', (doc.body || '').slice(-12000)],
+    ]) appendStoryPreviewSection(body, label, value);
+}
+
+function renderStoryLorebookOptions(doc) {
+    const names = getStoryLorebookNames();
+    const selected = String(doc?.lorebookName || '');
+    const options = ['<option value="">No document-specific lorebook</option>'];
+    if (selected && !names.includes(selected)) {
+        options.push(`<option value="${escapeAttribute(selected)}">${escapeHtml(selected)} (unavailable)</option>`);
+    }
+    options.push(...names.map((name) => `<option value="${escapeAttribute(name)}">${escapeHtml(name)}</option>`));
+    return options.join('');
 }
 
 function appendStoryPreviewSection(host, label, value) {
@@ -5542,10 +6259,14 @@ async function summarizeStoryDoc(field) {
     if (!doc || !field || !doc.body.trim()) return;
     if (status) status.textContent = 'Summarizing…';
     try {
-        const summary = await getContext().generateRaw({
+        // Same budget rule as prose: a reasoning model pays for its thinking out
+        // of this allowance, so a tight cap here produced a reply that was all
+        // reasoning and no summary. The "concisely" instruction does the
+        // shaping instead.
+        const { text: summary } = await generateProse({
             systemPrompt: 'Summarize the supplied fiction scene concisely for continuity notes. Return only the summary.',
             prompt: doc.body.slice(-16000),
-            responseLength: 256,
+            responseLength: storyResponseLength(),
             instructOverride: true,
         });
         field.value = summary.trim();
@@ -5602,48 +6323,47 @@ async function triggerStoryBeatGeneration() {
 
 // --- Story generation (the guarded core seam + generateRaw) ----------------
 //
-// THE ONE PLACE the whole Story feature touches SillyTavern internals. Wrapped
-// in try/catch and degrades gracefully: if a core update changes the shape of
-// getCharacterCardFields / getWorldInfoPrompt, story still writes + generates,
-// just without WI/card context, until this one function is patched. Validated
-// live (stage-1 spike) against the real exported APIs.
-async function assembleStoryContext(docText) {
+// THE ONE PLACE Story prompt sources are assembled. World Info resolution is
+// explicit and document-scoped: it never borrows the active chat's character,
+// metadata, extension prompts, or timed-effect state.
+async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode = 'continue', beat = '', dryRun = true } = {}) {
     const ctx = getContext();
-    const doc = getStoryDoc(activeStoryDocId);
-    const guidance = ctx.substituteParams?.(doc?.guidance || '') || doc?.guidance || '';
 
     try {
-        const chid = doc?.boundCharacterId != null ? Number(doc.boundCharacterId) : ctx.characterId;
-
-        // Character card fields (macros already resolved by core).
-        let card = {};
-        if (typeof ctx.getCharacterCardFields === 'function') {
-            card = ctx.getCharacterCardFields({ chid }) || {};
-        }
-
-        // World Info activation, scanning OUR document text as the corpus.
-        let wi = { worldInfoBefore: '', worldInfoAfter: '' };
-        if (typeof ctx.getWorldInfoPrompt === 'function') {
-            wi = await ctx.getWorldInfoPrompt([docText], 8192, false) || wi;
-        }
-
-        const characterCard = (ctx.substituteParams || ((s) => s))(
-            [
-                card.system,
-                card.description,
-                card.personality,
-                card.scenario,
-            ]
-                .filter(Boolean).join('\n\n'),
-        );
-        const persona = (ctx.substituteParams || ((s) => s))(card.persona || '');
+        const chid = doc?.boundCharacterId == null ? null : Number(doc.boundCharacterId);
+        const character = Number.isInteger(chid) ? ctx.characters?.[chid] : null;
+        const wi = await resolveStoryWorldInfo({
+            doc,
+            mode,
+            beat,
+            maxContext: getStoryWorldInfoMaxContext(),
+            dryRun,
+            // The Timeline this Scene belongs to may bind a lorebook of its own,
+            // shared by every Scene under it.
+            timelineLorebook: getActiveTimelineLorebook(),
+        });
+        const macroOptions = wi.macroOptions;
+        const resolve = (value) => ctx.substituteParams?.(String(value || ''), macroOptions) || String(value || '');
+        const characterCard = resolve([
+            ctx.powerUserSettings?.prefer_character_prompt ? character?.data?.system_prompt : '',
+            character?.description,
+            character?.personality,
+            character?.scenario,
+        ].filter(Boolean).join('\n\n'));
+        // A Story document has no persona. The user is the AUTHOR here, not a
+        // character inside the fiction — the bound character is a voice to
+        // narrate with, not a partner being addressed. Injecting "who the user
+        // is playing" only muddies the prose, so persona is deliberately empty
+        // for stories. (Roleplay Scenes are untouched; they still use it.)
+        const persona = '';
+        const guidance = [wi.authorNoteBefore, resolve(doc?.guidance), wi.authorNoteAfter].filter(Boolean).join('\n\n');
         const systemPrompt = [
             'You are the prose engine inside a fiction manuscript editor. Write only the requested story prose. Continue naturally from the manuscript, preserve continuity and point of view, and do not explain your work.',
             characterCard,
-            persona,
             guidance,
         ].filter(Boolean).join('\n\n');
-        const contextBlock = [wi.worldInfoBefore, wi.worldInfoAfter].filter(Boolean).join('\n');
+        const depthText = (wi.worldInfoDepth?.messages || []).map((message) => `[${message.role} · depth ${message.depth}]\n${message.content}`).join('\n');
+        const contextBlock = [wi.worldInfoBefore, wi.worldInfoAfter, wi.worldInfoExamples, depthText].filter(Boolean).join('\n\n');
         return {
             systemPrompt,
             contextBlock,
@@ -5651,12 +6371,24 @@ async function assembleStoryContext(docText) {
             persona,
             worldInfoBefore: wi.worldInfoBefore || '',
             worldInfoAfter: wi.worldInfoAfter || '',
+            worldInfoExamples: wi.worldInfoExamples || '',
+            worldInfoDepth: wi.worldInfoDepth || { messages: [] },
             authorGuidance: guidance,
+            outlets: wi.outlets || {},
+            activatedEntries: wi.activatedEntries || [],
+            diagnostics: wi.diagnostics || [],
+            notes: wi.notes || [],
+            books: wi.books || {},
+            budget: wi.budget || null,
+            pendingState: wi.pendingState,
+            macroOptions: wi.macroOptions || macroOptions,
         };
     } catch (err) {
-        console.warn('Remodel Story: context seam failed — generating without WI/card context.', err);
+        console.warn('Remodel Story: isolated context seam failed — generating without WI/card context.', err);
         // Graceful fallback: the guidance field is ours (no core dependency),
         // so authorial steering still applies even if the core seam breaks.
+        const macroOptions = { name1Override: ctx.name1 || 'User', name2Override: 'Character', replaceCharacterCard: false };
+        const guidance = ctx.substituteParams?.(doc?.guidance || '', macroOptions) || doc?.guidance || '';
         return {
             systemPrompt: guidance,
             contextBlock: '',
@@ -5664,7 +6396,17 @@ async function assembleStoryContext(docText) {
             persona: '',
             worldInfoBefore: '',
             worldInfoAfter: '',
+            worldInfoExamples: '',
+            worldInfoDepth: { messages: [] },
             authorGuidance: guidance,
+            outlets: {},
+            activatedEntries: [],
+            diagnostics: [`Story World Info resolver failed: ${String(err?.message || err)}`],
+            notes: [],
+            books: {},
+            budget: null,
+            pendingState: doc?.worldInfoState,
+            macroOptions,
         };
     }
 }
@@ -5672,7 +6414,7 @@ async function assembleStoryContext(docText) {
 function buildStoryPromptSources(doc, assembled, { mode = 'continue', beat = '' } = {}) {
     const body = doc?.body || '';
     const manuscript = body.length > 12000 ? body.slice(-12000) : body;
-    const direction = mode === 'beat' && beat.trim()
+    const direction = mode !== 'continue' && beat.trim()
         ? `[Write the next part of the story following this scene beat: ${beat.trim()}]`
         : '[Continue the manuscript with the next passage.]';
     return {
@@ -5680,11 +6422,39 @@ function buildStoryPromptSources(doc, assembled, { mode = 'continue', beat = '' 
         persona: assembled?.persona || '',
         worldInfoBefore: assembled?.worldInfoBefore || '',
         worldInfoAfter: assembled?.worldInfoAfter || '',
+        worldInfoExamples: assembled?.worldInfoExamples || '',
+        worldInfoDepth: assembled?.worldInfoDepth || { messages: [] },
         authorGuidance: assembled?.authorGuidance || '',
         priorText: doc?.priorText ? `=== PRIOR SCENE TEXT ===\n${doc.priorText}` : '',
         manuscript,
         sceneBeat: direction,
     };
+}
+
+// How long a generated passage may be.
+//
+// This used to be hardcoded to 512 for every backend, which quietly broke
+// reasoning models: reasoning tokens are spent from the SAME budget as the
+// answer, so a thinking model burned the whole 512 before writing a word and
+// returned a reply containing only a thinking block. Lowering "reasoning
+// effort" does not reliably get under such a small cap, so it looked
+// unfixable from the outside.
+//
+// The cap only ever existed to stop an anonymous Horde request becoming
+// expensive, so it now applies to Horde alone. Everywhere else we honour the
+// response length the user has already configured for their API — which also
+// makes "raise the response length" real advice they can act on.
+/** The lorebook bound to the Timeline that owns the active Scene, if any. */
+function getActiveTimelineLorebook() {
+    const scene = getActiveScene();
+    if (!scene?.timelineId) {
+        return null;
+    }
+    return getTimelineStore().timelines[scene.timelineId]?.lorebookName || null;
+}
+
+function storyResponseLength() {
+    return getContext().mainApi === 'koboldhorde' ? 512 : null;
 }
 
 // True while a story generation is in flight, so the controls can flip to a
@@ -5713,52 +6483,47 @@ async function generateStory({ mode = 'continue', beat = '', beatId = null } = {
         updateStoryDoc(activeStoryDocId, readStoryEditorState(prose));
     }
 
-    const docText = getStoryDoc(activeStoryDocId)?.body || '';
     storyGenerating = true;
     setStoryGeneratingUI(true);
 
     try {
-        const assembled = await assembleStoryContext(docText);
+        const currentDoc = getStoryDoc(activeStoryDocId);
+        const assembled = await assembleStoryContext({ doc: currentDoc, mode, beat, dryRun: false });
         const recipe = getCurrentPromptStudioRecipe('story', getPromptApiType());
         const prompt = compilePromptRecipe(
             recipe,
-            buildStoryPromptSources(getStoryDoc(activeStoryDocId), assembled, { mode, beat }),
+            buildStoryPromptSources(currentDoc, assembled, { mode, beat }),
+            { macroOptions: assembled.macroOptions, outlets: assembled.outlets },
         ).messages;
 
-        const generated = await ctx.generateRaw({
+        const { text: prose } = await generateProse({
             prompt,
-            // A passage, not a full chapter. Keeping this at Horde's anonymous
-            // threshold also avoids a configured 2k-token chat response turning
-            // one editor click into an unexpectedly expensive request.
-            responseLength: 512,
+            responseLength: storyResponseLength(),
             instructOverride: false,
         });
 
-        if (generated && generated.trim()) {
-            const prose = generated.trim();
-            if (beatId) insertStoryBeatProse(beatId, prose);
-            else appendStoryProse(prose);
-            renderStoryEditor(true);
-            return true;
-        }
-        showStoryGenError('The model returned no prose — try again.');
-        return false;
+        if (beatId) insertStoryBeatProse(beatId, prose);
+        else appendStoryProse(prose);
+        updateStoryDoc(activeStoryDocId, { worldInfoState: advanceStoryWorldInfoState(assembled.pendingState) });
+        renderStoryEditor(true);
+        return true;
     } catch (err) {
         // GENERATION_STOPPED (user hit Stop) surfaces here as a thrown abort —
         // not an error to report.
         const msg = String(err?.message || err);
         if (!msg.match(/cancel|abort|stopped/i)) {
             console.error('Remodel Story: generation failed', err);
-            // Surface a short, real reason (connection/kudos/etc.) rather than a
-            // generic "failed" so the user can act on it. Horde kudos and
-            // no-API errors are the common cases.
-            let reason = 'Generation failed — check your API connection.';
-            if (/kudos/i.test(msg)) {
-                reason = 'Generation failed — not enough Horde kudos for a request this size. Try a shorter response length or a different backend.';
-            } else if (/no message generated|empty/i.test(msg)) {
-                reason = 'The model returned nothing — try again.';
+            // generateProse already worked out WHICH layer failed — an empty
+            // prompt that never left the browser, a request the backend
+            // rejected, or a reply that carried no prose — so report that
+            // rather than a guess. The old code blamed the connection for all
+            // three, which sent you looking in the wrong place.
+            if (err?.name === 'StoryGenerationError') {
+                console.error('Remodel Story: failure stage =', err.stage, '· detail =', err.detail);
+                showStoryGenError(err.message);
+            } else {
+                showStoryGenError(`Generation failed — ${msg}`);
             }
-            showStoryGenError(reason);
         }
         return false;
     } finally {
@@ -5874,6 +6639,7 @@ function stopStoryGeneration() {
 // =====================================================================
 
 const ROLEPLAY_ROOT_ID = 'remodel-roleplay-root';
+let roleplayHoverMenuTimer = null;
 
 // Same Background-tab duplicate-ID scoping as getRealManuscriptOverlay —
 // see its comment. Resolved through the real #sheld under body so a click
@@ -5895,11 +6661,29 @@ function ensureRoleplayRoot() {
     root.id = ROLEPLAY_ROOT_ID;
     // Structural skeleton built once; contents (cast + stream + composer)
     // are re-rendered from chat[] on every refresh, same "re-derive from
-    // source" discipline the manuscript overlay uses. The cast column
-    // spans both rows on the left; the stream and composer stack on the
-    // right (grid areas defined in style.css).
+    // source" discipline the manuscript overlay uses. The header identifies
+    // the scene and owns the cast disclosure; the roster itself remains the
+    // same functional cast component, now overlaid at its familiar left edge.
     root.innerHTML = `
-        <aside class="remodel-rp-cast" data-remodel-rp-cast></aside>
+        <header class="remodel-rp-scene-header">
+            <button type="button" class="remodel-rp-scene-back" data-remodel-rp-scene-back title="Return to Tavern" aria-label="Return to Tavern">
+                <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
+            </button>
+            <div class="remodel-rp-scene-heading">
+                <span class="remodel-rp-scene-kicker">Roleplay scene</span>
+                <strong class="remodel-rp-scene-title" data-remodel-rp-scene-title>Roleplay</strong>
+                <button type="button" class="remodel-rp-cast-toggle" data-remodel-rp-cast-toggle aria-expanded="false" aria-controls="remodel-rp-cast-roster">
+                    <i class="fa-solid fa-users" aria-hidden="true"></i>
+                    <span class="remodel-rp-cast-toggle-copy">
+                        <strong>Cast</strong>
+                        <em data-remodel-rp-director-label>No Roleplay Director</em>
+                    </span>
+                    <small data-remodel-rp-cast-count>0</small>
+                    <i class="fa-solid fa-chevron-down remodel-rp-cast-toggle-caret" aria-hidden="true"></i>
+                </button>
+            </div>
+        </header>
+        <aside id="remodel-rp-cast-roster" class="remodel-rp-cast" data-remodel-rp-cast aria-hidden="true"></aside>
         <div class="remodel-rp-stream" data-remodel-rp-stream></div>
         <div class="remodel-rp-composer-zone" data-remodel-rp-composer></div>
     `;
@@ -5907,9 +6691,30 @@ function ensureRoleplayRoot() {
     return root;
 }
 
-// Builds the roleplay composer zone: the turn/speaker control bar plus the
-// persona input row. Rebuilt on each render so the "speak as" chip and the
-// per-member active toggles reflect the current cast/persona. Sends drive
+function setRoleplayCastOpen(root, open) {
+    if (!root) return;
+    const isOpen = Boolean(open);
+    root.classList.toggle('is-cast-open', isOpen);
+    root.querySelector('[data-remodel-rp-cast-toggle]')?.setAttribute('aria-expanded', String(isOpen));
+    root.querySelector('[data-remodel-rp-cast]')?.setAttribute('aria-hidden', String(!isOpen));
+}
+
+function renderRoleplayHeader(root) {
+    const scene = getActiveScene();
+    const members = roleplaySceneMembers(getContext());
+    const title = root.querySelector('[data-remodel-rp-scene-title]');
+    const count = root.querySelector('[data-remodel-rp-cast-count]');
+    const director = root.querySelector('[data-remodel-rp-director-label]');
+    if (title) title.textContent = scene?.title || 'Roleplay';
+    if (count) count.textContent = String(members.length);
+    if (director) director.textContent = scene?.liveDirection?.directorRef?.label
+        ? `Director: ${scene.liveDirection.directorRef.label}`
+        : 'Choose a Roleplay Director';
+}
+
+// Builds the roleplay composer zone: a compact command dock above the persona
+// input row. Rebuilt on each render so the "speak as" chip reflects the active
+// persona. Sends drive
 // core's real #send_textarea + #send_but underneath — the same reliable
 // path the story composer uses — so generation, group activation, swipes,
 // and World Info all run exactly as native.
@@ -5918,48 +6723,73 @@ function renderRoleplayComposer(root) {
     if (!zone) {
         return;
     }
+    const preservedDraft = zone.querySelector('[data-remodel-rp-input]')?.value || '';
     const context = getContext();
-    const members = roleplaySceneMembers(context);
     const personaName = context.name1 || 'You';
-
-    // Active-member toggles: only meaningful for a group. For a solo chat,
-    // there's just the one character and nothing to toggle.
-    const memberToggles = context.groupId
-        ? members.map((m) => `
-            <span class="remodel-rp-active-dot remodel-rp-color-${roleplaySpeakerColor(m.name)}" data-remodel-rp-member="${escapeAttribute(String(m.characterId ?? ''))}">
-                <span class="remodel-rp-dot"></span>${escapeHtml(m.name)}
-            </span>`).join('')
-        : '';
+    const activeScene = getActiveScene();
+    const goalIntents = activeScene ? getStoryGoalComposerIntents(activeScene.id) : [];
+    const attachedGoals = new Set(goalIntents.map((item) => item.goalId));
+    const goalChips = activeScene ? getSceneGoals(activeScene.id, { includeResolved: false, states: ['active', 'background'] }) : [];
+    const directionUi = getLiveDirectionUiState(activeScene);
 
     // Next speaker only means something in a group; in a solo scene there's
     // one character, so it's fixed to "AI decides" and not a menu.
     const inGroup = Boolean(context.groupId);
     const nextSpeakerAttrs = inGroup
-        ? 'data-remodel-rp-nextspeaker-menu role="button" tabindex="0"'
-        : '';
+        ? 'data-remodel-rp-nextspeaker-menu'
+        : 'data-remodel-rp-act-disabled="Next speaker is only available in group scenes"';
     const triggerAttrs = inGroup
         ? 'data-remodel-rp-action="trigger"'
         : 'data-remodel-rp-act-disabled="Only in group scenes — there\'s just one character here"';
 
     zone.innerHTML = `
-        <div class="remodel-rp-turn-bar">
-            <div class="remodel-rp-speaker-select" data-remodel-rp-persona-menu role="button" tabindex="0" title="Speaking as ${escapeAttribute(personaName)} — click to switch persona">
-                <span class="remodel-rp-chip-av">${escapeHtml(roleplayInitials(personaName))}</span>
-                <span class="remodel-rp-speaker-lbl">${escapeHtml(personaName)}</span>
-                <span class="remodel-rp-caret">▾</span>
-            </div>
-            <div class="remodel-rp-seg ${inGroup ? 'remodel-rp-seg-menu' : ''}" ${nextSpeakerAttrs} title="${inGroup ? 'Who speaks next' : 'The AI decides who speaks next'}"><span class="remodel-rp-seg-k">Next speaker</span><span class="remodel-rp-seg-v">AI decides</span>${inGroup ? '<span class="remodel-rp-caret">▾</span>' : ''}</div>
+        <div class="remodel-live-flow${directionUi.active ? ' is-directed' : ''}" data-remodel-live-flow>
+            <button type="button" class="remodel-live-mode" data-remodel-live-mode title="${directionUi.active ? 'Disable Live Direction for this Scene' : 'Enable Live Direction for this Scene'}">
+                <i class="fa-solid ${directionUi.active ? 'fa-wave-square' : 'fa-feather'}" aria-hidden="true"></i>
+                <span>${directionUi.active ? escapeHtml(directionUi.state) : 'Free play'}</span>
+            </button>
+            ${directionUi.performerLabel ? `<small>${escapeHtml(directionUi.performerLabel)}</small>` : ''}
+            <em data-remodel-live-opening${directionUi.openingLabel ? '' : ' hidden'}><i class="fa-regular fa-lightbulb"></i> <span>${escapeHtml(directionUi.openingLabel || '')}</span></em>
+            <label class="remodel-live-pacing">Pacing
+                <select data-remodel-live-pacing aria-label="Live Direction pacing">
+                    ${['slow', 'natural', 'fast', 'instant'].map((value) => `<option value="${value}"${directionUi.pacing === value ? ' selected' : ''}>${value[0].toUpperCase() + value.slice(1)}</option>`).join('')}
+                </select>
+            </label>
+            <button type="button" data-remodel-live-continue${directionUi.canContinue ? '' : ' hidden'}><i class="fa-solid fa-play"></i> Continue</button>
+            <button type="button" data-remodel-live-stop${directionUi.canStop ? '' : ' hidden'}><i class="fa-solid fa-stop"></i> Stop</button>
+            <button type="button" class="remodel-live-diagnostics" data-remodel-live-diagnostics title="Open the Live Direction flight recorder"><i class="fa-solid fa-stethoscope"></i> Diagnose</button>
+        </div>
+        <div class="remodel-rp-command-dock" aria-label="Roleplay commands">
+            <button type="button" class="remodel-rp-command remodel-rp-nextspeaker" ${nextSpeakerAttrs} title="${inGroup ? 'Choose the next speaker' : 'Next speaker is only available in group scenes'}">
+                <span class="remodel-rp-command-icon"><i class="fa-solid fa-users" aria-hidden="true"></i></span>
+                <span class="remodel-rp-command-stack"><small>Next speaker</small><strong>AI decides</strong></span>
+                ${inGroup ? '<i class="fa-solid fa-chevron-down remodel-rp-command-caret" aria-hidden="true"></i>' : ''}
+            </button>
+            <button type="button" class="remodel-rp-command remodel-rp-act" data-remodel-rp-action="regenerate" title="Regenerate">
+                <span class="remodel-rp-command-icon"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Regenerate</span>
+            </button>
+            <button type="button" class="remodel-rp-command remodel-rp-act" data-remodel-rp-action="next" title="Generate the next response">
+                <span class="remodel-rp-command-icon"><i class="fa-solid fa-forward-step" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Next</span>
+            </button>
+            <button type="button" class="remodel-rp-command remodel-rp-act" ${triggerAttrs} title="Trigger a group member">
+                <span class="remodel-rp-command-icon"><i class="fa-solid fa-bolt" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Trigger&hellip;</span>
+            </button>
+            <button type="button" class="remodel-rp-command remodel-rp-act" data-remodel-rp-action="impersonate" title="Write for me">
+                <span class="remodel-rp-command-icon"><i class="fa-solid fa-pen-nib" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Write for me</span>
+            </button>
+            <button type="button" class="remodel-rp-command remodel-rp-act" data-remodel-rp-action="preview" title="Preview the final prompt">
+                <span class="remodel-rp-command-icon"><i class="fa-solid fa-eye" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Preview</span>
+            </button>
+            <span class="remodel-rp-command-prompt">${renderScenePromptChoice(getActiveScene(), true)}</span>
         </div>
 
-        <div class="remodel-rp-action-row">
-            <button type="button" class="remodel-rp-act" data-remodel-rp-action="regenerate"><span class="remodel-rp-g">↺</span> Regenerate</button>
-            <button type="button" class="remodel-rp-act" data-remodel-rp-action="next"><span class="remodel-rp-g">▷</span> Next</button>
-            <button type="button" class="remodel-rp-act" ${triggerAttrs}><span class="remodel-rp-g">✦</span> Trigger…</button>
-            <button type="button" class="remodel-rp-act" data-remodel-rp-action="impersonate"><span class="remodel-rp-g">✎</span> Write for me</button>
-            <button type="button" class="remodel-rp-act" data-remodel-rp-action="preview"><span class="remodel-rp-g">◉</span> Preview</button>
-            ${renderScenePromptChoice(getActiveScene(), true)}
-            <span class="remodel-rp-spacer"></span>
-            ${memberToggles}
+        <div class="remodel-rp-composer-tools">
+            <button type="button" class="remodel-rp-goals-pill" data-remodel-rp-panel-toggle="goals" title="Story Goals" aria-label="Story Goals">
+                <i class="fa-solid fa-bullseye" aria-hidden="true"></i><span>Goals</span>
+            </button>
+            <div class="remodel-rp-goal-chips" aria-label="Goals available for this action">
+                ${goalChips.map((goal) => `<button type="button" class="${attachedGoals.has(goal.id) ? 'is-attached' : ''}" data-remodel-goal-intent="${escapeAttribute(goal.id)}" title="${attachedGoals.has(goal.id) ? 'Remove decisive attempt' : 'Attach as a decisive attempt'}: ${escapeAttribute(goal.title)}"><i class="fa-solid fa-dice-d20"></i><span>${escapeHtml(goal.title)}</span><small>${goal.successRate}%</small></button>`).join('')}
+            </div>
         </div>
 
         <div class="remodel-rp-composer">
@@ -5970,12 +6800,141 @@ function renderRoleplayComposer(root) {
             <textarea class="remodel-rp-input" data-remodel-rp-input placeholder="Write as ${escapeAttribute(personaName)}…" rows="1"></textarea>
             <button type="button" class="remodel-rp-send" data-remodel-rp-send title="Send">➤</button>
         </div>
-
-        <div class="remodel-rp-composer-meta">
-            <span data-remodel-rp-meta-left></span>
-            <span>${members.length} character${members.length === 1 ? '' : 's'} in scene</span>
-        </div>
     `;
+    const restoredInput = zone.querySelector('[data-remodel-rp-input]');
+    if (restoredInput instanceof HTMLTextAreaElement && preservedDraft) {
+        restoredInput.value = preservedDraft;
+        autosizeRoleplayInput(restoredInput);
+    }
+}
+
+function clearRoleplayComposerDraft() {
+    const input = getRealRoleplayRoot()?.querySelector('[data-remodel-rp-input]');
+    if (input instanceof HTMLTextAreaElement) {
+        input.value = '';
+        autosizeRoleplayInput(input);
+    }
+}
+
+function getLiveDirectionCast() {
+    const context = getContext();
+    const scene = getActiveScene();
+    const groupId = context.groupId || scene?.linkedChat?.type === 'group' && scene.linkedChat.groupId;
+    const activeGroup = groupId
+        ? (context.groups || []).find((group) => String(group.id) === String(groupId))
+        : null;
+    const disabledAvatars = new Set(Array.isArray(activeGroup?.disabled_members) ? activeGroup.disabled_members : []);
+    const sceneMembers = activeGroup
+        ? (activeGroup.members || []).map((avatar) => {
+            const characterId = (context.characters || []).findIndex((character) => character?.avatar === avatar);
+            const character = context.characters?.[characterId];
+            return { name: character?.name || avatar, characterId: characterId >= 0 ? characterId : null };
+        })
+        : roleplaySceneMembers(context);
+    const members = sceneMembers.map((member) => {
+        const character = context.characters?.[member.characterId];
+        const avatar = roleplayCharacterAvatar({ characterId: member.characterId, name: member.name });
+        return {
+            characterId: member.characterId,
+            name: member.name,
+            label: member.name,
+            ref: { kind: 'character', id: avatar || String(member.characterId), label: member.name },
+            description: character?.description || '',
+            personality: character?.personality || '',
+            scenario: character?.scenario || '',
+            creatorNotes: character?.creator_notes || '',
+            systemPrompt: character?.system_prompt || '',
+            postHistoryInstructions: character?.post_history_instructions || '',
+            disabled: Boolean(avatar && disabledAvatars.has(avatar)),
+        };
+    });
+    const legacy = scene?.liveDirection?.narratorRef;
+    if (legacy?.kind === 'legacy-character-index') {
+        const member = members.find((item) => item.characterId === Number(legacy.id));
+        if (member) updateScene(scene.id, { liveDirection: { ...scene.liveDirection, narratorRef: { kind: 'narrator', id: member.ref.id, label: member.label } } });
+    }
+    return members;
+}
+
+// The remodeled Scene can remain visible after Tavern navigation has cleared
+// core's selected character/group. Live Direction must generate against the
+// Scene's real native chat, not whichever chat happens to be selected (or no
+// chat at all). This hook runs before every Director request, including Retry,
+// Next, and autonomous continuations, while leaving the composer draft intact.
+async function ensureRoleplaySceneChatReady(scene) {
+    if (!scene?.linkedChat) return false;
+    const context = getContext();
+    const linked = scene.linkedChat;
+
+    if (linked.type === 'group') {
+        const group = (context.groups || []).find((item) => String(item.id) === String(linked.groupId));
+        const chatId = group?.chats?.find((candidate) => String(candidate) === String(linked.chatId));
+        if (!group || chatId === undefined) return false;
+        let openedGroup = false;
+        if (String(context.groupId || '') !== String(group.id)) {
+            await openGroupById(group.id);
+            openedGroup = true;
+        }
+        if (String(context.chatId || '') !== String(chatId)) {
+            await context.openGroupChat(group.id, chatId);
+        }
+        const settled = await waitForChatIdSettled();
+        if (!settled || String(getContext().groupId || '') !== String(group.id)) return false;
+        if (openedGroup) dismissProgrammaticGroupEditor();
+        writeSceneMetadata(scene);
+        syncStoryWorkspaceClass(scene);
+        ensureRoleplayRoot();
+        renderRoleplayScene();
+        return true;
+    }
+
+    const characterId = Number(linked.characterId);
+    if (!context.characters?.[characterId]) return false;
+    const currentFile = String(context.chatId || '').replace(/\.jsonl$/i, '');
+    const targetFile = String(linked.fileName || '').replace(/\.jsonl$/i, '');
+    if (Number(context.characterId) !== characterId) {
+        await context.selectCharacterById(characterId, { switchMenu: false });
+    }
+    if (currentFile !== targetFile) {
+        await context.openCharacterChat(linked.fileName);
+    }
+    writeSceneMetadata(scene);
+    syncStoryWorkspaceClass(scene);
+    ensureRoleplayRoot();
+    renderRoleplayScene();
+    return Boolean(getContext().chatId);
+}
+
+function openRoleplayDirectorMenu(anchor) {
+    const scene = getActiveScene();
+    if (!scene || !anchor) return;
+    const context = getContext();
+    const members = roleplaySceneMembers(context);
+    const currentId = scene.liveDirection?.directorRef?.id || '';
+    const narratorId = scene.liveDirection?.narratorRef?.id || '';
+    const items = [
+        ...(currentId ? [{ id: '__clear__', label: 'No Roleplay Director', sublabel: 'Clear the Director seat', active: false }] : []),
+        ...members.map((member) => {
+            const avatar = roleplayCharacterAvatar(member);
+            return {
+                id: avatar,
+                label: member.name,
+                avatar: avatar ? context.getThumbnailUrl('avatar', avatar) : '',
+                initials: roleplayInitials(member.name),
+                sublabel: avatar === narratorId ? 'Bound Narrator — unavailable as Director' : 'Directs privately; operation cards appear in the stream',
+                active: avatar === currentId,
+            };
+        }).filter((item) => item.id && item.id !== narratorId),
+    ];
+    openRoleplayMenu(anchor, items, (id) => {
+        const member = members.find((item) => roleplayCharacterAvatar(item) === id);
+        const directorRef = id === '__clear__' || !member ? null : { kind: 'character', id, label: member.name };
+        setSceneRoleplayDirector(scene.id, directorRef);
+        clearLiveDirectionFailure();
+        document.getElementById('remodel-direction-failure')?.remove();
+        showRoleplayToast(directorRef ? `${member.name} is now the Roleplay Director.` : 'Roleplay Director seat cleared.');
+        renderRoleplayScene();
+    });
 }
 
 // --- Turn-bar menus: persona switch + next speaker -----------------------
@@ -6105,6 +7064,13 @@ function openRoleplayNextSpeakerMenu(anchor) {
             return;
         }
         setRoleplayNextSpeakerLabel(id);
+        if (isDirectedLiveScene(getActiveScene())) {
+            const member = members.find((item) => item.name === id);
+            const avatar = member ? roleplayCharacterAvatar({ characterId: member.characterId, name: member.name }) : '';
+            if (member && avatar) setNextPerformerOverride({ kind: 'character', id: avatar, label: member.name });
+            showRoleplayToast(`${id} will perform the next directed response.`);
+            return;
+        }
         triggerRoleplaySpeaker(id);
     });
 }
@@ -6162,6 +7128,12 @@ async function openRoleplayPromptPreview() {
 
     try {
         const { generateData, warnings } = await runPromptPreviewDryRun('normal');
+        const activeGoalScene = getActiveScene();
+        const attachedGoalIntents = activeGoalScene ? getStoryGoalComposerIntents(activeGoalScene.id) : [];
+        if (attachedGoalIntents.length) {
+            warnings.push(`${attachedGoalIntents.length} attached Story Goal attempt${attachedGoalIntents.length === 1 ? '' : 's'} will be assessed by the hidden Game Director when sent; preview never rolls or mutates.`);
+        }
+        if (isDirectedLiveScene(activeGoalScene)) warnings.push('Live performer selection, openings, and future checkpoints require a Director assessment and are not executed by preview.');
         const bodyEl = overlay.querySelector('[data-remodel-rp-preview-body]');
         const warnEl = overlay.querySelector('[data-remodel-rp-preview-warn]');
         if (bodyEl) {
@@ -6194,7 +7166,8 @@ function closeRoleplayPromptPreview() {
 // swipes, World Info, and generation all run native). An empty send
 // falls through to core's own continue behavior via the composer's own
 // keydown handling elsewhere; this explicit-send path always sends.
-function handleRoleplaySend(root) {
+async function handleRoleplaySend(root) {
+    if (root.dataset.remodelRpSubmitting === 'true') return;
     const input = root.querySelector('[data-remodel-rp-input]');
     const textarea = document.getElementById('send_textarea');
     const sendBut = document.getElementById('send_but');
@@ -6205,20 +7178,105 @@ function handleRoleplaySend(root) {
     if (!value.trim()) {
         return;
     }
-    input.value = '';
-    autosizeRoleplayInput(input);
-    textarea.value = value;
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    const scene = getActiveScene();
+    if (isDirectedLiveScene(scene)) {
+        root.dataset.remodelRpSubmitting = 'true';
+        setRoleplayGenerating(true);
+        refreshLiveDirectionChrome({ state: 'Directing', acceptedVisibleText: getLiveDirectionRun()?.acceptedVisibleText || '' });
+        const intents = getStoryGoalComposerIntents(scene.id);
+        try {
+            await submitDirectedRoleplay({ scene, text: value, authorizedGoalIds: intents.map((item) => item.goalId) });
+        } finally {
+            delete root.dataset.remodelRpSubmitting;
+        }
+        return;
+    }
+    const sendNative = () => {
+        input.value = '';
+        autosizeRoleplayInput(input);
+        textarea.value = value;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
     // Immediate feedback: flip the generating state on right away rather
     // than waiting for GENERATION_STARTED (there's real latency between the
     // click and that event — the gap where "nothing looks like it's
     // happening"). The event handler is idempotent, so an early flip here
     // plus the event later is harmless; GENERATION_ENDED clears it.
-    setRoleplayGenerating(true);
-    sendBut.click();
+        setRoleplayGenerating(true);
+        sendBut.click();
     // The user's own line renders via USER_MESSAGE_RENDERED; show the
     // pending speaker bubble on the next frame so it lands after it.
-    requestAnimationFrame(() => showRoleplayTypingIndicator());
+        requestAnimationFrame(() => showRoleplayTypingIndicator());
+    };
+    await handleGoalAwareRoleplaySend({ root, scene: getActiveScene(), text: value, sendNative });
+}
+
+function sendRoleplayNormally(value) {
+    const input = getRealRoleplayRoot()?.querySelector('[data-remodel-rp-input]');
+    const textarea = document.getElementById('send_textarea');
+    const button = document.getElementById('send_but');
+    if (!(input instanceof HTMLTextAreaElement) || !(textarea instanceof HTMLTextAreaElement) || !button) return;
+    input.value = '';
+    autosizeRoleplayInput(input);
+    textarea.value = String(value || '');
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    setRoleplayGenerating(true);
+    button.click();
+}
+
+function showLiveDirectionFailure(error) {
+    document.getElementById('remodel-direction-failure')?.remove();
+    setRoleplayGenerating(false);
+    const panel = document.createElement('div');
+    panel.id = 'remodel-direction-failure';
+    panel.className = 'remodel-mechanics-failure remodel-direction-failure';
+    panel.innerHTML = `<span><strong>Direction paused.</strong> ${escapeHtml(error?.message || String(error))}</span><button type="button" data-remodel-direction-retry>Retry Direction</button><button type="button" data-remodel-direction-bypass>Send Normally</button>`;
+    getRealRoleplayRoot()?.append(panel);
+}
+
+function openLiveDirectionDiagnostics() {
+    document.getElementById('remodel-live-diagnostics-modal')?.remove();
+    const flights = getDirectionFlights().slice().reverse();
+    const modal = document.createElement('div');
+    modal.id = 'remodel-live-diagnostics-modal';
+    modal.className = 'remodel-live-diagnostics-modal';
+    const rows = flights.length ? flights.map((flight) => {
+        const interesting = flight.events.filter((event) => !['native.stream'].includes(event.type)).slice(-18);
+        return `<details${flight === flights[0] ? ' open' : ''}><summary><strong>${escapeHtml(flight.status)}</strong><span>${escapeHtml(flight.metadata?.action || flight.metadata?.directionId || flight.id)}</span><small>${escapeHtml(flight.startedAt || '')}</small></summary><div class="remodel-live-diagnostics-counts">${Object.entries(flight.counters || {}).map(([key, value]) => `<span>${escapeHtml(key)} <b>${Number(value)}</b></span>`).join('')}</div><ol>${interesting.map((event) => `<li><time>+${Number(event.elapsedMs || 0)}ms</time><strong>${escapeHtml(event.type)}</strong><pre>${escapeHtml(JSON.stringify(event.detail, null, 2))}</pre></li>`).join('')}</ol></details>`;
+    }).join('') : '<p>No directed-roleplay flight has been recorded in this browser session yet.</p>';
+    modal.innerHTML = `<section><header><div><small>LIVE DIRECTION</small><h2>Flight Recorder</h2></div><div><button type="button" data-remodel-live-diagnostics-export><i class="fa-solid fa-download"></i> Export JSON</button><button type="button" data-remodel-live-diagnostics-close aria-label="Close"><i class="fa-solid fa-xmark"></i></button></div></header><div class="remodel-live-diagnostics-body">${rows}</div></section>`;
+    document.body.append(modal);
+}
+
+function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
+    const root = getRealRoleplayRoot();
+    if (!root) return;
+    renderRoleplayDirectionFeed(root, getActiveScene());
+    const body = root.querySelector('[data-remodel-rp-typing-body]');
+    if (body && run?.acceptedVisibleText != null) body.textContent = run.acceptedVisibleText;
+    const zone = root.querySelector('[data-remodel-rp-composer]');
+    const flow = zone?.querySelector('[data-remodel-live-flow]');
+    if (flow) {
+        const ui = getLiveDirectionUiState(getActiveScene());
+        flow.querySelector('.remodel-live-mode span')?.replaceChildren(document.createTextNode(run?.state || ui.state));
+        const opening = flow.querySelector('[data-remodel-live-opening]');
+        if (opening) {
+            opening.hidden = !run?.openingLabel;
+            opening.querySelector('span')?.replaceChildren(document.createTextNode(run?.openingLabel || ''));
+        }
+        const continueButton = flow.querySelector('[data-remodel-live-continue]');
+        if (continueButton) continueButton.hidden = run?.state !== 'Waiting for you';
+        const stopButton = flow.querySelector('[data-remodel-live-stop]');
+        if (stopButton) stopButton.hidden = !run || ['Ready', 'Complete'].includes(run.state);
+    }
+    // A recovered run at the end of its accepted response is deliberately
+    // represented as "Waiting for you" so Continue can start a fresh
+    // direction. It is not generating and has no hidden suffix to reveal.
+    // Treating the mere existence of that recovery object as an active
+    // speaker resurrected a permanent "Narrator composing..." row every
+    // time a directed Scene was opened after a page reload.
+    if (run && !run.acceptedComplete && !root.querySelector('.remodel-rp-typing')) {
+        showRoleplayTypingIndicator(run.performer || null);
+    }
 }
 
 // One-line-growing textarea, capped so a long message scrolls inside the
@@ -6234,6 +7292,10 @@ function autosizeRoleplayInput(input) {
 function handleRoleplayAction(action) {
     switch (action) {
         case 'regenerate': {
+            if (isDirectedLiveScene(getActiveScene())) {
+                regenerateLastDirectedResponse(getActiveScene());
+                break;
+            }
             // core's regenerate = swipe/regenerate the last message. Flip the
             // generating state ourselves before clicking: core's own group
             // turn handling (generateGroupWrapper) flips the native group
@@ -6247,6 +7309,10 @@ function handleRoleplayAction(action) {
             break;
         }
         case 'next': {
+            if (isDirectedLiveScene(getActiveScene())) {
+                requestNextDirection(getActiveScene());
+                break;
+            }
             // Advance the group's turn / continue — core's continue option.
             setRoleplayGenerating(true);
             showRoleplayTypingIndicator();
@@ -6312,6 +7378,36 @@ function openRoleplayCastManagement() {
 // level (not on the root, which is rebuilt) and gated on
 // isRealRoleplayWorkspaceActive() so nothing fires outside a roleplay scene.
 function bindRoleplayComposerEvents() {
+    // The compact dock blooms on hover. For the two selector controls, a
+    // short intentional-hover delay opens their real menu as well; the delay
+    // prevents a casual pointer pass across the composer from flashing menus.
+    document.addEventListener('pointerover', (event) => {
+        if (!isRealRoleplayWorkspaceActive() || !window.matchMedia('(hover: hover)').matches) return;
+
+        const target = event.target instanceof Element ? event.target : null;
+        const anchor = target?.closest('[data-remodel-rp-nextspeaker-menu], [data-remodel-scene-prompt-choice]');
+        const root = getRealRoleplayRoot();
+        if (!anchor || !root?.contains(anchor) || anchor.contains(event.relatedTarget)) return;
+
+        clearTimeout(roleplayHoverMenuTimer);
+        roleplayHoverMenuTimer = setTimeout(() => {
+            if (!anchor.isConnected || !anchor.matches(':hover')) return;
+            if (anchor.matches('[data-remodel-rp-nextspeaker-menu]')) {
+                openRoleplayNextSpeakerMenu(anchor);
+            } else {
+                openScenePromptRecipeMenu(anchor);
+            }
+        }, 220);
+    });
+
+    document.addEventListener('pointerout', (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        const anchor = target?.closest('[data-remodel-rp-nextspeaker-menu], [data-remodel-scene-prompt-choice]');
+        if (!anchor || anchor.contains(event.relatedTarget)) return;
+        clearTimeout(roleplayHoverMenuTimer);
+        roleplayHoverMenuTimer = null;
+    });
+
     // Send button + action buttons (click).
     document.addEventListener('click', (event) => {
         if (!isRealRoleplayWorkspaceActive()) {
@@ -6332,7 +7428,7 @@ function bindRoleplayComposerEvents() {
             }
         }
 
-        // Popover menu (persona / next-speaker) lives in <body>, outside the
+        // Popover menu (persona / next-speaker / Director) lives in <body>, outside the
         // roleplay root — handle picks and outside-click-to-close here first.
         const menu = document.getElementById('remodel-rp-menu');
         if (menu) {
@@ -6347,7 +7443,7 @@ function bindRoleplayComposerEvents() {
             }
             // A click anywhere that isn't the menu itself (or the trigger that
             // would reopen it) closes it.
-            if (!menu.contains(target) && !target.closest('[data-remodel-rp-persona-menu], [data-remodel-rp-nextspeaker-menu], [data-remodel-scene-prompt-choice]')) {
+            if (!menu.contains(target) && !target.closest('[data-remodel-rp-persona-menu], [data-remodel-rp-nextspeaker-menu], [data-remodel-rp-director-menu], [data-remodel-scene-prompt-choice]')) {
                 closeRoleplayMenu();
                 // fall through — the click may also be a real control.
             }
@@ -6393,6 +7489,77 @@ function bindRoleplayComposerEvents() {
         const root = getRealRoleplayRoot();
         if (!root || !root.contains(target)) {
             return;
+        }
+
+        if (target.closest('[data-remodel-direction-retry]')) {
+            event.preventDefault();
+            document.getElementById('remodel-direction-failure')?.remove();
+            retryLiveDirection();
+            return;
+        }
+        if (target.closest('[data-remodel-direction-bypass]')) {
+            event.preventDefault();
+            document.getElementById('remodel-direction-failure')?.remove();
+            sendWithoutLiveDirection();
+            return;
+        }
+        if (target.closest('[data-remodel-live-mode]')) {
+            event.preventDefault();
+            const scene = getActiveScene();
+            setLiveDirectionEnabled(scene, !isDirectedLiveScene(scene));
+            renderRoleplayComposer(root);
+            return;
+        }
+        if (target.closest('[data-remodel-live-continue]')) {
+            event.preventDefault();
+            continueLiveDirection();
+            return;
+        }
+        if (target.closest('[data-remodel-live-stop]')) {
+            event.preventDefault();
+            stopLiveDirection();
+            return;
+        }
+        if (target.closest('[data-remodel-live-diagnostics]')) {
+            event.preventDefault();
+            openLiveDirectionDiagnostics();
+            return;
+        }
+        if (target.closest('[data-remodel-live-diagnostics-export]')) {
+            event.preventDefault();
+            downloadDirectionFlights();
+            return;
+        }
+        if (target.closest('[data-remodel-live-diagnostics-close]') || target.id === 'remodel-live-diagnostics-modal') {
+            event.preventDefault();
+            document.getElementById('remodel-live-diagnostics-modal')?.remove();
+            return;
+        }
+
+        if (target.closest('[data-remodel-rp-scene-back]')) {
+            event.preventDefault();
+            setRoleplayCastOpen(root, false);
+            transitionToWindow({ kind: 'tavern', tab: 'timeline' });
+            return;
+        }
+
+        const castToggle = target.closest('[data-remodel-rp-cast-toggle]');
+        if (castToggle) {
+            event.preventDefault();
+            setRoleplayCastOpen(root, !root.classList.contains('is-cast-open'));
+            return;
+        }
+
+        const directorMenu = target.closest('[data-remodel-rp-director-menu]');
+        if (directorMenu) {
+            event.preventDefault();
+            openRoleplayDirectorMenu(directorMenu);
+            return;
+        }
+
+        if (root.classList.contains('is-cast-open')
+            && !target.closest('[data-remodel-rp-cast]')) {
+            setRoleplayCastOpen(root, false);
         }
 
         if (target.closest('[data-remodel-rp-send]')) {
@@ -6482,6 +7649,34 @@ function bindRoleplayComposerEvents() {
             }
             return;
         }
+
+        // The Director plaque is deliberately inside the expanded Cast
+        // roster: choosing a card here assigns the extension-only Director
+        // seat. It does not make that card speak in native chat.
+        const directorSeat = target.closest('[data-remodel-rp-director-seat]');
+        if (directorSeat) {
+            event.preventDefault();
+            event.stopPropagation();
+            const avatar = directorSeat.getAttribute('data-remodel-rp-director-seat');
+            const scene = getActiveScene();
+            const member = roleplaySceneMembers(getContext()).find(
+                (item) => roleplayCharacterAvatar(item) === avatar,
+            );
+            if (!scene || !member) return;
+            const currentId = scene.liveDirection?.directorRef?.id || '';
+            const directorRef = currentId === avatar
+                ? null
+                : { kind: 'character', id: avatar, label: member.name };
+            setSceneRoleplayDirector(scene.id, directorRef);
+            clearLiveDirectionFailure();
+            document.getElementById('remodel-direction-failure')?.remove();
+            showRoleplayToast(directorRef
+                ? `${member.name} is now the Roleplay Director.`
+                : 'Roleplay Director seat cleared.');
+            renderRoleplayScene();
+            setRoleplayCastOpen(document.getElementById('remodel-roleplay-root'), true);
+            return;
+        }
     });
 
     // Enter-to-send + autosize in the roleplay input; Enter-to-roll in the
@@ -6493,6 +7688,15 @@ function bindRoleplayComposerEvents() {
         const el = event.target instanceof Element ? event.target : null;
         if (!el) {
             return;
+        }
+
+        if (event.key === 'Escape') {
+            const root = getRealRoleplayRoot();
+            if (root?.classList.contains('is-cast-open')) {
+                event.preventDefault();
+                setRoleplayCastOpen(root, false);
+                return;
+            }
         }
 
         const diceInput = el.closest('[data-remodel-rp-dice-input]');
@@ -6548,12 +7752,19 @@ function bindRoleplayComposerEvents() {
         const input = el.closest('[data-remodel-rp-input]');
         if (input instanceof HTMLTextAreaElement) {
             autosizeRoleplayInput(input);
+            handleLiveDirectionDraft(input.value);
             return;
         }
+
         const rules = el.closest('[data-remodel-rp-rules]');
         if (rules instanceof HTMLTextAreaElement) {
             writeRoleplayRulesNotes(rules.value);
         }
+    });
+    document.addEventListener('change', (event) => {
+        if (!isRealRoleplayWorkspaceActive()) return;
+        const pacing = event.target instanceof Element ? event.target.closest('[data-remodel-live-pacing]') : null;
+        if (pacing instanceof HTMLSelectElement) setLiveDirectionPacing(getActiveScene(), pacing.value);
     });
 }
 
@@ -6577,7 +7788,17 @@ function bindRoleplayGenerationFeedback() {
     });
 
     const finish = () => {
+        clearMechanicsReceiptInjection();
+        if (ownsLiveDirectionGeneration() || getLiveDirectionRun()) {
+            return;
+        }
         if (!document.body.classList.contains('remodel-roleplay-generating')) {
+            return;
+        }
+        // A directed Scene runs two generations back to back. This fires at the
+        // end of the FIRST leg, so tearing the turn UI down here would drop the
+        // typing indicator and re-render while the narrator is still to come.
+        if (isStoryPipelineRunning()) {
             return;
         }
         setRoleplayGenerating(false);
@@ -6595,11 +7816,24 @@ function bindRoleplayGenerationFeedback() {
         if (!isRealRoleplayWorkspaceActive() || !document.body.classList.contains('remodel-roleplay-generating')) {
             return;
         }
-        updateRoleplayTypingText(text);
+        if (!ownsLiveDirectionGeneration()) updateRoleplayTypingText(text);
     });
 }
 
 function setRoleplayGenerating(on) {
+    if (!on && isRealRoleplayWorkspaceActive()) {
+        // Core's generateGroupWrapper() always calls select_group_chats()
+        // before a group response. In native SillyTavern that merely changes
+        // the right drawer's current page; Remodel adopts that page as a
+        // full-screen editor, so it must be put away before the temporary
+        // generating class (which hides it during the request) is removed.
+        // A Cast/Group editor deliberately opened while idle is unaffected:
+        // this cleanup runs only when an actual roleplay generation settles.
+        const groupPanel = document.getElementById('rm_group_chats_block');
+        if (groupPanel && getComputedStyle(groupPanel).display !== 'none') {
+            selectRightMenuWithAnimation(null);
+        }
+    }
     document.body.classList.toggle('remodel-roleplay-generating', Boolean(on));
     if (!on) {
         removeRoleplayTypingIndicator();
@@ -6610,7 +7844,7 @@ function setRoleplayGenerating(on) {
 // Guesses the upcoming speaker: in a group we can't know for sure until the
 // message arrives, so it shows a neutral "…" until the first token names a
 // speaker; in a solo scene it's the one character.
-function showRoleplayTypingIndicator() {
+function showRoleplayTypingIndicator(forcedPerformer = null) {
     const root = getRealRoleplayRoot();
     const stream = root?.querySelector('[data-remodel-rp-stream]');
     if (!stream || stream.querySelector('.remodel-rp-typing')) {
@@ -6619,12 +7853,18 @@ function showRoleplayTypingIndicator() {
 
     const context = getContext();
     const members = roleplaySceneMembers(context);
-    const speaker = context.groupId ? null : members[0];
-    const name = speaker?.name || '';
+    const speaker = forcedPerformer
+        ? members.find((member) => member.characterId === forcedPerformer.characterId) || null
+        : (context.groupId ? null : members[0]);
+    const name = forcedPerformer?.label || speaker?.name || '';
     const color = name ? roleplaySpeakerColor(name) : null;
 
+    const scene = getActiveScene();
+    const narratorId = scene?.liveDirection?.narratorRef?.id || '';
+    const performerId = forcedPerformer?.ref?.id || '';
+    const isNarrator = Boolean(narratorId && performerId === narratorId);
     const row = document.createElement('div');
-    row.className = `remodel-rp-msg remodel-rp-character remodel-rp-typing`;
+    row.className = `remodel-rp-msg remodel-rp-${isNarrator ? 'narrator' : 'character'} remodel-rp-typing`;
     if (color) {
         row.classList.add(`remodel-rp-color-${color}`);
     }
@@ -6632,7 +7872,7 @@ function showRoleplayTypingIndicator() {
     const avatar = speaker
         ? buildRoleplayAvatar(name)
         : (() => { const d = document.createElement('div'); d.className = 'remodel-rp-avatar'; d.textContent = '…'; return d; })();
-    row.appendChild(avatar);
+    if (!isNarrator) row.appendChild(avatar);
 
     const bubble = document.createElement('div');
     bubble.className = 'remodel-rp-bubble';
@@ -6801,11 +8041,16 @@ function buildRoleplayMessage(mesId, message, { messagesSince = 0 } = {}) {
     const isSystem = Boolean(message.is_system);
     const name = message.name || (isUser ? 'You' : 'Unknown');
 
-    const kind = isUser ? 'user' : (isSystem ? 'narrator' : 'character');
+    const scene = getActiveScene();
+    const narratorId = scene?.liveDirection?.narratorRef?.id || '';
+    const speakerAvatar = roleplayCharacterAvatar({ name });
+    const isBoundNarrator = !isUser && narratorId && speakerAvatar === narratorId;
+    const kind = isUser ? 'user' : (isSystem || message.extra?.type === 'narrator' || isBoundNarrator ? 'narrator' : 'character');
     const color = kind === 'character' ? roleplaySpeakerColor(name) : null;
 
     const row = document.createElement('div');
     row.className = `remodel-rp-msg remodel-rp-${kind}`;
+    if (message.extra?.remodelDirection?.interrupted) row.classList.add('remodel-rp-interrupted');
     if (color) {
         row.classList.add(`remodel-rp-color-${color}`);
     }
@@ -6844,7 +8089,7 @@ function buildRoleplayMessage(mesId, message, { messagesSince = 0 } = {}) {
     // truth, no parallel markdown implementation to drift. display_text
     // (used by some extensions to override what's shown) is honored first,
     // exactly as core does.
-    const source = message.extra?.display_text ?? message.mes ?? '';
+    const source = sanitizeDirectionText(message.extra?.display_text ?? message.mes ?? '');
     try {
         const context = getContext();
         body.innerHTML = context.messageFormatting(source, name, isSystem, isUser, mesId);
@@ -7092,11 +8337,22 @@ function renderRoleplayScene() {
 
     const chatEl = getRealChatElement();
     const context = getContext();
+    const activeRoleplayScene = getActiveScene();
+    setExtensionPrompt(
+        'remodel_story_goals',
+        formatStoryGoalsPrompt(activeRoleplayScene),
+        extension_prompt_types.IN_CHAT,
+        1,
+        false,
+        extension_prompt_roles.SYSTEM,
+        () => getActiveScene()?.id === activeRoleplayScene?.id,
+    );
     const stream = root.querySelector('[data-remodel-rp-stream]');
     if (!stream) {
         return;
     }
     stream.textContent = '';
+    const liveRun = getLiveDirectionRun();
 
     const mesEls = Array.from(chatEl?.querySelectorAll(':scope > .mes') ?? []);
 
@@ -7106,6 +8362,9 @@ function renderRoleplayScene() {
         empty.textContent = 'The scene is set. Write the first line below to begin.';
         stream.appendChild(empty);
     } else {
+        const pendingDirections = [...(Array.isArray(activeRoleplayScene?.liveDirection?.directionLog)
+            ? activeRoleplayScene.liveDirection.directionLog
+            : [])].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
         mesEls.forEach((mesEl, index) => {
             const mesId = Number(mesEl.getAttribute('mesid'));
             const message = context.chat[mesId];
@@ -7116,22 +8375,36 @@ function renderRoleplayScene() {
             // (a roll from many turns back is stale context, not something
             // that should keep taking up visual weight forever).
             const messagesSince = mesEls.length - 1 - index;
-            stream.appendChild(buildRoleplayMessage(mesId, message, { messagesSince }));
+            const messageTime = new Date(message.send_date || message.sendDate || 0).getTime();
+            while (pendingDirections.length && Number.isFinite(messageTime)
+                && new Date(pendingDirections[0].createdAt).getTime() <= messageTime) {
+                stream.appendChild(buildRoleplayDirectionCard(pendingDirections.shift()));
+            }
+            const isHiddenLiveMessage = liveRun && !liveRun.acceptedComplete && !message.is_user && mesId === liveRun.messageId;
+            if (!isHiddenLiveMessage) stream.appendChild(buildRoleplayMessage(mesId, message, { messagesSince }));
         });
+        pendingDirections.forEach((record) => stream.appendChild(buildRoleplayDirectionCard(record)));
         // Land at the latest line, same as the manuscript's scroll-to-bottom.
         requestAnimationFrame(() => {
             stream.scrollTop = stream.scrollHeight;
         });
     }
 
+    renderRoleplayHeader(root);
     renderRoleplayCast(root);
+    renderRoleplayDirectionFeed(root, activeRoleplayScene);
     renderRoleplayComposer(root);
+    decorateStoryGoalStream(root, getActiveScene());
+    renderStoryGoalsForRoleplay(root, getActiveScene());
     ensureRoleplayPanels();
 
     // A stream rebuild wipes the (non-.mes-backed) typing indicator; if a
     // generation is still in flight, put it back so the "someone is
     // composing" affordance survives the user's own message rendering.
-    if (document.body.classList.contains('remodel-roleplay-generating')) {
+    if (liveRun && !liveRun.acceptedComplete) {
+        showRoleplayTypingIndicator(liveRun.performer);
+        updateRoleplayTypingText(liveRun.acceptedVisibleText || '');
+    } else if (document.body.classList.contains('remodel-roleplay-generating')) {
         showRoleplayTypingIndicator();
     }
 }
@@ -7572,6 +8845,9 @@ function renderRoleplayCast(root) {
 
     const context = getContext();
     const members = roleplaySceneMembers(context);
+    const scene = getActiveScene();
+    const directorId = scene?.liveDirection?.directorRef?.id || '';
+    const narratorId = scene?.liveDirection?.narratorRef?.id || '';
     const speakingName = roleplayCurrentSpeakerName(context);
     // Remove + reorder are only meaningful in a group with more than one
     // member (a scene needs at least one character; order matters for the
@@ -7600,6 +8876,25 @@ function renderRoleplayCast(root) {
 
         const av = buildRoleplayAvatar(member.name, { className: 'remodel-rp-cast-avatar' });
         chip.appendChild(av);
+
+        if (avatar && avatar !== narratorId) {
+            const director = document.createElement('button');
+            director.type = 'button';
+            director.className = 'remodel-rp-director-plaque';
+            director.dataset.remodelRpDirectorSeat = avatar;
+            director.title = directorId === avatar ? `${member.name} is the Roleplay Director — click to clear` : `Make ${member.name} the Roleplay Director`;
+            director.setAttribute('aria-pressed', String(directorId === avatar));
+            director.innerHTML = directorId === avatar
+                ? '<i class="fa-solid fa-clapperboard" aria-hidden="true"></i><span>Roleplay Director</span>'
+                : '<i class="fa-solid fa-clapperboard" aria-hidden="true"></i><span>Direct</span>';
+            chip.classList.toggle('is-roleplay-director', directorId === avatar);
+            chip.appendChild(director);
+        } else if (avatar === narratorId) {
+            const performer = document.createElement('span');
+            performer.className = 'remodel-rp-performer-plaque';
+            performer.innerHTML = '<i class="fa-solid fa-microphone-lines" aria-hidden="true"></i><span>Visible Narrator</span>';
+            chip.appendChild(performer);
+        }
 
         if (canRemove && avatar) {
             const remove = document.createElement('button');
@@ -7635,6 +8930,39 @@ function renderRoleplayCast(root) {
     cast.appendChild(add);
 }
 
+function renderRoleplayDirectionFeed(root, scene) {
+    // Director selection belongs exclusively to the expanded Cast roster.
+    // Direction records themselves are inserted chronologically into the
+    // roleplay stream, so no detached floating Director bar is rendered.
+}
+
+function buildRoleplayDirectionCard(record) {
+    const row = document.createElement('article');
+    row.className = 'remodel-rp-msg remodel-rp-direction-stream-card';
+    row.dataset.remodelDirectionId = record.id;
+    const beats = record.constraints?.length
+        ? `<ul>${record.constraints.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+        : '';
+    const openings = record.openings?.length
+        ? `<span><i class="fa-regular fa-lightbulb"></i> ${record.openings.map((item) => escapeHtml(item.label)).join(' · ')}</span>`
+        : '';
+    const mechanicalCount = Number(record.immediateCount || 0) + Number(record.checkpointCount || 0);
+    const trace = record.decisionTrace || {};
+    const traceItems = [
+        ...(trace.observations || []).map((item) => `<li><span>Observed</span>${escapeHtml(item)}</li>`),
+        ...(trace.intent ? [`<li><span>Intent</span>${escapeHtml(trace.intent)}</li>`] : []),
+        ...(trace.performerReason ? [`<li><span>Performer</span>${escapeHtml(trace.performerReason)}</li>`] : []),
+    ].join('');
+    row.innerHTML = `<div class="remodel-rp-direction-stream-inner">
+        <header><span class="remodel-rp-direction-badge"><i class="fa-solid fa-clapperboard"></i> Roleplay Director</span><strong>${escapeHtml(record.directorLabel || 'Game Director')}</strong><small>${escapeHtml(formatRoleplayTime(record.createdAt))}</small></header>
+        <p>${escapeHtml(record.objective)}</p>
+        ${beats}
+        ${traceItems ? `<details class="remodel-rp-direction-trace"><summary><i class="fa-solid fa-diagram-project"></i> Decision trace</summary><p>This is a concise rationale summary, not private chain-of-thought.</p><ul>${traceItems}</ul></details>` : ''}
+        <footer><span>Directing ${escapeHtml(record.performerLabel || 'the next performer')}</span>${openings}${mechanicalCount ? `<span><i class="fa-solid fa-gears"></i> ${mechanicalCount} mechanical operation${mechanicalCount === 1 ? '' : 's'}</span>` : ''}${record.hardPauseAfter ? '<span><i class="fa-solid fa-hand"></i> Hard pause</span>' : ''}</footer>
+    </div>`;
+    return row;
+}
+
 // Pointer-based drag-to-reorder for cast members. Native HTML5 drag-and-drop
 // proved unreliable here (the drop event frequently never fired against the
 // avatar-image children), so this uses pointer events directly: press a chip,
@@ -7659,7 +8987,7 @@ function bindRoleplayCastDragEvents() {
         }
         const chip = event.target instanceof Element ? event.target.closest('.remodel-rp-cast-draggable') : null;
         // Don't start a drag from the remove "×" button.
-        if (!chip || (event.target instanceof Element && event.target.closest('[data-remodel-rp-cast-remove]'))) {
+        if (!chip || (event.target instanceof Element && event.target.closest('[data-remodel-rp-cast-remove], [data-remodel-rp-director-seat]'))) {
             return;
         }
         roleplayDrag.pointerId = event.pointerId;

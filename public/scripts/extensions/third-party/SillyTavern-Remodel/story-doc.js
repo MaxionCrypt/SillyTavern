@@ -9,7 +9,7 @@ import { getContext } from '../../../st-context.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'storyDocsV1';
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 
 function getStore() {
     const context = getContext();
@@ -50,6 +50,12 @@ export function createStoryDoc({ title = 'New Story', boundCharacterId = null } 
         // core's numeric character index (this_chid-style), same convention the
         // timeline scene bindings use.
         boundCharacterId: boundCharacterId == null ? null : String(boundCharacterId),
+        // StoryDocs have no native chat_metadata, so this is their explicit
+        // equivalent of a chat-bound lorebook. Global, persona, and character
+        // lorebook associations remain live native sources.
+        lorebookName: null,
+        scanGuidanceForLore: false,
+        worldInfoState: normalizeWorldInfoState(),
         // The prose. Plain text (paragraphs separated by blank lines); the
         // editor renders it and writes edits straight back here.
         body: '',
@@ -104,6 +110,15 @@ export function updateStoryDoc(docId, patch) {
     if ('boundCharacterId' in patch) {
         doc.boundCharacterId = patch.boundCharacterId == null ? null : String(patch.boundCharacterId);
     }
+    if ('lorebookName' in patch) {
+        doc.lorebookName = patch.lorebookName == null || patch.lorebookName === '' ? null : String(patch.lorebookName);
+    }
+    if ('scanGuidanceForLore' in patch) {
+        doc.scanGuidanceForLore = Boolean(patch.scanGuidanceForLore);
+    }
+    if ('worldInfoState' in patch) {
+        doc.worldInfoState = normalizeWorldInfoState(patch.worldInfoState);
+    }
     doc.updatedAt = now();
     saveStoryDocStore();
     return doc;
@@ -145,7 +160,31 @@ function normalizeStore(store) {
         doc.priorSceneId = doc.priorSceneId == null ? null : String(doc.priorSceneId);
         doc.beats = Array.isArray(doc.beats) ? doc.beats.map(normalizeBeat).filter(Boolean) : [];
         doc.boundCharacterId = doc.boundCharacterId == null ? null : String(doc.boundCharacterId);
+        doc.lorebookName = doc.lorebookName == null || doc.lorebookName === '' ? null : String(doc.lorebookName);
+        doc.scanGuidanceForLore = Boolean(doc.scanGuidanceForLore);
+        doc.worldInfoState = normalizeWorldInfoState(doc.worldInfoState);
     }
+}
+
+function normalizeWorldInfoState(value = {}) {
+    const source = value && typeof value === 'object' ? value : {};
+    const normalizeEffects = (effects) => {
+        const result = {};
+        if (!effects || typeof effects !== 'object') return result;
+        for (const [key, effect] of Object.entries(effects)) {
+            if (!effect || typeof effect !== 'object') continue;
+            result[String(key)] = {
+                hash: Number(effect.hash) || 0,
+                end: Math.max(0, Number(effect.end) || 0),
+            };
+        }
+        return result;
+    };
+    return {
+        generationIndex: Math.max(0, Number(source.generationIndex) || 0),
+        sticky: normalizeEffects(source.sticky),
+        cooldown: normalizeEffects(source.cooldown),
+    };
 }
 
 function normalizeBeat(value) {

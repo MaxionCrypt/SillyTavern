@@ -51,6 +51,10 @@ public/error/
 /data
 /default/scaffold
 public/scripts/extensions/third-party
+!public/scripts/extensions/third-party/
+public/scripts/extensions/third-party/*
+!public/scripts/extensions/third-party/SillyTavern-Remodel/
+!public/scripts/extensions/third-party/SillyTavern-Remodel/**
 /certs
 .aider*
 .env
