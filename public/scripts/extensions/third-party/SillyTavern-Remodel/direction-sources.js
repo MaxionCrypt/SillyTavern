@@ -52,8 +52,10 @@ function describeMechanics(mechanics, { mechanicsEnabled = false } = {}) {
     const goals = Array.isArray(mechanics?.goals) ? mechanics.goals : [];
     // The one place refs are still read: relationships and the user's attached
     // attempts arrive keyed by `g1…gN` (buildMechanicalSnapshot), and both are
-    // resolved back to titles here rather than being printed raw.
-    const titleByRef = new Map(goals.map((goal) => [goal.ref, goal.title]));
+    // resolved back to titles here rather than being printed raw. Refless
+    // Goals are excluded so an unresolved relationship endpoint — which
+    // describeRelations renders as '' — cannot accidentally match one.
+    const titleByRef = new Map(goals.filter((goal) => goal.ref && goal.title).map((goal) => [goal.ref, goal.title]));
     const sections = [
         mechanicsEnabled ? section('CAPABILITIES', describeCapabilities(mechanics?.capabilities)) : '',
         section('VARIABLES', mechanics?.serializedVariables || '(none retrieved this turn)', describeRetrieval(mechanics?.retrieval)),

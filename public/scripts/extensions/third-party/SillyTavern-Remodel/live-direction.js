@@ -994,9 +994,9 @@ async function revealStep() {
  * Requests name Variables and Goals by the Timeline's address book (see
  * direction-address.js), not by an opaque ref. This resolves each request's
  * name against the book this pass actually advertised and adds a name-keyed
- * entry to a COPY of the ref maps the capability layer already reads with
- * `.get(ref)` — so mechanics-capabilities.js needs no change, it just gets
- * handed names as keys instead of synthetic refs. A name absent from the book
+ * entry to a NEW map the capability layer already reads with `.get(ref)` — so
+ * mechanics-capabilities.js needs no change, it just gets handed names as keys
+ * instead of synthetic refs. A name absent from the book
  * is simply left unresolved, which the capability layer already refuses as
  * "not advertised for this request"; the specific reason (unknown vs.
  * duplicated) is collected in `unresolvedReasons` for the caller to surface
