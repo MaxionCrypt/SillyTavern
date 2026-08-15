@@ -374,7 +374,16 @@ function normalizeStore(store, seed) {
     store.active ??= {};
     for (const mode of PROMPT_MODES) {
         store.active[mode] ??= {};
-        for (const apiType of PROMPT_API_TYPES) {
+        // Director recipes are Chat Completion only (Live Direction has no
+        // Text Completion path), so never seed — or even probe for — a
+        // director/text active slot. Doing so would call defaultBlocksFor
+        // with apiType 'text' but mode 'director', and defaultBlocksFor
+        // ignores apiType for director; normalizeRecipe below then forces
+        // the created recipe back to 'chat', so on every subsequent load the
+        // active[mode].text slot would mismatch its own recipe's apiType and
+        // a fresh orphan recipe would be created and persisted forever.
+        const apiTypesForMode = mode === 'director' ? ['chat'] : PROMPT_API_TYPES;
+        for (const apiType of apiTypesForMode) {
             const current = store.recipes[store.active[mode][apiType]];
             if (!current || current.mode !== mode || current.apiType !== apiType) {
                 const fallback = store.recipeIds.map((id) => store.recipes[id]).find((recipe) => recipe?.mode === mode && recipe.apiType === apiType);
@@ -450,7 +459,13 @@ function createPromptRecipeWithoutSave(store, input) {
 function normalizeRecipe(value) {
     if (!value || typeof value !== 'object' || !value.id) return null;
     const mode = PROMPT_MODES.includes(value.mode) ? value.mode : 'story';
-    const apiType = PROMPT_API_TYPES.includes(value.apiType) ? value.apiType : 'chat';
+    // Belt-and-suspenders alongside createPromptRecipe's own forcing and the
+    // normalizeStore active-slot loop skipping 'text' for director: this is
+    // the one funnel every recipe passes through (fresh creation *and*
+    // recipes loaded back out of persisted settings), so it is the place a
+    // stray or hand-edited director/text recipe gets coerced back to chat
+    // rather than silently surviving a reload.
+    const apiType = mode === 'director' ? 'chat' : (PROMPT_API_TYPES.includes(value.apiType) ? value.apiType : 'chat');
     return {
         id: String(value.id),
         name: normalizeText(value.name, 'Untitled Prompt'),
