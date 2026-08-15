@@ -3828,7 +3828,7 @@ function renderTimelineFocus(timeline, store) {
                     </button>
                     <button
                         type="button"
-                        class="remodel-route-round-button ${getSessionState().codexOpen ? 'is-bound' : ''}"
+                        class="remodel-route-round-button ${getSessionState().codexOpen ? 'is-open' : ''}"
                         title="${getSessionState().codexOpen ? 'Back to Scenes' : 'Variables Codex'}"
                         aria-label="Variables Codex"
                         aria-pressed="${getSessionState().codexOpen ? 'true' : 'false'}"
