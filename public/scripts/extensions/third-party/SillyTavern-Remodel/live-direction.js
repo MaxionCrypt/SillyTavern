@@ -393,6 +393,22 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     const message = context.chat[messageId];
     const saved = message?.extra?.remodelDirection;
     if (!saved || message.is_user) return false;
+    // Every other acceptance path checks this — applyPendingRequests refuses
+    // when `scene.id !== run.sceneId`. Without it here, regenerate undoes
+    // another Scene's transactions, re-attaches that Scene's advertised
+    // address book, and hands it to generateDirectedPerformer, which stamps
+    // the CURRENT Scene's id onto the result. A cross-Timeline replay fails
+    // closed on requireVariable/requireGoal, but a same-Timeline replay into a
+    // different Scene would succeed against a set this Scene never advertised.
+    // Nothing structurally prevents two Scenes resolving to the same chat.
+    if (saved.sceneId && saved.sceneId !== scene.id) {
+        journal('regenerate.rejected', {
+            reason: 'the saved direction belongs to a different Scene',
+            savedSceneId: saved.sceneId,
+            sceneId: scene.id,
+        }, { severity: 'warn' });
+        return requestNextDirection(scene);
+    }
     const transactionIds = [...(saved.checkpointTransactionIds || [])].reverse();
     const transactions = listMechanicsTransactions({ timelineId: scene.timelineId, sceneId: scene.id });
     for (const id of transactionIds) {
