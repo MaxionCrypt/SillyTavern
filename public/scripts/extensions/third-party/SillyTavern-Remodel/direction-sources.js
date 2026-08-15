@@ -1,7 +1,13 @@
 // The content behind each source block of a Director recipe.
 //
-// PURE — takes a snapshot, returns strings. Keeping it free of context imports
-// means the exact text sent to the Director can be asserted in tests.
+// PURE OUTPUT — takes a snapshot, returns strings. The one exception is the
+// capability dictionary below, which pulls a static, computed-only export out
+// of mechanics-capabilities.js; that file also exports context-touching
+// functions this module never calls, so the exact text sent to the Director
+// can still be asserted offline, through the same st-context stub every other
+// Remodel test uses.
+
+import { getCapabilityDictionary } from './mechanics-capabilities.js';
 
 /**
  * @param {object} snapshot the direction snapshot
@@ -43,12 +49,28 @@ function describeMechanics(mechanics) {
     return `[GOALS AND VARIABLES — persistent memory, not a turn structure]
 Address each one by the exact name below. A name you were not given will be rejected. Never invent an identifier, never roll dice, never change state yourself — request it and code will validate and apply it.
 
+CAPABILITIES
+${describeCapabilities()}
+
 VARIABLES
 ${mechanics?.serializedVariables || '(none retrieved this turn)'}
 
 GOALS
 ${goals || '(none active)'}
 ${duplicates.length ? `\nUnusable — these names are duplicated in this Timeline and cannot be addressed: ${duplicates.join(', ')}` : ''}`;
+}
+
+/**
+ * The verbs a Director's `requests` may name, spelled out rather than left
+ * for the model to infer from a record's shape. Without this list a Director
+ * can see a Variable or Goal in the snapshot above and have no idea what may
+ * be asked of it — the dictionary existed for exactly this before the
+ * compiled-recipe rework dropped it.
+ */
+function describeCapabilities() {
+    return getCapabilityDictionary()
+        .map((capability) => `- ${capability.name} (${capability.applicableKinds.join(', ')}): ${capability.description}`)
+        .join('\n');
 }
 
 function describeSnapshot(snapshot) {

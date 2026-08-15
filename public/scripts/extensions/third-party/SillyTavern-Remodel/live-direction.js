@@ -16,11 +16,10 @@ import {
     toCoreJsonSchema,
     undoMechanicsTransaction,
 } from './mechanics-capabilities.js';
-import {
-    buildMechanicalSnapshot,
-    formatMechanicsReceipts,
-} from './mechanics-runtime.js';
+import { buildMechanicalSnapshot } from './mechanics-runtime.js';
 import { buildDirectionSources } from './direction-sources.js';
+import { resolveByName } from './direction-address.js';
+import { deriveBeats } from './direction-beats.js';
 import { compilePromptRecipe, resolveDirectorRecipe } from './prompt-studio.js';
 import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
 import { readDirectionUnit, sanitizeDirectionText } from './live-direction-markers.js';
@@ -401,10 +400,12 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
         if (tx) undoMechanicsTransaction(tx);
     }
     await context.deleteMessage(messageId);
-    const movement = saved.movement;
     const performer = resolvePerformer(saved.performerRef, scene);
-    if (!movement || !performer) return requestNextDirection(scene);
-    const envelope = normalizeEnvelope(saved.envelope, scene, performer.ref);
+    // `movement.objective` covers a message saved by the previous schema, the
+    // same fallback normalizeEnvelope itself applies.
+    const hadInstruction = Boolean(saved.envelope?.instruction || saved.envelope?.movement?.objective);
+    if (!hadInstruction || !performer) return requestNextDirection(scene);
+    const envelope = normalizeEnvelope(saved.envelope, scene);
     return generateDirectedPerformer({ scene, envelope, performer, autonomousSequence: Number(saved.autonomousSequence) || 0 });
 }
 
@@ -460,11 +461,8 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             passId: token.id,
             directionId: envelope.directionId,
             durationMs: Date.now() - startedAt,
-            performerRef: envelope.performerRef || null,
-            movementChars: String(envelope.movement?.objective || '').length,
-            openings: envelope.openings.length,
-            immediateRequests: envelope.mechanics.immediateRequests.length,
-            checkpoints: envelope.mechanics.checkpoints.length,
+            instructionChars: String(envelope.instruction || '').length,
+            requestCount: envelope.requests.length,
             continueAfter: envelope.flow.continueAfter,
             hardPauseAfter: envelope.flow.hardPauseAfter,
             reasoningLength: lastDirectorReasoning.length,
@@ -478,41 +476,39 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // during it — Stop, a user intervention outranking an autonomous pass —
         // lands here, before a single native token is spent.
         if (token.aborted) return abandonPass(token, 'envelope');
-        const requestedRef = performerOverride || envelope.performerRef;
+        // Performer selection is no longer the Director's to make — whoever
+        // holds the Scene's Narrator badge speaks. A manual "speak next"
+        // override still outranks it when one is armed.
+        const requestedRef = performerOverride || scene.liveDirection?.narratorRef;
         const performer = resolvePerformer(requestedRef, scene);
         performerOverride = null;
         if (!performer) {
             const requested = normalizeRef(requestedRef);
             const available = snapshot.cast.map((item) => `${item.label} (${item.ref?.id || '?'})`).join(', ') || 'none';
-            throw new Error(`The Director selected ${requested?.label || requested?.id || 'an unknown performer'}, but the available performers are: ${available}.`);
+            throw new Error(requested
+                ? `The Scene's Narrator (${requested.label || requested.id}) is not an active cast member. Available performers: ${available}.`
+                : `No performer could be resolved to speak this direction — bind a Narrator for this Scene, or leave only one active performer. Available performers: ${available}.`);
         }
         journal('performer', {
             passId: token.id,
             requestedRef: normalizeRef(requestedRef),
             resolvedRef: performer.ref,
             nativeIndex: performer.characterId,
-            // resolvePerformer substitutes the Narrator (or the sole card) when
-            // the model names something that is not a native performer.
+            // resolvePerformer substitutes the sole available card when no
+            // Narrator is bound.
             substituted: normalizeRef(requestedRef)?.id !== performer.ref.id,
         }, { correlationId: token.id });
-        const normalized = normalizeEnvelope(envelope, scene, performer.ref);
+        const normalized = normalizeEnvelope(envelope, scene);
+        // Mechanical requests are addressed by name against exactly what this
+        // pass advertised (direction-address.js); they are validated and
+        // applied once the response is accepted, not here — see
+        // finalizeRunMessage. Carried on the envelope rather than executed
+        // eagerly, which is the change this task makes.
         normalized.variableRefs = snapshot.mechanics.variableRefs;
         normalized.goalRefs = snapshot.mechanics.goalRefs;
+        normalized.addressBook = snapshot.mechanics.addressBook;
         normalized.authorizedGoalIds = authorizedGoalIds;
-        const immediate = executeDirectionRequests(normalized.mechanics.immediateRequests, {
-            scene, directionId: normalized.directionId, checkpointId: 'immediate', authorizedGoalIds,
-            variableRefs: normalized.variableRefs, goalRefs: normalized.goalRefs,
-        });
-        journal('mechanics.immediate', {
-            passId: token.id,
-            requested: normalized.mechanics.immediateRequests.length,
-            ok: immediate.ok,
-            errors: immediate.errors || [],
-            transactionId: immediate.transaction?.id || null,
-        }, { correlationId: token.id, severity: immediate.ok ? 'info' : 'error' });
-        if (!immediate.ok) throw new Error(immediate.errors?.join(' ') || 'Immediate mechanical requests were rejected.');
-        normalized.immediateReceipts = immediate.receipts || [];
-        if (token.aborted) return abandonPass(token, 'mechanics');
+        if (token.aborted) return abandonPass(token, 'normalized');
         if (insertUser) {
             await sendMessageAsUser(action);
             hooks.clearComposer();
@@ -626,7 +622,7 @@ async function requestDirectionEnvelope(scene, snapshot) {
             { role: 'user', content: sources.directorSnapshot },
         ];
     }
-    const schema = toCoreJsonSchema(getDirectionEnvelopeSchema(snapshot.cast));
+    const schema = toCoreJsonSchema(getDirectionEnvelopeSchema());
     let raw;
     let reasoning = '';
     if (testAdapters?.requestDirection) {
@@ -668,52 +664,24 @@ async function requestDirectionEnvelope(scene, snapshot) {
     //
     // Never accept it from the model, even when it looks unique.
     envelope.directionId = createId('direction');
-    // Performer identity is extension-owned, not model-owned. When only one
-    // native speaking card is available (the common Director + Narrator
-    // setup), an empty, fictional, or malformed performerRef from the model
-    // cannot create ambiguity. Pin it to the sole advertised native card
-    // before beginDirection validates the envelope.
-    if (snapshot.cast.length === 1 && snapshot.cast[0]?.ref?.id) {
-        envelope.performerRef = structuredClone(snapshot.cast[0].ref);
-    }
     // Some OpenAI-compatible providers advertise JSON Schema support but
-    // omit required nested objects. Repair only the transport skeleton here;
-    // retain every valid semantic value the Director did return. A useful
-    // movement fallback keeps the scene operable without inventing events.
-    const returnedObjective = String(
-        envelope.movement?.objective
-        || envelope.display?.summary
-        || envelope.objective
-        || envelope.summary
-        || '',
-    ).trim();
-    const safeObjective = returnedObjective
+    // omit required fields. Repair only the transport skeleton here; retain
+    // every valid semantic value the Director did return. A useful fallback
+    // keeps the scene operable without inventing events. `movement.objective`
+    // covers a reply still in flight against the previous schema when this
+    // shipped.
+    const returnedInstruction = String(envelope.instruction || envelope.movement?.objective || '').trim();
+    envelope.instruction = returnedInstruction
         || `Respond naturally to the current action while preserving accepted scene facts: ${String(snapshot.currentAction || '').trim()}`;
-    envelope.movement = {
-        objective: safeObjective,
-        constraints: Array.isArray(envelope.movement?.constraints) ? envelope.movement.constraints : [],
-        breathingGuidance: String(envelope.movement?.breathingGuidance || ''),
-    };
-    envelope.display = {
-        summary: String(envelope.display?.summary || returnedObjective || safeObjective),
-        beats: Array.isArray(envelope.display?.beats) ? envelope.display.beats : [],
-        observations: Array.isArray(envelope.display?.observations) ? envelope.display.observations : [],
-        intent: String(envelope.display?.intent || ''),
-        performerReason: String(envelope.display?.performerReason || ''),
-    };
     envelope.flow = {
         continueAfter: Boolean(envelope.flow?.continueAfter),
         hardPauseAfter: Boolean(envelope.flow?.hardPauseAfter),
     };
-    envelope.openings = Array.isArray(envelope.openings) ? envelope.openings : [];
-    envelope.mechanics = {
-        immediateRequests: Array.isArray(envelope.mechanics?.immediateRequests) ? envelope.mechanics.immediateRequests : [],
-        checkpoints: Array.isArray(envelope.mechanics?.checkpoints) ? envelope.mechanics.checkpoints : [],
-    };
-    if (!profile.enabled && envelope?.mechanics) {
-        envelope.mechanics.immediateRequests = [];
-        envelope.mechanics.checkpoints = [];
-    }
+    envelope.requests = Array.isArray(envelope.requests) ? envelope.requests : [];
+    // Mechanics disabled for this account: never let a Director reply carry
+    // requests forward for code that will not offer Variables or Goals to
+    // resolve them against.
+    if (!profile.enabled) envelope.requests = [];
     return envelope;
 }
 
@@ -731,7 +699,7 @@ async function requestDirectionEnvelope(scene, snapshot) {
  *
  * The Director is NOT re-run: the direction was valid, only its rendering
  * failed, and re-directing would cost a second long call and could change the
- * movement the user is waiting on.
+ * instruction the user is waiting on.
  */
 const EMPTY_RESPONSE_RETRIES = 2;
 const EMPTY_RESPONSE_RETRY_DELAY_MS = 400;
@@ -739,7 +707,7 @@ const EMPTY_RESPONSE_RETRY_DELAY_MS = 400;
 async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0 }) {
     const director = resolveDirector(scene);
     persistDirectionRecord(scene, envelope, performer, director);
-    const movementPrompt = formatMovementPrompt(envelope, performer);
+    const movementPrompt = formatMovementPrompt(envelope);
     activeRun = {
         directionId: envelope.directionId,
         sceneId: scene.id,
@@ -748,7 +716,6 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         performer,
         director,
         envelope,
-        movement: envelope.movement,
         rawBufferedText: '',
         acceptedVisibleText: '',
         rawOffset: 0,
@@ -756,7 +723,6 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         holdReason: '',
         state: 'Speaking',
         openingLabel: '',
-        emittedCheckpointIds: new Set(),
         checkpointTransactionIds: [],
         generationFinished: false,
         generationSettled: false,
@@ -767,6 +733,8 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         authorizedGoalIds: envelope.authorizedGoalIds || [],
         variableRefs: envelope.variableRefs instanceof Map ? envelope.variableRefs : new Map(),
         goalRefs: envelope.goalRefs instanceof Map ? envelope.goalRefs : new Map(),
+        addressBook: envelope.addressBook || { entries: [], duplicates: [] },
+        pendingRequestsApplied: false,
         emptyRetries: Number(emptyRetries) || 0,
     };
     // A visible run now exists, so activeRun is the authoritative guard and the
@@ -899,37 +867,34 @@ async function revealStep() {
     }
     const pace = PACING[run.pacing] || PACING.natural;
     const budget = pace.cps === Infinity ? Number.MAX_SAFE_INTEGER : Math.max(1, Math.ceil(pace.cps / 20));
+    // Beats come from the prose itself now, not from markers the model was
+    // asked to type — see direction-beats.js. Derived once per revealed
+    // chunk, not per character: the offsets are stable positions in whatever
+    // text has streamed in so far, so recomputing per character would just
+    // repeat the same answer.
+    const beats = deriveBeats(run.rawBufferedText);
     let emitted = 0;
     while (activeRun === run && !run.holdReason && emitted < budget) {
         const unit = readDirectionUnit(run.rawBufferedText, run.rawOffset, { final: run.generationFinished });
         if (unit.kind === 'end' || unit.kind === 'partial') break;
         run.rawOffset = unit.nextOffset;
-        if (unit.kind === 'text') {
-            run.acceptedVisibleText += unit.value;
-            emitted++;
-            continue;
-        }
-        if (unit.kind === 'unknown') continue;
-        if (unit.kind === 'commit') {
-            await executeCheckpoint(run, unit.id);
-            continue;
-        }
-        if (unit.kind === 'hard-pause') {
-            run.holdReason = 'hard';
-            run.state = 'Waiting for you';
-            journal('reveal.hard-pause', { directionId: run.directionId, atVisibleOffset: run.acceptedVisibleText.length }, { correlationId: run.directionId });
-            persistRun(run, true);
-            notifyState();
-            return;
-        }
+        // The performer is never told to emit a Remodel marker under this
+        // contract, so anything shaped like one is a stray artifact — treated
+        // exactly like readDirectionUnit's own 'unknown' kind: consumed, never
+        // shown, never actioned.
+        if (unit.kind !== 'text') continue;
+        run.acceptedVisibleText += unit.value;
+        emitted++;
+        const beat = beats.find((item) => item.offset === run.rawOffset);
+        if (!beat) continue;
         const words = run.acceptedVisibleText.slice(run.lastBreathOffset).trim().split(/\s+/).filter(Boolean).length;
         run.lastBreathOffset = run.acceptedVisibleText.length;
-        run.state = unit.kind === 'opening' ? 'Opening' : 'Breathing';
-        run.openingLabel = unit.kind === 'opening' ? openingLabel(run.envelope, unit.id) : '';
+        run.state = beat.kind === 'opening' ? 'Opening' : 'Breathing';
+        run.openingLabel = beat.kind === 'opening' ? 'Opportunity' : '';
         persistRun(run, true);
         notifyState();
         const adaptive = pace.cps === Infinity ? 0 : Math.max(pace.min, Math.min(pace.max, words * pace.wordMs));
-        scheduleReveal(adaptive + (unit.kind === 'opening' ? pace.opening : 0));
+        scheduleReveal(adaptive + (beat.kind === 'opening' ? pace.opening : 0));
         return;
     }
     notifyState();
@@ -941,42 +906,44 @@ async function revealStep() {
     if (run.rawOffset < run.rawBufferedText.length) scheduleReveal(pace.cps === Infinity ? 0 : 50);
 }
 
-async function executeCheckpoint(run, checkpointId) {
-    if (run.emittedCheckpointIds.has(checkpointId)) return;
-    const checkpoint = run.envelope.mechanics.checkpoints.find((item) => item.id === checkpointId);
-    run.emittedCheckpointIds.add(checkpointId);
-    if (!checkpoint) {
-        journal('checkpoint.unknown', { directionId: run.directionId, checkpointId }, { correlationId: run.directionId, severity: 'warn' });
-        return;
+/**
+ * Requests name Variables and Goals by the Timeline's address book (see
+ * direction-address.js), not by an opaque ref. This resolves each request's
+ * name against the book this pass actually advertised and adds a name-keyed
+ * entry to a COPY of the ref maps the capability layer already reads with
+ * `.get(ref)` — so mechanics-capabilities.js needs no change, it just gets
+ * handed names as keys instead of synthetic refs. A name absent from the book
+ * is simply left unresolved, which the capability layer already refuses as
+ * "not advertised for this request"; no separate rejection path is needed
+ * here. The original entries are kept alongside the new ones so goal.reach's
+ * "was this Variable retrieved this pass" check — which reads only
+ * `.values()` — still sees everything this pass retrieved, not just the
+ * Variables a request happened to name.
+ */
+function addressRequestsByName(requests, addressBook, variableRefs, goalRefs) {
+    const resolvedVariableRefs = new Map(variableRefs instanceof Map ? variableRefs : []);
+    const resolvedGoalRefs = new Map(goalRefs instanceof Map ? goalRefs : []);
+    const addResolved = (refs, name) => {
+        if (!name || refs.has(name)) return;
+        const result = resolveByName(addressBook, name);
+        if (result.ok) refs.set(name, result.id);
+    };
+    for (const request of requests) {
+        const args = request?.arguments || {};
+        addResolved(resolvedVariableRefs, args.variableRef);
+        addResolved(resolvedVariableRefs, args.modifierVariableRef);
+        addResolved(resolvedGoalRefs, args.goalRef);
+        addResolved(resolvedGoalRefs, args.fromGoalRef);
+        addResolved(resolvedGoalRefs, args.toGoalRef);
     }
-    const scene = hooks.getActiveScene();
-    if (!scene || scene.id !== run.sceneId) {
-        journal('checkpoint.skipped', { directionId: run.directionId, checkpointId, reason: 'the Scene changed before the marker was revealed' }, { correlationId: run.directionId, severity: 'warn' });
-        return;
-    }
-    const result = executeDirectionRequests(checkpoint.requests, {
-        scene, directionId: run.directionId, messageId: run.messageId, checkpointId,
-        authorizedGoalIds: run.authorizedGoalIds,
-        variableRefs: run.variableRefs, goalRefs: run.goalRefs,
-    });
-    journal('checkpoint', {
-        directionId: run.directionId,
-        checkpointId,
-        requests: checkpoint.requests.length,
-        ok: result.ok,
-        errors: result.errors || [],
-        transactionId: result.transaction?.id || null,
-        atVisibleOffset: run.acceptedVisibleText.length,
-    }, { correlationId: run.directionId, severity: result.ok ? 'info' : 'error' });
-    if (result.transaction?.id) run.checkpointTransactionIds.push(result.transaction.id);
-    if (!result.ok) run.checkpointDiagnostics = [...(run.checkpointDiagnostics || []), ...(result.errors || ['Checkpoint failed.'])];
-    persistRun(run, true);
+    return { variableRefs: resolvedVariableRefs, goalRefs: resolvedGoalRefs };
 }
 
 function executeDirectionRequests(requests, context) {
     const scene = context.scene;
     if (!Array.isArray(requests) || requests.length === 0) return { ok: true, receipts: [], transaction: null };
-    return executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests: Array.isArray(requests) ? requests : [] }, {
+    const { variableRefs, goalRefs } = addressRequestsByName(requests, context.addressBook, context.variableRefs, context.goalRefs);
+    return executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests }, {
         timelineId: scene.timelineId,
         sceneId: scene.id,
         turnId: context.directionId,
@@ -985,8 +952,7 @@ function executeDirectionRequests(requests, context) {
         checkpointId: context.checkpointId,
         authorizedGoalIds: context.authorizedGoalIds || [],
         authorizedVariableRefs: [],
-        variableRefs: context.variableRefs || new Map(),
-        goalRefs: context.goalRefs || new Map(),
+        variableRefs, goalRefs,
         allowUserGoalCreate: false,
     });
 }
@@ -1020,7 +986,7 @@ async function completeVisibleRun(run) {
         acceptedLength: run.acceptedVisibleText.length,
         autonomousSequence: run.autonomousSequence,
         limit,
-        checkpointsFired: [...run.emittedCheckpointIds],
+        mechanicsTransactionIds: run.checkpointTransactionIds,
         checkpointDiagnostics: run.checkpointDiagnostics || [],
         continueAfter: run.envelope.flow.continueAfter,
         hardPauseAfter: run.envelope.flow.hardPauseAfter,
@@ -1228,6 +1194,14 @@ async function finalizeRunMessage(run, { state }) {
         run.messageId = null;
         return;
     }
+    // State changes land here, not at a marker in the prose the model wrote:
+    // this is the one place every run passes through once *something* was
+    // accepted, whether that is the full response or the prefix a user
+    // interruption froze. An early interruption returned above with nothing
+    // accepted and applied nothing — the property this replaces the commit
+    // marker to preserve: only fiction the user actually read may change
+    // stored state.
+    applyPendingRequests(run);
     journal('finalize', {
         directionId: run.directionId,
         state,
@@ -1242,6 +1216,41 @@ async function finalizeRunMessage(run, { state }) {
     message.extra.remodelDirection = serializeRun(run, state);
     if (run.performer.ref.kind === 'narrator') message.extra.type = 'narrator';
     await context.saveChat();
+}
+
+/**
+ * Apply the direction's mechanical requests exactly once, now that some
+ * fiction has been accepted (see finalizeRunMessage). Failures are recorded
+ * on the run rather than thrown: the performer has already spoken, so there
+ * is no earlier point left in this pass to refuse it at.
+ */
+function applyPendingRequests(run) {
+    if (run.pendingRequestsApplied) return;
+    run.pendingRequestsApplied = true;
+    const pending = run.envelope.mechanics.pendingRequests;
+    if (!pending?.length) return;
+    const scene = hooks.getActiveScene();
+    if (!scene || scene.id !== run.sceneId) {
+        journal('mechanics.accepted.skipped', {
+            directionId: run.directionId,
+            reason: 'the Scene changed before the response was accepted',
+        }, { correlationId: run.directionId, severity: 'warn' });
+        return;
+    }
+    const result = executeDirectionRequests(pending, {
+        scene, directionId: run.directionId, messageId: run.messageId, checkpointId: 'accepted',
+        authorizedGoalIds: run.authorizedGoalIds,
+        variableRefs: run.variableRefs, goalRefs: run.goalRefs, addressBook: run.addressBook,
+    });
+    journal('mechanics.accepted', {
+        directionId: run.directionId,
+        requested: pending.length,
+        ok: result.ok,
+        errors: result.errors || [],
+        transactionId: result.transaction?.id || null,
+    }, { correlationId: run.directionId, severity: result.ok ? 'info' : 'error' });
+    if (result.transaction?.id) run.checkpointTransactionIds.push(result.transaction.id);
+    if (!result.ok) run.checkpointDiagnostics = [...(run.checkpointDiagnostics || []), ...(result.errors || ['Mechanical request failed.'])];
 }
 
 function persistRun(run, immediate) {
@@ -1302,17 +1311,23 @@ async function recoverLiveDirectionMessages() {
                 timelineId: scene.timelineId,
                 messageId: recovered.messageId,
                 performer,
-                envelope: recovered.metadata.envelope || { flow: { continueAfter: false, hardPauseAfter: true }, openings: [], mechanics: { immediateRequests: [], checkpoints: [] } },
-                movement: recovered.metadata.movement || null,
+                envelope: recovered.metadata.envelope || { flow: { continueAfter: false, hardPauseAfter: true }, mechanics: { pendingRequests: [] } },
                 rawBufferedText: recovered.metadata.acceptedText || '',
                 acceptedVisibleText: recovered.metadata.acceptedText || '',
                 rawOffset: String(recovered.metadata.acceptedText || '').length,
                 lastBreathOffset: String(recovered.metadata.acceptedText || '').length,
                 holdReason: 'hard', state: 'Waiting for you', openingLabel: '',
-                emittedCheckpointIds: new Set(recovered.metadata.emittedCheckpointIds || []),
                 checkpointTransactionIds: [...(recovered.metadata.checkpointTransactionIds || [])],
                 variableRefs: new Map(Object.entries(recovered.metadata.variableRefs || {})),
                 goalRefs: new Map(Object.entries(recovered.metadata.goalRefs || {})),
+                addressBook: recovered.metadata.addressBook || { entries: [], duplicates: [] },
+                // The crash-recovery pass above already fixed the message's
+                // saved text directly, without going through finalizeRunMessage
+                // — so the pending requests this run may still carry were
+                // never applied. Leave that decision to whatever resumes this
+                // run (Continue, Next) rather than applying them silently here
+                // on a page load the user did not initiate.
+                pendingRequestsApplied: Boolean(recovered.metadata.pendingRequestsApplied),
                 generationFinished: true, generationSettled: true, interrupted: false,
                 waitingAtEnd: true, acceptedComplete: true,
                 pacing: scene.liveDirection?.pacing || 'natural',
@@ -1333,15 +1348,15 @@ function serializeRun(run, state) {
         acceptedText: sanitizeDirectionText(run.acceptedVisibleText),
         revealOffset: run.rawOffset,
         performerRef: run.performer.ref,
-        movement: run.movement,
         envelope: run.envelope,
-        emittedCheckpointIds: [...run.emittedCheckpointIds],
         checkpointTransactionIds: [...run.checkpointTransactionIds],
         // As plain objects: a Map stringifies to {}, so a recovered run would
-        // otherwise resolve no refs at all and every surviving checkpoint would
+        // otherwise resolve no refs at all and every surviving request would
         // be rejected as never advertised.
         variableRefs: Object.fromEntries(run.variableRefs || []),
         goalRefs: Object.fromEntries(run.goalRefs || []),
+        addressBook: run.addressBook || { entries: [], duplicates: [] },
+        pendingRequestsApplied: Boolean(run.pendingRequestsApplied),
         interrupted: Boolean(run.interrupted),
         autonomousSequence: run.autonomousSequence,
         updatedAt: new Date().toISOString(),
@@ -1349,7 +1364,7 @@ function serializeRun(run, state) {
 }
 
 function publicRun(run) {
-    return { ...run, emittedCheckpointIds: [...run.emittedCheckpointIds], envelope: undefined };
+    return { ...run, envelope: undefined };
 }
 
 function notifyTransient(state) {
@@ -1387,30 +1402,28 @@ function resolvePerformer(ref, scene) {
         return !item.disabled && (!director || candidate?.id !== director.id);
     });
     const normalized = normalizeRef(ref);
-    // Do not reject an empty model-selected ref before considering the only
-    // native performer the Scene actually makes available.
+    // Do not reject an empty ref before considering the only native performer
+    // the Scene actually makes available. `ref` is never model-selected —
+    // performer selection is code's, not the Director's — but a Scene may
+    // still have no Narrator bound.
     if (!normalized && cast.length !== 1) return null;
     const member = cast.find((item) => {
         const candidate = item.ref || normalizeRef(item);
         return candidate?.id === normalized?.id;
     });
     if (!member) {
-        // Some providers accept the structured schema but still return a
-        // fictional actor (for example, an NPC named in the movement) instead
-        // of the native character card that must render the prose. A Scene's
-        // explicitly bound Narrator is the safe rendering fallback: it does
-        // not change the Director's movement, only which available card voices
-        // that movement. Scenes without a valid Narrator continue to fail
-        // loudly rather than selecting an arbitrary cast member.
+        // The requested ref (typically the Scene's bound Narrator) does not
+        // match an active cast member — removed from the Scene, or never
+        // bound. A Scene's explicitly bound Narrator is the primary answer;
+        // Scenes without one, and with more than one active performer, fail
+        // loudly rather than guessing who should speak.
         const narrator = normalizeRef(scene.liveDirection?.narratorRef);
         const narratorMember = narrator && cast.find((item) => {
             const candidate = item.ref || normalizeRef(item);
             return candidate?.id === narrator.id;
         });
         // A directed Scene with exactly one available speaking card is
-        // unambiguous. Some Chat Completion providers still return a display
-        // label or fictional NPC despite the enum-constrained schema; code,
-        // not that label, owns performer identity. Use the sole native card.
+        // unambiguous even with no Narrator bound. Use the sole native card.
         const fallbackMember = narratorMember || (cast.length === 1 ? cast[0] : null);
         if (!fallbackMember) return null;
         const fallbackRef = fallbackMember.ref || normalizeRef(fallbackMember);
@@ -1505,21 +1518,15 @@ function readReasoning(data) {
 }
 
 /** Compact, storable summary of what the Director asked the system to do. */
-function summarizeRequests(requests, kind) {
-    return (Array.isArray(requests) ? requests : []).flatMap((entry) => {
-        // A checkpoint carries its own nested request list; an immediate
-        // request is one operation on its own.
-        const inner = kind === 'checkpoint' ? (Array.isArray(entry?.requests) ? entry.requests : []) : [entry];
-        return inner.filter(Boolean).map((request) => ({
-            kind,
-            capability: String(request.capability || 'unknown'),
-            reason: String(request.reason || '').trim(),
-        }));
-    }).slice(0, 40);
+function summarizeRequests(requests) {
+    return (Array.isArray(requests) ? requests : []).filter(Boolean).map((request) => ({
+        capability: String(request.capability || 'unknown'),
+        reason: String(request.reason || '').trim(),
+    })).slice(0, 40);
 }
 
 function persistDirectionRecord(scene, envelope, performer, director) {
-    if (!scene || !envelope?.movement?.objective) return;
+    if (!scene || !envelope?.instruction) return;
     const existing = Array.isArray(scene.liveDirection?.directionLog) ? scene.liveDirection.directionLog : [];
     const record = {
         id: envelope.directionId,
@@ -1528,22 +1535,12 @@ function persistDirectionRecord(scene, envelope, performer, director) {
         directorLabel: director?.label || 'Game Director',
         performerRef: performer.ref,
         performerLabel: performer.label,
-        objective: envelope.display?.summary || envelope.movement.objective,
-        decisionTrace: {
-            observations: (Array.isArray(envelope.display?.observations) ? envelope.display.observations : []).map(String).filter(Boolean).slice(0, 8),
-            intent: String(envelope.display?.intent || envelope.display?.summary || '').trim(),
-            performerReason: String(envelope.display?.performerReason || '').trim(),
-        },
-        constraints: envelope.display?.beats || [],
-        openings: envelope.openings,
-        immediateCount: envelope.mechanics.immediateRequests.length,
-        checkpointCount: envelope.mechanics.checkpoints.length,
-        // What it actually asked for, not just how many — so the card can show
-        // the operations instead of a bare count.
-        operations: [
-            ...summarizeRequests(envelope.mechanics.immediateRequests, 'immediate'),
-            ...summarizeRequests(envelope.mechanics.checkpoints, 'checkpoint'),
-        ],
+        // Kept as `objective`, not renamed to `instruction`: this is the field
+        // timeline-state.js's normalizeDirectionRecord requires (and the
+        // roleplay stream's direction card already reads) to keep the record
+        // instead of silently dropping it.
+        objective: envelope.instruction,
+        operations: summarizeRequests(envelope.mechanics.pendingRequests),
         reasoning: lastDirectorReasoning,
         continueAfter: envelope.flow.continueAfter,
         hardPauseAfter: envelope.flow.hardPauseAfter,
@@ -1559,88 +1556,77 @@ function normalizeRef(value) {
     return { kind: value.kind === 'narrator' ? 'narrator' : 'character', id, label: String(value.label || value.name || id) };
 }
 
-function normalizeEnvelope(value, scene, performerRef) {
+function normalizeEnvelope(value, scene) {
     if (!value || value.protocol !== DIRECTION_PROTOCOL) throw new Error(`Direction protocol must be ${DIRECTION_PROTOCOL}.`);
     const directionId = String(value.directionId || createId('direction'));
-    const movement = {
-        objective: String(value.movement?.objective || '').trim(),
-        constraints: (Array.isArray(value.movement?.constraints) ? value.movement.constraints : []).map(String).filter(Boolean).slice(0, 20),
-        breathingGuidance: String(value.movement?.breathingGuidance || '').trim(),
-    };
-    if (!movement.objective) throw new Error('Direction requires a narrative objective.');
-    const checkpoints = (Array.isArray(value.mechanics?.checkpoints) ? value.mechanics.checkpoints : []).map((checkpoint) => ({
-        id: String(checkpoint?.id || ''), requests: Array.isArray(checkpoint?.requests) ? checkpoint.requests : [],
-    })).filter((checkpoint) => checkpoint.id);
-    const ids = new Set();
-    for (const checkpoint of checkpoints) {
-        if (ids.has(checkpoint.id)) throw new Error(`Duplicate checkpoint ${checkpoint.id}.`);
-        ids.add(checkpoint.id);
-    }
+    // `movement.objective` is read as a fallback so a response requested
+    // under the previous schema — still in flight when this shipped — parses
+    // instead of throwing. `mechanics.pendingRequests` likewise covers
+    // re-normalizing an envelope this function already produced (regenerate),
+    // since its own output moves `requests` there.
+    const instruction = String(value.instruction || value.movement?.objective || '').trim();
+    if (!instruction) throw new Error('Direction requires an instruction for the performer.');
+    const pendingRequests = Array.isArray(value.requests) ? value.requests : Array.isArray(value.mechanics?.pendingRequests) ? value.mechanics.pendingRequests : [];
     return {
         protocol: DIRECTION_PROTOCOL,
         directionId,
-        performerRef,
-        display: {
-            summary: String(value.display?.summary || movement.objective).trim(),
-            beats: (Array.isArray(value.display?.beats) ? value.display.beats : []).map(String).filter(Boolean).slice(0, 12),
-            observations: (Array.isArray(value.display?.observations) ? value.display.observations : []).map(String).filter(Boolean).slice(0, 8),
-            intent: String(value.display?.intent || '').trim(),
-            performerReason: String(value.display?.performerReason || '').trim(),
-        },
-        movement,
+        instruction,
         flow: { continueAfter: Boolean(value.flow?.continueAfter), hardPauseAfter: Boolean(value.flow?.hardPauseAfter) },
-        openings: (Array.isArray(value.openings) ? value.openings : []).map((item) => ({ id: String(item?.id || ''), label: String(item?.label || '') })).filter((item) => item.id && item.label),
-        mechanics: { immediateRequests: Array.isArray(value.mechanics?.immediateRequests) ? value.mechanics.immediateRequests : [], checkpoints },
+        mechanics: { pendingRequests },
         sceneId: scene.id,
     };
 }
 
-function formatMovementPrompt(envelope, performer) {
-    const receipts = formatMechanicsReceipts((envelope.immediateReceipts || []).filter((item) => item.status === 'applied'));
-    const checkpoints = envelope.mechanics.checkpoints.map((item) => `- ${item.id}: emit [[RM:COMMIT:${item.id}]] immediately after narrating the establishing fact.`).join('\n');
-    const openings = envelope.openings.map((item) => `- ${item.id}: ${item.label}; emit [[RM:OPENING:${item.id}]] at the opportunity.`).join('\n');
-    return `[REMODEL LIVE DIRECTION — applies only to this response]
-You are the visible performer ${performer.label}; never mention the hidden Director or this contract.
-Objective: ${envelope.movement.objective}
-Constraints:
-${envelope.movement.constraints.map((item) => `- ${item}`).join('\n') || '- Preserve accepted continuity.'}
-Breathing guidance: ${envelope.movement.breathingGuidance || 'Insert [[RM:BREATH]] at natural readable beats.'}
-${openings ? `Openings:\n${openings}` : ''}
-${checkpoints ? `Mechanical checkpoints:\n${checkpoints}` : ''}
-${receipts || ''}
-Markers are invisible protocol. Emit only the exact known forms. They are not prose and must never be explained.`;
+/**
+ * What the performing character is told.
+ *
+ * Just the direction. It used to also carry an objective/constraint form, three
+ * marker formats with ids to remember, and two prohibitions — clerical load at
+ * the position closest to the next word, which is what flattened the prose.
+ */
+export function formatMovementPrompt(envelope) {
+    const instruction = String(envelope?.instruction || '').trim();
+    if (!instruction) return '';
+    return `[Direction for this response only]\n${instruction}`;
 }
 
-export function getDirectionEnvelopeSchema(cast = []) {
+/**
+ * What the Director must reply with.
+ *
+ * Deliberately small: an instruction the performer will read as prose, a flow
+ * decision, and mechanical requests addressed by name. No performer choice —
+ * whoever holds the Scene's Narrator badge speaks — and no marker vocabulary
+ * for the model to remember, since deriveBeats() reads pacing out of the
+ * finished prose instead.
+ */
+export function getDirectionEnvelopeSchema() {
     const request = structuredClone(getMechanicsRequestSchema().schema.properties.requests.items);
-    const performerIds = [...new Set((Array.isArray(cast) ? cast : [])
-        .map((member) => member?.ref?.id || member?.id || member?.avatar)
-        .map((id) => String(id || '').trim())
-        .filter(Boolean))];
-    const performerIdSchema = performerIds.length
-        ? { type: 'string', enum: performerIds }
-        : { type: 'string' };
     return {
         name: 'remodel_direction_envelope', strict: true,
         schema: {
             type: 'object', additionalProperties: false,
-            required: ['protocol', 'directionId', 'performerRef', 'display', 'movement', 'flow', 'openings', 'mechanics'],
+            required: ['protocol', 'directionId', 'instruction', 'flow', 'requests'],
             properties: {
                 protocol: { type: 'string', const: DIRECTION_PROTOCOL },
                 directionId: { type: 'string' },
-                performerRef: { type: 'object', additionalProperties: false, required: ['kind', 'id', 'label'], properties: { kind: { type: 'string', enum: ['character', 'narrator'] }, id: performerIdSchema, label: { type: 'string' } } },
-                display: { type: 'object', additionalProperties: false, required: ['summary', 'beats', 'observations', 'intent', 'performerReason'], properties: { summary: { type: 'string' }, beats: { type: 'array', items: { type: 'string' } }, observations: { type: 'array', items: { type: 'string' } }, intent: { type: 'string' }, performerReason: { type: 'string' } } },
-                movement: { type: 'object', additionalProperties: false, required: ['objective', 'constraints', 'breathingGuidance'], properties: { objective: { type: 'string' }, constraints: { type: 'array', items: { type: 'string' } }, breathingGuidance: { type: 'string' } } },
-                flow: { type: 'object', additionalProperties: false, required: ['continueAfter', 'hardPauseAfter'], properties: { continueAfter: { type: 'boolean' }, hardPauseAfter: { type: 'boolean' } } },
-                openings: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'label'], properties: { id: { type: 'string' }, label: { type: 'string' } } } },
-                mechanics: { type: 'object', additionalProperties: false, required: ['immediateRequests', 'checkpoints'], properties: { immediateRequests: { type: 'array', items: request }, checkpoints: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['id', 'requests'], properties: { id: { type: 'string' }, requests: { type: 'array', items: request } } } } } },
+                instruction: {
+                    type: 'string',
+                    description: 'The direction, written as prose for the performer who writes the next response: what they are doing, and what matters about how. This is the only guidance they receive — never a summary of it, never a reference to a director or a protocol.',
+                },
+                flow: {
+                    type: 'object', additionalProperties: false, required: ['continueAfter', 'hardPauseAfter'],
+                    properties: {
+                        continueAfter: { type: 'boolean', description: 'True if the scene should keep moving on its own after this response, without waiting on the user.' },
+                        hardPauseAfter: { type: 'boolean', description: 'True if the fiction is now explicitly waiting on the user and must not continue on its own, regardless of continueAfter.' },
+                    },
+                },
+                requests: {
+                    type: 'array', items: request,
+                    description: 'Mechanical changes this direction causes, each addressing a Variable or Goal by the exact name advertised this turn. Applied once this response is accepted — never narrate, roll, or invent the outcome yourself. Return an empty array when nothing changes.',
+                },
             },
         },
     };
-}
-
-function openingLabel(envelope, id) {
-    return envelope.openings.find((item) => item.id === id)?.label || 'Opportunity';
 }
 
 function clearRevealTimer() {

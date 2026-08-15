@@ -36,3 +36,28 @@ export const name2 = 'Character';
 export function saveSettingsDebounced() {}
 
 export function substituteParams(text) { return text == null ? '' : String(text); }
+
+// live-direction.js's own bindings. Values copied verbatim from script.js
+// where they are plain constants (cheap and removes any drift risk); the
+// functions stay inert no-ops.
+export const extension_prompt_types = {
+    NONE: -1,
+    IN_PROMPT: 0,
+    IN_CHAT: 1,
+    BEFORE_PROMPT: 2,
+};
+
+export const extension_prompt_roles = {
+    SYSTEM: 0,
+    USER: 1,
+    ASSISTANT: 2,
+};
+
+export let online_status = 'no_connection';
+
+export async function sendMessageAsUser() {}
+
+export function setExtensionPrompt() {}
+
+// variables-vector.js's binding, for its cache-key request headers.
+export function getRequestHeaders() { return {}; }
