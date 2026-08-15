@@ -2,7 +2,7 @@ import { getContext } from '../../../st-context.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 4;
+const STORE_VERSION = 5;
 
 export const PROMPT_MODES = ['story', 'roleplay', 'director'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
@@ -36,6 +36,19 @@ export const PROMPT_SOURCE_DEFINITIONS = Object.freeze({
         { key: 'currentInput', label: 'Current Input (via history)', role: 'user', nativeIdentifier: 'chatHistory' },
         { key: 'generationNudge', label: 'Generation Nudge', role: 'instruction', nativeIdentifier: 'quietPrompt' },
         { key: 'nativeContext', label: 'Native Roleplay Context', role: 'system', textOnly: true, locked: true },
+    ]),
+    // Without this entry getSourceDefinitions returned [] for every director
+    // recipe, which disabled "Add context" permanently, made directorCard and
+    // mechanicsSkill deletable with no way to put them back, showed raw
+    // camelCase keys as labels, and fell sourceDescription through to
+    // "Resolved by SillyTavern's native Roleplay prompt manager" — false for
+    // a Director block, and precisely the confusion this rework exists to end.
+    // Director recipes are Chat Completion only, so no textOnly entries.
+    director: Object.freeze([
+        { key: 'directionProtocol', label: 'Direction Protocol', role: 'system' },
+        { key: 'directorCard', label: 'Director Card', role: 'system' },
+        { key: 'mechanicsSkill', label: 'Goals & Variables', role: 'system' },
+        { key: 'directorSnapshot', label: 'Scene Snapshot', role: 'user' },
     ]),
 });
 
@@ -278,24 +291,55 @@ function defaultStoryBlocks() {
 }
 
 /**
+ * The seeded style block — the only Director-facing authorial text that ships.
+ *
+ * It says nothing about openings or rhythm any more, because neither exists:
+ * `openings` is gone from the schema, the envelope and the reveal loop, and
+ * pacing is derived from the finished prose by deriveBeats (design section 4
+ * — the Narrator is told nothing about pacing). What remains is the two flow
+ * decisions the Director genuinely still makes: whether the scene continues
+ * on its own, and whether it must stop. Nothing was invented to replace the
+ * deleted instructions — authorial policy belongs to the user's recipe now,
+ * which is the point of the rework.
+ */
+const DIRECTOR_STYLE_DEFAULT = 'The world may move without waiting for the user, and only ask the scene to stop when the fiction is explicitly waiting on them.';
+
+/**
+ * The text seeded before the rework deleted the mechanisms it describes.
+ *
+ * Matched exactly and replaced once, at the version bump below, so a user who
+ * edited their own style block keeps it and a user who never touched it stops
+ * reading instructions about openings and rhythm.
+ */
+const DIRECTOR_STYLE_LEGACY = 'The world may move without waiting for the user. Keep openings optional — the user may intervene anywhere. Responses may be long; give the performer useful guidance on rhythm, and only ask the scene to stop when the fiction is explicitly waiting on the user.';
+
+/**
  * The Director's default prompt.
  *
  * Only the protocol and the snapshot are locked: remove either and the reply
- * stops being parseable. Everything else — including the pacing and autonomy
- * policy that used to be compiled into directionHandbook — is an ordinary
- * editable block.
+ * stops being parseable. Everything else — including the autonomy policy that
+ * used to be compiled into directionHandbook — is an ordinary editable block.
  */
 function defaultDirectorBlocks() {
     return [
         createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directionProtocol', enabled: true, locked: true }),
         createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directorCard', enabled: true, locked: false }),
-        createPromptBlock({
-            kind: 'message', role: 'system', enabled: true, locked: false,
-            content: 'The world may move without waiting for the user. Keep openings optional — the user may intervene anywhere. Responses may be long; give the performer useful guidance on rhythm, and only ask the scene to stop when the fiction is explicitly waiting on the user.',
-        }),
+        createPromptBlock({ kind: 'message', role: 'system', enabled: true, locked: false, content: DIRECTOR_STYLE_DEFAULT }),
         createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'mechanicsSkill', enabled: true, locked: false }),
         createPromptBlock({ kind: 'source', role: 'user', sourceKey: 'directorSnapshot', enabled: true, locked: true }),
     ];
+}
+
+/** One-shot: retire the style block that instructs about deleted machinery. */
+function migrateDirectorStyleBlock(recipe) {
+    let changed = false;
+    for (const block of recipe.blocks || []) {
+        if (block.kind !== 'message' || String(block.content || '').trim() !== DIRECTOR_STYLE_LEGACY) continue;
+        block.content = DIRECTOR_STYLE_DEFAULT;
+        changed = true;
+    }
+    if (changed) recipe.updatedAt = now();
+    return changed;
 }
 
 function defaultBlocksFor(mode, apiType) {
@@ -409,6 +453,13 @@ function normalizeStore(store, seed) {
             if (recipe?.mode === 'roleplay' && recipe.apiType === 'chat') {
                 changed = ensureStoryGoalsSource(recipe.blocks) || changed;
             }
+        }
+    }
+    // Runs after the active-slot loop above, so a director recipe seeded on
+    // this very load already carries the new text and matches nothing here.
+    if (previousVersion < 5) {
+        for (const recipe of Object.values(store.recipes)) {
+            if (recipe?.mode === 'director') changed = migrateDirectorStyleBlock(recipe) || changed;
         }
     }
     return changed;

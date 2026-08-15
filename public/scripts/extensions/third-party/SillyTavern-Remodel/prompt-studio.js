@@ -884,6 +884,18 @@ function getSourceLabel(recipe, key) {
 function sourceDescription(recipe, key) {
     const mode = recipe?.mode;
     if (key === 'nativeContext') return 'SillyTavern’s complete token-budgeted Roleplay prompt, including character, World Info, examples, history, and current turn.';
+    // A Director recipe never touches the native prompt manager — it is
+    // compiled to an explicit message array and sent on its own. Falling
+    // through to the roleplay default below told the user the exact opposite.
+    if (mode === 'director') {
+        const director = {
+            directionProtocol: 'The reply contract the hidden Director must satisfy. Locked: without it the reply cannot be parsed and Remodel falls back to a built-in prompt.',
+            directorCard: 'The character card bound as this Scene’s Director, read as judgment, priorities and genre sense — never spoken as dialogue.',
+            mechanicsSkill: 'The Goals and Variables addressable this turn, by name, with the capabilities that may be requested against them. Remove this and the Director stops seeing any persistent state.',
+            directorSnapshot: 'The Scene, cast, persona, accepted history, activated World Info and recent mechanical receipts assembled for this pass.',
+        };
+        return director[key] || 'Assembled by Remodel and sent directly to the Director, without the native prompt manager.';
+    }
     if (mode === 'story') {
         if (key === 'worldInfoExamples') return 'Lorebook entries using Example placement, resolved by the active Story document immediately before generation.';
         if (key === 'worldInfoDepth') return 'Lorebook depth injections with their configured Chat Completion roles, resolved by the active Story document.';
