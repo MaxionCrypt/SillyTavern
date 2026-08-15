@@ -1,5 +1,6 @@
 import { getContext } from '../../../st-context.js';
 import { extractProse, hasPromptContent } from './story-prose-extract.js';
+import { canStreamStory, streamStoryProse } from './story-stream.js';
 
 // Prose generation with a diagnosable failure surface.
 //
@@ -32,7 +33,7 @@ export class StoryGenerationError extends Error {
  * @param {object[]|string} prompt compiled messages, or a plain string
  * @returns {Promise<{ text: string, raw: any, source: string }>}
  */
-export async function generateProse({ prompt, responseLength = null, instructOverride = false, systemPrompt = '' } = {}) {
+export async function generateProse({ prompt, responseLength = null, instructOverride = false, systemPrompt = '', onStream = null, signal = null } = {}) {
     // Stage 1 — never let an empty prompt reach the API layer, where it
     // surfaces as a connection error and sends you hunting the wrong bug.
     // A system prompt alone is enough to have something to send.
@@ -41,6 +42,28 @@ export async function generateProse({ prompt, responseLength = null, instructOve
             'empty-prompt',
             'The story prompt came out empty, so nothing was sent — no request reached your API. Check that the Story prompt recipe for this API type has at least one enabled block with content.',
         );
+    }
+
+    // Stage 2 — stream when the caller wants live text and the connection can
+    // actually do it. Everything else falls through to the one-shot path below,
+    // unchanged, so Text Completion and non-streaming providers are untouched.
+    if (typeof onStream === 'function' && canStreamStory() && !systemPrompt) {
+        try {
+            const streamed = await streamStoryProse({ prompt, onChunk: onStream, signal });
+            if (streamed.text) {
+                return { text: streamed.text, raw: null, source: streamed.streamed ? 'stream' : 'stream-fallback', reasoning: streamed.reasoning };
+            }
+            // An empty stream is the same failure as an empty one-shot reply,
+            // so it gets the same diagnosis rather than a bespoke message.
+            throw new StoryGenerationError('no-prose', describeEmptyResponse({ reasoningOnly: Boolean(streamed.reasoning), shape: 'streamed reply' }, null));
+        } catch (error) {
+            if (error instanceof StoryGenerationError || /cancel|abort|stopped/i.test(String(error?.message || error))) {
+                throw error;
+            }
+            // A transport that fails mid-stream should not cost the user their
+            // request: fall through and try the ordinary one-shot path.
+            console.warn('Remodel Story: streaming failed, falling back to a single request', error);
+        }
     }
 
     const context = getContext();

@@ -59,6 +59,20 @@ export function createStoryDoc({ title = 'New Story', boundCharacterId = null } 
         // The prose. Plain text (paragraphs separated by blank lines); the
         // editor renders it and writes edits straight back here.
         body: '',
+        // Inline formatting, kept OUT of `body` on purpose: a list of
+        // {start,end} character ranges over `body` carrying the styles the
+        // Manuscript format bar applied (font/size/bold/italic/underline).
+        // Prose stays clean plain text, so nothing here ever leaks into a
+        // generation prompt. Offsets are recomputed from the DOM on every
+        // save (readStoryEditorState), which is what keeps them correct
+        // while the author types.
+        styleRuns: [],
+        // Whole-manuscript typography, owned by THIS document rather than by
+        // the browser: setting a face or a size on one story must not reach
+        // any other scene (a roleplay scene least of all — it shares the
+        // --remodel-manuscript-font variable). Empty means "the default".
+        font: '',
+        fontSize: '',
         createdAt: now(),
         updatedAt: now(),
     };
@@ -106,6 +120,15 @@ export function updateStoryDoc(docId, patch) {
     }
     if (Array.isArray(patch.beats)) {
         doc.beats = patch.beats.map(normalizeBeat).filter(Boolean);
+    }
+    if (Array.isArray(patch.styleRuns)) {
+        doc.styleRuns = normalizeStyleRuns(patch.styleRuns);
+    }
+    if (typeof patch.font === 'string') {
+        doc.font = patch.font;
+    }
+    if (typeof patch.fontSize === 'string') {
+        doc.fontSize = patch.fontSize;
     }
     if ('boundCharacterId' in patch) {
         doc.boundCharacterId = patch.boundCharacterId == null ? null : String(patch.boundCharacterId);
@@ -159,6 +182,9 @@ function normalizeStore(store) {
         doc.priorText ??= '';
         doc.priorSceneId = doc.priorSceneId == null ? null : String(doc.priorSceneId);
         doc.beats = Array.isArray(doc.beats) ? doc.beats.map(normalizeBeat).filter(Boolean) : [];
+        doc.styleRuns = normalizeStyleRuns(doc.styleRuns);
+        doc.font = typeof doc.font === 'string' ? doc.font : '';
+        doc.fontSize = typeof doc.fontSize === 'string' ? doc.fontSize : '';
         doc.boundCharacterId = doc.boundCharacterId == null ? null : String(doc.boundCharacterId);
         doc.lorebookName = doc.lorebookName == null || doc.lorebookName === '' ? null : String(doc.lorebookName);
         doc.scanGuidanceForLore = Boolean(doc.scanGuidanceForLore);
@@ -185,6 +211,30 @@ function normalizeWorldInfoState(value = {}) {
         sticky: normalizeEffects(source.sticky),
         cooldown: normalizeEffects(source.cooldown),
     };
+}
+
+// A style run is only kept when it covers real characters AND actually
+// carries a style — an empty run is indistinguishable from no run at all,
+// so dropping them keeps the stored list from growing on every edit.
+function normalizeStyleRuns(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value.map(normalizeStyleRun).filter(Boolean).sort((a, b) => a.start - b.start);
+}
+
+function normalizeStyleRun(value) {
+    if (!value || typeof value !== 'object') return null;
+    const start = Math.max(0, Math.floor(Number(value.start) || 0));
+    const end = Math.max(0, Math.floor(Number(value.end) || 0));
+    if (end <= start) return null;
+    const run = { start, end };
+    if (value.font) run.font = String(value.font);
+    if (value.size) run.size = String(value.size);
+    if (value.bold) run.bold = true;
+    if (value.italic) run.italic = true;
+    if (value.underline) run.underline = true;
+    return run.font || run.size || run.bold || run.italic || run.underline ? run : null;
 }
 
 function normalizeBeat(value) {

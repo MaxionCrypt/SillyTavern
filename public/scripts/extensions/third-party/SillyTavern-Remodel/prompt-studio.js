@@ -366,10 +366,14 @@ function renderRecipeEditor(recipe) {
 function renderPromptBlock(recipe, block, index) {
     const source = block.kind === 'source' ? getSourceDefinition(recipe, block.sourceKey) : null;
     const bindingNote = sourceBindingNote(recipe, block);
+    const movable = canMoveBlock(recipe, block);
+    const railTitle = movable
+        ? (block.locked ? 'Drag to reorder — this source stays linked and cannot be deleted' : 'Drag to reorder')
+        : bindingNote;
     return `
-        <article class="remodel-prompt-block role-${escapeAttribute(block.role)} ${block.kind === 'source' ? 'is-source' : ''} ${block.enabled ? '' : 'is-disabled'}" draggable="${block.locked ? 'false' : 'true'}" data-remodel-prompt-block="${escapeAttribute(block.id)}">
+        <article class="remodel-prompt-block role-${escapeAttribute(block.role)} ${block.kind === 'source' ? 'is-source' : ''} ${block.enabled ? '' : 'is-disabled'}" draggable="${movable ? 'true' : 'false'}" data-remodel-prompt-block="${escapeAttribute(block.id)}">
             <div class="remodel-prompt-block-rail">
-                <i class="fa-solid ${block.locked ? 'fa-lock' : 'fa-grip-vertical'}" title="${escapeAttribute(block.locked ? bindingNote : 'Drag to reorder')}" aria-hidden="true"></i>
+                <i class="fa-solid ${movable ? 'fa-grip-vertical' : 'fa-lock'}" title="${escapeAttribute(railTitle)}" aria-hidden="true"></i>
                 <span>${String(index + 1).padStart(2, '0')}</span>
             </div>
             <div class="remodel-prompt-block-main">
@@ -380,8 +384,8 @@ function renderPromptBlock(recipe, block, index) {
                     <span class="remodel-prompt-block-kind">${block.kind === 'source' ? '<i class="fa-solid fa-link"></i> Live source' : '<i class="fa-regular fa-message"></i> Authored message'}</span>
                     <div class="remodel-prompt-block-actions">
                         <button type="button" data-remodel-prompt-block-toggle title="${block.enabled ? 'Disable' : 'Enable'}"><i class="fa-solid ${block.enabled ? 'fa-eye' : 'fa-eye-slash'}"></i></button>
-                        <button type="button" data-remodel-prompt-block-up title="Move up" ${index === 0 || block.locked ? 'disabled' : ''}><i class="fa-solid fa-chevron-up"></i></button>
-                        <button type="button" data-remodel-prompt-block-down title="Move down" ${index === recipe.blocks.length - 1 || block.locked ? 'disabled' : ''}><i class="fa-solid fa-chevron-down"></i></button>
+                        <button type="button" data-remodel-prompt-block-up title="Move up" ${index === 0 || !movable ? 'disabled' : ''}><i class="fa-solid fa-chevron-up"></i></button>
+                        <button type="button" data-remodel-prompt-block-down title="Move down" ${index === recipe.blocks.length - 1 || !movable ? 'disabled' : ''}><i class="fa-solid fa-chevron-down"></i></button>
                         <button type="button" data-remodel-prompt-block-copy title="Copy"><i class="fa-regular fa-copy"></i></button>
                         <button type="button" data-remodel-prompt-block-delete title="Delete" ${block.locked ? 'disabled' : ''}><i class="fa-regular fa-trash-can"></i></button>
                     </div>
@@ -609,7 +613,7 @@ function bindPromptStudioEvents() {
         event.preventDefault();
         const from = recipe.blocks.findIndex((block) => block.id === state.dragBlockId);
         const to = recipe.blocks.findIndex((block) => block.id === targetCard.dataset.remodelPromptBlock);
-        if (from !== -1 && to !== -1 && from !== to && !recipe.blocks[from].locked) {
+        if (from !== -1 && to !== -1 && from !== to && canMoveBlock(recipe, recipe.blocks[from])) {
             const blocks = [...recipe.blocks];
             const [moved] = blocks.splice(from, 1);
             blocks.splice(to, 0, moved);
@@ -629,10 +633,22 @@ function patchRecipeBlocks(recipe, blocks) {
     state.requestRender();
 }
 
+// Reordering and deleting are different permissions, and conflating them is
+// what made every core marker immovable. SillyTavern's own Prompt Manager
+// makes EVERY prompt draggable (markers included) and reorders by rewriting
+// oai_settings.prompt_order — which is exactly what applyRoleplayChatRecipe
+// already does with the block order. So position is free; what stays locked
+// is deleting a marker or editing its content, since those genuinely have no
+// native equivalent.
+function canMoveBlock(recipe, block) {
+    if (!block?.locked) return true;
+    return recipe.mode === 'roleplay' && recipe.apiType === 'chat' && Boolean(block.nativeIdentifier);
+}
+
 function moveBlock(recipe, blockId, offset) {
     const index = recipe.blocks.findIndex((block) => block.id === blockId);
     const destination = index + offset;
-    if (index < 0 || destination < 0 || destination >= recipe.blocks.length || recipe.blocks[index].locked) return;
+    if (index < 0 || destination < 0 || destination >= recipe.blocks.length || !canMoveBlock(recipe, recipe.blocks[index])) return;
     const blocks = [...recipe.blocks];
     const [block] = blocks.splice(index, 1);
     blocks.splice(destination, 0, block);
@@ -893,7 +909,7 @@ function sourceBindingNote(recipe, block) {
         return 'Required assembly point · preserves SillyTavern’s token-budgeted Text Completion context';
     }
     if (recipe.mode === 'roleplay' && recipe.apiType === 'chat' && block.nativeIdentifier && block.locked) {
-        return 'Protected core marker · linked to SillyTavern’s Chat Completion assembly';
+        return 'Core marker · reorder freely; it cannot be deleted because SillyTavern’s Chat Completion assembly resolves it by name';
     }
     if (block.locked) return 'Protected linked source';
     return '';
