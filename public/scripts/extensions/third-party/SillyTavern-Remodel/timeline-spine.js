@@ -101,6 +101,7 @@ import {
     describeNativeGenerationBlock,
     isDirectedLiveScene,
     ownsLiveDirectionGeneration,
+    previewDirectorPrompt,
     regenerateLastDirectedResponse,
     requestNextDirection,
     retryLiveDirection,
@@ -8368,17 +8369,34 @@ async function triggerRoleplaySpeaker(name) {
     }
 }
 
-// Prompt preview: assembles (but never sends) the exact prompt that a normal
-// turn would produce right now — reusing the same dry-run + formatter the
-// Story workspace's preview uses — and shows it in a read-only modal. Honest
-// "here's what the model will actually see," including whatever's typed in
-// the composer.
+// Prompt preview: assembles (but never sends) the exact prompts a normal turn
+// would produce right now, and shows them in a read-only modal split into two
+// tabs — Directed Roleplay sends two separately-authored prompts on a turn,
+// the hidden Director and the visible Narrator, and a user should be able to
+// see what each one will actually be sent.
+//
+// Narrator tab: reuses the same dry-run + formatter the Story workspace's
+// preview uses. Honest "here's what the model will actually see," including
+// whatever's typed in the composer.
+//
+// Director tab: compiles through the exact path a real direction pass takes
+// (previewDirectorPrompt → compileDirectorPrompt in live-direction.js — same
+// recipe resolution, same buildDirectionSources, same compilePromptRecipe) so
+// this can never drift from what actually gets sent.
 const ROLEPLAY_PREVIEW_ID = 'remodel-rp-preview-modal';
+
+const previewTab = (id, label, active) =>
+    `<button type="button" data-remodel-rp-preview-tab="${id}" class="${active === id ? 'is-active' : ''}">${label}</button>`;
 
 async function openRoleplayPromptPreview() {
     // Build the modal shell immediately with a loading state so the click is
-    // acknowledged, then fill it once the dry run resolves.
+    // acknowledged, then fill it once the dry runs resolve.
     document.getElementById(ROLEPLAY_PREVIEW_ID)?.remove();
+    const activeScene = getActiveScene();
+    const directed = isDirectedLiveScene(activeScene);
+    // Free play never calls the Director, so default to whichever tab this
+    // Scene will actually use on its next turn.
+    const defaultTab = directed ? 'director' : 'narrator';
     const overlay = document.createElement('div');
     overlay.id = ROLEPLAY_PREVIEW_ID;
     overlay.className = 'remodel-rp-picker-scrim';
@@ -8387,30 +8405,41 @@ async function openRoleplayPromptPreview() {
             <div class="remodel-rp-picker-head">
                 <div>
                     <div class="remodel-rp-picker-title">Prompt preview</div>
-                    <div class="remodel-rp-picker-hint">Exactly what the model will receive on the next turn — nothing is sent.</div>
+                    <div class="remodel-rp-picker-hint">Exactly what each model will receive on the next turn — nothing is sent.</div>
                 </div>
                 <button type="button" class="remodel-rp-picker-x" data-remodel-rp-preview-close aria-label="Close">×</button>
             </div>
-            <div class="remodel-rp-preview-warn" data-remodel-rp-preview-warn hidden></div>
-            <div class="remodel-rp-preview-views" data-remodel-rp-preview-views hidden>
-                <button type="button" class="is-active" data-remodel-rp-preview-view="sources">By source</button>
-                <button type="button" data-remodel-rp-preview-view="raw">Raw prompt</button>
+            <div class="remodel-rp-preview-tabs" data-remodel-rp-preview-tabs>
+                ${previewTab('director', 'Director', defaultTab)}
+                ${previewTab('narrator', 'Narrator', defaultTab)}
             </div>
-            <div class="remodel-rp-preview-sources" data-remodel-rp-preview-sources hidden></div>
-            <pre class="remodel-rp-preview-body" data-remodel-rp-preview-body>Assembling prompt…</pre>
+            <div class="remodel-rp-preview-panel" data-remodel-rp-preview-panel="director" ${defaultTab === 'director' ? '' : 'hidden'}>
+                <div class="remodel-rp-preview-warn" data-remodel-rp-director-preview-warn hidden></div>
+                <pre class="remodel-rp-preview-body" data-remodel-rp-director-preview-body>Assembling prompt…</pre>
+            </div>
+            <div class="remodel-rp-preview-panel" data-remodel-rp-preview-panel="narrator" ${defaultTab === 'narrator' ? '' : 'hidden'}>
+                <div class="remodel-rp-preview-warn" data-remodel-rp-preview-warn hidden></div>
+                <div class="remodel-rp-preview-views" data-remodel-rp-preview-views hidden>
+                    <button type="button" class="is-active" data-remodel-rp-preview-view="sources">By source</button>
+                    <button type="button" data-remodel-rp-preview-view="raw">Raw prompt</button>
+                </div>
+                <div class="remodel-rp-preview-sources" data-remodel-rp-preview-sources hidden></div>
+                <pre class="remodel-rp-preview-body" data-remodel-rp-preview-body>Assembling prompt…</pre>
+            </div>
         </div>
     `;
     document.body.appendChild(overlay);
     requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
 
+    fillDirectorPreviewPanel(overlay, activeScene, directed);
+
     try {
         const { generateData, warnings } = await runPromptPreviewDryRun('normal');
-        const activeGoalScene = getActiveScene();
-        const attachedGoalIntents = activeGoalScene ? getStoryGoalComposerIntents(activeGoalScene.id) : [];
+        const attachedGoalIntents = activeScene ? getStoryGoalComposerIntents(activeScene.id) : [];
         if (attachedGoalIntents.length) {
             warnings.push(`${attachedGoalIntents.length} attached Story Goal attempt${attachedGoalIntents.length === 1 ? '' : 's'} will be assessed by the hidden Game Director when sent; preview never rolls or mutates.`);
         }
-        if (isDirectedLiveScene(activeGoalScene)) warnings.push('Live performer selection, openings, and future checkpoints require a Director assessment and are not executed by preview.');
+        if (directed) warnings.push('Live performer selection, openings, and future checkpoints require a Director assessment and are not executed by preview.');
         const bodyEl = overlay.querySelector('[data-remodel-rp-preview-body]');
         const warnEl = overlay.querySelector('[data-remodel-rp-preview-warn]');
         if (bodyEl) {
@@ -8437,6 +8466,41 @@ async function openRoleplayPromptPreview() {
         if (bodyEl) {
             bodyEl.textContent = `Could not assemble a preview.\n\n${String(err)}`;
         }
+    }
+}
+
+// Fills the Director tab by compiling the active Director recipe against a
+// snapshot built for the current Scene — the same compile path
+// requestDirectionEnvelope uses for a real direction pass (see
+// previewDirectorPrompt/compileDirectorPrompt in live-direction.js) — so the
+// two can never drift apart. Runs independently of the Narrator dry run above
+// so one tab's failure never blocks the other from filling in.
+async function fillDirectorPreviewPanel(overlay, scene, directed) {
+    const bodyEl = overlay.querySelector('[data-remodel-rp-director-preview-body]');
+    const warnEl = overlay.querySelector('[data-remodel-rp-director-preview-warn]');
+    if (!bodyEl) return;
+    if (!directed) {
+        bodyEl.textContent = '(This Scene is on Free play — no Director request is made on its next turn. Turn Live Direction on to preview it.)';
+        return;
+    }
+    try {
+        const { prompt, recipe } = await previewDirectorPrompt(scene);
+        bodyEl.textContent = formatPromptStudioPreview({ apiType: 'chat', messages: prompt });
+        if (!recipe && warnEl) {
+            warnEl.textContent = '⚠ No active Director recipe — showing the built-in fallback prompt.';
+            warnEl.hidden = false;
+        }
+    } catch (err) {
+        bodyEl.textContent = `Could not assemble a Director preview.\n\n${String(err)}`;
+    }
+}
+
+function setRoleplayPreviewTab(overlay, tab) {
+    for (const panel of overlay.querySelectorAll('[data-remodel-rp-preview-panel]')) {
+        panel.hidden = panel.dataset.remodelRpPreviewPanel !== tab;
+    }
+    for (const button of overlay.querySelectorAll('[data-remodel-rp-preview-tab]')) {
+        button.classList.toggle('is-active', button.dataset.remodelRpPreviewTab === tab);
     }
 }
 
@@ -8780,6 +8844,12 @@ function bindRoleplayComposerEvents() {
             if (target.closest('[data-remodel-rp-preview-close]') || target === previewOverlay) {
                 event.preventDefault();
                 closeRoleplayPromptPreview();
+                return;
+            }
+            const tabButton = target.closest('[data-remodel-rp-preview-tab]');
+            if (tabButton && previewOverlay.contains(tabButton)) {
+                event.preventDefault();
+                setRoleplayPreviewTab(previewOverlay, tabButton.dataset.remodelRpPreviewTab);
                 return;
             }
             const viewButton = target.closest('[data-remodel-rp-preview-view]');
@@ -10424,7 +10494,7 @@ function buildRoleplayDirectionCard(record) {
             <ul class="remodel-rp-direction-ops">
                 ${operations.map((op) => `<li>
                     <code>${escapeHtml(op.capability)}</code>
-                    <em>${op.kind === 'checkpoint' ? 'on a narrated beat' : 'immediately'}</em>
+                    <em>on accept</em>
                     ${op.reason ? `<span>${escapeHtml(op.reason)}</span>` : ''}
                 </li>`).join('')}
             </ul>

@@ -1938,6 +1938,45 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   font-family: var(--remodel-manuscript-font, Georgia) !important;
 }
 
+/* --- Prompt preview: Director / Narrator tabs -----------------------------
+   Directed Roleplay sends two separately-authored prompts on a turn — the
+   hidden Director and the visible Narrator — so the preview modal splits
+   into one tab per prompt. Each tab's panel keeps the exact flex/scroll
+   behavior the modal already had (see .remodel-rp-preview above) by staying
+   a shrinkable flex column itself, so a long compiled prompt scrolls inside
+   its own <pre> instead of pushing the modal past its max-height. */
+#remodel-rp-preview-modal .remodel-rp-preview-tabs {
+  display: flex !important;
+  gap: 8px !important;
+  margin: 14px 20px 0 !important;
+  padding-bottom: 12px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-tabs button {
+  padding: 7px 18px !important;
+  border: 1px solid rgba(215, 200, 0, 0.26) !important;
+  border-radius: 999px !important;
+  background: rgba(8, 8, 12, 0.6) !important;
+  color: rgba(238, 235, 245, 0.62) !important;
+  font: 11px/1 var(--remodel-serif, Georgia) !important;
+  letter-spacing: 0.14em !important;
+  text-transform: uppercase !important;
+  cursor: pointer !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-tabs button.is-active {
+  border-color: rgba(235, 219, 35, 0.66) !important;
+  background: rgba(215, 200, 0, 0.14) !important;
+  color: #fff6a1 !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-panel {
+  display: flex !important;
+  flex-direction: column !important;
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-panel[hidden] { display: none !important; }
+
 #remodel-prompt-studio-preview-modal .remodel-story-resolver-report,
 #remodel-story-preview-modal .remodel-story-resolver-report {
   margin: 10px 20px 0 !important;

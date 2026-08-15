@@ -16,7 +16,7 @@ import {
     toCoreJsonSchema,
     undoMechanicsTransaction,
 } from './mechanics-capabilities.js';
-import { buildMechanicalSnapshot } from './mechanics-runtime.js';
+import { buildMechanicalSnapshot, previewMechanicalContext } from './mechanics-runtime.js';
 import { buildDirectionSources } from './direction-sources.js';
 import { resolveByName } from './direction-address.js';
 import { deriveBeats } from './direction-beats.js';
@@ -541,7 +541,7 @@ function abandonPass(token, stage) {
     return false;
 }
 
-async function buildDirectionSnapshot(scene, action, authorizedGoalIds) {
+async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { preview = false } = {}) {
     const context = getContext();
     const cast = hooks.getCast() || [];
     const persona = hooks.getPersona() || null;
@@ -562,11 +562,16 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds) {
     const director = directorRef && cast.find((member) => normalizeRef(member.ref || member)?.id === directorRef.id);
     const performingCast = cast.filter((member) => !member.disabled && (!directorRef || normalizeRef(member.ref || member)?.id !== directorRef.id));
     const activatedEntries = [...(lore.allActivatedEntries || [])];
-    const mechanics = await buildMechanicalSnapshot(scene, action, performingCast.map((member) => member.ref || member), persona, authorizedGoalIds, {
-        history,
-        activatedEntries,
-        correlationId: directionInFlight?.id || null,
-    });
+    // Preview never rolls or mutates: previewMechanicalContext retrieves the
+    // same shape of state through buildMechanicalSnapshot but with a fixed,
+    // inert action string and no authorized Goal ids to act on.
+    const mechanics = preview
+        ? await previewMechanicalContext(scene, { cast: performingCast.map((member) => member.ref || member), persona })
+        : await buildMechanicalSnapshot(scene, action, performingCast.map((member) => member.ref || member), persona, authorizedGoalIds, {
+            history,
+            activatedEntries,
+            correlationId: directionInFlight?.id || null,
+        });
     return {
         scene: { id: scene.id, timelineId: scene.timelineId, title: scene.title },
         currentAction: action,
@@ -612,24 +617,56 @@ function scrubReceipt(receipt) {
     };
 }
 
-async function requestDirectionEnvelope(scene, snapshot) {
-    const profile = getMechanicsProfile();
+/**
+ * Compiles the Director's prompt from a snapshot: resolve the active director
+ * recipe, build its sources, compile it. The SAME steps a real request takes
+ * (requestDirectionEnvelope below) and the ONLY place they run — the Prompt
+ * Studio preview calls this too (see previewDirectorPrompt), so the preview
+ * can never drift from what actually gets sent. A recipe that compiles to
+ * nothing (emptied, or missing its protocol block) falls back to a minimal
+ * built-in prompt rather than silently producing an unusable request.
+ */
+function compileDirectorPrompt(snapshot, { mechanicsEnabled = false } = {}) {
     const recipe = resolveDirectorRecipe();
-    const sources = buildDirectionSources(snapshot, { mechanicsEnabled: profile.enabled });
+    const sources = buildDirectionSources(snapshot, { mechanicsEnabled });
     let prompt;
     if (recipe) {
         prompt = compilePromptRecipe(recipe, sources).messages;
     }
-    // A recipe that compiles to nothing — emptied, or missing its protocol
-    // block — must not silently produce an unusable request.
-    if (!prompt?.length || !prompt.some((message) => message.content.includes(sources.directionProtocol.slice(0, 40)))) {
-        journal('recipe.fallback', { hadRecipe: Boolean(recipe), messages: prompt?.length || 0 }, { severity: 'warn' });
+    const usedFallback = !prompt?.length || !prompt.some((message) => message.content.includes(sources.directionProtocol.slice(0, 40)));
+    if (usedFallback) {
         prompt = [
             { role: 'system', content: sources.directionProtocol },
             ...(sources.directorCard ? [{ role: 'system', content: sources.directorCard }] : []),
             ...(sources.mechanicsSkill ? [{ role: 'system', content: sources.mechanicsSkill }] : []),
             { role: 'user', content: sources.directorSnapshot },
         ];
+    }
+    return { recipe, sources, prompt, usedFallback };
+}
+
+/**
+ * Preview-only: compiles the Director's prompt for the current Scene without
+ * sending a request, rolling, or mutating anything (see buildDirectionSnapshot's
+ * `preview` flag). Shares compileDirectorPrompt with the real request path, so
+ * the Prompt Studio preview shows exactly the messages a real direction pass
+ * would compile right now — same recipe resolution, same buildDirectionSources,
+ * same compilePromptRecipe.
+ */
+export async function previewDirectorPrompt(scene) {
+    if (!scene) return { prompt: [], recipe: null, snapshot: null };
+    const action = hooks.getComposerDraft() || '[preview only: retrieve state; do not mutate or roll]';
+    const snapshot = await buildDirectionSnapshot(scene, action, [], { preview: true });
+    const profile = getMechanicsProfile();
+    const { recipe, prompt } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled });
+    return { prompt, recipe, snapshot };
+}
+
+async function requestDirectionEnvelope(scene, snapshot) {
+    const profile = getMechanicsProfile();
+    const { recipe, prompt, usedFallback } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled });
+    if (usedFallback) {
+        journal('recipe.fallback', { hadRecipe: Boolean(recipe), messages: prompt?.length || 0 }, { severity: 'warn' });
     }
     const schema = toCoreJsonSchema(getDirectionEnvelopeSchema());
     let raw;
