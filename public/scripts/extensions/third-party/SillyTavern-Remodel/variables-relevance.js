@@ -112,11 +112,22 @@ export function assignVariableRefs(selected) {
     return { listed, refToId };
 }
 
+/**
+ * The Variable lines the Director reads.
+ *
+ * Deliberately NO `[vN]` prefix. The refs assignVariableRefs hands out are an
+ * internal bookkeeping key for the retrieval diagnostics and the State drawer;
+ * printing them here put them directly beneath the prompt's own "Address each
+ * one by the exact name below" instruction, which invited the model to reply
+ * with a positional ref that bypassed name validation entirely. Design §3
+ * specifies this exact shape — name, value, meaning — and nothing else the
+ * model could mistake for an identifier.
+ */
 export function serializeRetrievedVariables(listed) {
     if (!listed.length) return 'No relevant Variables were retrieved.';
-    return listed.map(({ ref, variable, reasons }) => {
+    return listed.map(({ variable, reasons }) => {
         const subvalues = variable.subvalues.map((item) => `${item.label}: ${String(item.value)}`);
-        return [`[${ref}] ${variable.name}: ${String(variable.value)}`, ...subvalues, variable.description ? `Meaning: ${variable.description}` : '', reasons.length ? `Reason: ${reasons.join(' ')}` : ''].filter(Boolean).join('\n');
+        return [`${variable.name}: ${String(variable.value)}`, ...subvalues, variable.description ? `Meaning: ${variable.description}` : '', reasons.length ? `Reason: ${reasons.join(' ')}` : ''].filter(Boolean).join('\n');
     }).join('\n\n');
 }
 

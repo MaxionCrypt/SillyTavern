@@ -12,7 +12,7 @@ export function buildDirectionSources(snapshot, { mechanicsEnabled = false } = {
     return {
         directionProtocol: PROTOCOL,
         directorCard: snapshot?.director ? describeCard(snapshot.director) : '',
-        mechanicsSkill: mechanicsEnabled ? describeMechanics(snapshot?.mechanics) : '',
+        mechanicsSkill: describeMechanics(snapshot?.mechanics, { mechanicsEnabled }),
         directorSnapshot: describeSnapshot(snapshot),
     };
 }
@@ -34,24 +34,130 @@ System prompt: ${director.systemPrompt || '(none)'}
 Post-history instructions: ${director.postHistoryInstructions || '(none)'}`;
 }
 
-function describeMechanics(mechanics) {
-    // goal.title, not goal.name: buildMechanicalSnapshot's listed goals carry
-    // a title field, never a name field. Reading .name here would render
-    // "undefined" for every Goal.
-    const goals = (mechanics?.goals || []).map((goal) => `- ${goal.title}${goal.status ? ` (${goal.status})` : ''}`).join('\n');
-    const duplicates = (mechanics?.addressBook?.duplicates || []);
-    return `[GOALS AND VARIABLES — persistent memory, not a turn structure]
-Address each one by the exact name below. A name you were not given will be rejected. Never invent an identifier, never roll dice, never change state yourself — request it and code will validate and apply it.
+/**
+ * Everything the Director may read about persistent state, and — when
+ * mechanics are on — everything it may ask to change.
+ *
+ * Rendered rather than JSON-dumped, and rendered WITHOUT the temporary
+ * `v1`/`g1` refs the layers underneath still use as internal keys. Names are
+ * the only address now (design §3), so a ref appearing anywhere in this text
+ * is an invitation to reply with one.
+ *
+ * When mechanics are disabled this still renders. It used to return '', which
+ * `compilePromptRecipe` then dropped entirely — leaving a Director with no
+ * Variables, no Goals, no statement that anything was off, and a schema still
+ * demanding a `requests` array it had nothing to fill from.
+ */
+function describeMechanics(mechanics, { mechanicsEnabled = false } = {}) {
+    const goals = Array.isArray(mechanics?.goals) ? mechanics.goals : [];
+    // The one place refs are still read: relationships and the user's attached
+    // attempts arrive keyed by `g1…gN` (buildMechanicalSnapshot), and both are
+    // resolved back to titles here rather than being printed raw.
+    const titleByRef = new Map(goals.map((goal) => [goal.ref, goal.title]));
+    const sections = [
+        mechanicsEnabled ? section('CAPABILITIES', describeCapabilities(mechanics?.capabilities)) : '',
+        section('VARIABLES', mechanics?.serializedVariables || '(none retrieved this turn)', describeRetrieval(mechanics?.retrieval)),
+        section('GOALS', goals.map(describeGoal).join('\n') || '(none active)'),
+        section('RELATIONSHIPS', describeRelationships(mechanics?.relationships, titleByRef)),
+        section('ATTEMPTED THIS TURN', describeAttempts(mechanics?.authorizedGoalRefs, titleByRef)),
+    ].filter(Boolean);
+    return [heading(mechanicsEnabled), ...sections, closing(mechanicsEnabled, mechanics)].filter(Boolean).join('\n\n');
+}
 
-CAPABILITIES
-${describeCapabilities(mechanics?.capabilities)}
+function heading(mechanicsEnabled) {
+    const title = '[GOALS AND VARIABLES — persistent memory, not a turn structure]';
+    return mechanicsEnabled
+        ? `${title}\nAddress each one by the exact name below. A name you were not given will be rejected. Never invent an identifier, never roll dice, never change state yourself — request it and code will validate and apply it.`
+        : `${title}\nMechanical automation is unavailable this turn, so everything below is read-only: treat it as established fact your direction must respect, and return an empty requests array. Never roll dice or narrate a change to any value below.`;
+}
 
-VARIABLES
-${mechanics?.serializedVariables || '(none retrieved this turn)'}
+function closing(mechanicsEnabled, mechanics) {
+    if (!mechanicsEnabled) return '';
+    const duplicates = mechanics?.addressBook?.duplicates || [];
+    return duplicates.length
+        ? `Unusable — these names are duplicated in this Timeline and cannot be addressed: ${duplicates.join(', ')}`
+        : '';
+}
 
-GOALS
-${goals || '(none active)'}
-${duplicates.length ? `\nUnusable — these names are duplicated in this Timeline and cannot be addressed: ${duplicates.join(', ')}` : ''}`;
+/** A heading with nothing under it tells the Director less than no heading. */
+function section(title, body, note = '') {
+    const content = String(body || '').trim();
+    if (!content) return '';
+    // The note is its own paragraph: run up against the last entry it reads as
+    // part of that entry rather than as a caveat on the whole list.
+    return [`${title}\n${content}`, note].filter(Boolean).join('\n\n');
+}
+
+/**
+ * One Goal, with the fields the capability dictionary actually acts on.
+ *
+ * `successRate` above all: `goal.shift` exists to move exactly this number by
+ * a named band, and the Director was previously shown only title and status —
+ * asked to shift a value it could not read.
+ */
+function describeGoal(goal) {
+    const facets = [goal.status, goal.visibility].filter(Boolean).join(', ');
+    const rate = Number.isFinite(Number(goal.successRate)) ? ` — ${Number(goal.successRate)}%` : '';
+    const detail = [
+        goal.description,
+        describeOwners('Held by', goal.holderRefs),
+        describeOwners('Against', goal.targetRefs),
+        describeGoalResolution(goal.resolution),
+    ].filter(Boolean).map((line) => `  ${line}`);
+    return [`- ${goal.title}${rate}${facets ? ` (${facets})` : ''}`, ...detail].join('\n');
+}
+
+function describeOwners(label, refs) {
+    const names = (Array.isArray(refs) ? refs : []).map((ref) => ref?.label).filter(Boolean);
+    return names.length ? `${label}: ${names.join(', ')}` : '';
+}
+
+/**
+ * What a tracked Goal tracks, named the way everything else is now.
+ *
+ * `variableName` is supplied by mechanics-runtime.js's describeResolution; it
+ * used to be `variableRef`, which would have reintroduced `v1` into the prompt
+ * the moment this block started rendering resolutions at all.
+ */
+function describeGoalResolution(resolution) {
+    if (!resolution || resolution.kind !== 'tracked') return '';
+    if (!resolution.variableName) return `Tracks a Variable that was not retrieved this turn${resolution.note ? ` — ${resolution.note}` : ''}.`;
+    const direction = resolution.direction === 'decrease' ? 'down to' : 'up to';
+    const threshold = resolution.completionThreshold ?? null;
+    const field = resolution.field && resolution.field !== 'value' ? ` (${resolution.field})` : '';
+    return `Tracks ${resolution.variableName}${field}, achieved when it goes ${direction} ${threshold}.`;
+}
+
+function describeRelationships(relationships, titleByRef) {
+    return (Array.isArray(relationships) ? relationships : []).map((relation) => {
+        const from = titleByRef.get(relation.fromRef);
+        const to = titleByRef.get(relation.toRef);
+        if (!from || !to) return '';
+        return `- ${from} → ${to} (${relation.type || 'related'})${relation.reason ? `: ${relation.reason}` : ''}`;
+    }).filter(Boolean).join('\n');
+}
+
+/**
+ * The Goal attempts the user attached to this action.
+ *
+ * `isAuthorizedGoal` still gates persona-held Goals on exactly these, and the
+ * Roleplay preview still promises the user they "will be assessed by the
+ * hidden Game Director when sent" — so the Director has to be told which ones.
+ */
+function describeAttempts(authorizedGoalRefs, titleByRef) {
+    const titles = (Array.isArray(authorizedGoalRefs) ? authorizedGoalRefs : [])
+        .map((ref) => titleByRef.get(ref)).filter(Boolean);
+    if (!titles.length) return '';
+    return [
+        'The user attached these Goal attempts to the current action. Judge them in this direction.',
+        ...titles.map((title) => `- ${title}`),
+    ].join('\n');
+}
+
+/** Retrieval that fell back is a caveat on the Variable list, not a section. */
+function describeRetrieval(retrieval) {
+    if (!retrieval?.degraded) return '';
+    return `Semantic retrieval was unavailable this turn${retrieval.warning ? ` (${retrieval.warning})` : ''}, so this list was selected deterministically and may be incomplete.`;
 }
 
 /**

@@ -983,21 +983,28 @@ async function revealStep() {
  * — the generic downstream refusal alone is actively misleading for a
  * duplicated name, since it *was* advertised, twice.
  *
- * The base Maps are copied in, not replaced, so goal.reach's "was this
- * Variable retrieved this pass" check — which reads only `.values()` on
- * `variableRefs` — still sees everything this pass retrieved, not just the
- * Variables a request happened to name. Those base Maps are keyed by the
- * synthetic v1/g1-style refs the retrieval layer still assigns internally
- * (assignVariableRefs / buildMechanicalSnapshot), which is exactly why a
- * successful resolution must be allowed to overwrite an inherited key: a
- * Variable a user actually named "v1" must resolve to itself, not to
- * whatever `v1` happened to mean as a positional ref this pass. `attempted`
- * only prevents re-resolving the same name twice; it never substitutes for
- * resolution the way checking the map itself would.
+ * The base Maps' VALUES are carried in, but never their keys. goal.reach is
+ * the only reader of the base entries and it uses exactly two things —
+ * `runtime.variableRefs.size` and `[...runtime.variableRefs.values()]`
+ * (mechanics-capabilities.js:392-396) — so re-keying costs nothing there.
+ * The keys, on the other hand, are the synthetic `v1…vN` / `g1…gN` refs the
+ * retrieval layer assigns internally (assignVariableRefs /
+ * buildMechanicalSnapshot), and inheriting them made every one of them a
+ * second, unvalidated address: `resolveVariableReference` does
+ * `runtime.variableRefs.get(ref)`, so a Director replying `variableRef: "v1"`
+ * wrote to whatever Variable happened to rank first, with no name check at
+ * all — and defeated the duplicate-name refusal design §3 requires, since a
+ * name excluded from the book was still reachable positionally. The
+ * placeholder keys below are NUL-prefixed: nothing a model can type collides
+ * with them, so the ONLY way into this Map is a name resolved against the
+ * book this pass advertised.
  */
 export function addressRequestsByName(requests, addressBook, variableRefs, goalRefs) {
-    const resolvedVariableRefs = new Map(variableRefs instanceof Map ? variableRefs : []);
-    const resolvedGoalRefs = new Map(goalRefs instanceof Map ? goalRefs : []);
+    const unaddressable = (refs) => new Map(
+        (refs instanceof Map ? [...refs.values()] : []).map((id, index) => [`\0retrieved:${index}`, id]),
+    );
+    const resolvedVariableRefs = unaddressable(variableRefs);
+    const resolvedGoalRefs = unaddressable(goalRefs);
     const unresolvedReasons = [];
     const attempted = new Set();
     const addResolved = (refs, tag, name) => {

@@ -90,7 +90,7 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
             ref, title: goal.title, description: goal.description,
             holderRefs: goal.holderRefs, targetRefs: goal.targetRefs,
             successRate: goal.successRate, status: goal.status, visibility: goal.visibility,
-            resolution: describeResolution(goal.resolution, resolved.refToId),
+            resolution: describeResolution(goal.resolution, resolved.listed),
         };
     });
     const refByGoalId = new Map([...goalRefs].map(([ref, id]) => [id, ref]));
@@ -130,14 +130,24 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
     };
 }
 
-/** A tracked resolution names its Variable by this request's ref, or not at all. */
-function describeResolution(resolution, variableRefs) {
+/**
+ * A tracked resolution names its Variable by NAME, or not at all.
+ *
+ * It used to carry the positional `vN` ref. Nothing rendered it at the time,
+ * but direction-sources.js now does — and a ref in the prompt is exactly the
+ * defect the name-addressing rework exists to remove, since the model would
+ * reasonably reply with the identifier it was shown. Resolved against
+ * `resolved.listed` (what this pass actually advertised), so a Goal tracking a
+ * Variable retrieval did not surface still says so rather than naming one the
+ * Director cannot address.
+ */
+function describeResolution(resolution, listed) {
     if (!resolution || resolution.kind !== 'tracked') return { kind: 'instant' };
-    const ref = [...variableRefs].find(([, id]) => id === resolution.variableId)?.[0] || '';
+    const name = listed.find((item) => item.variable.id === resolution.variableId)?.variable?.name || '';
     return {
-        kind: 'tracked', variableRef: ref, field: resolution.field,
+        kind: 'tracked', variableName: name, field: resolution.field,
         direction: resolution.direction, completionThreshold: resolution.completionThreshold,
-        ...(ref ? {} : { note: 'Its tracked Variable was not retrieved this pass.' }),
+        ...(name ? {} : { note: 'Its tracked Variable was not retrieved this pass.' }),
     };
 }
 
