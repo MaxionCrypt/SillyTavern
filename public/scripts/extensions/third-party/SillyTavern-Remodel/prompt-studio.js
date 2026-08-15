@@ -133,6 +133,23 @@ export function getCurrentPromptStudioRecipe(mode = state.getRuntimeMode(), apiT
     return getActivePromptRecipe(mode, apiType);
 }
 
+/**
+ * Which prompt modes may be mirrored into SillyTavern's native Prompt Manager.
+ *
+ * Director recipes must never be: they are compiled by Remodel for the hidden
+ * directing call. Applying one to native would make the performing character
+ * generate while reading directing instructions.
+ */
+export function isNativeApplicableMode(mode) {
+    return mode === 'roleplay' || mode === 'story';
+}
+
+/** The active Director recipe, or null when none is configured. */
+export function resolveDirectorRecipe() {
+    const recipe = getActivePromptRecipe('director', 'chat');
+    return recipe && recipe.mode === 'director' ? recipe : null;
+}
+
 export function getPromptStudioRecipes(mode, apiType) {
     return getPromptRecipes({ mode, apiType });
 }
@@ -155,6 +172,7 @@ export function applyPromptStudioRuntimeRecipe() {
     const mode = normalizeMode(state.getRuntimeMode());
     const apiType = getPromptApiType();
     const recipe = getCurrentPromptStudioRecipe(mode, apiType);
+    if (!isNativeApplicableMode(recipe?.mode)) return;
     applyRecipeToNative(recipe);
     state.boundMode = mode;
     state.boundApiType = apiType;
@@ -169,6 +187,7 @@ export function syncPromptStudioForCurrentMode({ apply = false } = {}) {
     const changed = mode !== state.boundMode || apiType !== state.boundApiType || recipe?.id !== state.boundRecipeId;
     if (apply && changed) {
         captureNativeSettingsFor(state.boundMode, state.boundApiType, state.boundRecipeId);
+        if (!isNativeApplicableMode(recipe?.mode)) return;
         applyRecipeToNative(recipe);
     }
     state.boundMode = mode;
@@ -686,6 +705,10 @@ function showTransportFeedback(field) {
 
 function applyRecipeToNative(recipe) {
     if (!recipe) return;
+    // Defense in depth: every native path funnels through this one function,
+    // so this is where the director/native split holds even for a call site
+    // that forgets to check isNativeApplicableMode() itself (see onRecipeChanged).
+    if (!isNativeApplicableMode(recipe.mode)) return;
     state.nativeSyncGuard = true;
     try {
         if (recipe.mode === 'roleplay' && recipe.apiType === 'chat') applyRoleplayChatRecipe(recipe);
