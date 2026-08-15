@@ -4,7 +4,7 @@ const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
 const STORE_VERSION = 4;
 
-export const PROMPT_MODES = ['story', 'roleplay'];
+export const PROMPT_MODES = ['story', 'roleplay', 'director'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
 export const PROMPT_ROLES = ['system', 'instruction', 'user', 'assistant'];
 
@@ -102,7 +102,8 @@ export function setActivePromptRecipe(mode, apiType, recipeId) {
 export function createPromptRecipe({ name = 'Untitled Prompt', description = '', mode = 'story', apiType = 'chat', blocks = null, transport = null } = {}) {
     const store = getPromptStudioStore();
     const safeMode = PROMPT_MODES.includes(mode) ? mode : 'story';
-    const safeApiType = PROMPT_API_TYPES.includes(apiType) ? apiType : 'chat';
+    const requestedApiType = PROMPT_API_TYPES.includes(apiType) ? apiType : 'chat';
+    const safeApiType = safeMode === 'director' ? 'chat' : requestedApiType;
     const timestamp = now();
     const recipe = normalizeRecipe({
         id: createId('prompt'),
@@ -276,8 +277,30 @@ function defaultStoryBlocks() {
     ];
 }
 
+/**
+ * The Director's default prompt.
+ *
+ * Only the protocol and the snapshot are locked: remove either and the reply
+ * stops being parseable. Everything else — including the pacing and autonomy
+ * policy that used to be compiled into directionHandbook — is an ordinary
+ * editable block.
+ */
+function defaultDirectorBlocks() {
+    return [
+        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directionProtocol', enabled: true, locked: true }),
+        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directorCard', enabled: true, locked: false }),
+        createPromptBlock({
+            kind: 'message', role: 'system', enabled: true, locked: false,
+            content: 'The world may move without waiting for the user. Keep openings optional — the user may intervene anywhere. Responses may be long; give the performer useful guidance on rhythm, and only ask the scene to stop when the fiction is explicitly waiting on the user.',
+        }),
+        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'mechanicsSkill', enabled: true, locked: false }),
+        createPromptBlock({ kind: 'source', role: 'user', sourceKey: 'directorSnapshot', enabled: true, locked: true }),
+    ];
+}
+
 function defaultBlocksFor(mode, apiType) {
     if (mode === 'story') return defaultStoryBlocks();
+    if (mode === 'director') return defaultDirectorBlocks();
     if (apiType === 'text') {
         return [createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'nativeContext', enabled: true, locked: true })];
     }
