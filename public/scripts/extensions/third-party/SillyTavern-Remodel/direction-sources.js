@@ -1,13 +1,7 @@
 // The content behind each source block of a Director recipe.
 //
-// PURE OUTPUT — takes a snapshot, returns strings. The one exception is the
-// capability dictionary below, which pulls a static, computed-only export out
-// of mechanics-capabilities.js; that file also exports context-touching
-// functions this module never calls, so the exact text sent to the Director
-// can still be asserted offline, through the same st-context stub every other
-// Remodel test uses.
-
-import { getCapabilityDictionary } from './mechanics-capabilities.js';
+// PURE — takes a snapshot, returns strings. Keeping it free of context imports
+// means the exact text sent to the Director can be asserted in tests.
 
 /**
  * @param {object} snapshot the direction snapshot
@@ -50,7 +44,7 @@ function describeMechanics(mechanics) {
 Address each one by the exact name below. A name you were not given will be rejected. Never invent an identifier, never roll dice, never change state yourself — request it and code will validate and apply it.
 
 CAPABILITIES
-${describeCapabilities()}
+${describeCapabilities(mechanics?.capabilities)}
 
 VARIABLES
 ${mechanics?.serializedVariables || '(none retrieved this turn)'}
@@ -66,9 +60,15 @@ ${duplicates.length ? `\nUnusable — these names are duplicated in this Timelin
  * can see a Variable or Goal in the snapshot above and have no idea what may
  * be asked of it — the dictionary existed for exactly this before the
  * compiled-recipe rework dropped it.
+ *
+ * Read from the snapshot rather than imported from mechanics-capabilities.js
+ * directly: that module pulls in variables-store.js/story-goals-store.js,
+ * which import st-context.js, and this module must not. mechanics-runtime.js
+ * puts `getCapabilityDictionary()`'s output into `mechanics.capabilities` for
+ * exactly this reason.
  */
-function describeCapabilities() {
-    return getCapabilityDictionary()
+function describeCapabilities(capabilities) {
+    return (Array.isArray(capabilities) ? capabilities : [])
         .map((capability) => `- ${capability.name} (${capability.applicableKinds.join(', ')}): ${capability.description}`)
         .join('\n');
 }

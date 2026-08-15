@@ -406,6 +406,15 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     const hadInstruction = Boolean(saved.envelope?.instruction || saved.envelope?.movement?.objective);
     if (!hadInstruction || !performer) return requestNextDirection(scene);
     const envelope = normalizeEnvelope(saved.envelope, scene);
+    // Every pending request that survived to this point (the undo loop above
+    // reversed the ones this run actually applied) still needs the same
+    // name-to-id resolution it had originally. Without these, regenerate
+    // would resolve every name against empty Maps and reject them all as
+    // "not advertised" — reverting a Variable or Goal change the user already
+    // read, silently, while the reused instruction still describes it.
+    envelope.variableRefs = new Map(Object.entries(saved.variableRefs || {}));
+    envelope.goalRefs = new Map(Object.entries(saved.goalRefs || {}));
+    envelope.addressBook = saved.addressBook || { entries: [], duplicates: [] };
     return generateDirectedPerformer({ scene, envelope, performer, autonomousSequence: Number(saved.autonomousSequence) || 0 });
 }
 
@@ -914,36 +923,58 @@ async function revealStep() {
  * `.get(ref)` — so mechanics-capabilities.js needs no change, it just gets
  * handed names as keys instead of synthetic refs. A name absent from the book
  * is simply left unresolved, which the capability layer already refuses as
- * "not advertised for this request"; no separate rejection path is needed
- * here. The original entries are kept alongside the new ones so goal.reach's
- * "was this Variable retrieved this pass" check — which reads only
- * `.values()` — still sees everything this pass retrieved, not just the
- * Variables a request happened to name.
+ * "not advertised for this request"; the specific reason (unknown vs.
+ * duplicated) is collected in `unresolvedReasons` for the caller to surface
+ * — the generic downstream refusal alone is actively misleading for a
+ * duplicated name, since it *was* advertised, twice.
+ *
+ * The base Maps are copied in, not replaced, so goal.reach's "was this
+ * Variable retrieved this pass" check — which reads only `.values()` on
+ * `variableRefs` — still sees everything this pass retrieved, not just the
+ * Variables a request happened to name. Those base Maps are keyed by the
+ * synthetic v1/g1-style refs the retrieval layer still assigns internally
+ * (assignVariableRefs / buildMechanicalSnapshot), which is exactly why a
+ * successful resolution must be allowed to overwrite an inherited key: a
+ * Variable a user actually named "v1" must resolve to itself, not to
+ * whatever `v1` happened to mean as a positional ref this pass. `attempted`
+ * only prevents re-resolving the same name twice; it never substitutes for
+ * resolution the way checking the map itself would.
  */
-function addressRequestsByName(requests, addressBook, variableRefs, goalRefs) {
+export function addressRequestsByName(requests, addressBook, variableRefs, goalRefs) {
     const resolvedVariableRefs = new Map(variableRefs instanceof Map ? variableRefs : []);
     const resolvedGoalRefs = new Map(goalRefs instanceof Map ? goalRefs : []);
-    const addResolved = (refs, name) => {
-        if (!name || refs.has(name)) return;
+    const unresolvedReasons = [];
+    const attempted = new Set();
+    const addResolved = (refs, tag, name) => {
+        if (!name) return;
+        const key = `${tag}:${name}`;
+        if (attempted.has(key)) return;
+        attempted.add(key);
         const result = resolveByName(addressBook, name);
         if (result.ok) refs.set(name, result.id);
+        else unresolvedReasons.push(result.reason);
     };
     for (const request of requests) {
         const args = request?.arguments || {};
-        addResolved(resolvedVariableRefs, args.variableRef);
-        addResolved(resolvedVariableRefs, args.modifierVariableRef);
-        addResolved(resolvedGoalRefs, args.goalRef);
-        addResolved(resolvedGoalRefs, args.fromGoalRef);
-        addResolved(resolvedGoalRefs, args.toGoalRef);
+        addResolved(resolvedVariableRefs, 'variable', args.variableRef);
+        addResolved(resolvedVariableRefs, 'variable', args.modifierVariableRef);
+        // A tracked Goal's resolution names its Variable the same way every
+        // other Variable reference does — see mechanics-capabilities.js's
+        // normalizeResolutionArgs, which resolves it through this same
+        // lookup. Missing this is the only way to create a tracked Goal.
+        addResolved(resolvedVariableRefs, 'variable', args.resolution?.variableRef);
+        addResolved(resolvedGoalRefs, 'goal', args.goalRef);
+        addResolved(resolvedGoalRefs, 'goal', args.fromGoalRef);
+        addResolved(resolvedGoalRefs, 'goal', args.toGoalRef);
     }
-    return { variableRefs: resolvedVariableRefs, goalRefs: resolvedGoalRefs };
+    return { variableRefs: resolvedVariableRefs, goalRefs: resolvedGoalRefs, unresolvedReasons };
 }
 
 function executeDirectionRequests(requests, context) {
     const scene = context.scene;
-    if (!Array.isArray(requests) || requests.length === 0) return { ok: true, receipts: [], transaction: null };
-    const { variableRefs, goalRefs } = addressRequestsByName(requests, context.addressBook, context.variableRefs, context.goalRefs);
-    return executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests }, {
+    if (!Array.isArray(requests) || requests.length === 0) return { ok: true, receipts: [], transaction: null, unresolvedReasons: [] };
+    const { variableRefs, goalRefs, unresolvedReasons } = addressRequestsByName(requests, context.addressBook, context.variableRefs, context.goalRefs);
+    const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests }, {
         timelineId: scene.timelineId,
         sceneId: scene.id,
         turnId: context.directionId,
@@ -955,6 +986,7 @@ function executeDirectionRequests(requests, context) {
         variableRefs, goalRefs,
         allowUserGoalCreate: false,
     });
+    return { ...result, unresolvedReasons };
 }
 
 async function completeVisibleRun(run) {
@@ -1247,10 +1279,21 @@ function applyPendingRequests(run) {
         requested: pending.length,
         ok: result.ok,
         errors: result.errors || [],
+        unresolvedReasons: result.unresolvedReasons || [],
         transactionId: result.transaction?.id || null,
     }, { correlationId: run.directionId, severity: result.ok ? 'info' : 'error' });
     if (result.transaction?.id) run.checkpointTransactionIds.push(result.transaction.id);
-    if (!result.ok) run.checkpointDiagnostics = [...(run.checkpointDiagnostics || []), ...(result.errors || ['Mechanical request failed.'])];
+    // unresolvedReasons carries the specific reason (unknown vs. duplicated
+    // name) that addressRequestsByName already worked out; folded in even on
+    // an otherwise-ok result, since one request can name an unresolvable
+    // Variable while the rest of the batch still succeeds.
+    if (!result.ok || result.unresolvedReasons?.length) {
+        run.checkpointDiagnostics = [
+            ...(run.checkpointDiagnostics || []),
+            ...(result.ok ? [] : (result.errors || ['Mechanical request failed.'])),
+            ...(result.unresolvedReasons || []),
+        ];
+    }
 }
 
 function persistRun(run, immediate) {

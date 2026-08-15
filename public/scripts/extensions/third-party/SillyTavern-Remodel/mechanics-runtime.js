@@ -105,6 +105,12 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
         // formatMechanicalSnapshot. Held here so callers need one object.
         serializedVariables: resolved.serialized,
         addressBook,
+        // The operations a Director may request, carried in the snapshot so
+        // direction-sources.js can render them without importing
+        // mechanics-capabilities.js itself — that module pulls in
+        // variables-store.js/story-goals-store.js, which import st-context.js,
+        // and direction-sources.js is required to stay free of that.
+        capabilities: getCapabilityDictionary(),
         // Maps stringify as {}, so persistent IDs remain code-side only.
         variableRefs: resolved.refToId,
         goalRefs,
