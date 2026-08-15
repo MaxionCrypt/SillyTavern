@@ -307,6 +307,37 @@ export function updateVectorIndexState(timelineId, patch = {}) {
 
 export function getMigrationBackup() { return getVariableStore().migrationBackup; }
 
+/**
+ * Mark every Timeline holding lore-linked Variables for re-embedding.
+ *
+ * Called when World Info changes. A linked entry's prose is part of the
+ * document that was embedded, so editing an entry silently invalidates the
+ * index — and `ensureVariableVectorIndex` early-returns when the Timeline is
+ * clean, so without this the stale document survives indefinitely.
+ *
+ * Which book changed is not reliably reported, so this flags every linked
+ * Timeline. That is cheap: reindexing is hash-diffed, so an unaffected Timeline
+ * costs one list-and-compare with nothing to insert. Already-dirty Timelines are
+ * skipped so a burst of edits does not churn settings.
+ */
+export function markLoreLinkedTimelinesDirty(reason = 'lore-changed') {
+    const store = getVariableStore();
+    let marked = 0;
+    for (const [timelineId, bucket] of Object.entries(store.timelines)) {
+        const linked = bucket.variableIds.some((id) => bucket.variables[id]?.loreLinks?.length);
+        if (!linked) continue;
+        const current = store.vectorIndexState[timelineId];
+        if (current?.dirty) continue;
+        store.vectorIndexState[timelineId] = {
+            ...(current || { collectionId: vectorCollectionId(timelineId), hashes: {} }),
+            dirty: true, dirtyReason: reason, updatedAt: now(),
+        };
+        marked++;
+    }
+    if (marked) saveVariableStore();
+    return marked;
+}
+
 export function normalizeOwnerRef(value = {}, fallbackKind = 'custom') {
     const kind = ['character', 'persona', 'group', 'faction', 'object', 'location', 'timeline', 'goal', 'custom'].includes(value?.kind) ? value.kind : fallbackKind;
     const label = String(value?.label || value?.name || value?.id || 'Unknown').trim() || 'Unknown';

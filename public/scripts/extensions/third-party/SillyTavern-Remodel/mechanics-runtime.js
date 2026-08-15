@@ -23,7 +23,7 @@ export async function runMechanicalPreflight({ scene, action, cast = [], persona
     const prompt = [
         { role: 'system', content: mechanicalHandbook(profile.handbookAdditions) },
         { role: 'system', content: `CAPABILITY DICTIONARY\n${JSON.stringify(getCapabilityDictionary())}` },
-        { role: 'user', content: `MECHANICAL SNAPSHOT\n${JSON.stringify(snapshot)}\n\nReturn one ${MECHANICS_PROTOCOL} envelope. Return an empty requests array when no authoritative fact changes.` },
+        { role: 'user', content: `MECHANICAL SNAPSHOT\n${formatMechanicalSnapshot(snapshot)}\n\nReturn one ${MECHANICS_PROTOCOL} envelope. Return an empty requests array when no authoritative fact changes.` },
     ];
     const raw = await getContext().generateRaw({
         api: 'openai', prompt,
@@ -33,7 +33,8 @@ export async function runMechanicalPreflight({ scene, action, cast = [], persona
     const envelope = interpretStructuredReply(raw, 'Mechanical AI');
     const result = executeMechanicsRequest(envelope, {
         timelineId: scene.timelineId, sceneId: scene.id, turnId,
-        authorizedGoalIds, authorizedVariableRefs: [], variableRefs: snapshot.variableRefs,
+        authorizedGoalIds, authorizedVariableRefs: [],
+        variableRefs: snapshot.variableRefs, goalRefs: snapshot.goalRefs,
         allowUserGoalCreate: false,
     });
     if (!result.ok) throw new Error(result.errors?.join(' ') || 'The mechanical transaction was rejected.');
@@ -65,30 +66,79 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
         timelineId: scene.timelineId, action,
         history: evidence.history || [], cast: subjects,
         activatedEntries: evidence.activatedEntries || [], goals,
+        correlationId: evidence.correlationId || null,
     });
-    const variables = resolved.listed.map(({ ref, variable, reasons }) => ({
-        ref, name: variable.name, description: variable.description,
-        type: variable.valueType, value: variable.value,
-        subvalues: variable.subvalues.map(({ key, label, type, value, role }) => ({ key, label, type, value, role })),
-        modifiers: variable.modifiers.map(({ label, amount, target, reason }) => ({ label, amount, target, reason })),
-        authority: variable.authority, reason: reasons.join(' '),
-    }));
+
+    // Goals get temporary refs for the same reason Variables do: a persistent
+    // UUID in the prompt is one the model can echo back for a Goal that was
+    // never advertised this pass. g1/g2 are meaningless outside this request.
+    const goalRefs = new Map();
+    const listedGoals = goals.map((goal, index) => {
+        const ref = `g${index + 1}`;
+        goalRefs.set(ref, goal.id);
+        return {
+            ref, title: goal.title, description: goal.description,
+            holderRefs: goal.holderRefs, targetRefs: goal.targetRefs,
+            successRate: goal.successRate, status: goal.status, visibility: goal.visibility,
+            resolution: describeResolution(goal.resolution, resolved.refToId),
+        };
+    });
+    const refByGoalId = new Map([...goalRefs].map(([ref, id]) => [id, ref]));
+
     return {
         timelineId: scene.timelineId, sceneId: scene.id, action: String(action),
-        explicitlyAuthorizedGoalIds: authorizedGoalIds.map(String),
+        authorizedGoalRefs: authorizedGoalIds.map((id) => refByGoalId.get(String(id))).filter(Boolean),
         entities: subjects,
-        goals: goals.map((goal) => ({ id: goal.id, title: goal.title, description: goal.description, holderRefs: goal.holderRefs, targetRefs: goal.targetRefs, successRate: goal.successRate, resolution: goal.resolution, status: goal.status, visibility: goal.visibility })),
-        relationships: getSceneGoalRelations(scene.id),
-        addressBook: variables.map((item) => `[${item.ref}] ${item.name} = ${String(item.value)}`),
-        variables,
+        goals: listedGoals,
+        relationships: describeRelations(getSceneGoalRelations(scene.id), refByGoalId),
+        // Variables travel as compact lines rather than inside the JSON — see
+        // formatMechanicalSnapshot. Held here so callers need one object.
+        serializedVariables: resolved.serialized,
         // Maps stringify as {}, so persistent IDs remain code-side only.
         variableRefs: resolved.refToId,
-        retrieval: { degraded: resolved.degraded, warning: resolved.vectorError, selected: variables.length, diagnostics: resolved.diagnostics.filter((item) => item.included) },
+        goalRefs,
+        // Only the shape of retrieval, never its rejects: naming the Variables
+        // that deliberately did not surface would hand the model the context
+        // retrieval just decided to withhold. Full diagnostics go to the journal.
+        retrieval: { degraded: resolved.degraded, warning: resolved.vectorError, selected: resolved.listed.length },
     };
 }
 
+/** A tracked resolution names its Variable by this request's ref, or not at all. */
+function describeResolution(resolution, variableRefs) {
+    if (!resolution || resolution.kind !== 'tracked') return { kind: 'instant' };
+    const ref = [...variableRefs].find(([, id]) => id === resolution.variableId)?.[0] || '';
+    return {
+        kind: 'tracked', variableRef: ref, field: resolution.field,
+        direction: resolution.direction, completionThreshold: resolution.completionThreshold,
+        ...(ref ? {} : { note: 'Its tracked Variable was not retrieved this pass.' }),
+    };
+}
+
+function describeRelations(relations, refByGoalId) {
+    return (relations || []).map((relation) => ({
+        ...relation,
+        fromRef: refByGoalId.get(String(relation.fromGoalId ?? relation.goalId ?? '')) || '',
+        toRef: refByGoalId.get(String(relation.toGoalId ?? relation.relatedGoalId ?? '')) || '',
+        fromGoalId: undefined, toGoalId: undefined, goalId: undefined, relatedGoalId: undefined,
+    }));
+}
+
+/**
+ * Render a snapshot for a prompt.
+ *
+ * Variables leave the JSON and arrive as the compact lines
+ * `serializeRetrievedVariables` produces — the format the design specifies, and
+ * far cheaper than a nested object per Variable. The Maps carrying persistent
+ * IDs are dropped rather than relied on stringifying to `{}`.
+ */
+export function formatMechanicalSnapshot(snapshot) {
+    const { serializedVariables, variableRefs, goalRefs, ...rest } = snapshot;
+    return `${JSON.stringify(rest)}\n\nVARIABLES\n${serializedVariables || 'No relevant Variables were retrieved.'}`;
+}
+
 export function mechanicalHandbook(additions) {
-    return `You are the hidden mechanical adjudicator for a continuous roleplay. Goals and Variables are persistent memory, not a turn structure. Never narrate, invent references, emit dice, or mutate state directly. Submit only advertised capabilities using the temporary v1, v2... references in the current address book. Code owns validation, bounds, authority, transactions, and any roll.\n\nVARIABLES\nLorebook prose supplies meaning. Variables supply authoritative current scalar facts. Use variable.set for an exact correction, variable.adjust for numeric change, variable.transition for enum change, and variable.subvalue.set only for an advertised field. Do not request a Variable that is absent from the temporary address book.\n\nAUTHORITY\nUser/persona state requires direct authorization or review. Bounded world state may apply automatically.\n${String(additions || '').trim()}`;
+    return `You are the hidden mechanical adjudicator for a continuous roleplay. Goals and Variables are persistent memory, not a turn structure. Never narrate, invent references, emit dice, or mutate state directly. Submit only advertised capabilities, addressing Variables by their temporary v1, v2... references and Goals by their temporary g1, g2... references from the current snapshot. Those references are valid only for this request; a reference you were not given this time will be rejected. Code owns validation, bounds, authority, transactions, and any roll.\n\nVARIABLES\nLorebook prose supplies meaning. Variables supply authoritative current scalar facts. Use variable.set for an exact correction, variable.adjust for numeric change, variable.transition for enum change, and variable.subvalue.set only for an advertised field. Do not request a Variable that is absent from the temporary address book.\n\nAUTHORITY\nUser/persona state requires direct authorization or review. Bounded world state may apply automatically.\n${String(additions || '').trim()}`;
 }
 
 export function formatMechanicsReceipts(receipts) {

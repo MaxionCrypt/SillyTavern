@@ -99,7 +99,7 @@ export function getMechanicsRequestSchema() {
                             arguments: {
                                 type: 'object', additionalProperties: false,
                                 properties: {
-                                    alias: { type: 'string' }, goalId: { type: 'string' }, fromGoalId: { type: 'string' }, toGoalId: { type: 'string' },
+                                    alias: { type: 'string' }, goalRef: { type: 'string' }, fromGoalRef: { type: 'string' }, toGoalRef: { type: 'string' },
                                     title: { type: 'string' }, description: { type: 'string' }, visibility: { type: 'string', enum: ['public', 'secret'] },
                                     holderRefs: { type: 'array', items: ownerRefSchema() }, targetRefs: { type: 'array', items: ownerRefSchema() },
                                     openingBand: { type: 'string', enum: ['nearly_impossible', 'extreme', 'difficult', 'uncertain', 'favorable', 'strongly_favored', 'nearly_assured'] }, successRate: { type: 'number' },
@@ -156,6 +156,7 @@ export function executeMechanicsRequest(envelope, context = {}) {
         turnId: String(context.turnId || ''),
         aliases: new Map(),
         variableRefs: context.variableRefs instanceof Map ? context.variableRefs : new Map(Object.entries(context.variableRefs || {})),
+        goalRefs: context.goalRefs instanceof Map ? context.goalRefs : new Map(Object.entries(context.goalRefs || {})),
         receipts: [],
         pending: [],
         reached: new Set(),
@@ -206,11 +207,17 @@ export function approvePendingMechanics(sceneId, pendingId, timelineId) {
     const variableRef = String(args.variableRef || args.modifierVariableRef || '');
     const variableRefs = args._resolvedVariableId && variableRef ? new Map([[variableRef, args._resolvedVariableId]]) : new Map();
     if ('_resolvedVariableId' in args) delete args._resolvedVariableId;
+    // The refs a deferred request carries were advertised by a pass that is long
+    // over, so approval rebuilds a one-entry table from the ids resolved when the
+    // request was first validated. Without it every approval would be rejected
+    // as "not advertised for this request".
+    const goalRefs = new Map(Object.entries(args._resolvedGoalIds || {}));
+    if ('_resolvedGoalIds' in args) delete args._resolvedGoalIds;
     const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests: [request] }, {
         timelineId, sceneId,
-        authorizedGoalIds: [args.goalId, args.fromGoalId].filter(Boolean),
+        authorizedGoalIds: [...goalRefs.values()],
         authorizedVariableRefs: [variableRef].filter(Boolean),
-        variableRefs,
+        variableRefs, goalRefs,
         allowUserGoalCreate: request.capability === 'goal.create',
     });
     if (result.ok) takePendingOp(sceneId, entry.id);
@@ -307,8 +314,8 @@ function createGoal(request, args, runtime) {
 }
 
 function shiftGoal(request, args, runtime) {
-    const goal = requireGoal(resolveReference(args.goalId, runtime, 'goal'), runtime);
-    if (!isAuthorizedGoal(goal, runtime)) return defer(request, runtime, `Changing the user-owned Goal “${goal.title}” requires review.`);
+    const goal = requireGoal(resolveReference(args.goalRef ?? args.goalId, runtime, 'goal'), runtime);
+    if (!isAuthorizedGoal(goal, runtime)) return deferGoal(request, runtime, { [String(args.goalRef ?? args.goalId)]: goal.id }, `Changing the user-owned Goal “${goal.title}” requires review.`);
     const amount = shiftForMagnitude(args.magnitude);
     if (!amount) throw new MechanicsError(`${request.id}: invalid shift magnitude.`);
     const before = copy(goal);
@@ -318,17 +325,17 @@ function shiftGoal(request, args, runtime) {
 }
 
 function relateGoals(request, args, runtime) {
-    const from = requireGoal(resolveReference(args.fromGoalId, runtime, 'goal'), runtime);
-    const to = requireGoal(resolveReference(args.toGoalId, runtime, 'goal'), runtime);
-    if (!isAuthorizedGoal(from, runtime)) return defer(request, runtime, `Changing a relationship from the user-owned Goal “${from.title}” requires review.`);
+    const from = requireGoal(resolveReference(args.fromGoalRef ?? args.fromGoalId, runtime, 'goal'), runtime);
+    const to = requireGoal(resolveReference(args.toGoalRef ?? args.toGoalId, runtime, 'goal'), runtime);
+    if (!isAuthorizedGoal(from, runtime)) return deferGoal(request, runtime, { [String(args.fromGoalRef ?? args.fromGoalId)]: from.id, [String(args.toGoalRef ?? args.toGoalId)]: to.id }, `Changing a relationship from the user-owned Goal “${from.title}” requires review.`);
     const relation = createTimelineGoalRelation(runtime.timelineId, from.id, to.id, args.type, request.reason, txContext(runtime, request));
     if (!relation) throw new MechanicsError(`${request.id}: invalid Goal relationship.`);
     receipt(runtime, request, null, relation);
 }
 
 function closeGoal(request, args, runtime) {
-    const goal = requireGoal(resolveReference(args.goalId, runtime, 'goal'), runtime);
-    if (!isAuthorizedGoal(goal, runtime)) return defer(request, runtime, `Closing the user-owned Goal “${goal.title}” requires review.`);
+    const goal = requireGoal(resolveReference(args.goalRef ?? args.goalId, runtime, 'goal'), runtime);
+    if (!isAuthorizedGoal(goal, runtime)) return deferGoal(request, runtime, { [String(args.goalRef ?? args.goalId)]: goal.id }, `Closing the user-owned Goal “${goal.title}” requires review.`);
     if (!['achieved', 'abandoned', 'impossible'].includes(args.status)) throw new MechanicsError(`${request.id}: invalid terminal Goal status.`);
     const before = copy(goal);
     const after = updateStoryGoal(goal.id, { status: args.status }, { ...txContext(runtime, request), type: 'goal.closed' });
@@ -336,9 +343,9 @@ function closeGoal(request, args, runtime) {
 }
 
 function reachGoal(request, args, runtime) {
-    const goal = requireGoal(resolveReference(args.goalId, runtime, 'goal'), runtime);
+    const goal = requireGoal(resolveReference(args.goalRef ?? args.goalId, runtime, 'goal'), runtime);
     if (runtime.reached.has(goal.id)) throw new MechanicsError(`${request.id}: a Goal may be reached only once per transaction.`);
-    if (!isAuthorizedGoal(goal, runtime)) return defer(request, runtime, `A reach for the user-owned Goal “${goal.title}” must be explicitly declared.`);
+    if (!isAuthorizedGoal(goal, runtime)) return deferGoal(request, runtime, { [String(args.goalRef ?? args.goalId)]: goal.id }, `A reach for the user-owned Goal “${goal.title}” must be explicitly declared.`);
     runtime.reached.add(goal.id);
     const before = copy(goal);
     let modifierInstance = null;
@@ -379,13 +386,17 @@ function reachGoal(request, args, runtime) {
 
 function validateArguments(request) {
     const args = request.arguments;
-    const require = (...keys) => { for (const key of keys) if (args[key] == null || args[key] === '') throw new MechanicsError(`${request.id}: ${key} is required.`); };
+    // `goalRef` also accepts the older `goalId` spelling, so a request deferred
+    // for review under the previous schema still validates when it is approved.
+    const legacy = { goalRef: 'goalId', fromGoalRef: 'fromGoalId', toGoalRef: 'toGoalId' };
+    const missing = (key) => (args[key] == null || args[key] === '') && (!legacy[key] || args[legacy[key]] == null || args[legacy[key]] === '');
+    const require = (...keys) => { for (const key of keys) if (missing(key)) throw new MechanicsError(`${request.id}: ${key} is required.`); };
     switch (request.capability) {
         case 'goal.create': require('title', 'holderRefs', 'resolution'); break;
-        case 'goal.shift': require('goalId', 'direction', 'magnitude'); break;
-        case 'goal.reach': require('goalId', 'impactMagnitude'); break;
-        case 'goal.relate': require('fromGoalId', 'toGoalId', 'type'); break;
-        case 'goal.close': require('goalId', 'status'); break;
+        case 'goal.shift': require('goalRef', 'direction', 'magnitude'); break;
+        case 'goal.reach': require('goalRef', 'impactMagnitude'); break;
+        case 'goal.relate': require('fromGoalRef', 'toGoalRef', 'type'); break;
+        case 'goal.close': require('goalRef', 'status'); break;
         case 'variable.set': require('variableRef', 'value'); break;
         case 'variable.subvalue.set': require('variableRef', 'field', 'value'); break;
         case 'variable.adjust': require('variableRef', 'delta'); break;
@@ -422,6 +433,21 @@ function deferVariable(request, runtime, variable, reason) {
     return defer(copyRequest, runtime, reason);
 }
 
+/**
+ * Defer a Goal request, remembering which persistent Goal each ref meant.
+ *
+ * Refs are only valid for the pass that advertised them, and approval happens
+ * later — so the resolution is frozen here rather than re-derived from a ref
+ * table that no longer exists.
+ */
+function deferGoal(request, runtime, resolved, reason) {
+    const copyRequest = copy(request);
+    copyRequest.arguments._resolvedGoalIds = Object.fromEntries(
+        Object.entries(resolved).filter(([ref, id]) => ref && id),
+    );
+    return defer(copyRequest, runtime, reason);
+}
+
 function receipt(runtime, request, before, after, extra = {}) {
     const value = { requestId: request.id, capability: request.capability, status: 'applied', approvalStatus: 'authorized', validatedInputs: copy(request.arguments), before: copy(before), after: copy(after), reason: request.reason, ...copy(extra) };
     runtime.receipts.push(value);
@@ -441,6 +467,15 @@ function resolveReference(value, runtime, type) {
     if (alias) {
         if (alias.type !== type) throw new MechanicsError(`${raw} does not refer to a ${type}.`);
         return alias.id;
+    }
+    // Goals are addressed by the temporary refs advertised in this request, the
+    // same rule Variables follow. Falling through to the raw string would let a
+    // model reach a Goal that was never offered — including one from another
+    // Scene — by guessing or replaying an id it saw earlier.
+    if (type === 'goal') {
+        const id = runtime.goalRefs.get(raw);
+        if (!id) throw new MechanicsError(`Goal reference ${raw || '(missing)'} was not advertised for this request.`);
+        return id;
     }
     return raw;
 }

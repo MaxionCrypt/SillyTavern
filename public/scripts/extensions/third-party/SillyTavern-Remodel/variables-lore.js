@@ -1,5 +1,6 @@
 import { getContext } from '../../../st-context.js';
 import { entryKey, sameEntry } from './variables-lore-key.js';
+import { markLoreLinkedTimelinesDirty } from './variables-store.js';
 
 // Read access to lorebook entries, for the Variables layer.
 //
@@ -30,7 +31,16 @@ function ensureInvalidation() {
     listening = true;
     try {
         const context = getContext();
-        const invalidate = () => { cache = null; };
+        // Clearing our own cache is not enough: a linked entry's prose is part of
+        // the embedded document, so an edit also invalidates the vector index.
+        const invalidate = () => {
+            cache = null;
+            try {
+                markLoreLinkedTimelinesDirty('lore-entry-changed');
+            } catch {
+                // A reindex we failed to schedule must not break World Info.
+            }
+        };
         context.eventSource.on(context.eventTypes.WORLDINFO_UPDATED, invalidate);
         context.eventSource.on(context.eventTypes.WORLDINFO_ENTRIES_LOADED, invalidate);
         context.eventSource.on(context.eventTypes.WORLDINFO_SETTINGS_UPDATED, invalidate);

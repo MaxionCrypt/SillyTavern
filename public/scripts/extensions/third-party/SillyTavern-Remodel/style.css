@@ -10832,6 +10832,66 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     color: #ffc070;
 }
 
+/* Mechanics profile — the switch that decides whether the Director may change
+   stored facts. Collapsed while disabled so it stays out of the way. */
+.remodel-debug-mechanics {
+    padding: 8px 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, .07);
+    background: rgba(20, 19, 27, .72);
+    font-size: 10px;
+    color: #8f8b83;
+}
+
+.remodel-debug-mechanics > summary {
+    cursor: pointer;
+    color: #c8c4b9;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.remodel-debug-mechanics > summary b {
+    color: #e9df53;
+}
+
+.remodel-debug-mechanics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 10px 16px;
+    padding: 12px 0 4px;
+}
+
+.remodel-debug-mechanics-grid label {
+    display: grid;
+    gap: 5px;
+    color: #8f8b83;
+}
+
+.remodel-debug-mechanics-grid label.is-wide {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: #c8c4b9;
+    cursor: pointer;
+}
+
+.remodel-debug-mechanics-grid input[type="number"],
+.remodel-debug-mechanics-grid select {
+    width: 100%;
+    min-width: 0;
+    padding: 6px 8px;
+    color: #f2eff7;
+    background: rgba(7, 6, 12, .72);
+    border: 1px solid rgba(255, 255, 255, .12);
+    border-radius: 6px;
+}
+
+.remodel-debug-mechanics-note {
+    margin: 6px 0 2px;
+    max-width: 92ch;
+    line-height: 1.5;
+}
+
 .remodel-debug-filters {
     display: grid;
     grid-template-columns: 170px 140px 140px minmax(220px, 1fr) auto;

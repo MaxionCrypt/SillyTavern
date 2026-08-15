@@ -38,23 +38,52 @@ export async function ensureVariableVectorIndex(timelineId, { force = false } = 
     }
 }
 
-export async function queryVariableVectors(timelineId, searchText, topK = 20) {
+/**
+ * Query the Timeline's collection once per distinct semantic threshold.
+ *
+ * SillyTavern's /api/vector/query filters by similarity server-side and then
+ * returns only `x.item.metadata` — the score itself never reaches the client
+ * (src/endpoints/vectors.js). So the only honest way to know a document cleared
+ * a threshold is to ask the server for that threshold and see whether it comes
+ * back. Asking once at the lowest threshold and reusing the answer for stricter
+ * Variables would silently grant them relevance they never earned.
+ *
+ * In practice every Variable keeps the 0.70 default, so this is one request;
+ * the loop only costs more when the user has actually set different thresholds.
+ *
+ * Each match carries `passedAt` — the highest threshold it survived — and
+ * `rank`, which orders results but is never treated as a score.
+ */
+export async function queryVariableVectors(timelineId, searchText, { thresholds = [0.7], topK = 20 } = {}) {
     const indexed = await ensureVariableVectorIndex(timelineId);
     if (!indexed.ok) return { ok: false, degraded: true, error: indexed.state.error || 'Vector retrieval unavailable.', matches: [] };
     const state = getVectorIndexState(timelineId);
     const source = vectorSettings().source || 'transformers';
+    const wanted = [...new Set(thresholds.map((value) => Number(value)).filter(Number.isFinite))].sort((left, right) => left - right);
+    if (!wanted.length) wanted.push(0.7);
+    const limit = Math.max(1, Math.min(50, Number(topK) || 20));
     try {
-        const result = await vectorRequest('/api/vector/query', {
-            collectionId: state.collectionId,
-            searchText: String(searchText || ''), topK: Math.max(1, Math.min(50, Number(topK) || 20)), threshold: 0,
-        }, source, [String(searchText || '')]);
-        const hashes = Array.isArray(result?.hashes) ? result.hashes : [];
-        const metadata = Array.isArray(result?.metadata) ? result.metadata : [];
-        const matches = hashes.map((hash, index) => ({
-            hash: Number(hash), ...(state.hashes?.[String(hash)] || {}),
-            score: vectorScore(metadata[index], index, hashes.length), rawMetadata: metadata[index] || null,
+        const passedAt = new Map();
+        let widest = [];
+        for (const threshold of wanted) {
+            // eslint-disable-next-line no-await-in-loop
+            const result = await vectorRequest('/api/vector/query', {
+                collectionId: state.collectionId, searchText: String(searchText || ''), topK: limit, threshold,
+            }, source, [String(searchText || '')]);
+            // ONLY `metadata` is threshold-filtered. `hashes` is built from the
+            // unfiltered result set (src/endpoints/vectors.js queryCollection),
+            // so reading it would silently ignore the threshold entirely — a
+            // Variable demanding 0.99 would accept everything the query returned.
+            const passing = (Array.isArray(result?.metadata) ? result.metadata : [])
+                .map((item) => Number(item?.hash)).filter(Number.isFinite);
+            if (threshold === wanted[0]) widest = passing.map((hash, index) => ({ hash, rank: index }));
+            for (const hash of passing) passedAt.set(hash, Math.max(passedAt.get(hash) ?? 0, threshold));
+        }
+        const matches = widest.map(({ hash, rank }) => ({
+            hash, rank, passedAt: passedAt.get(hash) ?? wanted[0],
+            ...(state.hashes?.[String(hash)] || {}),
         })).filter((item) => item.variableId && getVariableValue(item.variableId, timelineId));
-        return { ok: true, degraded: false, matches };
+        return { ok: true, degraded: false, matches, thresholds: wanted };
     } catch (error) {
         const degraded = degrade(timelineId, String(error?.message || error));
         return { ok: false, degraded: true, error: degraded.state.error, matches: [] };
@@ -128,14 +157,4 @@ function providerOptions(source, settings) {
 }
 
 function vectorSettings() { return extension_settings.vectors || {}; }
-// SillyTavern's vector endpoint currently returns ranked hashes but omits the
-// backend similarity score from metadata. Prefer a score when a provider adds
-// one; otherwise use a conservative rank proxy so vectors remain candidate
-// recall while native activation/corroboration stays authoritative.
-function vectorScore(metadata, index, total) {
-    const score = Number(metadata?.score ?? metadata?.similarity);
-    if (Number.isFinite(score)) return score;
-    if (!total) return 0;
-    return Math.max(0.7, 0.84 - (index / Math.max(1, total - 1)) * 0.14);
-}
 function degrade(timelineId, error) { updateVectorIndexState(timelineId, { degraded: true, error, dirty: true }); return { ok: false, state: getVectorIndexState(timelineId) }; }

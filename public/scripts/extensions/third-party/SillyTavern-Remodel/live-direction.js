@@ -497,10 +497,11 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         }, { correlationId: token.id });
         const normalized = normalizeEnvelope(envelope, scene, performer.ref);
         normalized.variableRefs = snapshot.mechanics.variableRefs;
+        normalized.goalRefs = snapshot.mechanics.goalRefs;
         normalized.authorizedGoalIds = authorizedGoalIds;
         const immediate = executeDirectionRequests(normalized.mechanics.immediateRequests, {
             scene, directionId: normalized.directionId, checkpointId: 'immediate', authorizedGoalIds,
-            variableRefs: normalized.variableRefs,
+            variableRefs: normalized.variableRefs, goalRefs: normalized.goalRefs,
         });
         journal('mechanics.immediate', {
             passId: token.id,
@@ -559,6 +560,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds) {
     const mechanics = await buildMechanicalSnapshot(scene, action, performingCast.map((member) => member.ref || member), persona, authorizedGoalIds, {
         history,
         activatedEntries,
+        correlationId: directionInFlight?.id || null,
     });
     return {
         scene: { id: scene.id, timelineId: scene.timelineId, title: scene.title },
@@ -580,8 +582,45 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds) {
         acceptedHistory: history,
         lore: { before: lore.worldInfoBefore || '', after: lore.worldInfoAfter || '', examples: lore.worldInfoExamples || [], depth: lore.worldInfoDepth || [] },
         mechanics,
-        recentReceipts: listMechanicsTransactions({ timelineId: scene.timelineId, sceneId: scene.id }).slice(-6).map((tx) => ({ id: tx.id, status: tx.status, receipts: tx.receipts })),
+        // Receipts carry before/after snapshots of whole records, which is how
+        // persistent Variable and Goal ids used to reach the model even though
+        // everything else addresses them by ref. The model needs what changed,
+        // not which row it was.
+        recentReceipts: listMechanicsTransactions({ timelineId: scene.timelineId, sceneId: scene.id })
+            .slice(-6).map((tx) => ({ status: tx.status, receipts: (tx.receipts || []).map(scrubReceipt) })),
     };
+}
+
+/** Drops storage identity from a receipt, keeping the mechanical record. */
+function scrubReceipt(receipt) {
+    const withoutIds = (value) => {
+        if (Array.isArray(value)) return value.map(withoutIds);
+        if (!value || typeof value !== 'object') return value;
+        const { id, timelineId, sceneId, variableId, definitionId, ...rest } = value;
+        return Object.fromEntries(Object.entries(rest).map(([key, item]) => [key, withoutIds(item)]));
+    };
+    const { requestId, capability, status, approvalStatus, reason, rejectionReason } = receipt || {};
+    return {
+        requestId, capability, status, approvalStatus, reason, rejectionReason,
+        ...withoutIds(Object.fromEntries(Object.entries(receipt || {}).filter(([key]) =>
+            !['requestId', 'capability', 'status', 'approvalStatus', 'reason', 'rejectionReason'].includes(key)))),
+    };
+}
+
+/**
+ * Render the Director snapshot for the prompt.
+ *
+ * The mechanical half is nested, so its Variables are lifted out and appended as
+ * the compact lines the design specifies rather than being stringified inside
+ * the blob. The ref tables are dropped outright — relying on Maps stringifying
+ * to `{}` to keep persistent ids out of a prompt is a property of JSON.stringify,
+ * not a decision, and it stops being true the moment someone spreads one.
+ */
+function formatDirectorSnapshot(snapshot) {
+    const { mechanics, ...rest } = snapshot;
+    if (!mechanics) return JSON.stringify(rest);
+    const { serializedVariables, variableRefs, goalRefs, ...mechanicsRest } = mechanics;
+    return `${JSON.stringify({ ...rest, mechanics: mechanicsRest })}\n\nVARIABLES\n${serializedVariables || 'No relevant Variables were retrieved.'}`;
 }
 
 async function requestDirectionEnvelope(scene, snapshot) {
@@ -593,7 +632,7 @@ async function requestDirectionEnvelope(scene, snapshot) {
         { role: 'system', content: profile.enabled
             ? `MECHANICAL HANDBOOK\n${mechanicalHandbook(profile.handbookAdditions)}\n\nCAPABILITY DICTIONARY\n${JSON.stringify(capabilityDictionary)}`
             : 'MECHANICAL AUTOMATION IS DISABLED. Return no immediate requests and no checkpoint requests; Goals and Variables are read-only memory.' },
-        { role: 'user', content: `DIRECTOR SNAPSHOT\n${JSON.stringify(snapshot)}\n\nReturn exactly one ${DIRECTION_PROTOCOL} envelope. Choose only an advertised performerRef and capability IDs.` },
+        { role: 'user', content: `DIRECTOR SNAPSHOT\n${formatDirectorSnapshot(snapshot)}\n\nReturn exactly one ${DIRECTION_PROTOCOL} envelope. Choose only an advertised performerRef and capability IDs.` },
     ];
     const schema = toCoreJsonSchema(getDirectionEnvelopeSchema(snapshot.cast));
     let raw;
@@ -735,6 +774,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         autonomousSequence: Number(autonomousSequence) || 0,
         authorizedGoalIds: envelope.authorizedGoalIds || [],
         variableRefs: envelope.variableRefs instanceof Map ? envelope.variableRefs : new Map(),
+        goalRefs: envelope.goalRefs instanceof Map ? envelope.goalRefs : new Map(),
         emptyRetries: Number(emptyRetries) || 0,
     };
     // A visible run now exists, so activeRun is the authoritative guard and the
@@ -925,7 +965,7 @@ async function executeCheckpoint(run, checkpointId) {
     const result = executeDirectionRequests(checkpoint.requests, {
         scene, directionId: run.directionId, messageId: run.messageId, checkpointId,
         authorizedGoalIds: run.authorizedGoalIds,
-        variableRefs: run.variableRefs,
+        variableRefs: run.variableRefs, goalRefs: run.goalRefs,
     });
     journal('checkpoint', {
         directionId: run.directionId,
@@ -954,6 +994,7 @@ function executeDirectionRequests(requests, context) {
         authorizedGoalIds: context.authorizedGoalIds || [],
         authorizedVariableRefs: [],
         variableRefs: context.variableRefs || new Map(),
+        goalRefs: context.goalRefs || new Map(),
         allowUserGoalCreate: false,
     });
 }
@@ -1278,6 +1319,8 @@ async function recoverLiveDirectionMessages() {
                 holdReason: 'hard', state: 'Waiting for you', openingLabel: '',
                 emittedCheckpointIds: new Set(recovered.metadata.emittedCheckpointIds || []),
                 checkpointTransactionIds: [...(recovered.metadata.checkpointTransactionIds || [])],
+                variableRefs: new Map(Object.entries(recovered.metadata.variableRefs || {})),
+                goalRefs: new Map(Object.entries(recovered.metadata.goalRefs || {})),
                 generationFinished: true, generationSettled: true, interrupted: false,
                 waitingAtEnd: true, acceptedComplete: true,
                 pacing: scene.liveDirection?.pacing || 'natural',
@@ -1302,6 +1345,11 @@ function serializeRun(run, state) {
         envelope: run.envelope,
         emittedCheckpointIds: [...run.emittedCheckpointIds],
         checkpointTransactionIds: [...run.checkpointTransactionIds],
+        // As plain objects: a Map stringifies to {}, so a recovered run would
+        // otherwise resolve no refs at all and every surviving checkpoint would
+        // be rejected as never advertised.
+        variableRefs: Object.fromEntries(run.variableRefs || []),
+        goalRefs: Object.fromEntries(run.goalRefs || []),
         interrupted: Boolean(run.interrupted),
         autonomousSequence: run.autonomousSequence,
         updatedAt: new Date().toISOString(),

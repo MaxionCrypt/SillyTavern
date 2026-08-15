@@ -1,4 +1,5 @@
 import { getContext } from '../../../st-context.js';
+import { getMechanicsProfile, updateMechanicsProfile } from './variables-store.js';
 
 const STORAGE_KEY = 'remodel.debugJournal.v1';
 const SETTINGS_KEY = 'remodel.debugJournal.settings.v1';
@@ -507,6 +508,7 @@ export function renderDebugConsoleWorkspace() {
                 <label><input type="checkbox" data-remodel-debug-sensitive ${settings.captureSensitive ? 'checked' : ''}> Capture prompt, message, request, and response bodies</label>
                 <span>Secrets, cookies, authorization headers, and password fields are always redacted.</span>
             </div>
+            ${renderMechanicsProfile()}
             <div class="remodel-debug-filters">
                 <select data-remodel-debug-source><option value="all">all source tabs</option>${sources.map((source) => `<option value="${escapeHtml(source.tabId)}" ${settings.source === source.tabId ? 'selected' : ''}>${escapeHtml(source.shortId)} · ${escapeHtml(source.label)}</option>`).join('')}</select>
                 <select data-remodel-debug-category>${categories.map((category) => `<option value="${escapeHtml(category)}" ${settings.category === category ? 'selected' : ''}>${escapeHtml(category)}</option>`).join('')}</select>
@@ -519,6 +521,49 @@ export function renderDebugConsoleWorkspace() {
                 <aside class="remodel-debug-detail" data-remodel-debug-detail>${renderDetail()}</aside>
             </div>
         </section>`;
+}
+
+/**
+ * The Mechanics profile lives here rather than in a Variables workspace: it
+ * decides whether the Director may change stored facts at all, and while that
+ * pipeline is still being hardened the people who need the switch are the
+ * people reading this journal. It moves to the Timeline State drawer once that
+ * surface exists.
+ */
+function renderMechanicsProfile() {
+    const profile = getMechanicsProfile();
+    const option = (value, label, selected) => `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`;
+    return `
+        <details class="remodel-debug-mechanics" ${profile.enabled ? 'open' : ''}>
+            <summary>Mechanics profile — <b>${profile.enabled ? 'enabled' : 'disabled'}</b></summary>
+            <div class="remodel-debug-mechanics-grid">
+                <label class="is-wide"><input type="checkbox" data-remodel-debug-mechanics="enabled" ${profile.enabled ? 'checked' : ''}>
+                    Let the Director propose changes to Goals and Variables</label>
+                <label>Context budget
+                    <input type="number" min="1000" max="32000" step="500" data-remodel-debug-mechanics="contextBudget" value="${profile.contextBudget}"></label>
+                <label>Director answer allowance
+                    <input type="number" min="1500" max="32000" step="500" data-remodel-debug-mechanics="directorResponseTokens" value="${profile.directorResponseTokens}"></label>
+                <label>Variables per pass
+                    <input type="number" min="1" max="12" data-remodel-debug-mechanics="retrievalLimit" value="${profile.retrievalLimit}"></label>
+                <label>Recent messages scanned
+                    <input type="number" min="1" max="60" data-remodel-debug-mechanics="retrievalWindow" value="${profile.retrievalWindow}"></label>
+                <label>Authority
+                    <select data-remodel-debug-mechanics="automationPolicy">
+                        ${option('hybrid', 'Hybrid — world auto, you review', profile.automationPolicy)}
+                        ${option('review-all', 'Review everything', profile.automationPolicy)}
+                        ${option('automatic', 'Apply everything', profile.automationPolicy)}
+                    </select></label>
+                <label>On failure
+                    <select data-remodel-debug-mechanics="failureBehavior">
+                        ${option('pause', 'Pause and show it', profile.failureBehavior)}
+                        ${option('bypass', 'Carry on without mechanics', profile.failureBehavior)}
+                        ${option('retry-once', 'Retry once, then pause', profile.failureBehavior)}
+                    </select></label>
+            </div>
+            <p class="remodel-debug-mechanics-note">The budget sizes how much mechanical state enters the prompt. The allowance is
+                how much room the Director has to reply — its reasoning is paid out of the same allowance, so a Scene with no Goals
+                can still need a large one. Overrunning it truncates the envelope rather than shortening the answer.</p>
+        </details>`;
 }
 
 export function refreshDebugConsoleWorkspace() {
@@ -561,6 +606,16 @@ export function handleDebugConsoleInput(target) {
 }
 
 export function handleDebugConsoleChange(target, requestRender) {
+    const mechanicsField = target.dataset?.remodelDebugMechanics;
+    if (mechanicsField) {
+        const value = target.type === 'checkbox' ? target.checked : target.value;
+        const applied = updateMechanicsProfile({ [mechanicsField]: value });
+        // Store-clamped, so echo what was actually stored rather than what was typed.
+        recordDebugEvent('variables', 'mechanics.profile.changed', { field: mechanicsField, stored: applied[mechanicsField] },
+            { force: true, severity: mechanicsField === 'enabled' && applied.enabled ? 'warn' : 'info', summary: `Mechanics ${mechanicsField} = ${applied[mechanicsField]}` });
+        requestRender();
+        return true;
+    }
     if (target.matches('[data-remodel-debug-source]')) settings.source = target.value;
     else if (target.matches('[data-remodel-debug-category]')) settings.category = target.value;
     else if (target.matches('[data-remodel-debug-severity]')) settings.severity = target.value;

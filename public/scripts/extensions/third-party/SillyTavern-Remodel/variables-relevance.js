@@ -3,7 +3,16 @@ import { entryKey } from './variables-lore-key.js';
 export const DEFAULT_WINDOW = 12;
 export const DEFAULT_LIMIT = 6;
 export const HARD_LIMIT = 12;
-export const STRONG_SEMANTIC_SCORE = 0.82;
+
+// There is deliberately no STRONG_SEMANTIC_SCORE here. The spec allowed one
+// very strong semantic match (>= 0.82) to corroborate a Variable on its own,
+// but SillyTavern's vector endpoint filters by similarity and then discards it,
+// so no similarity value ever reaches this code. The previous implementation
+// synthesised one from result rank across [0.70, 0.84], which meant the
+// top-ranked document always cleared 0.82 and every request corroborated its
+// first hit unconditionally. A match now means "the server confirmed this
+// cleared the threshold we asked for" — a boolean — so corroboration needs a
+// second, independent channel.
 
 export function retrieveRelevantVariables({
     variables = [], entries = new Map(), messages = [], vectorMatches = [], activatedKeys = new Set(),
@@ -22,12 +31,14 @@ export function retrieveRelevantVariables({
         const evidence = [];
         const links = variable.loreLinks || [];
         const vectors = vectorByVariable.get(variable.id) || [];
-        const bestVector = vectors.reduce((best, item) => Math.max(best, normalizeScore(item.score)), 0);
-        for (const item of vectors) {
-            if (normalizeScore(item.score) >= variable.retrieval.semanticThreshold) {
-                channels.add(item.channel === 'link' ? `semantic:${item.loreKey}` : 'semantic:self');
-                evidence.push({ type: 'semantic', score: normalizeScore(item.score), loreKey: item.loreKey || '' });
-            }
+        // `passedAt` is the highest threshold the server confirmed this document
+        // survived, so a Variable only accepts matches that cleared ITS bar.
+        const semanticHits = vectors.filter((item) => Number(item.passedAt) >= variable.retrieval.semanticThreshold);
+        const semantic = semanticHits.length > 0;
+        const bestThreshold = semanticHits.reduce((best, item) => Math.max(best, Number(item.passedAt) || 0), 0);
+        for (const item of semanticHits) {
+            channels.add(item.channel === 'link' ? `semantic:${item.loreKey}` : 'semantic:self');
+            evidence.push({ type: 'semantic', passedAt: Number(item.passedAt), rank: Number(item.rank), loreKey: item.loreKey || '' });
         }
 
         let activatedCount = 0;
@@ -57,27 +68,34 @@ export function retrieveRelevantVariables({
         if (direct) { channels.add('direct'); reasons.push('Directly referenced by the action or a Goal.'); }
         if (recentIds.has(variable.id) && variable.retrieval.continuity) { channels.add('continuity'); evidence.push({ type: 'continuity' }); }
         const distinctLinks = new Set([...channels].map((channel) => channel.includes(':') ? channel.split(':').slice(1).join(':') : channel));
-        const semanticLinks = new Set(vectors.filter((item) => item.channel === 'link' && normalizeScore(item.score) >= variable.retrieval.semanticThreshold).map((item) => item.loreKey));
-        const corroborated = direct || bestVector >= STRONG_SEMANTIC_SCORE
+        const semanticLinks = new Set(semanticHits.filter((item) => item.channel === 'link').map((item) => item.loreKey));
+        const corroborated = direct
             || subjectEstablished && (semanticLinks.size > 0 || activatedCount > 1 || evidence.some((item) => item.type === 'keyword'))
-            || links.length === 1 && (activatedCount > 0 || bestVector >= variable.retrieval.semanticThreshold)
+            || links.length === 1 && (activatedCount > 0 || semantic)
             || distinctLinks.size >= 2;
         const all = links.length > 0 && links.every((link) => {
             const key = entryKey(link);
             return activatedKeys.has(key) || semanticLinks.has(key) || evidence.some((item) => item.loreKey === key && item.type === 'keyword');
         });
-        const any = direct || activatedCount > 0 || bestVector >= variable.retrieval.semanticThreshold || evidence.some((item) => item.type === 'keyword');
+        const any = direct || activatedCount > 0 || semantic || evidence.some((item) => item.type === 'keyword');
         const included = variable.retrieval.mode === 'always' || variable.retrieval.mode === 'all' && all
             || variable.retrieval.mode === 'any' && any || variable.retrieval.mode === 'corroborated' && corroborated;
         if (!reasons.length && included) {
             if (subjectEstablished) reasons.push('A linked subject is present in the scene.');
             if (activatedCount) reasons.push(`${activatedCount} linked Lorebook entr${activatedCount === 1 ? 'y is' : 'ies are'} active.`);
-            if (bestVector) reasons.push(`Semantic relevance ${bestVector.toFixed(2)}.`);
+            if (semantic) reasons.push(`Semantically relevant at ${bestThreshold.toFixed(2)}.`);
             if (recentIds.has(variable.id)) reasons.push('Recently relevant state remains continuous.');
             if (variable.retrieval.mode === 'always') reasons.push('Configured as always available.');
         }
-        const score = (direct ? 2 : 0) + (subjectEstablished ? 0.5 : 0) + activatedCount * 0.35 + bestVector + (recentIds.has(variable.id) ? 0.1 : 0);
-        return { variable, included, score, semanticScore: bestVector, reasons, evidence, exclusionReason: included ? '' : exclusion(variable, { bestVector, activatedCount, subjectEstablished, channels }) };
+        // Rank orders candidates; it is not evidence. A semantic hit contributes a
+        // flat amount because "it cleared the threshold" is all we actually know.
+        const score = (direct ? 2 : 0) + (subjectEstablished ? 0.5 : 0) + activatedCount * 0.35
+            + (semantic ? 1 : 0) + (recentIds.has(variable.id) ? 0.1 : 0);
+        return {
+            variable, included, score, semantic, semanticThreshold: bestThreshold,
+            channels: [...channels], reasons, evidence,
+            exclusionReason: included ? '' : exclusion(variable, { semantic, activatedCount, subjectEstablished, channels }),
+        };
     }).sort((left, right) => right.score - left.score || left.variable.name.localeCompare(right.variable.name));
 
     const cap = Math.min(HARD_LIMIT, Math.max(1, Number(limit) || DEFAULT_LIMIT));
@@ -124,7 +142,12 @@ function scoreEntryKeywords(entry, messages) {
     return { score, keys: [...new Set(keys)] };
 }
 function groupVectors(matches) { const map = new Map(); for (const item of matches || []) { if (!map.has(item.variableId)) map.set(item.variableId, []); map.get(item.variableId).push(item); } return map; }
-function normalizeScore(value) { const score = Number(value); if (!Number.isFinite(score)) return 0; return Math.max(0, Math.min(1, score)); }
-function exclusion(variable, detail) { if (variable.retrieval.mode === 'all') return 'Not every linked entry was established.'; if (variable.retrieval.mode === 'corroborated') return `Insufficient corroboration (semantic ${detail.bestVector.toFixed(2)}, ${detail.activatedCount} active links).`; return 'No linked evidence reached the retrieval threshold.'; }
+function exclusion(variable, detail) {
+    if (variable.retrieval.mode === 'all') return 'Not every linked entry was established.';
+    if (variable.retrieval.mode === 'corroborated') {
+        return `Insufficient corroboration: ${detail.semantic ? 'a semantic match' : 'no semantic match'}, ${detail.activatedCount} active link${detail.activatedCount === 1 ? '' : 's'}${detail.subjectEstablished ? ', subject present' : ', subject absent'}. Corroborated retrieval needs two independent entries, a subject plus a concept, or a direct reference.`;
+    }
+    return 'No linked evidence reached the retrieval threshold.';
+}
 function lookup(source) { return source instanceof Map ? (key) => source.get(key) : (key) => source?.[key]; }
 
