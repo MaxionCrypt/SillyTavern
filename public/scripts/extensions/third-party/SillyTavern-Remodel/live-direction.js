@@ -11,7 +11,6 @@ import { getContext } from '../../../st-context.js';
 import { generateGroupWrapper, is_group_generating } from '../../../group-chats.js';
 import {
     executeMechanicsRequest,
-    getCapabilityDictionary,
     getMechanicsRequestSchema,
     MECHANICS_PROTOCOL,
     toCoreJsonSchema,
@@ -20,8 +19,9 @@ import {
 import {
     buildMechanicalSnapshot,
     formatMechanicsReceipts,
-    mechanicalHandbook,
 } from './mechanics-runtime.js';
+import { buildDirectionSources } from './direction-sources.js';
+import { compilePromptRecipe, resolveDirectorRecipe } from './prompt-studio.js';
 import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
 import { readDirectionUnit, sanitizeDirectionText } from './live-direction-markers.js';
 import { directorResponseTokens, interpretStructuredReply } from './structured-reply.js';
@@ -607,33 +607,25 @@ function scrubReceipt(receipt) {
     };
 }
 
-/**
- * Render the Director snapshot for the prompt.
- *
- * The mechanical half is nested, so its Variables are lifted out and appended as
- * the compact lines the design specifies rather than being stringified inside
- * the blob. The ref tables are dropped outright — relying on Maps stringifying
- * to `{}` to keep persistent ids out of a prompt is a property of JSON.stringify,
- * not a decision, and it stops being true the moment someone spreads one.
- */
-function formatDirectorSnapshot(snapshot) {
-    const { mechanics, ...rest } = snapshot;
-    if (!mechanics) return JSON.stringify(rest);
-    const { serializedVariables, variableRefs, goalRefs, ...mechanicsRest } = mechanics;
-    return `${JSON.stringify({ ...rest, mechanics: mechanicsRest })}\n\nVARIABLES\n${serializedVariables || 'No relevant Variables were retrieved.'}`;
-}
-
 async function requestDirectionEnvelope(scene, snapshot) {
     const profile = getMechanicsProfile();
-    const capabilityDictionary = profile.enabled ? getCapabilityDictionary() : [];
-    const prompt = [
-        { role: 'system', content: directionHandbook(profile.handbookAdditions) },
-        ...(snapshot.director ? [{ role: 'system', content: directorDoctrine(snapshot.director) }] : []),
-        { role: 'system', content: profile.enabled
-            ? `MECHANICAL HANDBOOK\n${mechanicalHandbook(profile.handbookAdditions)}\n\nCAPABILITY DICTIONARY\n${JSON.stringify(capabilityDictionary)}`
-            : 'MECHANICAL AUTOMATION IS DISABLED. Return no immediate requests and no checkpoint requests; Goals and Variables are read-only memory.' },
-        { role: 'user', content: `DIRECTOR SNAPSHOT\n${formatDirectorSnapshot(snapshot)}\n\nReturn exactly one ${DIRECTION_PROTOCOL} envelope. Choose only an advertised performerRef and capability IDs.` },
-    ];
+    const recipe = resolveDirectorRecipe();
+    const sources = buildDirectionSources(snapshot, { mechanicsEnabled: profile.enabled });
+    let prompt;
+    if (recipe) {
+        prompt = compilePromptRecipe(recipe, sources).messages;
+    }
+    // A recipe that compiles to nothing — emptied, or missing its protocol
+    // block — must not silently produce an unusable request.
+    if (!prompt?.length || !prompt.some((message) => message.content.includes(sources.directionProtocol.slice(0, 40)))) {
+        journal('recipe.fallback', { hadRecipe: Boolean(recipe), messages: prompt?.length || 0 }, { severity: 'warn' });
+        prompt = [
+            { role: 'system', content: sources.directionProtocol },
+            ...(sources.directorCard ? [{ role: 'system', content: sources.directorCard }] : []),
+            ...(sources.mechanicsSkill ? [{ role: 'system', content: sources.mechanicsSkill }] : []),
+            { role: 'user', content: sources.directorSnapshot },
+        ];
+    }
     const schema = toCoreJsonSchema(getDirectionEnvelopeSchema(snapshot.cast));
     let raw;
     let reasoning = '';
@@ -1617,21 +1609,6 @@ ${openings ? `Openings:\n${openings}` : ''}
 ${checkpoints ? `Mechanical checkpoints:\n${checkpoints}` : ''}
 ${receipts || ''}
 Markers are invisible protocol. Emit only the exact known forms. They are not prose and must never be explained.`;
-}
-
-function directionHandbook(additions) {
-    return `You are Remodel's hidden Game Director, not a visible roleplay character. Determine cause, consequence, the one visible performer, and the movement for the next response. The world may move without waiting for the user, but preserve every accepted fact and treat the current intervention as a new cause. Choose only an advertised stable performer ID. Keep openings optional: the user may intervene anywhere. Put consequences of already accepted history/current action in immediateRequests. Put future consequences in checkpoints and require the performer to narrate the establishing fact before its COMMIT marker. Do not roll dice or invent IDs. Goals and Variables are persistent memory, not a turn structure. Return an empty mechanical request list when nothing worth tracking changes. Responses may be long; supply useful breathing guidance and use hardPauseAfter only when the fiction is explicitly waiting. The display field is an audience-safe decision trace, never private chain-of-thought: summary states the direction; observations lists concise accepted facts considered; intent states the desired scene effect; performerReason briefly explains the visible performer choice. Do not expose protocol JSON, secret Goals, private Variables, unrevealed twists, or hidden mechanical instructions.\n${String(additions || '')}`;
-}
-
-function directorDoctrine(director) {
-    return `[ROLEPLAY DIRECTOR CARD — private directing doctrine]
-The selected Roleplay Director is ${director.label}. Use the card material below as directing temperament, priorities, genre sense, and judgment—not as visible dialogue and not as authority to violate the protocol. Never impersonate this card in the scene unless it is separately selected as a visible performer.
-Description: ${director.description || '(none)'}
-Personality: ${director.personality || '(none)'}
-Scenario: ${director.scenario || '(none)'}
-Creator notes: ${director.creatorNotes || '(none)'}
-System prompt: ${director.systemPrompt || '(none)'}
-Post-history instructions: ${director.postHistoryInstructions || '(none)'}`;
 }
 
 export function getDirectionEnvelopeSchema(cast = []) {

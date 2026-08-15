@@ -5,6 +5,7 @@ import { getSceneGoals, getSceneGoalRelations, nextStoryGoalTurn } from './story
 import { interpretStructuredReply, structuredResponseLength } from './structured-reply.js';
 import { getMechanicsProfile } from './variables-store.js';
 import { resolveVariableContext } from './variables-context.js';
+import { buildAddressBook } from './direction-address.js';
 
 const RECEIPT_PROMPT_KEY = 'remodel_mechanics_receipts';
 let pendingReceipt = null;
@@ -85,6 +86,15 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
     });
     const refByGoalId = new Map([...goalRefs].map(([ref, id]) => [id, ref]));
 
+    // The address book lets the Director name a Variable or Goal directly —
+    // see direction-address.js. Built only from what this pass actually
+    // advertised: the Variables retrieval selected (resolved.listed), not
+    // every Variable in the Timeline, and the Goals just listed above.
+    const addressBook = buildAddressBook([
+        ...resolved.listed.map((item) => ({ id: item.variable.id, name: item.variable.name })),
+        ...goals.map((goal) => ({ id: goal.id, name: goal.title })),
+    ]);
+
     return {
         timelineId: scene.timelineId, sceneId: scene.id, action: String(action),
         authorizedGoalRefs: authorizedGoalIds.map((id) => refByGoalId.get(String(id))).filter(Boolean),
@@ -94,6 +104,7 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
         // Variables travel as compact lines rather than inside the JSON — see
         // formatMechanicalSnapshot. Held here so callers need one object.
         serializedVariables: resolved.serialized,
+        addressBook,
         // Maps stringify as {}, so persistent IDs remain code-side only.
         variableRefs: resolved.refToId,
         goalRefs,
