@@ -15,13 +15,30 @@ export const RETRIEVAL_MODES = Object.freeze(['corroborated', 'any', 'all', 'alw
 export const MODIFIER_TARGETS = Object.freeze(['value', 'maximum']);
 export const VARIABLE_AUTHORITIES = Object.freeze(['review', 'world', 'user', 'persona']);
 
+/**
+ * The V3 store, created and migrated on first read.
+ *
+ * A store that fails `isStore` is repaired, never replaced. The previous code
+ * swapped in `emptyStore()` on any shape failure — so a single malformed field,
+ * a hand-edited settings file, or a future version bump would silently delete
+ * every Variable in the account and re-run migration over the wreckage,
+ * overwriting `migrationBackup` (the copy of the legacy data) in the same pass.
+ * Only genuinely absent or non-object values get a fresh store, and migration
+ * runs exactly once — on that first creation — rather than on every repair.
+ */
 export function getVariableStore() {
     const context = getContext();
     context.extensionSettings[SETTINGS_NAMESPACE] ??= {};
     const namespace = context.extensionSettings[SETTINGS_NAMESPACE];
-    if (!isStore(namespace[SETTINGS_KEY])) {
+    const current = namespace[SETTINGS_KEY];
+    if (!current || typeof current !== 'object' || Array.isArray(current)) {
         namespace[SETTINGS_KEY] = emptyStore();
         migrateLegacyStores(namespace, namespace[SETTINGS_KEY]);
+        context.saveSettingsDebounced();
+    } else if (!isStore(current)) {
+        // Present but the wrong shape: normalizeStore below rebuilds the missing
+        // structure around whatever records survived, and anything it cannot
+        // make sense of lands in the unresolved tray rather than being dropped.
         context.saveSettingsDebounced();
     }
     normalizeStore(namespace[SETTINGS_KEY]);
@@ -93,9 +110,13 @@ export const updateVariable = updateVariableValue;
 export function setVariableField(variableId, field = 'value', value, context = {}) {
     const variable = getVariableValue(variableId, context.timelineId);
     if (!variable) return null;
-    if (field === 'value') return updateVariableValue(variable.id, { value }, { ...context, type: 'variable.value-set' });
+    if (field === 'value') {
+        if (!isAssignable(variable.valueType, variable.enumValues, value)) return null;
+        return updateVariableValue(variable.id, { value }, { ...context, type: 'variable.value-set' });
+    }
     const index = variable.subvalues.findIndex((item) => item.key === String(field));
     if (index < 0) return null;
+    if (!isAssignable(variable.subvalues[index].type, variable.subvalues[index].enumValues, value)) return null;
     const subvalues = variable.subvalues.map((item, i) => i === index ? { ...item, value } : item);
     return updateVariableValue(variable.id, { subvalues }, { ...context, type: 'variable.subvalue-set' });
 }
@@ -168,7 +189,12 @@ export function addVariableModifier(variableId, input = {}, context = {}) {
     const modifier = {
         id: createId('mod'), label: String(input.label || 'Modifier').trim() || 'Modifier', amount,
         target: MODIFIER_TARGETS.includes(input.target) ? input.target : 'value',
-        reason: String(input.reason || '').trim(), source: String(input.source || context.actor || 'user'), createdAt: now(),
+        reason: String(input.reason || '').trim(), source: String(input.source || context.actor || 'user'),
+        // Modifiers persist until removed or until accepted fiction establishes
+        // this condition. Storing it is what makes that promise checkable later;
+        // it used to be accepted by the capability layer and dropped here.
+        endingCondition: String(input.endingCondition || '').trim(),
+        createdAt: now(),
     };
     const updated = updateVariableValue(variable.id, { modifiers: [...variable.modifiers, modifier] }, { ...context, type: 'modifier.added' });
     return updated ? modifier : null;
@@ -307,6 +333,26 @@ export function updateVectorIndexState(timelineId, patch = {}) {
 
 export function getMigrationBackup() { return getVariableStore().migrationBackup; }
 
+/** True when the backup holds anything worth exporting before discarding. */
+export function hasMigrationBackup() {
+    const backup = getVariableStore().migrationBackup;
+    return Object.keys(backup.sources || {}).length > 0 || (backup.unresolved || []).length > 0;
+}
+
+/**
+ * Discard the retained legacy snapshots and the unresolved tray.
+ *
+ * The legacy stores are kept indefinitely by design — nothing deletes
+ * storyVariablesV1/V2 — so this is the only way to reclaim that space, and it
+ * is deliberately explicit rather than automatic.
+ */
+export function clearMigrationBackup() {
+    const store = getVariableStore();
+    store.migrationBackup = { ...emptyStore().migrationBackup, migratedAt: store.migrationBackup.migratedAt, clearedAt: now() };
+    saveVariableStore();
+    return store.migrationBackup;
+}
+
 /**
  * Mark every Timeline holding lore-linked Variables for re-embedding.
  *
@@ -364,6 +410,27 @@ function timelineBucket(timelineId) { return { timelineId, variableIds: [], vari
 
 function isStore(value) { return Boolean(value && typeof value === 'object' && Number(value.version) === STORE_VERSION && value.timelines); }
 
+const MAX_UNRESOLVED = 200;
+
+/**
+ * Park a record the store could not make sense of, without growing forever.
+ *
+ * normalizeStore runs on EVERY getVariableStore() call, so an unresolvable
+ * record used to append a fresh copy of itself on every read — the tray grew
+ * without bound for as long as the offending record existed. Entries are keyed
+ * by source and id so a repeat is an update, not another row.
+ */
+function recordUnresolved(store, entry) {
+    const key = `${entry.source}:${entry.timelineId || ''}:${entry.id || entry.oldId || ''}`;
+    const existing = store.migrationBackup.unresolved.findIndex((item) => item.key === key);
+    const value = { ...entry, key, at: now() };
+    if (existing >= 0) store.migrationBackup.unresolved[existing] = value;
+    else store.migrationBackup.unresolved.push(value);
+    if (store.migrationBackup.unresolved.length > MAX_UNRESOLVED) {
+        store.migrationBackup.unresolved.splice(0, store.migrationBackup.unresolved.length - MAX_UNRESOLVED);
+    }
+}
+
 function normalizeStore(store) {
     store.version = STORE_VERSION;
     store.timelines ??= {}; store.events ??= {}; store.transactions ??= {}; store.vectorIndexState ??= {};
@@ -380,7 +447,7 @@ function normalizeStore(store) {
         for (const [id, raw] of Object.entries(bucket.variables)) {
             const variable = normalizeVariable({ ...raw, id, timelineId });
             if (variable && (variable.loreLinks.length || variable.retrieval.mode === 'always')) normalized[id] = variable;
-            else store.migrationBackup.unresolved.push({ source: 'v3-normalize', timelineId, id, raw: clone(raw), reason: 'Invalid or unlinked Variable' });
+            else recordUnresolved(store, { source: 'v3-normalize', timelineId, id, raw: clone(raw), reason: 'Invalid or unlinked Variable' });
         }
         bucket.variables = normalized;
         bucket.variableIds = (Array.isArray(bucket.variableIds) ? bucket.variableIds : bucket.valueIds || []).filter((id) => normalized[id]);
@@ -465,9 +532,11 @@ function normalizeRetrieval(value = {}) {
 
 function normalizeModifiers(value) {
     return (Array.isArray(value) ? value : []).map((item) => {
-        const amount = Number(item?.amount);
+        // V1 called it `delta`. Reading only `amount` silently dropped every
+        // migrated modifier, since a missing amount normalizes to null.
+        const amount = Number(item?.amount ?? item?.delta);
         if (!Number.isFinite(amount)) return null;
-        return { id: String(item.id || createId('mod')), label: String(item.label || 'Modifier'), amount, target: MODIFIER_TARGETS.includes(item.target) ? item.target : 'value', reason: String(item.reason || ''), source: String(item.source || 'legacy'), createdAt: String(item.createdAt || now()) };
+        return { id: String(item.id || createId('mod')), label: String(item.label || 'Modifier'), amount, target: MODIFIER_TARGETS.includes(item.target) ? item.target : 'value', reason: String(item.reason || ''), source: String(item.source || 'legacy'), endingCondition: String(item.endingCondition || '').trim(), createdAt: String(item.createdAt || now()) };
     }).filter(Boolean);
 }
 
@@ -482,6 +551,62 @@ function migrateLegacyStores(namespace, store) {
     if (profile) store.mechanicsProfile = { ...store.mechanicsProfile, ...clone(profile) };
     migrateV2(v2, store);
     migrateV1(v1, store);
+    migrateLegacyEvents(v1, v2, store);
+    remapGoalResolutions(namespace, store);
+}
+
+/**
+ * Carry the legacy ledgers across.
+ *
+ * A Variable's history is the record of how the fiction got here, so dropping
+ * it on migration loses exactly what the History view exists to show. Events
+ * are rewritten onto their new Variable ids via the migration idMap, and any
+ * event whose Variable did not survive is left behind rather than pointing at
+ * nothing.
+ */
+function migrateLegacyEvents(v1, v2, store) {
+    const idMap = store.migrationBackup.idMap;
+    for (const [source, legacy] of [['v1', v1], ['v2', v2]]) {
+        const ids = Array.isArray(legacy?.eventIds) ? legacy.eventIds : Object.keys(legacy?.events || {});
+        for (const oldId of ids) {
+            const event = legacy?.events?.[oldId];
+            const variableId = idMap[String(event?.variableId ?? event?.instanceId ?? '')];
+            if (!event || !variableId) continue;
+            const id = `${source}-${String(oldId)}`;
+            if (store.events[id]) continue;
+            // Stamp the Timeline from the migrated Variable. History is listed
+            // per Timeline, so a legacy event that never carried one would be
+            // migrated into a record nothing can ever retrieve.
+            const owner = findVariableInStore(store, variableId);
+            if (!owner) continue;
+            store.events[id] = { ...clone(event), id, variableId, timelineId: owner.timelineId, migratedFrom: source };
+            store.eventIds.push(id);
+        }
+    }
+    trimMap(store.eventIds, store.events, MAX_EVENTS);
+}
+
+/**
+ * Point migrated Goals at the Variables they actually track.
+ *
+ * A tracked Goal stores `resolution.variableId`. After migration that id names
+ * a V1 record that no longer exists, so `goal.reach` would throw "Variable
+ * instance … is unavailable" — the Goal would look fine and be unreachable.
+ * idMap was already being built for this and never read.
+ */
+function remapGoalResolutions(namespace, store) {
+    const idMap = store.migrationBackup.idMap;
+    const goals = namespace.storyGoalsV3?.goals;
+    if (!goals) return;
+    let remapped = 0;
+    for (const goal of Object.values(goals)) {
+        const current = String(goal?.resolution?.variableId || goal?.resolution?.variableInstanceId || '');
+        if (!current || !idMap[current]) continue;
+        goal.resolution.variableId = idMap[current];
+        delete goal.resolution.variableInstanceId;
+        remapped++;
+    }
+    if (remapped) store.migrationBackup.remappedGoalResolutions = remapped;
 }
 
 function migrateV2(v2, store) {
@@ -498,7 +623,7 @@ function migrateV1(v1, store) {
     for (const [timelineId, bucket] of Object.entries(v1?.timelineInstances || {})) {
         for (const raw of Object.values(bucket?.instances || {})) {
             const definition = v1?.definitions?.[raw?.definitionId] || v1?.timelineDefinitions?.[timelineId]?.[raw?.definitionId];
-            if (!definition) { store.migrationBackup.unresolved.push({ source: 'v1', timelineId, raw: clone(raw), reason: 'Missing definition' }); continue; }
+            if (!definition) { recordUnresolved(store, { source: 'v1', timelineId, id: raw?.id, raw: clone(raw), reason: 'Missing definition' }); continue; }
             const owner = raw?.ownerRef?.label || 'Unassigned';
             const type = definition.kind === 'enum' ? 'enum' : definition.kind === 'boolean' ? 'boolean' : definition.kind === 'number' || definition.kind === 'resource' ? 'number' : 'text';
             const loreLinks = definition.loreRefs || (definition.loreRef ? [definition.loreRef] : []);
@@ -513,9 +638,17 @@ function migrateV1(v1, store) {
     }
 }
 
+/** Locate a Variable across every Timeline bucket, without the context layer. */
+function findVariableInStore(store, variableId) {
+    for (const bucket of Object.values(store.timelines || {})) {
+        if (bucket?.variables?.[variableId]) return bucket.variables[variableId];
+    }
+    return null;
+}
+
 function importVariable(store, variable, { source, oldId } = {}) {
     if (!variable || (!variable.loreLinks.length && variable.retrieval.mode !== 'always')) {
-        store.migrationBackup.unresolved.push({ source, oldId: String(oldId || ''), raw: clone(variable), reason: 'Invalid migrated Variable' });
+        recordUnresolved(store, { source, oldId: String(oldId || ''), raw: clone(variable), reason: 'Invalid migrated Variable' });
         return;
     }
     const bucket = (store.timelines[variable.timelineId] ??= timelineBucket(variable.timelineId));
@@ -547,7 +680,35 @@ function meaningChanged(left, right) {
 function boundsFromSubvalues(subvalues) { return { minimum: subvalues.find((item) => item.role === 'minimum')?.value ?? null, maximum: subvalues.find((item) => item.role === 'maximum')?.value ?? null }; }
 function numericRole(variable, role) { const value = variable.subvalues.find((item) => item.role === role && item.type === 'number')?.value; return Number.isFinite(Number(value)) ? Number(value) : null; }
 function normalizeType(value) { return value === 'state' ? 'enum' : VARIABLE_TYPES.includes(value) ? value : 'number'; }
-function normalizeEnum(value) { return [...new Set((Array.isArray(value) ? value : []).map((item) => String(item ?? '').trim()).filter(Boolean))]; }
+/**
+ * Enum states, accepting both shapes.
+ *
+ * V3 stores plain strings, but a V1 definition's `enumStates` are objects
+ * — `{ id, label, reachModifier }` — and stringifying one yields
+ * "[object Object]". Every migrated enum Variable collapsed to a single
+ * garbage state, taking its real states and its current value with it.
+ */
+function normalizeEnum(value) {
+    const list = (Array.isArray(value) ? value : []).map((item) => {
+        if (item && typeof item === 'object') return String(item.id ?? item.label ?? item.value ?? '').trim();
+        return String(item ?? '').trim();
+    }).filter(Boolean);
+    return [...new Set(list)];
+}
+/**
+ * Whether a value may be written to a field of this type.
+ *
+ * normalizeScalar is lenient by design — it coerces so a malformed stored
+ * record still loads — but that leniency must not extend to a write. An enum
+ * assigned an unknown state silently became `enumValues[0]`, so an invalid
+ * model request changed the Variable to its first state and reported success.
+ */
+function isAssignable(type, enumValues, value) {
+    if (type === 'enum') return (enumValues || []).includes(String(value ?? '').trim());
+    if (type === 'number') return Number.isFinite(Number(value));
+    return true;
+}
+
 function normalizeScalar(value, type, enumValues = [], minimum = null, maximum = null) {
     if (type === 'number') return clampNumber(Number(value), minimum, maximum);
     if (type === 'boolean') return value === true || value === 'true' || value === 1 || value === '1';

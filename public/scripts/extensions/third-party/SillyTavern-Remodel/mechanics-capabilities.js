@@ -108,7 +108,7 @@ export function getMechanicsRequestSchema() {
                                     type: { type: 'string', enum: ['antagonistic', 'sympathetic'] }, status: { type: 'string', enum: ['achieved', 'abandoned', 'impossible'] },
                                     variableRef: { type: 'string' }, modifierVariableRef: { type: 'string' }, modifierId: { type: 'string' }, field: { type: 'string' },
                                     value: { type: ['number', 'string', 'boolean'] },
-                                    delta: { type: 'number' }, nextState: { type: ['string', 'boolean'] }, label: { type: 'string' }, target: { type: 'string', enum: ['value', 'maximum', 'reach'] },
+                                    delta: { type: 'number' }, nextState: { type: ['string', 'boolean'] }, label: { type: 'string' }, target: { type: 'string', enum: ['value', 'maximum'] },
                                     endingCondition: { type: 'string' },
                                 },
                             },
@@ -288,6 +288,9 @@ function addModifier(request, args, runtime) {
     const instance = requireVariable(resolveVariableReference(args.variableRef, runtime), runtime);
     if (!isAuthorizedVariable(instance, args.variableRef, runtime)) return deferVariable(request, runtime, instance, `Modifying ${instance.name} requires review.`);
     const before = copy(instance);
+    if (args.target && !['value', 'maximum'].includes(args.target)) {
+        throw new MechanicsError(`${request.id}: modifier target must be value or maximum.`);
+    }
     const modifier = addVariableModifier(instance.id, { label: args.label, amount: requiredNumber(args.delta, 'delta'), target: args.target, endingCondition: args.endingCondition, reason: request.reason, source: 'mechanics' }, txContext(runtime, request));
     if (!modifier) throw new MechanicsError(`${request.id}: modifier was invalid.`);
     receipt(runtime, request, before, getVariableValue(instance.id), { modifier });
@@ -354,7 +357,18 @@ function reachGoal(request, args, runtime) {
         modifierInstance = requireVariable(resolveVariableReference(args.modifierVariableRef, runtime), runtime);
         modifier = Number(computeVariable(modifierInstance)?.value || 0);
     }
-    const trackedInstance = goal.resolution?.kind === 'tracked' ? requireVariable(goal.resolution.variableId || goal.resolution.variableInstanceId, runtime) : null;
+    // The tracked Variable comes from stored Goal data, not from model input, so
+    // it is resolved by id rather than by ref — but it must still be a Variable
+    // this pass advertised. Otherwise a reach reads and writes a Variable the
+    // Director was never shown, which is the containment the refs exist for.
+    const trackedId = String(goal.resolution?.variableId || goal.resolution?.variableInstanceId || '');
+    if (goal.resolution?.kind === 'tracked' && trackedId && !runtime.variableRefs.size) {
+        throw new MechanicsError(`${request.id}: the Goal tracks a Variable that was not retrieved for this request.`);
+    }
+    if (goal.resolution?.kind === 'tracked' && trackedId && ![...runtime.variableRefs.values()].includes(trackedId)) {
+        throw new MechanicsError(`${request.id}: the Goal tracks a Variable that was not advertised for this request.`);
+    }
+    const trackedInstance = goal.resolution?.kind === 'tracked' ? requireVariable(trackedId, runtime) : null;
     const frozen = {
         successRate: goal.successRate,
         modifierVariableId: modifierInstance?.id || '', modifier,
