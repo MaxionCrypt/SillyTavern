@@ -751,9 +751,7 @@ body.st-remodel-active #chat .swipe_right {
    rules explicitly reveal them. */
 #remodel-story-editor,
 #remodel-rp-panelgroup,
-#remodel-rp-rules-panel,
-#remodel-rp-dice-panel,
-#remodel-rp-priortext-panel {
+.remodel-rp-panel {
   display: none !important;
 }
 
@@ -2327,10 +2325,11 @@ body.remodel-roleplay-workspace-active .remodel-rp-native-slot:hover > * {
   color: var(--tarot-gold-bright) !important;
 }
 
-/* The panels: fixed to the right edge, slid off-screen until -open. */
-body.remodel-roleplay-workspace-active #remodel-rp-rules-panel,
-body.remodel-roleplay-workspace-active #remodel-rp-dice-panel,
-body.remodel-roleplay-workspace-active #remodel-rp-priortext-panel {
+/* The panels: fixed to the right edge, slid off-screen until -open.
+   Matched on the shared class, not on a list of ids — enumerating ids meant a
+   new panel silently got no positioning at all and laid out as a full-width
+   block at the bottom of the scene. */
+body.remodel-roleplay-workspace-active .remodel-rp-panel {
   display: flex !important;
   flex-direction: column !important;
   position: fixed !important;
@@ -2348,9 +2347,7 @@ body.remodel-roleplay-workspace-active #remodel-rp-priortext-panel {
   pointer-events: none !important;
 }
 
-body.remodel-roleplay-workspace-active #remodel-rp-rules-panel.remodel-rp-panel-open,
-body.remodel-roleplay-workspace-active #remodel-rp-dice-panel.remodel-rp-panel-open,
-body.remodel-roleplay-workspace-active #remodel-rp-priortext-panel.remodel-rp-panel-open {
+body.remodel-roleplay-workspace-active .remodel-rp-panel.remodel-rp-panel-open {
   transform: translateX(0) !important;
   pointer-events: auto !important;
 }
