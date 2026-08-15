@@ -11241,3 +11241,170 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.is-seat-narrator 
 @media (max-width: 620px) {
   .remodel-rp-duet-seats { grid-template-columns: 1fr !important; }
 }
+
+/* =====================================================================
+   VARIABLES — the authoring surface (variables-ui.js)
+
+   One editor rendered in two places: the Timeline State panel on either
+   scene rail, and inside an expanded Lorebook entry. The rules are shared
+   so the two mounts cannot drift apart visually either.
+   ===================================================================== */
+
+.remodel-varstate { display: grid; gap: 10px; min-width: 0; }
+
+.remodel-varstate-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 3px;
+    border-bottom: 1px solid rgba(201, 190, 0, .22);
+}
+
+.remodel-varstate-tabs button {
+    padding: 7px 3px;
+    color: rgba(235, 232, 244, .55);
+    background: none;
+    border: none;
+    border-bottom: 1px solid transparent;
+    font: 600 9px/1.2 system-ui, sans-serif;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    cursor: pointer;
+}
+
+.remodel-varstate-tabs button.is-active { color: #e9df53; border-bottom-color: #c9be00; background: rgba(201, 190, 0, .06); }
+
+.remodel-varstate-pane { display: grid; gap: 8px; min-width: 0; }
+.remodel-varstate-empty { margin: 0; padding: 14px 2px; color: rgba(235, 232, 244, .45); font-size: 11px; font-style: italic; }
+.remodel-varstate-meta { margin: 0; color: rgba(235, 232, 244, .42); font-size: 10px; letter-spacing: .04em; }
+.remodel-varstate-notice { margin: 0; padding: 7px 9px; color: #ffc070; background: rgba(83, 50, 15, .3); border: 1px solid rgba(219, 151, 44, .34); border-radius: 6px; font-size: 11px; }
+
+.remodel-varstate-row,
+.remodel-varstate-card,
+.remodel-varstate-event {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 10px;
+    background: rgba(11, 9, 17, .6);
+    border: 1px solid rgba(255, 255, 255, .07);
+    border-left: 2px solid rgba(201, 190, 0, .45);
+    border-radius: 6px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.remodel-varstate-row code,
+.remodel-varstate-event time { color: rgba(242, 219, 66, .7); font: 10px Consolas, monospace; }
+.remodel-varstate-row strong,
+.remodel-varstate-card strong,
+.remodel-varstate-event strong { display: block; color: #f0edf4; font: 500 13px Georgia, serif; overflow: hidden; text-overflow: ellipsis; }
+.remodel-varstate-row small,
+.remodel-varstate-card small,
+.remodel-varstate-event small { display: block; margin-top: 2px; color: rgba(235, 232, 244, .4); font-size: 10px; }
+.remodel-varstate-row output,
+.remodel-varstate-card output,
+.remodel-varstate-event output { color: #eae338; font: 13px Consolas, monospace; white-space: nowrap; }
+.remodel-varstate-card button { color: rgba(235, 232, 244, .45); background: none; border: none; cursor: pointer; padding: 4px; }
+.remodel-varstate-card button:hover { color: #e9df53; }
+
+.remodel-varstate-group { display: grid; gap: 6px; }
+.remodel-varstate-group h4 { margin: 6px 0 0; color: rgba(242, 219, 66, .72); font: 600 9px/1.3 system-ui, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
+.remodel-varstate-group.is-unresolved h4 { color: #ff9b9e; }
+
+.remodel-varstate-diag { display: grid; gap: 3px; padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, .07); background: rgba(11, 9, 17, .55); }
+.remodel-varstate-diag.is-in { border-left: 2px solid rgba(126, 200, 96, .6); }
+.remodel-varstate-diag.is-out { border-left: 2px solid rgba(255, 255, 255, .14); opacity: .72; }
+.remodel-varstate-diag p { margin: 0; color: rgba(235, 232, 244, .5); font-size: 10px; line-height: 1.45; }
+
+.remodel-varstate-vector { display: grid; gap: 5px; padding: 9px 10px; border: 1px solid rgba(201, 190, 0, .2); border-radius: 6px; font-size: 10px; color: rgba(235, 232, 244, .6); }
+.remodel-varstate-vector.is-degraded { border-color: rgba(219, 151, 44, .4); color: #ffc070; }
+.remodel-varstate-vector small { color: rgba(235, 232, 244, .4); }
+
+.remodel-varstate-action {
+    justify-self: start;
+    padding: 7px 12px;
+    color: #09080d;
+    background: #c9be00;
+    border: none;
+    border-radius: 6px;
+    font: 600 11px system-ui, sans-serif;
+    cursor: pointer;
+}
+
+.remodel-varstate-action:disabled { opacity: .55; cursor: default; }
+
+/* The editor. Two columns where there is room, one on a rail. */
+.remodel-varedit { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 12px; min-width: 0; }
+.remodel-varedit .is-wide { grid-column: 1 / -1; }
+.remodel-varedit label { display: grid; gap: 4px; min-width: 0; color: rgba(231, 227, 240, .55); font-size: 9px; letter-spacing: .11em; text-transform: uppercase; }
+.remodel-varedit input,
+.remodel-varedit select,
+.remodel-varedit textarea {
+    width: 100%;
+    min-width: 0;
+    padding: 7px 9px;
+    color: #f2eff7;
+    background: rgba(7, 6, 12, .72);
+    border: 1px solid rgba(255, 255, 255, .12);
+    border-radius: 6px;
+    font: 12px system-ui, sans-serif;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.remodel-varedit fieldset { grid-column: 1 / -1; margin: 0; padding: 9px 11px; border: 1px solid rgba(201, 190, 0, .2); border-radius: 7px; }
+.remodel-varedit legend { padding: 0 6px; color: rgba(242, 219, 66, .7); font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
+.remodel-varedit-note { margin: 7px 0 0; color: rgba(231, 227, 240, .4); font-size: 10px; line-height: 1.4; }
+.remodel-varedit-note code { color: rgba(242, 219, 66, .75); }
+
+.remodel-varedit-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.remodel-varedit-chips em { color: rgba(235, 232, 244, .35); font-size: 10px; }
+.remodel-varedit-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    padding: 4px 8px;
+    color: rgba(238, 235, 245, .82);
+    background: rgba(198, 164, 74, .1);
+    border: 1px solid rgba(198, 164, 74, .3);
+    border-radius: 999px;
+    font-size: 11px;
+}
+
+.remodel-varedit-chip em { color: rgba(242, 219, 66, .6); font-size: 9px; font-style: normal; text-transform: uppercase; letter-spacing: .06em; }
+.remodel-varedit-chip.is-unresolved { color: #ff9b9e; border-color: rgba(191, 97, 106, .5); background: rgba(191, 97, 106, .1); }
+.remodel-varedit-chip button,
+.remodel-varedit-chip-add { color: inherit; background: none; border: none; cursor: pointer; padding: 0 2px; font-size: 13px; line-height: 1; }
+.remodel-varedit-chip-add { padding: 4px 9px; color: rgba(238, 235, 245, .45); border: 1px dashed rgba(198, 164, 74, .35); border-radius: 999px; font-size: 11px; }
+.remodel-varedit-chip-add:hover { color: #e9df53; border-style: solid; }
+
+.remodel-varedit-picker { margin-top: 8px; border: 1px solid rgba(198, 164, 74, .24); border-radius: 7px; overflow: hidden; }
+.remodel-varedit-picker select { border: none; border-bottom: 1px solid rgba(198, 164, 74, .18); border-radius: 0; }
+.remodel-varedit-picker-list { max-height: 220px; overflow-y: auto; scrollbar-width: thin; }
+.remodel-varedit-picker-list button { display: grid; width: 100%; gap: 1px; padding: 7px 10px; text-align: left; color: rgba(238, 235, 245, .8); background: none; border: none; border-bottom: 1px solid rgba(255, 255, 255, .05); cursor: pointer; }
+.remodel-varedit-picker-list button:hover { background: rgba(198, 164, 74, .09); }
+.remodel-varedit-picker-list button.is-disabled { opacity: .5; }
+.remodel-varedit-picker-list strong { font-size: 12px; }
+.remodel-varedit-picker-list small { color: rgba(235, 232, 244, .4); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.remodel-varedit footer { display: flex; flex-wrap: wrap; gap: 8px; }
+.remodel-varedit footer button { padding: 8px 13px; color: #09080d; background: #c9be00; border: none; border-radius: 6px; font-weight: 700; font-size: 11px; cursor: pointer; }
+.remodel-varedit footer button:not(:first-child) { color: #e5e1ec; background: transparent; border: 1px solid rgba(255, 255, 255, .16); }
+.remodel-varedit footer button.is-danger { color: #ff8e91; border-color: rgba(255, 80, 84, .32); }
+
+/* Inside a native Lorebook entry. */
+.remodel-varlink { display: grid; gap: 8px; width: 100%; min-width: 0; margin-top: 10px; padding: 11px 12px; border: 1px solid rgba(201, 190, 0, .22); border-radius: 8px; background: rgba(11, 9, 17, .4); }
+.remodel-varlink-title { margin: 0; color: rgba(242, 219, 66, .75); font: 600 9px/1.3 system-ui, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
+.remodel-varlink-title i { margin-right: 5px; }
+.remodel-varlink-empty { margin: 0; color: rgba(235, 232, 244, .42); font-size: 11px; font-style: italic; }
+
+/* A rail is narrow, and so is a phone: one column, and long values wrap
+   rather than pushing the container sideways. */
+.remodel-rp-state-panel .remodel-varedit,
+.remodel-storydoc-panel .remodel-varedit { grid-template-columns: 1fr; }
+
+@media (max-width: 760px) {
+    .remodel-varedit { grid-template-columns: 1fr; }
+}

@@ -81,6 +81,14 @@ import { getSceneGoals, updateSceneGoalState } from './story-goals-store.js';
 import { clearMechanicsReceiptInjection } from './mechanics-runtime.js';
 import { listVariablesForLoreRef } from './variables-store.js';
 import {
+    buildVariableStateBodyMarkup,
+    handleVariablesUiChange,
+    handleVariablesUiClick,
+    refreshVariableLore,
+    renderLinkedVariablesSection,
+    renderVariableStateInner,
+} from './variables-ui.js';
+import {
     canSendWithoutLiveDirection,
     clearLiveDirectionFailure,
     continueLiveDirection,
@@ -227,6 +235,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindStoryLockInterceptor();
     observeTavernPanelState();
     bindExternalSidebarWindowSwitch();
+    bindVariablesSurfaces();
     bindStoryEditorEvents();
     bindRoleplayComposerEvents();
     bindRoleplayGenerationFeedback();
@@ -429,6 +438,31 @@ function observeTavernPanelState() {
 // "close other unpinned drawers" sweep. Treat every other native sidebar
 // drawer toggle as a window switch: close Tavern synchronously before core's
 // own handler opens the requested drawer.
+/**
+ * Variables surfaces are mounted in three places — both scene rails (inside
+ * #sheld) and inside native Lorebook entries — so their events are caught at the
+ * document rather than on any one container. The handlers claim an event by
+ * returning true, and repaint every mounted surface so the two rails and an open
+ * entry never disagree about what a Variable currently is.
+ */
+function bindVariablesSurfaces() {
+    document.addEventListener('click', (event) => {
+        if (!(event.target instanceof Element)) return;
+        if (!event.target.closest('[data-remodel-varstate], [data-remodel-varlink]')) return;
+        if (handleVariablesUiClick(event.target, refreshVariableStateSurfaces)) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    });
+    document.addEventListener('change', (event) => {
+        if (!(event.target instanceof Element)) return;
+        if (!event.target.closest('[data-remodel-varstate], [data-remodel-varlink]')) return;
+        if (handleVariablesUiChange(event.target, refreshVariableStateSurfaces)) {
+            event.stopPropagation();
+        }
+    });
+}
+
 function bindExternalSidebarWindowSwitch() {
     document.addEventListener('click', (event) => {
         if (getSessionState().currentWindow.kind !== 'tavern') return;
@@ -4120,6 +4154,9 @@ function attachLorebooksWorkspaceAdapter(panel) {
     syncLorebooksWorkspaceMeta(panel);
     setRemodeledLorebooksGlobalLabel(panel);
     decorateLorebookVariableLinks(panel);
+    // Entry names and the attach picker come from an async read; warm it, then
+    // repaint so links render as titles rather than as raw book/uid pairs.
+    refreshVariableLore().then(() => decorateLorebookVariableLinks(panel));
 
     if (panel.dataset.remodelLorebooksAdapterBound === 'true') {
         return;
@@ -4135,12 +4172,41 @@ function attachLorebooksWorkspaceAdapter(panel) {
     panel.dataset.remodelLorebooksAdapterBound = 'true';
 }
 
+/**
+ * The exact name of the book currently open in native's editor.
+ *
+ * Neither obvious source is safe on its own. The option's VALUE is a numeric
+ * index, not a name — using it keys lookups as "4.0". Its TEXT is not the name
+ * either: HTMLOptionElement.text is specified to return the child text
+ * *stripped and collapsed*, so a book actually called "TEST  The Box" (two
+ * spaces) reports as "TEST The Box" and never matches a stored link.
+ *
+ * The value is an index into getWorldInfoNames(), which is the same list the
+ * Variables lore layer enumerates, so that is the primary lookup. The collapsed
+ * text is kept only as a fallback for the case where the two lists drift.
+ */
+function selectedLorebookName(select) {
+    if (!select) return '';
+    let names = [];
+    try {
+        names = getContext().getWorldInfoNames() || [];
+    } catch {
+        names = [];
+    }
+    const byIndex = names[Number(select.value)];
+    if (typeof byIndex === 'string') return byIndex;
+    const label = select.options?.[select.selectedIndex]?.text?.trim() || '';
+    const collapse = (value) => String(value).replace(/\s+/g, ' ').trim();
+    return names.find((name) => collapse(name) === collapse(label)) || '';
+}
+
 // Marks lorebook entries that Variables are attached to. The count is re-read on
 // every pass rather than guarded by presence, so an entry that gains or loses a
 // Variable does not keep a stale badge. Entries with no Variables carry no badge
 // at all — attaching happens inside the expanded entry, not from this row.
 function decorateLorebookVariableLinks(panel) {
-    const book = panel.querySelector('#world_editor_select')?.value || '';
+    const select = panel.querySelector('#world_editor_select');
+    const book = selectedLorebookName(select);
     if (!book) return;
     const timelineId = getTimelineStore().activeTimelineId || '';
     panel.querySelectorAll('#world_popup_entries_list .world_entry').forEach((entry) => {
@@ -4165,6 +4231,38 @@ function decorateLorebookVariableLinks(panel) {
         badge.dataset.uid = String(uid);
         badge.dataset.linkedCount = String(linked.length);
         badge.title = `${linked.length} linked Variable${linked.length === 1 ? '' : 's'}: ${linked.map((variable) => variable.name).join(', ')}`;
+    });
+    decorateExpandedLorebookEntries(panel, book);
+}
+
+/**
+ * Put the Linked Variables editor inside an expanded Lorebook entry.
+ *
+ * Native builds the expanded body lazily and destroys it again on collapse
+ * (world-info.js getWorldEntry: `inline-drawer-toggle` → addEditorDrawerContent,
+ * clearEntryList on close), so this cannot be a one-time injection. It re-runs
+ * from the MutationObserver that already watches the entry list, and each
+ * section is keyed to its entry so a rebuilt outlet gets a fresh one while an
+ * untouched entry keeps the section the user is typing in.
+ */
+function decorateExpandedLorebookEntries(panel, book) {
+    panel.querySelectorAll('#world_popup_entries_list .world_entry .inline-drawer-outlet').forEach((outlet) => {
+        if (!(outlet instanceof HTMLElement) || !outlet.children.length) return;
+        const entry = outlet.closest('.world_entry');
+        const uidNode = entry?.matches('[data-uid]') ? entry : entry?.querySelector('[data-uid]');
+        const uid = entry?.dataset.uid || uidNode?.getAttribute('data-uid') || entry?.getAttribute('uid');
+        if (uid == null || uid === '') return;
+        let section = outlet.querySelector('[data-remodel-varlink]');
+        if (section && section.dataset.book === book && section.dataset.uid === String(uid)) return;
+        if (!section) {
+            section = document.createElement('div');
+            section.className = 'remodel-varlink';
+            section.dataset.remodelVarlink = '';
+            outlet.append(section);
+        }
+        section.dataset.book = book;
+        section.dataset.uid = String(uid);
+        section.innerHTML = `<h5 class="remodel-varlink-title"><i class="fa-solid fa-chart-simple"></i> Linked Variables</h5>${renderLinkedVariablesSection({ book, uid: String(uid) })}`;
     });
 }
 
@@ -5799,6 +5897,7 @@ function ensureStoryEditor() {
                 <button type="button" data-remodel-storydoc-tool="prior" title="Prior Scene Text"><i class="fa-solid fa-book-open" aria-hidden="true"></i><span>Prior</span></button>
                 <button type="button" data-remodel-storydoc-tool="prompt" title="Final Prompt Preview"><i class="fa-solid fa-eye" aria-hidden="true"></i><span>Prompt</span></button>
                 <button type="button" data-remodel-storydoc-tool="guidance" title="Author guidance"><i class="fa-solid fa-compass" aria-hidden="true"></i><span>Guide</span></button>
+                <button type="button" data-remodel-storydoc-tool="state" title="Timeline State"><i class="fa-solid fa-chart-simple" aria-hidden="true"></i><span>State</span></button>
                 <span class="remodel-storydoc-tool-control remodel-storydoc-native-slot" data-remodel-storydoc-native-slot="options_button" title="Story options">
                     <span class="remodel-storydoc-tool-label">Menu</span>
                 </span>
@@ -7196,6 +7295,13 @@ async function openStoryToolPanel(tool, trigger = null) {
         try { font.value = localStorage.getItem(MANUSCRIPT_FONT_STORAGE_KEY) || MANUSCRIPT_FONT_OPTIONS[0].value; } catch { /* local storage unavailable */ }
         font.addEventListener('change', () => handleManuscriptFontChange(font));
         body.querySelectorAll('[data-remodel-storydoc-format]').forEach((button) => button.addEventListener('click', () => formatStoryDocSelection(button.dataset.remodelStorydocFormat)));
+        return;
+    }
+    if (tool === 'state') {
+        title.textContent = 'Timeline State';
+        body.innerHTML = buildVariableStateBodyMarkup();
+        // Lore is read asynchronously; repaint when it arrives.
+        refreshVariableLore().then(refreshVariableStateSurfaces);
         return;
     }
     if (tool === 'guidance') {
@@ -9665,6 +9771,7 @@ function ensureRoleplayPanels() {
     ensureRoleplayRulesPanel();
     ensureRoleplayDicePanel();
     ensureRoleplayPriorTextPanel();
+    ensureRoleplayStatePanel();
 }
 
 // Prior Text in roleplay reuses the ONE story Prior Text panel rather than a
@@ -9674,6 +9781,50 @@ function ensureRoleplayPanels() {
 // and out of it via getOriginalPanelHomes(), the same origin-tracking used
 // for the hamburger/wand relocation — so exactly one prior-text body lives in
 // the DOM at a time, and refreshPriorTextPanel()/handlers stay unchanged.
+/**
+ * The Timeline State panel on the roleplay rail.
+ *
+ * Unlike Prior Scene Text this does not relocate a shared DOM node between the
+ * two rails: its view state lives in variables-ui.js, not in the markup, so both
+ * rails can render the same body independently and stay in agreement. Nothing to
+ * move means nothing to orphan when a workspace tears down.
+ */
+function ensureRoleplayStatePanel() {
+    if (!isRealRoleplayWorkspaceActive()) {
+        return;
+    }
+    let panel = document.getElementById('remodel-rp-state-panel');
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'remodel-rp-state-panel';
+        panel.className = 'remodel-rp-panel remodel-rp-state-panel';
+        panel.innerHTML = `
+            <div class="remodel-rp-panel-head">
+                <span class="remodel-rp-panel-title"><i class="fa-solid fa-chart-simple" aria-hidden="true"></i> Timeline State</span>
+                <button type="button" class="remodel-rp-panel-close" data-remodel-rp-panel-close="state" title="Close" aria-label="Close">×</button>
+            </div>
+            <div class="remodel-rp-panel-body">${buildVariableStateBodyMarkup()}</div>
+        `;
+        getRealSheld()?.appendChild(panel);
+    }
+    refreshVariableLore().then(refreshVariableStateSurfaces);
+}
+
+/**
+ * Repaint every mounted Variables surface — both rails and any expanded
+ * Lorebook entry. Swaps inner markup rather than re-rendering the workspace,
+ * following refreshDebugConsoleWorkspace, so an open drawer does not flicker.
+ */
+function refreshVariableStateSurfaces() {
+    for (const host of document.querySelectorAll('[data-remodel-varstate]')) {
+        host.innerHTML = renderVariableStateInner();
+    }
+    for (const host of document.querySelectorAll('[data-remodel-varlink]')) {
+        const { book, uid } = host.dataset;
+        host.innerHTML = renderLinkedVariablesSection({ book, uid });
+    }
+}
+
 function ensureRoleplayPriorTextPanel() {
     if (!isRealRoleplayWorkspaceActive()) {
         return;
@@ -9762,6 +9913,9 @@ function ensureRoleplayPanelGroup() {
         </button>
         <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="dice" title="Dice" aria-label="Dice">
             <i class="fa-solid fa-dice-d20" aria-hidden="true"></i>
+        </button>
+        <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="state" title="Timeline State" aria-label="Timeline State">
+            <i class="fa-solid fa-chart-simple" aria-hidden="true"></i>
         </button>
         <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="priortext" title="Prior Scene Text" aria-label="Prior Scene Text">
             <i class="fa-solid fa-book-open" aria-hidden="true"></i>
@@ -10041,6 +10195,7 @@ const ROLEPLAY_PANEL_IDS = {
     rules: 'remodel-rp-rules-panel',
     dice: 'remodel-rp-dice-panel',
     priortext: 'remodel-rp-priortext-panel',
+    state: 'remodel-rp-state-panel',
 };
 
 function toggleRoleplayPanel(which) {
@@ -10062,6 +10217,11 @@ function toggleRoleplayPanel(which) {
         // and its dropdown is fresh when the panel opens.
         if (which === 'priortext') {
             ensureRoleplayPriorTextPanel();
+        }
+        // Lore lists are read asynchronously, so repaint once they land rather
+        // than showing an editor that thinks every entry is missing.
+        if (which === 'state') {
+            refreshVariableLore().then(refreshVariableStateSurfaces);
         }
     }
 }

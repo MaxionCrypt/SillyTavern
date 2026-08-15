@@ -22,6 +22,22 @@ function journal(type, detail = {}, { severity = 'info', correlationId = null, s
 }
 
 /**
+ * The most recent retrieval per Timeline, for the State drawer to render.
+ *
+ * Deliberately not read back out of the debug journal: recording can be paused,
+ * filtered or cleared, and a drawer that empties because diagnostics were
+ * switched off would be a bad surface. The journal stays the historical record;
+ * this is the live one. In memory only — it describes one session's last pass
+ * and is worthless persisted.
+ */
+const lastByTimeline = new Map();
+
+/** The last retrieval for a Timeline, or null if none has run this session. */
+export function getLastVariableContext(timelineId) {
+    return lastByTimeline.get(String(timelineId || '')) || null;
+}
+
+/**
  * Resolve the small, temporary Variable address book for one request.
  * Persistent IDs stay in refToId and are never serialized for the model.
  *
@@ -102,7 +118,13 @@ export async function resolveVariableContext({
         summary: `${listed.length}/${diagnostics.length} Variables retrieved${vectors.ok ? '' : ' (deterministic fallback)'}`,
     });
 
-    return { listed, refToId, serialized, diagnostics, degraded: !vectors.ok, vectorError: vectors.error || '', query };
+    const result = {
+        listed, refToId, serialized, diagnostics,
+        degraded: !vectors.ok, vectorError: vectors.error || '', query,
+        at: new Date().toISOString(), action: String(action || ''),
+    };
+    lastByTimeline.set(id, result);
+    return result;
 }
 
 export function buildVariableQuery({ action = '', historyText = [], subjects = [], activatedKeys = [], entries = new Map(), goals = [], windowSize = 6 } = {}) {

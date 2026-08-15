@@ -411,11 +411,21 @@ function normalizeVariable(raw) {
     };
 }
 
+/**
+ * Authority for a record that did not state one.
+ *
+ * V3 Variables have no owner — the lore link replaced it — so this only ever
+ * fires for migrated V1/V2 records, where `ownerRef` still says who the value
+ * belonged to. A V3 Variable created without an explicit authority is world
+ * state: it is attached to a lorebook entry about the fiction, not to the user.
+ * Defaulting those to `review` (what the ownerless branch used to return) made
+ * every AI write wait for approval that nothing in the UI could grant.
+ */
 function authorityFromOwner(ownerRef) {
     const kind = String(ownerRef?.kind || '');
     if (kind === 'persona') return 'persona';
     if (kind === 'character') return 'review';
-    return kind ? 'world' : 'review';
+    return 'world';
 }
 
 function normalizeSubvalues(input, legacy, valueType) {
