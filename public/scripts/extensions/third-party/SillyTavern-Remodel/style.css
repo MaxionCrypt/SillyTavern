@@ -10733,12 +10733,16 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     overflow: hidden;
 }
 
+/* Column of auto-height bars above one filling pane. Deliberately flex rather
+   than a grid with a fixed row list: the row list had to match the number of
+   children exactly, so adding a section silently pushed the last bar into the
+   1fr track, collapsed it to 0px, and drew it on top of the stream. */
 .remodel-debug-workspace {
     width: 100%;
     height: 100%;
     min-height: 0;
-    display: grid;
-    grid-template-rows: auto auto auto minmax(0, 1fr);
+    display: flex;
+    flex-direction: column;
     color: #e7e4dc;
     background:
         linear-gradient(180deg, rgba(12, 11, 18, .96), rgba(5, 5, 9, .94)),
@@ -10923,6 +10927,7 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
 }
 
 .remodel-debug-grid {
+    flex: 1;
     min-height: 0;
     display: grid;
     grid-template-columns: minmax(430px, 58%) minmax(300px, 42%);
