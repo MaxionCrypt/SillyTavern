@@ -562,11 +562,18 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     const director = directorRef && cast.find((member) => normalizeRef(member.ref || member)?.id === directorRef.id);
     const performingCast = cast.filter((member) => !member.disabled && (!directorRef || normalizeRef(member.ref || member)?.id !== directorRef.id));
     const activatedEntries = [...(lore.allActivatedEntries || [])];
-    // Preview never rolls or mutates: previewMechanicalContext retrieves the
-    // same shape of state through buildMechanicalSnapshot but with a fixed,
-    // inert action string and no authorized Goal ids to act on.
+    // Preview never rolls or mutates and never carries authorized Goal ids —
+    // but retrieval (resolveVariableContext) scores against action/history/
+    // activatedEntries, so it still gets the real ones: the same `action`
+    // this function was called with (the composer draft when there is one —
+    // see previewDirectorPrompt), and the same history/activatedEntries just
+    // computed above. Only the write-adjacent authority (authorizedGoalIds)
+    // is withheld; the retrieval inputs are identical to a real pass's.
     const mechanics = preview
-        ? await previewMechanicalContext(scene, { cast: performingCast.map((member) => member.ref || member), persona })
+        ? await previewMechanicalContext(scene, {
+            cast: performingCast.map((member) => member.ref || member), persona, action,
+            evidence: { history, activatedEntries },
+        })
         : await buildMechanicalSnapshot(scene, action, performingCast.map((member) => member.ref || member), persona, authorizedGoalIds, {
             history,
             activatedEntries,
@@ -633,6 +640,10 @@ function compileDirectorPrompt(snapshot, { mechanicsEnabled = false } = {}) {
     if (recipe) {
         prompt = compilePromptRecipe(recipe, sources).messages;
     }
+    // Captured before any fallback swap: this is what the user's OWN recipe
+    // compiled to, which is the number a diagnostic needs — after the swap
+    // below, prompt.length would only ever report the fallback's own size.
+    const compiledCount = prompt?.length || 0;
     const usedFallback = !prompt?.length || !prompt.some((message) => message.content.includes(sources.directionProtocol.slice(0, 40)));
     if (usedFallback) {
         prompt = [
@@ -642,31 +653,38 @@ function compileDirectorPrompt(snapshot, { mechanicsEnabled = false } = {}) {
             { role: 'user', content: sources.directorSnapshot },
         ];
     }
-    return { recipe, sources, prompt, usedFallback };
+    return { recipe, sources, prompt, usedFallback, compiledCount };
 }
 
 /**
  * Preview-only: compiles the Director's prompt for the current Scene without
  * sending a request, rolling, or mutating anything (see buildDirectionSnapshot's
  * `preview` flag). Shares compileDirectorPrompt with the real request path, so
- * the Prompt Studio preview shows exactly the messages a real direction pass
- * would compile right now — same recipe resolution, same buildDirectionSources,
- * same compilePromptRecipe.
+ * the recipe resolution, buildDirectionSources call, and compilePromptRecipe
+ * call are the exact same code a real direction pass runs — that part cannot
+ * drift.
+ *
+ * One input cannot be made exact: Variables/Goals retrieval
+ * (resolveVariableContext, inside buildMechanicalSnapshot) is scored against
+ * the message the user has not sent yet. This passes the real accepted
+ * history, the real activated lore entries, and the current composer draft as
+ * the action — the best available stand-in — but the retrieved set can still
+ * differ from a real pass once the user's actual next action is known.
  */
 export async function previewDirectorPrompt(scene) {
-    if (!scene) return { prompt: [], recipe: null, snapshot: null };
+    if (!scene) return { prompt: [], recipe: null, snapshot: null, usedFallback: false };
     const action = hooks.getComposerDraft() || '[preview only: retrieve state; do not mutate or roll]';
     const snapshot = await buildDirectionSnapshot(scene, action, [], { preview: true });
     const profile = getMechanicsProfile();
-    const { recipe, prompt } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled });
-    return { prompt, recipe, snapshot };
+    const { recipe, prompt, usedFallback } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled });
+    return { prompt, recipe, snapshot, usedFallback };
 }
 
 async function requestDirectionEnvelope(scene, snapshot) {
     const profile = getMechanicsProfile();
-    const { recipe, prompt, usedFallback } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled });
+    const { recipe, prompt, usedFallback, compiledCount } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled });
     if (usedFallback) {
-        journal('recipe.fallback', { hadRecipe: Boolean(recipe), messages: prompt?.length || 0 }, { severity: 'warn' });
+        journal('recipe.fallback', { hadRecipe: Boolean(recipe), messages: compiledCount }, { severity: 'warn' });
     }
     const schema = toCoreJsonSchema(getDirectionEnvelopeSchema());
     let raw;

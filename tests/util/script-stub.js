@@ -55,6 +55,11 @@ export const extension_prompt_roles = {
 
 export let online_status = 'no_connection';
 
+/** Test-only: flips the connection gate live-direction.js checks before it will begin a pass. */
+export function __setOnlineStatus(value) {
+    online_status = value;
+}
+
 export async function sendMessageAsUser() {}
 
 export function setExtensionPrompt() {}

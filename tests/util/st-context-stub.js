@@ -17,6 +17,17 @@ export function getContext() {
     return {
         extensionSettings: settings,
         saveSettingsDebounced() { /* no persistence under test */ },
+        // live-direction.js registers listeners on these at module init
+        // (initLiveDirection) and reads an empty chat during a direction
+        // pass; inert stand-ins so that code path can run under Node without
+        // pulling in the real event bus. Widen this, not the pure modules,
+        // if a future test needs more of the context surface.
+        chat: [],
+        eventSource: {
+            on() {}, once() {}, off() {}, removeListener() {}, emit() {},
+        },
+        eventTypes: new Proxy({}, { get: (_target, key) => String(key) }),
+        async getWorldInfoPrompt() { return {}; },
     };
 }
 

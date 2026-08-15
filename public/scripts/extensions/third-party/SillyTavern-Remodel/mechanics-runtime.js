@@ -56,8 +56,17 @@ export function clearMechanicsReceiptInjection() {
     setExtensionPrompt(RECEIPT_PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0);
 }
 
-export async function previewMechanicalContext(scene, { cast = [], persona = null } = {}) {
-    return buildMechanicalSnapshot(scene, '[preview only: retrieve state; do not mutate or roll]', cast, persona);
+export async function previewMechanicalContext(scene, { cast = [], persona = null, action = '', evidence = {} } = {}) {
+    // Retrieval (resolveVariableContext) scores against action/history/
+    // activatedEntries, so a preview that wants the same Variables/Goals a
+    // real pass would surface needs to hand those through rather than
+    // substitute a placeholder and empty evidence — a caller with nothing
+    // real to offer can still omit them and get the old inert behavior.
+    return buildMechanicalSnapshot(
+        scene,
+        action || '[preview only: retrieve state; do not mutate or roll]',
+        cast, persona, [], evidence,
+    );
 }
 
 export async function buildMechanicalSnapshot(scene, action, cast = [], persona = null, authorizedGoalIds = [], evidence = {}) {

@@ -1452,11 +1452,6 @@ body.remodel-roleplay-workspace-active .remodel-rp-direction-ops code {
   font-size:.66rem !important;
 }
 
-body.remodel-roleplay-workspace-active .remodel-rp-direction-ops em {
-  color:rgba(236,232,212,.4) !important;
-  font-size:.58rem !important;
-}
-
 body.remodel-roleplay-workspace-active .remodel-rp-direction-ops li > span {
   flex:1 1 100% !important;
   color:rgba(236,232,212,.72) !important;
@@ -1947,23 +1942,31 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
    its own <pre> instead of pushing the modal past its max-height. */
 #remodel-rp-preview-modal .remodel-rp-preview-tabs {
   display: flex !important;
+  flex-wrap: wrap !important;
   gap: 8px !important;
   margin: 14px 20px 0 !important;
   padding-bottom: 12px !important;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
 }
-#remodel-rp-preview-modal .remodel-rp-preview-tabs button {
-  padding: 7px 18px !important;
+/* Shared pill styling with the "By source"/"Raw prompt" sub-view toggle
+   below (.remodel-rp-preview-views button) — one definition so the two
+   segmented controls in this modal can't drift out of visual sync. Only
+   size differs, in the two variant rules that follow. */
+#remodel-rp-preview-modal .remodel-rp-preview-tabs button,
+#remodel-rp-preview-modal .remodel-rp-preview-views button {
   border: 1px solid rgba(215, 200, 0, 0.26) !important;
   border-radius: 999px !important;
   background: rgba(8, 8, 12, 0.6) !important;
   color: rgba(238, 235, 245, 0.62) !important;
-  font: 11px/1 var(--remodel-serif, Georgia) !important;
+  font-family: var(--remodel-serif, Georgia) !important;
+  line-height: 1 !important;
   letter-spacing: 0.14em !important;
   text-transform: uppercase !important;
   cursor: pointer !important;
 }
-#remodel-rp-preview-modal .remodel-rp-preview-tabs button.is-active {
+#remodel-rp-preview-modal .remodel-rp-preview-tabs button { padding: 7px 18px !important; font-size: 11px !important; }
+#remodel-rp-preview-modal .remodel-rp-preview-tabs button.is-active,
+#remodel-rp-preview-modal .remodel-rp-preview-views button.is-active {
   border-color: rgba(235, 219, 35, 0.66) !important;
   background: rgba(215, 200, 0, 0.14) !important;
   color: #fff6a1 !important;
@@ -2031,22 +2034,9 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   gap: 6px !important;
   margin: 12px 20px 0 !important;
 }
-#remodel-rp-preview-modal .remodel-rp-preview-views button {
-  padding: 6px 13px !important;
-  border: 1px solid rgba(215, 200, 0, 0.26) !important;
-  border-radius: 999px !important;
-  background: rgba(8, 8, 12, 0.6) !important;
-  color: rgba(238, 235, 245, 0.62) !important;
-  font: 10px/1 var(--remodel-serif, Georgia) !important;
-  letter-spacing: 0.14em !important;
-  text-transform: uppercase !important;
-  cursor: pointer !important;
-}
-#remodel-rp-preview-modal .remodel-rp-preview-views button.is-active {
-  border-color: rgba(235, 219, 35, 0.66) !important;
-  background: rgba(215, 200, 0, 0.14) !important;
-  color: #fff6a1 !important;
-}
+/* Shared pill declarations live with .remodel-rp-preview-tabs button above;
+   only this variant's smaller size differs. */
+#remodel-rp-preview-modal .remodel-rp-preview-views button { padding: 6px 13px !important; font-size: 10px !important; }
 
 #remodel-rp-preview-modal .remodel-rp-preview-sources {
   margin: 12px 20px 20px !important;

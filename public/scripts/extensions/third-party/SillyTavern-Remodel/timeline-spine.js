@@ -8382,7 +8382,10 @@ async function triggerRoleplaySpeaker(name) {
 // Director tab: compiles through the exact path a real direction pass takes
 // (previewDirectorPrompt → compileDirectorPrompt in live-direction.js — same
 // recipe resolution, same buildDirectionSources, same compilePromptRecipe) so
-// this can never drift from what actually gets sent.
+// the compile mechanism can never drift from what actually gets sent. The one
+// piece that cannot be made exact is Variables/Goals retrieval, which is
+// scored against a message the user has not sent yet — see the note rendered
+// in the Director panel below and previewDirectorPrompt's own doc comment.
 const ROLEPLAY_PREVIEW_ID = 'remodel-rp-preview-modal';
 
 const previewTab = (id, label, active) =>
@@ -8405,7 +8408,7 @@ async function openRoleplayPromptPreview() {
             <div class="remodel-rp-picker-head">
                 <div>
                     <div class="remodel-rp-picker-title">Prompt preview</div>
-                    <div class="remodel-rp-picker-hint">Exactly what each model will receive on the next turn — nothing is sent.</div>
+                    <div class="remodel-rp-picker-hint">What each model will receive on the next turn — nothing is sent.</div>
                 </div>
                 <button type="button" class="remodel-rp-picker-x" data-remodel-rp-preview-close aria-label="Close">×</button>
             </div>
@@ -8415,6 +8418,7 @@ async function openRoleplayPromptPreview() {
             </div>
             <div class="remodel-rp-preview-panel" data-remodel-rp-preview-panel="director" ${defaultTab === 'director' ? '' : 'hidden'}>
                 <div class="remodel-rp-preview-warn" data-remodel-rp-director-preview-warn hidden></div>
+                ${directed ? '<p class="remodel-rp-direction-note">Everything here compiles exactly like a real request, except Variables/Goals retrieval — it is scored against your current history and this composer draft, and can select differently once you actually send.</p>' : ''}
                 <pre class="remodel-rp-preview-body" data-remodel-rp-director-preview-body>Assembling prompt…</pre>
             </div>
             <div class="remodel-rp-preview-panel" data-remodel-rp-preview-panel="narrator" ${defaultTab === 'narrator' ? '' : 'hidden'}>
@@ -8484,10 +8488,14 @@ async function fillDirectorPreviewPanel(overlay, scene, directed) {
         return;
     }
     try {
-        const { prompt, recipe } = await previewDirectorPrompt(scene);
+        const { prompt, usedFallback } = await previewDirectorPrompt(scene);
         bodyEl.textContent = formatPromptStudioPreview({ apiType: 'chat', messages: prompt });
-        if (!recipe && warnEl) {
-            warnEl.textContent = '⚠ No active Director recipe — showing the built-in fallback prompt.';
+        // Keyed on usedFallback, not on "no recipe": compileDirectorPrompt also
+        // falls back when a recipe exists but compiles to nothing or lost its
+        // protocol block — exactly the user who most needs to be told they are
+        // looking at the built-in prompt, not their own recipe's output.
+        if (usedFallback && warnEl) {
+            warnEl.textContent = '⚠ No usable Director recipe — showing the built-in fallback prompt.';
             warnEl.hidden = false;
         }
     } catch (err) {
@@ -10489,12 +10497,14 @@ function buildRoleplayDirectionCard(record) {
     // until you want the detail behind it.
     const operations = Array.isArray(record.operations) ? record.operations : [];
     const operationsSection = operations.length
+        // "on accept" is stated once here, not per line: every operation in
+        // this list applies under the same rule (see finalizeRunMessage), so
+        // repeating it per row carried no information, only noise.
         ? `<details class="remodel-rp-direction-section">
-            <summary><i class="fa-solid fa-gears"></i> What it changed <b>${operations.length}</b></summary>
+            <summary><i class="fa-solid fa-gears"></i> What it changed · applied on accept <b>${operations.length}</b></summary>
             <ul class="remodel-rp-direction-ops">
                 ${operations.map((op) => `<li>
                     <code>${escapeHtml(op.capability)}</code>
-                    <em>on accept</em>
                     ${op.reason ? `<span>${escapeHtml(op.reason)}</span>` : ''}
                 </li>`).join('')}
             </ul>
