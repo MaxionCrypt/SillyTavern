@@ -41,12 +41,29 @@ import { getTimelineStore } from './timeline-state.js';
 const state = {
     pane: 'relevant',
     editingId: '',
+    creating: false,
     creatingFor: null,
-    picking: '',
     pickerBook: '',
+    pickerSearch: '',
     busy: '',
     notice: '',
+    // Which mount is rendering right now. Set by each entry point and read by
+    // canAuthor(); rendering is synchronous, so a module-level value is not a
+    // race — it is the same shape `state` already has.
+    context: 'readonly',
 };
+
+/**
+ * Authoring lives in one place: the Codex.
+ *
+ * A Variable relates to many entries, so the entry is the wrong home for
+ * editing it — attaching one value to ten of a hundred entries from inside an
+ * entry means visiting ten of them. The lorebook section and the scene rails
+ * are readouts; the Codex owns creation, editing and attachment.
+ */
+function canAuthor() {
+    return state.context === 'codex';
+}
 
 let loreEntriesCache = [];
 let loreBooksCache = [];
@@ -59,6 +76,16 @@ export async function refreshVariableLore() {
     } catch {
         loreEntriesCache = [];
         loreBooksCache = [];
+    }
+}
+
+/** The lorebook bound to the active Timeline, if any. Defaults the browser. */
+function timelineLorebookName() {
+    try {
+        const store = getTimelineStore();
+        return store.timelines[store.activeTimelineId]?.lorebookName || '';
+    } catch {
+        return '';
     }
 }
 
@@ -83,6 +110,7 @@ export function buildVariableStateBodyMarkup() {
 }
 
 export function renderVariableStateInner() {
+    state.context = 'readonly';
     const timelineId = activeTimelineId();
     if (!timelineId) return '<p class="remodel-varstate-empty">Open a Scene in a Timeline to see its state.</p>';
     const tab = (id, label) => `<button type="button" data-remodel-varstate-pane="${id}" class="${state.pane === id ? 'is-active' : ''}">${label}</button>`;
@@ -126,8 +154,8 @@ function renderRelevantPane(timelineId) {
 
 function renderAllPane(timelineId) {
     const variables = listVariableValues({ timelineId });
-    if (state.creatingFor !== null) return renderEditor(null, state.creatingFor);
-    if (state.editingId) {
+    if (canAuthor() && state.creating) return renderEditor(null, state.creatingFor);
+    if (canAuthor() && state.editingId) {
         const variable = getVariableValue(state.editingId, timelineId);
         if (variable) return renderEditor(variable, null);
     }
@@ -150,17 +178,17 @@ function renderAllPane(timelineId) {
     }).join('');
     return `
         ${sections || '<p class="remodel-varstate-empty">This Timeline has no Variables yet.</p>'}
-        <button type="button" class="remodel-varstate-action" data-remodel-varstate-action="create">Add a Variable</button>`;
+        ${canAuthor() ? '<button type="button" class="remodel-varstate-action" data-remodel-varstate-action="create">Add a Variable</button>' : ''}`;
 }
 
 function renderVariableCard(variable) {
     const computed = computeVariable(variable);
     const modifiers = variable.modifiers.length ? ` · ${variable.modifiers.length} modifier${variable.modifiers.length === 1 ? '' : 's'}` : '';
     return `
-        <article class="remodel-varstate-card" data-remodel-varstate-variable="${escapeAttribute(variable.id)}">
+        <article class="remodel-varstate-card ${state.editingId === variable.id ? 'is-active' : ''}" data-remodel-varstate-variable="${escapeAttribute(variable.id)}">
             <div><strong>${escapeHtml(variable.name)}</strong><small>${escapeHtml(variable.valueType)}${escapeHtml(modifiers)}</small></div>
             <output>${escapeHtml(formatVariable(variable))}${computed?.modified ? ' *' : ''}</output>
-            <button type="button" data-remodel-varstate-action="edit" data-id="${escapeAttribute(variable.id)}" title="Edit"><i class="fa-solid fa-pen"></i></button>
+            ${canAuthor() ? `<button type="button" data-remodel-varstate-action="edit" data-id="${escapeAttribute(variable.id)}" title="Edit"><i class="fa-solid fa-pen"></i></button>` : ''}
         </article>`;
 }
 
@@ -202,20 +230,57 @@ function renderRetrievalPane(timelineId) {
 
 // --------------------------------------------------------------- Lorebook seam
 
-/** The Linked Variables section rendered inside an expanded Lorebook entry. */
+/**
+ * What this Lorebook entry drives. Read-only by design.
+ *
+ * A Variable is authored in the Codex, where it can be attached to many entries
+ * at once; this answers the question you have while reading an entry — what
+ * current state does this prose govern — and nothing more.
+ */
 export function renderLinkedVariablesSection(ref) {
+    state.context = 'readonly';
     const timelineId = activeTimelineId();
-    if (!timelineId) return '<p class="remodel-varlink-empty">Open a Timeline to attach Variables to this entry.</p>';
+    if (!timelineId) return '<p class="remodel-varlink-empty">Open a Timeline to see the Variables attached to this entry.</p>';
     const attached = listVariablesForLoreRef(ref, { timelineId });
-    if (state.creatingFor && entryKey(state.creatingFor) === entryKey(ref)) return renderEditor(null, state.creatingFor);
-    if (state.editingId) {
-        const editing = getVariableValue(state.editingId, timelineId);
-        if (editing && editing.loreLinks.some((link) => entryKey(link) === entryKey(ref))) return renderEditor(editing, null);
-    }
+    if (!attached.length) return '<p class="remodel-varlink-empty">No Variables are attached to this entry. Attach one from the Timeline’s Variables Codex.</p>';
+    return attached.map((variable) => `
+        <article class="remodel-varstate-card">
+            <div><strong>${escapeHtml(variable.name)}</strong><small>${escapeHtml(variable.description || variable.valueType)}</small></div>
+            <output>${escapeHtml(formatVariable(variable))}</output>
+        </article>`).join('');
+}
+
+// ---------------------------------------------------------------------- Codex
+
+/**
+ * The Variables Codex: the Timeline's own view of its state, and the one place
+ * a Variable is created, edited, and attached to the entries it describes.
+ */
+export function renderVariableCodex() {
+    state.context = 'codex';
+    const timelineId = activeTimelineId();
+    if (!timelineId) return '<p class="remodel-varstate-empty">Open a Timeline to author its Variables.</p>';
+    const variables = listVariableValues({ timelineId });
+    const selected = state.creating
+        ? null
+        : getVariableValue(state.editingId, timelineId) || variables[0] || null;
+    const detail = state.creating
+        ? renderEditor(null, state.creatingFor)
+        : selected ? renderEditor(selected, null) : '<p class="remodel-varstate-empty">This Timeline has no Variables yet. Add one to begin.</p>';
     return `
-        ${attached.map(renderVariableCard).join('') || '<p class="remodel-varlink-empty">No Variables are attached to this entry.</p>'}
-        <button type="button" class="remodel-varstate-action" data-remodel-varstate-action="create"
-            data-book="${escapeAttribute(ref.book)}" data-uid="${escapeAttribute(ref.uid)}">Attach a Variable</button>`;
+        <div class="remodel-codex" data-remodel-varcodex>
+            <aside class="remodel-codex-list">
+                <header>
+                    <span>${variables.length} Variable${variables.length === 1 ? '' : 's'}</span>
+                    <button type="button" class="remodel-varstate-action" data-remodel-varstate-action="create">Add</button>
+                </header>
+                ${variables.map(renderVariableCard).join('') || '<p class="remodel-varstate-empty">Nothing yet.</p>'}
+            </aside>
+            <section class="remodel-codex-detail">
+                ${state.notice ? `<p class="remodel-varstate-notice">${escapeHtml(state.notice)}</p>` : ''}
+                ${detail}
+            </section>
+        </div>`;
 }
 
 // -------------------------------------------------------------------- Editor
@@ -267,9 +332,10 @@ function renderEditor(variable, presetRef) {
                 <legend>Attached entries</legend>
                 <div class="remodel-varedit-chips">
                     ${draft.loreLinks.map((link) => renderLinkChip(link, draft.id)).join('') || '<em>Not attached to any entry.</em>'}
-                    ${draft.id ? `<button type="button" class="remodel-varedit-chip-add" data-remodel-varstate-action="pick" data-id="${id}">+ entry</button>` : ''}
                 </div>
-                ${state.picking && state.picking === draft.id ? renderEntryPicker() : ''}
+                ${draft.id
+        ? renderEntryBrowser(draft, timelineLorebookName())
+        : '<p class="remodel-varedit-note">Create it first, then attach as many entries as it governs.</p>'}
                 <p class="remodel-varedit-note">A Variable needs at least one attached entry unless its retrieval mode is <code>always</code>.</p>
             </fieldset>
             ${draft.id && draft.modifiers.length ? `
@@ -296,19 +362,50 @@ function renderLinkChip(link, variableId) {
         </span>`;
 }
 
-function renderEntryPicker() {
+/**
+ * Attach one Variable to many entries in a single pass.
+ *
+ * The relationship runs one-to-many, so this is driven from the Variable's
+ * side: pick a book, filter, and tick every entry the value governs. Ticking
+ * writes immediately — there is no separate save for attachments, so a long
+ * session of ticking cannot be lost by navigating away.
+ *
+ * Defaults to the book bound to this Timeline, because that is where a
+ * Timeline's own lore lives, while leaving every other book reachable.
+ */
+function renderEntryBrowser(variable, boundBook) {
     const books = loreBooksCache;
-    const active = state.pickerBook || books[0]?.book || '';
+    // Prefer the Timeline's own book; failing that, the book this Variable is
+    // already attached to — opening on a book with none of its attachments
+    // shows "2 attached" beside zero ticks, which reads as a bug.
+    const attachedBook = variable?.loreLinks?.[0]?.book || '';
+    const active = state.pickerBook || boundBook || attachedBook || books[0]?.book || '';
     const entries = books.find((book) => book.book === active)?.entries || [];
+    const needle = state.pickerSearch.trim().toLowerCase();
+    const matches = needle
+        ? entries.filter((entry) => `${entry.name} ${(entry.keys || []).join(' ')}`.toLowerCase().includes(needle))
+        : entries;
+    const attached = new Set((variable?.loreLinks || []).map(entryKey));
     return `
         <div class="remodel-varedit-picker">
-            <select data-remodel-varstate-picker-book>${books.map((book) => `<option value="${escapeAttribute(book.book)}" ${book.book === active ? 'selected' : ''}>${escapeHtml(book.book)}</option>`).join('')}</select>
-            <div class="remodel-varedit-picker-list">
-                ${entries.slice(0, 200).map((entry) => `
-                    <button type="button" data-remodel-varstate-action="attach" data-book="${escapeAttribute(entry.book)}" data-uid="${escapeAttribute(entry.uid)}" class="${entry.disabled ? 'is-disabled' : ''}">
-                        <strong>${escapeHtml(entry.name)}</strong><small>${escapeHtml((entry.keys || []).slice(0, 4).join(', '))}</small>
-                    </button>`).join('') || '<em>This book has no entries.</em>'}
+            <div class="remodel-varedit-picker-head">
+                <select data-remodel-varstate-picker-book>
+                    ${books.map((book) => `<option value="${escapeAttribute(book.book)}" ${book.book === active ? 'selected' : ''}>${escapeHtml(book.book)}${book.book === boundBook ? ' · this Timeline' : ''}</option>`).join('')}
+                </select>
+                <input type="search" data-remodel-varstate-picker-search value="${escapeAttribute(state.pickerSearch)}" placeholder="Filter entries…">
             </div>
+            <div class="remodel-varedit-picker-list">
+                ${matches.slice(0, 300).map((entry) => {
+        const key = entryKey(entry);
+        const on = attached.has(key);
+        return `
+                    <label class="remodel-varedit-picker-entry ${entry.disabled ? 'is-disabled' : ''} ${on ? 'is-on' : ''}">
+                        <input type="checkbox" data-remodel-varstate-attach data-book="${escapeAttribute(entry.book)}" data-uid="${escapeAttribute(entry.uid)}" ${on ? 'checked' : ''}>
+                        <span><strong>${escapeHtml(entry.name)}</strong><small>${escapeHtml((entry.keys || []).slice(0, 5).join(', '))}</small></span>
+                    </label>`;
+    }).join('') || `<em>${needle ? 'No entry matches that filter.' : 'This book has no entries.'}</em>`}
+            </div>
+            <p class="remodel-varedit-note" data-attached="${attached.size}">${attached.size} attached${matches.length !== entries.length ? ` · showing ${matches.length} of ${entries.length}` : ''}. Changes save as you tick.</p>
         </div>`;
 }
 
@@ -324,6 +421,14 @@ export function handleVariablesUiClick(target, requestRender) {
         requestRender();
         return true;
     }
+    const card = target.closest('[data-remodel-varstate-variable]');
+    if (card && canAuthor() && !action) {
+        state.editingId = card.dataset.remodelVarstateVariable || '';
+        state.creating = false;
+        state.creatingFor = null;
+        requestRender();
+        return true;
+    }
     if (!action) return false;
     const name = action.remodelVarstateAction;
     const form = target.closest('[data-remodel-varstate-form]');
@@ -331,26 +436,20 @@ export function handleVariablesUiClick(target, requestRender) {
     if (name === 'create') {
         // From a Lorebook entry the new Variable starts attached to it; from the
         // drawer it starts unattached, which is why `always` is its default mode.
-        state.creatingFor = action.book ? { book: action.book, uid: action.uid, hint: 'subject' } : { book: '', uid: '' };
+        state.creating = true;
+        state.creatingFor = action.book ? { book: action.book, uid: action.uid, hint: 'subject' } : null;
         state.editingId = '';
         requestRender();
         return true;
     }
-    if (name === 'edit') { state.editingId = action.id || ''; state.creatingFor = null; requestRender(); return true; }
-    if (name === 'cancel') { state.editingId = ''; state.creatingFor = null; state.picking = ''; requestRender(); return true; }
-    if (name === 'pick') { state.picking = state.picking === action.id ? '' : action.id || ''; requestRender(); return true; }
+    if (name === 'edit') { state.editingId = action.id || ''; state.creating = false; state.creatingFor = null; requestRender(); return true; }
+    if (name === 'cancel') { state.editingId = ''; state.creating = false; state.creatingFor = null; state.pickerSearch = ''; requestRender(); return true; }
     if (name === 'save') { saveFromForm(form, action.id, requestRender); return true; }
     if (name === 'delete') {
         if (confirm('Delete this Variable and its history?')) {
             deleteVariableValue(action.id, { actor: 'user' });
             state.editingId = '';
         }
-        requestRender();
-        return true;
-    }
-    if (name === 'attach') {
-        attachEntry(state.picking, { book: action.book, uid: action.uid, hint: 'subject' }, { actor: 'user' });
-        state.picking = '';
         requestRender();
         return true;
     }
@@ -369,9 +468,50 @@ export function handleVariablesUiClick(target, requestRender) {
     return false;
 }
 
+/**
+ * Live entry filter.
+ *
+ * Hides rows in place rather than re-rendering: a re-render on every keystroke
+ * would rebuild the input and take the caret with it. `state.pickerSearch` is
+ * kept in step so the filter survives the re-render that ticking a box causes.
+ */
+export function handleVariablesUiInput(target) {
+    if (!target.matches('[data-remodel-varstate-picker-search]')) return false;
+    state.pickerSearch = target.value || '';
+    const needle = state.pickerSearch.trim().toLowerCase();
+    const list = target.closest('.remodel-varedit-picker')?.querySelector('.remodel-varedit-picker-list');
+    let shown = 0;
+    for (const row of list?.querySelectorAll('.remodel-varedit-picker-entry') || []) {
+        const match = !needle || row.textContent.toLowerCase().includes(needle);
+        row.hidden = !match;
+        if (match) shown++;
+    }
+    const note = target.closest('.remodel-varedit-picker')?.querySelector('.remodel-varedit-note');
+    if (note) note.textContent = `${note.dataset.attached || '0'} attached${needle ? ` · showing ${shown}` : ''}. Changes save as you tick.`;
+    return true;
+}
+
 export function handleVariablesUiChange(target, requestRender) {
     if (target.matches('[data-remodel-varstate-picker-book]')) {
         state.pickerBook = target.value || '';
+        state.pickerSearch = '';
+        requestRender();
+        return true;
+    }
+    // Ticking writes straight through. Attachment is not part of the editor's
+    // save, so a long session of ticking cannot be lost by navigating away, and
+    // the checkbox reflects stored truth on the next render.
+    if (target.matches('[data-remodel-varstate-attach]')) {
+        const editor = target.closest('[data-remodel-varstate-form]');
+        const id = editor?.dataset.id || state.editingId;
+        const ref = { book: target.dataset.book, uid: target.dataset.uid, hint: 'subject' };
+        try {
+            if (target.checked) attachEntry(id, ref, { actor: 'user' });
+            else detachEntry(id, ref, { actor: 'user' });
+            state.notice = '';
+        } catch (error) {
+            state.notice = String(error?.message || error);
+        }
         requestRender();
         return true;
     }
@@ -410,12 +550,22 @@ function saveFromForm(form, id, requestRender) {
     try {
         if (id) {
             updateVariableValue(id, patch, { actor: 'user' });
+            state.editingId = id;
         } else {
             const links = state.creatingFor?.book ? [{ ...state.creatingFor, hint: state.creatingFor.hint || 'subject' }] : [];
-            createVariableValue({ ...patch, timelineId: activeTimelineId(), loreLinks: links }, { actor: 'user' });
+            const made = createVariableValue({ ...patch, timelineId: activeTimelineId(), loreLinks: links }, { actor: 'user' });
+            if (!made) {
+                state.notice = patch.retrieval.mode === 'always'
+                    ? 'That Variable could not be created. Check it has a name.'
+                    : `A Variable set to “${patch.retrieval.mode}” retrieval needs at least one attached entry. Use “always” for a Timeline-wide fact.`;
+                requestRender();
+                return;
+            }
+            // Stay on the new Variable so its entry browser is right there.
+            state.editingId = made.id;
         }
         state.notice = '';
-        state.editingId = '';
+        state.creating = false;
         state.creatingFor = null;
     } catch (error) {
         state.notice = String(error?.message || error);

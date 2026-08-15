@@ -312,6 +312,9 @@ const session = {
     initialized: false,
     renderQueued: false,
     activeTavernTab: 'timeline',
+    // Whether the focused Timeline is showing its Variables Codex instead of
+    // its Scenes. View state: which half of one workspace you are looking at.
+    codexOpen: false,
     focusedTimelineId: null,
     createModalOpen: false,
     createModalDraft: { title: '', description: '', thumbnail: null },
@@ -358,6 +361,10 @@ export function setRenderQueued(value) {
 
 export function setActiveTavernTab(value) {
     session.activeTavernTab = value;
+}
+
+export function setCodexOpen(value) {
+    session.codexOpen = Boolean(value);
 }
 
 export function setFocusedTimelineId(value) {

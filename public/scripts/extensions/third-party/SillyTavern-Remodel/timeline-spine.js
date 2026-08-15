@@ -84,8 +84,10 @@ import {
     buildVariableStateBodyMarkup,
     handleVariablesUiChange,
     handleVariablesUiClick,
+    handleVariablesUiInput,
     refreshVariableLore,
     renderLinkedVariablesSection,
+    renderVariableCodex,
     renderVariableStateInner,
 } from './variables-ui.js';
 import {
@@ -139,6 +141,7 @@ import {
     resetWizardState,
     restorePastChatsBridge,
     setActiveTavernTab,
+    setCodexOpen,
     setAdoptedPanel,
     setAutoContinueStatus,
     setAutoContinueTurnIsFirst,
@@ -448,15 +451,20 @@ function observeTavernPanelState() {
 function bindVariablesSurfaces() {
     document.addEventListener('click', (event) => {
         if (!(event.target instanceof Element)) return;
-        if (!event.target.closest('[data-remodel-varstate], [data-remodel-varlink]')) return;
+        if (!event.target.closest('[data-remodel-varstate], [data-remodel-varlink], [data-remodel-varcodex]')) return;
         if (handleVariablesUiClick(event.target, refreshVariableStateSurfaces)) {
             event.preventDefault();
             event.stopPropagation();
         }
     });
+    document.addEventListener('input', (event) => {
+        if (!(event.target instanceof Element)) return;
+        if (!event.target.closest('[data-remodel-varstate], [data-remodel-varlink], [data-remodel-varcodex]')) return;
+        handleVariablesUiInput(event.target);
+    });
     document.addEventListener('change', (event) => {
         if (!(event.target instanceof Element)) return;
-        if (!event.target.closest('[data-remodel-varstate], [data-remodel-varlink]')) return;
+        if (!event.target.closest('[data-remodel-varstate], [data-remodel-varlink], [data-remodel-varcodex]')) return;
         if (handleVariablesUiChange(event.target, refreshVariableStateSurfaces)) {
             event.stopPropagation();
         }
@@ -3050,6 +3058,11 @@ async function handleAction(element) {
         case 'choose-lorebook':
             await chooseTimelineLorebook(element.dataset.timelineId);
             break;
+        case 'toggle-codex':
+            setCodexOpen(!getSessionState().codexOpen);
+            // Entry names and the attach browser come from an async read.
+            if (getSessionState().codexOpen) refreshVariableLore().then(queueRender);
+            break;
         case 'create-arc': {
             const title = askForTitle('Arc title?', 'New Arc');
             if (title) {
@@ -3813,6 +3826,16 @@ function renderTimelineFocus(timeline, store) {
                     >
                         <i class="fa-solid fa-book-open" aria-hidden="true"></i>
                     </button>
+                    <button
+                        type="button"
+                        class="remodel-route-round-button ${getSessionState().codexOpen ? 'is-bound' : ''}"
+                        title="${getSessionState().codexOpen ? 'Back to Scenes' : 'Variables Codex'}"
+                        aria-label="Variables Codex"
+                        aria-pressed="${getSessionState().codexOpen ? 'true' : 'false'}"
+                        data-remodel-timeline-action="toggle-codex"
+                    >
+                        <i class="fa-solid fa-chart-simple" aria-hidden="true"></i>
+                    </button>
                     <label class="remodel-route-round-button" title="Change timeline cover">
                         <input type="file" accept="image/*" data-remodel-timeline-photo-input data-timeline-id="${escapeAttribute(timeline.id)}" hidden>
                         <i class="fa-solid fa-image" aria-hidden="true"></i>
@@ -3822,6 +3845,7 @@ function renderTimelineFocus(timeline, store) {
                     </button>
                 </div>
             </header>
+            ${getSessionState().codexOpen ? `<div class="remodel-route-layout is-codex">${renderVariableCodex()}</div>` : `
             <div class="remodel-route-layout">
                 <aside class="remodel-route-side">
                     <label class="remodel-timeline-card remodel-route-cover-card" title="Change timeline cover">
@@ -3874,7 +3898,7 @@ function renderTimelineFocus(timeline, store) {
                     </section>
                 </main>
                 ${renderArcIndex(timeline, store, activeArc)}
-            </div>
+            </div>`}
         </section>
     `;
 }
@@ -9822,6 +9846,10 @@ function refreshVariableStateSurfaces() {
     for (const host of document.querySelectorAll('[data-remodel-varlink]')) {
         const { book, uid } = host.dataset;
         host.innerHTML = renderLinkedVariablesSection({ book, uid });
+    }
+    // The Codex owns its whole layout, so it is replaced rather than patched.
+    for (const host of document.querySelectorAll('[data-remodel-varcodex]')) {
+        host.outerHTML = renderVariableCodex();
     }
 }
 
