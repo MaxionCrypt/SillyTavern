@@ -1,5 +1,5 @@
 import { RATE_CEIL, RATE_FLOOR, clampRate } from './story-goals-math.js';
-import { normalizeOwnerRef } from './story-variables-store.js';
+import { normalizeOwnerRef } from './variables-store.js';
 
 // Story Goals — the goal data model.
 //
@@ -85,12 +85,13 @@ export function normalizeGoalOwnerRefs(value, legacy = []) {
 
 export function normalizeGoalResolution(value) {
     const kind = STORY_GOAL_RESOLUTION_KINDS.includes(value?.kind) ? value.kind : 'instant';
-    if (kind === 'instant') return { kind: 'instant', variableInstanceId: '', direction: '', completionThreshold: null };
+    if (kind === 'instant') return { kind: 'instant', variableId: '', field: '', direction: '', completionThreshold: null };
     const direction = value?.direction === 'increase' ? 'increase' : 'decrease';
     const threshold = Number(value?.completionThreshold);
     return {
         kind,
-        variableInstanceId: String(value?.variableInstanceId || ''),
+        variableId: String(value?.variableId || value?.variableInstanceId || ''),
+        field: String(value?.field || 'value'),
         direction,
         completionThreshold: Number.isFinite(threshold) ? threshold : direction === 'increase' ? 100 : 0,
     };

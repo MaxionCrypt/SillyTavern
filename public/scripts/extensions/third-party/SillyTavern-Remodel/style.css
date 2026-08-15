@@ -26,30 +26,12 @@
 .remodel-goal-create-form > button:first-child { position: absolute; right: 10px; top: 8px; font-size: 21px; }
 .remodel-goal-create-form > button[type="submit"] { padding: 10px; color: #09080d; background: #c9be00; }
 
-/* Typed Variables workspace ------------------------------------------------ */
-.remodel-tavern-viewport:has(.remodel-variables-workspace) .remodel-tavern-body { overflow: hidden; }
-.remodel-variables-workspace { width: 100%; height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(250px, 320px) minmax(0, 1fr); background: rgba(7, 6, 13, .88); color: var(--SmartThemeBodyColor); }
-.remodel-variable-library { min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); border-right: 1px solid rgba(201, 190, 0, .38); background: linear-gradient(160deg, rgba(8, 7, 13, .97), rgba(12, 10, 19, .86)); }
-.remodel-variable-library > header, .remodel-variable-pane-header { padding: 28px 26px 20px; position: relative; border-bottom: 1px solid rgba(201, 190, 0, .23); }
-.remodel-variable-library header > span, .remodel-variable-pane-header > span, .remodel-variable-review > span { display: block; color: #c9be00; font: 600 10px/1.3 serif; letter-spacing: .18em; text-transform: uppercase; }
-.remodel-variable-library h2, .remodel-variable-pane-header h2 { margin: 4px 0 0; color: #f1eee4; font: 400 clamp(24px, 2.4vw, 38px)/1.05 Georgia, serif; letter-spacing: .02em; }
-.remodel-variable-library header > button { position: absolute; right: 22px; top: 32px; color: #e9e5f4; font-size: 17px; }
-.remodel-variable-tabs { padding: 12px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; border-bottom: 1px solid rgba(255,255,255,.06); }
-.remodel-variable-tabs button { min-width: 0; padding: 9px 3px; display: grid; justify-items: center; gap: 5px; color: rgba(235,232,244,.54); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid transparent; }
-.remodel-variable-tabs button i { font-size: 13px; }.remodel-variable-tabs button.is-active { color: #e9df53; border-color: #c9be00; background: rgba(201,190,0,.05); }
-.remodel-variable-library-list { min-height: 0; overflow: auto; scrollbar-width: thin; padding: 12px; }
-.remodel-variable-library-list > button { width: 100%; display: grid; grid-template-columns: 22px minmax(0,1fr) 16px; align-items: center; gap: 10px; padding: 13px 10px; text-align: left; color: rgba(242,239,248,.72); border-left: 2px solid transparent; }
-.remodel-variable-library-list > button span { min-width: 0; display: grid; }.remodel-variable-library-list > button strong { overflow: hidden; text-overflow: ellipsis; color: #f0edf4; font: 500 14px/1.2 Georgia, serif; }.remodel-variable-library-list > button small { margin-top: 4px; color: rgba(235,232,244,.4); font-size: 10px; text-transform: capitalize; }
-.remodel-variable-library-list > button.is-active { border-left-color: #d6cc00; background: linear-gradient(90deg, rgba(201,190,0,.12), transparent); }.remodel-variable-library-list > button.is-active > i:first-child { color: #ecf500; }
-.remodel-variable-editor { min-width: 0; min-height: 0; overflow: auto; scrollbar-width: thin; background: radial-gradient(circle at 62% 30%, rgba(77,61,96,.15), transparent 44%); }
-.remodel-variable-pane { min-height: 100%; padding-bottom: 40px; }.remodel-variable-pane-header { padding-left: 30px; }.remodel-variable-pane-header p { max-width: 760px; margin: 10px 0 0; color: rgba(235,232,244,.5); font-size: 12px; }
-.remodel-variable-form { max-width: 1050px; padding: 26px 30px; }.remodel-variable-form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px 18px; }.remodel-variable-form label, .remodel-variable-form-grid label { display: grid; gap: 7px; color: rgba(231,227,240,.6); font-size: 10px; letter-spacing: .11em; text-transform: uppercase; }.remodel-variable-form input, .remodel-variable-form select, .remodel-variable-form textarea, .remodel-variable-instance-create input, .remodel-variable-instance-create select { width: 100%; min-width: 0; color: #f2eff7; background: rgba(7,6,12,.72); border: 1px solid rgba(255,255,255,.12); border-radius: 8px; padding: 10px 12px; text-transform: none; letter-spacing: 0; }.remodel-variable-form input:focus, .remodel-variable-form textarea:focus, .remodel-variable-form select:focus { border-color: rgba(218,207,0,.7); box-shadow: 0 0 0 2px rgba(201,190,0,.08); }.remodel-variable-field-note,.remodel-variable-instance-help { color: rgba(231,227,240,.46); font: 400 11px/1.45 system-ui,sans-serif; letter-spacing: 0; text-transform: none; }.remodel-variable-instance-help { margin: 0; padding: 0 30px 12px; border-bottom: 1px solid rgba(201,190,0,.17); }
-.remodel-variable-form .is-wide { margin-top: 18px; }.remodel-variable-form fieldset { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; margin: 18px 0; padding: 16px; border: 1px solid rgba(201,190,0,.22); }.remodel-variable-form legend { padding: 0 8px; color: #c9be00; font-size: 10px; text-transform: uppercase; letter-spacing: .14em; }.remodel-variable-form footer { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }.remodel-variable-form footer button, .remodel-variable-instance-create button { padding: 10px 15px; color: #09080d; background: #c9be00; border-radius: 8px; font-weight: 700; }.remodel-variable-form footer button:not(:first-child) { color: #e5e1ec; background: transparent; border: 1px solid rgba(255,255,255,.16); }.remodel-variable-form footer button.is-danger { color: #ff8e91; border-color: rgba(255,80,84,.3); }
-.remodel-variable-instance-create { display: grid; grid-template-columns: 1.25fr .8fr repeat(5,minmax(90px,1fr)) auto; gap: 8px; padding: 20px 30px 12px; }.remodel-variable-instance-list, .remodel-variable-record-list { padding: 12px 30px; display: grid; gap: 9px; }.remodel-variable-instance-list article { display: grid; grid-template-columns: 24px minmax(180px,1fr) minmax(100px,150px) 90px 34px; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid rgba(255,255,255,.09); border-left-color: rgba(201,190,0,.55); background: rgba(11,9,17,.68); }.remodel-variable-instance-list article > div { display: grid; }.remodel-variable-instance-list article span, .remodel-variable-instance-list article small { color: rgba(235,232,244,.45); font-size: 10px; }.remodel-variable-instance-list article strong { color: #f2eff6; font: 500 15px Georgia,serif; }.remodel-variable-instance-list output { color: #eae338; font-family: monospace; }
-.remodel-variable-record-list article { display: grid; grid-template-columns: minmax(170px,.7fr) minmax(0,1.4fr) auto; gap: 18px; padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,.08); }.remodel-variable-record-list article strong { color: #f1edf5; text-transform: capitalize; }.remodel-variable-record-list article span, .remodel-variable-record-list article small { color: rgba(235,232,244,.5); }.remodel-variable-empty, .remodel-variable-warning { padding: 30px; color: rgba(235,232,244,.45); font-style: italic; }.remodel-variable-review { margin: 0 30px; padding: 18px; border: 1px solid rgba(219,151,44,.32); background: rgba(83,50,15,.13); }.remodel-variable-toggle { grid-template-columns: auto minmax(0,1fr) !important; align-items: center; }
 .remodel-mechanics-failure { position: absolute; z-index: 30; left: 50%; bottom: 92px; transform: translateX(-50%); width: min(760px,calc(100% - 40px)); display: flex; align-items: center; gap: 10px; padding: 12px 15px; color: #ede8f4; background: rgba(17,12,24,.97); border: 1px solid rgba(218,207,0,.65); box-shadow: 0 16px 50px rgba(0,0,0,.45); }.remodel-mechanics-failure span { flex: 1; }.remodel-mechanics-failure button { padding: 8px 11px; border: 1px solid rgba(218,207,0,.4); color: #e8e239; }
 .remodel-rp-goal-chips { display: flex; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }.remodel-rp-goal-chips:empty { display: none; }.remodel-rp-goal-chips > button { display: flex; align-items: center; gap: 6px; max-width: 190px; padding: 5px 8px; color: rgba(235,232,244,.55); background: rgba(8,7,13,.62); border: 1px solid rgba(255,255,255,.1); border-radius: 999px; }.remodel-rp-goal-chips > button span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }.remodel-rp-goal-chips > button small { color: #d2c900; }.remodel-rp-goal-chips > button.is-attached { color: #f4eff8; border-color: rgba(218,207,0,.75); box-shadow: 0 0 14px rgba(201,190,0,.16); }
-@media (max-width: 850px) { .remodel-variables-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(210px,36vh) minmax(0,1fr); overflow: hidden; }.remodel-variable-library { border-right: 0; border-bottom: 1px solid rgba(201,190,0,.38); }.remodel-variable-form-grid { grid-template-columns: 1fr; }.remodel-variable-form fieldset { grid-template-columns: repeat(2,minmax(0,1fr)); }.remodel-variable-instance-create { grid-template-columns: repeat(2,minmax(0,1fr)); }.remodel-variable-instance-list article { grid-template-columns: 22px minmax(0,1fr) 90px; }.remodel-variable-instance-list article output, .remodel-variable-instance-list article > button { display: none; }.remodel-variable-record-list article { grid-template-columns: 1fr; gap: 5px; }.remodel-mechanics-failure { align-items: stretch; flex-direction: column; } }
+/* Count badge on a lorebook entry that Variables are attached to. */
+.remodel-variable-lore-link { margin-left: 6px; font-size: 11px; color: rgba(242,219,66,.72); cursor: default; }
+.remodel-variable-lore-link::after { content: attr(data-linked-count); margin-left: 3px; font: 600 9px/1 system-ui, sans-serif; vertical-align: super; }
+@media (max-width: 850px) { .remodel-mechanics-failure { align-items: stretch; flex-direction: column; } }
 
 @font-face {
   font-family: 'Cinzel';
@@ -74,6 +56,10 @@ body.st-remodel-active {
      changed live by the Manuscript toolbar's font picker via this one
      variable, persisted per-session in session-state.js. */
   --remodel-manuscript-font: Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', serif;
+  /* Manuscript reading size, the twin of the font above: same single
+     variable, same live change from the format bar, same local-preference
+     status. Per-selection sizes are inline on the run spans instead. */
+  --remodel-manuscript-size: 15px;
   --solid-color: rgba(20, 21, 26, 0.95);
   --border-color: rgba(255, 255, 255, 0.08);
   --card-radius: 12px;
@@ -1360,12 +1346,16 @@ body.remodel-roleplay-workspace-active .remodel-rp-user .remodel-rp-bubble {
 body.remodel-roleplay-workspace-active .remodel-rp-user .remodel-rp-meta { justify-content: flex-end !important; }
 body.remodel-roleplay-workspace-active .remodel-rp-user .remodel-rp-name { color: var(--tarot-gold-bright) !important; }
 
-/* --- Narrator / system (centered, rule-flanked) --- */
+/* --- Narrator / system (full-column, rule-flanked) ---
+   The narrator isn't a speaker in the room, it's the page talking, so it
+   spans the whole stream column edge to edge rather than sitting inside the
+   78% bubble measure the character rows use. */
 body.remodel-roleplay-workspace-active .remodel-rp-narrator {
-  max-width: 88% !important;
-  margin: 0 auto !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
   flex-direction: column !important;
-  align-items: center !important;
+  align-items: stretch !important;
   text-align: center !important;
   gap: 5px !important;
 }
@@ -1383,15 +1373,19 @@ body.remodel-roleplay-workspace-active .remodel-rp-narrator .remodel-rp-bubble {
   border-radius: 0 !important;
   padding: 11px 22px !important;
 }
+/* Pinned to the literal stack, not to --remodel-manuscript-font: the
+   narrator's voice is part of the scene's furniture, so the Story format
+   bar must never be able to restyle it. */
 body.remodel-roleplay-workspace-active .remodel-rp-narrator .remodel-rp-body {
+  font-family: Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', serif !important;
   font-style: italic !important;
   color: rgba(238, 235, 245, 0.55) !important;
-  font-size: 14px !important;
+  font-size: 12px !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-narrator.remodel-rp-typing {
-  width:min(100%,920px) !important;
-  max-width:88% !important;
+  width:100% !important;
+  max-width:100% !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-narrator.remodel-rp-typing .remodel-rp-bubble {
@@ -1399,10 +1393,93 @@ body.remodel-roleplay-workspace-active .remodel-rp-narrator.remodel-rp-typing .r
   box-sizing:border-box !important;
 }
 
-body.remodel-roleplay-workspace-active .remodel-rp-direction-trace {
+body.remodel-roleplay-workspace-active .remodel-rp-direction-trace,
+body.remodel-roleplay-workspace-active .remodel-rp-direction-section {
   margin:10px 0 2px !important;
   border-top:1px solid rgba(215,200,0,.16) !important;
   color:rgba(236,232,212,.68) !important;
+}
+
+/* Foldable sections inside the Director card. */
+body.remodel-roleplay-workspace-active .remodel-rp-direction-section summary {
+  display:flex !important;
+  align-items:center !important;
+  gap:7px !important;
+  padding:9px 0 5px !important;
+  color:rgba(232,222,90,.76) !important;
+  cursor:pointer !important;
+  font-size:.56rem !important;
+  letter-spacing:.13em !important;
+  text-transform:uppercase !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-section summary b {
+  min-width:15px !important;
+  padding:0 5px !important;
+  border-radius:999px !important;
+  background:rgba(215,200,0,.16) !important;
+  color:#f4ecae !important;
+  font-weight:400 !important;
+  text-align:center !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-note {
+  margin:0 0 7px !important;
+  color:rgba(236,232,212,.42) !important;
+  font-size:.62rem !important;
+  font-style:italic !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-ops {
+  display:flex !important;
+  flex-direction:column !important;
+  gap:6px !important;
+  margin:0 !important;
+  padding:0 !important;
+  list-style:none !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-ops li {
+  display:flex !important;
+  align-items:baseline !important;
+  flex-wrap:wrap !important;
+  gap:7px !important;
+  padding:5px 8px !important;
+  border-left:2px solid rgba(215,200,0,.34) !important;
+  background:rgba(215,200,0,.05) !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-ops code {
+  color:#f2e79a !important;
+  font-size:.66rem !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-ops em {
+  color:rgba(236,232,212,.4) !important;
+  font-size:.58rem !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-direction-ops li > span {
+  flex:1 1 100% !important;
+  color:rgba(236,232,212,.72) !important;
+  font-size:.68rem !important;
+}
+
+/* Raw reasoning can be long and is pre-formatted, so it scrolls in place
+   rather than stretching the stream. */
+body.remodel-roleplay-workspace-active .remodel-rp-direction-reasoning {
+  max-height:280px !important;
+  margin:0 !important;
+  padding:9px 11px !important;
+  overflow:auto !important;
+  border:1px solid rgba(215,200,0,.14) !important;
+  background:rgba(4,4,8,.6) !important;
+  color:rgba(226,222,206,.74) !important;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace !important;
+  font-size:.66rem !important;
+  line-height:1.5 !important;
+  white-space:pre-wrap !important;
+  overflow-wrap:anywhere !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-direction-trace summary {
@@ -1453,27 +1530,26 @@ body.remodel-roleplay-workspace-active #form_sheld {
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-composer-zone {
-  border-top: 1px solid var(--gold-faint, rgba(198, 164, 74, 0.14)) !important;
-  background: rgba(11, 11, 13, 0.72) !important;
-  padding: 12px 26px 16px !important;
+  border-top: 0 !important;
+  background: transparent !important;
+  padding: 0 26px 16px !important;
   display: flex !important;
   flex-direction: column !important;
   gap: 10px !important;
 }
 
-/* Live Direction sits between the floating command icons and the composer.
-   It stays compact: state first, pacing tucked to the edge, and controls only
-   appear when their current reveal state can actually use them. */
+/* Live Direction state sits immediately above the Goal pills. Pacing lives in
+   its own quiet row between those pills and the actual message box. */
 body.remodel-roleplay-workspace-active .remodel-live-flow {
   position:relative !important;
   z-index:9 !important;
   display:flex !important;
   align-items:center !important;
-  gap:8px !important;
-  min-height:28px !important;
-  margin:0 10px -2px !important;
-  padding:3px 8px !important;
-  border-top:1px solid rgba(215,200,0,.12) !important;
+  gap:6px !important;
+  min-height:18px !important;
+  margin:0 !important;
+  padding:0 !important;
+  border:0 !important;
   color:rgba(239,234,215,.55) !important;
   font:9px/1.2 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.06em !important;
@@ -1483,8 +1559,8 @@ body.remodel-roleplay-workspace-active .remodel-live-flow.is-directed {
   text-shadow:0 0 9px rgba(215,200,0,.18) !important;
 }
 body.remodel-roleplay-workspace-active .remodel-live-flow button,
-body.remodel-roleplay-workspace-active .remodel-live-flow select {
-  min-height:24px !important;
+body.remodel-roleplay-workspace-active .remodel-live-pacing select {
+  min-height:18px !important;
   border:1px solid rgba(215,200,0,.2) !important;
   border-radius:999px !important;
   background:rgba(8,8,12,.5) !important;
@@ -1492,81 +1568,36 @@ body.remodel-roleplay-workspace-active .remodel-live-flow select {
   box-shadow:none !important;
 }
 
-body.remodel-roleplay-workspace-active .remodel-live-diagnostics {
-  opacity: .52 !important;
-  margin-left: 2px !important;
-}
-
-body.remodel-roleplay-workspace-active .remodel-live-diagnostics:hover {
-  opacity: 1 !important;
-}
-
-.remodel-live-diagnostics-modal {
-  position: fixed !important;
-  inset: 0 !important;
-  z-index: 12000 !important;
-  display: grid !important;
-  place-items: center !important;
-  padding: 24px !important;
-  background: rgba(4, 5, 8, .76) !important;
-  backdrop-filter: blur(10px) !important;
-}
-
-.remodel-live-diagnostics-modal > section {
-  width: min(1100px, 96vw) !important;
-  height: min(780px, 92vh) !important;
-  display: flex !important;
-  flex-direction: column !important;
-  overflow: hidden !important;
-  border: 1px solid rgba(215, 200, 0, .45) !important;
-  background: rgba(8, 8, 13, .97) !important;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, .68) !important;
-}
-
-.remodel-live-diagnostics-modal header {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: space-between !important;
-  gap: 16px !important;
-  padding: 16px 20px !important;
-  border-bottom: 1px solid rgba(215, 200, 0, .28) !important;
-}
-
-.remodel-live-diagnostics-modal header small,
-.remodel-live-diagnostics-modal summary strong {
-  color: var(--tarot-gold) !important;
-  letter-spacing: .14em !important;
-  text-transform: uppercase !important;
-}
-
-.remodel-live-diagnostics-modal h2 { margin: 2px 0 0 !important; font-family: var(--remodel-serif) !important; }
-.remodel-live-diagnostics-modal header button { margin-left: 8px !important; }
-.remodel-live-diagnostics-body { overflow: auto !important; padding: 14px 20px 28px !important; }
-.remodel-live-diagnostics-body details { border-bottom: 1px solid rgba(215, 200, 0, .16) !important; padding: 12px 0 !important; }
-.remodel-live-diagnostics-body summary { display: grid !important; grid-template-columns: 110px minmax(0, 1fr) auto !important; gap: 14px !important; cursor: pointer !important; }
-.remodel-live-diagnostics-body summary span { overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; }
-.remodel-live-diagnostics-counts { display: flex !important; flex-wrap: wrap !important; gap: 6px !important; margin: 12px 0 !important; }
-.remodel-live-diagnostics-counts span { padding: 3px 7px !important; border: 1px solid rgba(215, 200, 0, .18) !important; font-size: 11px !important; }
-.remodel-live-diagnostics-body ol { margin: 0 !important; padding-left: 28px !important; }
-.remodel-live-diagnostics-body li { display: grid !important; grid-template-columns: 72px 190px minmax(0, 1fr) !important; gap: 10px !important; align-items: start !important; margin: 6px 0 !important; }
-.remodel-live-diagnostics-body pre { margin: 0 !important; max-height: 150px !important; overflow: auto !important; white-space: pre-wrap !important; color: rgba(235, 233, 240, .72) !important; font-size: 11px !important; }
-
-@media (max-width: 720px) {
-  .remodel-live-diagnostics-modal { padding: 8px !important; }
-  .remodel-live-diagnostics-modal > section { width: 100% !important; height: 96vh !important; }
-  .remodel-live-diagnostics-body summary,
-  .remodel-live-diagnostics-body li { grid-template-columns: 1fr !important; }
-}
 body.remodel-roleplay-workspace-active .remodel-live-mode {
   display:inline-flex !important;
   align-items:center !important;
-  gap:7px !important;
-  padding:0 10px !important;
+  gap:5px !important;
+  min-height:18px !important;
+  height:18px !important;
+  padding:0 8px !important;
+  font-size:8px !important;
   text-transform:uppercase !important;
   letter-spacing:.11em !important;
 }
 body.remodel-roleplay-workspace-active .remodel-live-mode i { color:rgba(215,200,0,.92) !important; }
-body.remodel-roleplay-workspace-active .remodel-live-flow small { opacity:.58 !important; }
+
+/* The pill names the mode the Scene is IN, so the ON state has to be readable
+   at a glance rather than inferred from the wording. */
+body.remodel-roleplay-workspace-active .remodel-live-mode.is-on {
+  border-color:rgba(215,200,0,.62) !important;
+  background:rgba(215,200,0,.13) !important;
+  color:#f7efb0 !important;
+}
+
+/* The run state ("Waiting for you", "Speaking") sits beside the mode instead of
+   replacing it. */
+body.remodel-roleplay-workspace-active .remodel-live-state::before {
+  content:'·';
+  margin-right:5px;
+  opacity:.5;
+}
+
+body.remodel-roleplay-workspace-active .remodel-live-flow small { opacity:.58 !important; font-size:7px !important; }
 body.remodel-roleplay-workspace-active .remodel-live-flow em {
   min-width:0 !important;
   overflow:hidden !important;
@@ -1575,19 +1606,103 @@ body.remodel-roleplay-workspace-active .remodel-live-flow em {
   text-overflow:ellipsis !important;
   white-space:nowrap !important;
 }
+/* Continue / Stop now ride in the command dock. The dock is right-aligned, so
+   margin-right:auto parks them at the far left of that row — well clear of
+   the icon cluster, and with room to be a real target rather than a 8px chip
+   floating over the chat. */
+body.remodel-roleplay-workspace-active .remodel-live-flow-actions {
+  display:inline-flex !important;
+  align-items:center !important;
+  gap:7px !important;
+  margin-right:auto !important;
+  order:-1 !important;
+}
+body.remodel-roleplay-workspace-active .remodel-live-flow-actions button {
+  display:inline-flex !important;
+  align-items:center !important;
+  gap:7px !important;
+  height:30px !important;
+  min-height:30px !important;
+  padding:0 15px !important;
+  border:1px solid rgba(215,200,0,.42) !important;
+  border-radius:999px !important;
+  background:rgba(12,11,17,.82) !important;
+  color:rgba(244,238,206,.92) !important;
+  font:11px/1 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.12em !important;
+  text-transform:uppercase !important;
+  cursor:pointer !important;
+  transition:border-color .16s ease,color .16s ease,background .16s ease !important;
+}
+body.remodel-roleplay-workspace-active .remodel-live-flow-actions button i { font-size:10px !important; }
+body.remodel-roleplay-workspace-active .remodel-live-flow-actions button:is(:hover,:focus-visible) {
+  border-color:rgba(235,219,35,.8) !important;
+  background:rgba(215,200,0,.14) !important;
+  color:#fff6a1 !important;
+}
+/* Stop is the one control here that interrupts work in progress. */
+body.remodel-roleplay-workspace-active .remodel-live-flow-actions [data-remodel-live-stop] {
+  border-color:rgba(255,138,120,.5) !important;
+  color:#ffcfc4 !important;
+}
+body.remodel-roleplay-workspace-active .remodel-live-flow-actions [data-remodel-live-stop]:is(:hover,:focus-visible) {
+  border-color:rgba(255,138,120,.85) !important;
+  background:rgba(255,110,90,.16) !important;
+  color:#ffe3db !important;
+}
+body.remodel-roleplay-workspace-active .remodel-live-flow-actions button[hidden] { display:none !important; }
+/* Pacing is the last thing above the message box, directly under the command
+   dock (see the order: rules below). It was small enough to read as noise —
+   this brings it up to a legible pill. */
+body.remodel-roleplay-workspace-active .remodel-live-pacing-row {
+  display:flex !important;
+  align-items:center !important;
+  justify-content:flex-end !important;
+  min-height:24px !important;
+  height:24px !important;
+  margin:0 !important;
+}
 body.remodel-roleplay-workspace-active .remodel-live-pacing {
   display:inline-flex !important;
   align-items:center !important;
-  gap:6px !important;
-  margin-left:auto !important;
-  color:rgba(235,229,202,.44) !important;
+  gap:8px !important;
+  color:rgba(235,229,202,.72) !important;
+  font:10px/1.2 var(--remodel-serif,Georgia,serif) !important;
+  letter-spacing:.12em !important;
   text-transform:uppercase !important;
 }
 body.remodel-roleplay-workspace-active .remodel-live-pacing select {
   width:auto !important;
-  padding:0 22px 0 9px !important;
-  font-size:9px !important;
+  height:24px !important;
+  min-height:24px !important;
+  max-height:24px !important;
+  padding:0 22px 0 11px !important;
+  line-height:22px !important;
+  font-size:10px !important;
+  letter-spacing:.06em !important;
+  border-color:rgba(215,200,0,.34) !important;
+  background:rgba(8,8,12,.72) !important;
+  color:rgba(244,238,206,.9) !important;
 }
+body.remodel-roleplay-workspace-active .remodel-live-pacing select:is(:hover,:focus-visible) {
+  border-color:rgba(235,219,35,.6) !important;
+  color:#fff6a1 !important;
+}
+
+/* Placement is by grid-area (see .remodel-rp-composer-zone) — the dock row
+   on top, then Directed / Goals / Pacing sharing one line above the input.
+   Below this width the three of them stop fitting side by side. */
+@media (max-width:760px) {
+  body.remodel-roleplay-workspace-active .remodel-rp-composer-zone {
+    grid-template-columns:minmax(0,1fr) auto !important;
+    grid-template-areas:
+      "dock dock"
+      "flow pacing"
+      "tools tools"
+      "composer composer" !important;
+  }
+}
+
 body.remodel-roleplay-workspace-active .remodel-rp-msg.remodel-rp-interrupted .remodel-rp-bubble::after {
   content:'interrupted' !important;
   position:absolute !important;
@@ -1608,15 +1723,17 @@ body.remodel-roleplay-workspace-active .remodel-direction-failure {
 
 @media (max-width:620px) {
   body.remodel-roleplay-workspace-active .remodel-live-flow { flex-wrap:wrap !important; margin-inline:0 !important; }
-  body.remodel-roleplay-workspace-active .remodel-live-pacing { margin-left:0 !important; }
   body.remodel-roleplay-workspace-active .remodel-live-flow em { order:4; flex-basis:100% !important; }
 }
 
-/* Story Goals launcher: a pill above the composer input, left-aligned. */
+/* Story Goals launcher: a pill above the composer input, sharing its line
+   with the Directed pill on the left and Pacing on the right. */
 body.remodel-roleplay-workspace-active .remodel-rp-composer-tools {
   display: flex !important;
   align-items: center !important;
   justify-content: flex-start !important;
+  gap: 8px !important;
+  min-width: 0 !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-goals-pill {
@@ -1866,6 +1983,123 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   line-height: 1.55 !important;
   white-space: pre-wrap !important;
   word-break: break-word !important;
+}
+
+/* --- Prompt preview: the by-source breakdown ---------------------------
+   One card per prompt identifier, in the order they're assembled, so a
+   block of text can be traced back to the prompt that produced it and an
+   empty source is visibly empty rather than simply absent. */
+#remodel-rp-preview-modal .remodel-rp-preview-views {
+  display: flex !important;
+  gap: 6px !important;
+  margin: 12px 20px 0 !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-views button {
+  padding: 6px 13px !important;
+  border: 1px solid rgba(215, 200, 0, 0.26) !important;
+  border-radius: 999px !important;
+  background: rgba(8, 8, 12, 0.6) !important;
+  color: rgba(238, 235, 245, 0.62) !important;
+  font: 10px/1 var(--remodel-serif, Georgia) !important;
+  letter-spacing: 0.14em !important;
+  text-transform: uppercase !important;
+  cursor: pointer !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-views button.is-active {
+  border-color: rgba(235, 219, 35, 0.66) !important;
+  background: rgba(215, 200, 0, 0.14) !important;
+  color: #fff6a1 !important;
+}
+
+#remodel-rp-preview-modal .remodel-rp-preview-sources {
+  margin: 12px 20px 20px !important;
+  overflow: auto !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-summary {
+  display: flex !important;
+  gap: 18px !important;
+  margin-bottom: 10px !important;
+  color: rgba(238, 235, 245, 0.5) !important;
+  font: 10px/1.4 var(--remodel-serif, Georgia) !important;
+  letter-spacing: 0.1em !important;
+  text-transform: uppercase !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-summary strong { color: #f2db42 !important; font-weight: 400 !important; }
+
+#remodel-rp-preview-modal .remodel-rp-preview-cards {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-card {
+  border: 1px solid rgba(215, 200, 0, 0.2) !important;
+  border-radius: 10px !important;
+  background: rgba(0, 0, 0, 0.32) !important;
+  overflow: hidden !important;
+}
+/* A source that contributed nothing still gets a card — knowing a prompt
+   resolved empty is as useful as reading one that didn't. */
+#remodel-rp-preview-modal .remodel-rp-preview-card.is-empty {
+  border-color: rgba(255, 255, 255, 0.07) !important;
+  background: transparent !important;
+  opacity: 0.55 !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-card summary {
+  display: flex !important;
+  align-items: baseline !important;
+  gap: 10px !important;
+  padding: 9px 13px !important;
+  cursor: pointer !important;
+  list-style: none !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-card summary::-webkit-details-marker { display: none !important; }
+#remodel-rp-preview-modal .remodel-rp-preview-card-role {
+  flex: 0 0 auto !important;
+  padding: 2px 7px !important;
+  border: 1px solid rgba(215, 200, 0, 0.28) !important;
+  border-radius: 999px !important;
+  color: rgba(242, 219, 66, 0.82) !important;
+  font: 8px/1.3 var(--remodel-serif, Georgia) !important;
+  letter-spacing: 0.14em !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-card-title {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  color: #f2eee4 !important;
+  font: 13px/1.3 var(--remodel-serif, Georgia) !important;
+  letter-spacing: 0.03em !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-card-meta {
+  flex: 0 0 auto !important;
+  color: rgba(238, 235, 245, 0.36) !important;
+  font: 10px/1.3 var(--monoFontFamily, monospace) !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-card-body {
+  padding: 0 13px 11px !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-msg + .remodel-rp-preview-msg {
+  margin-top: 9px !important;
+  padding-top: 9px !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.06) !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-msg-role {
+  display: block !important;
+  margin-bottom: 4px !important;
+  color: rgba(238, 235, 245, 0.34) !important;
+  font: 9px/1.3 var(--remodel-serif, Georgia) !important;
+  letter-spacing: 0.16em !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-msg pre {
+  margin: 0 !important;
+  color: rgba(238, 235, 245, 0.86) !important;
+  font: 12px/1.55 var(--monoFontFamily, monospace) !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-empty {
+  margin: 0 !important;
+  color: rgba(238, 235, 245, 0.4) !important;
+  font: italic 11px/1.4 var(--remodel-serif, Georgia) !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-action-row {
@@ -5525,20 +5759,134 @@ body.remodel-storydoc-active .remodel-storydoc-workbench {
 body.remodel-storydoc-active .remodel-storydoc-page {
   width:min(728px,calc(100vw - 260px)) !important; margin:0 auto !important;
 }
+/* The Manuscript rule is also the format bar, and it's sticky: it rides down
+   under the document header as you scroll (--remodel-storydoc-rule-top is the
+   measured header height, written by bindManuscriptRuleStick). At the top of
+   the page it wears no chrome and the bar is open; once .is-stuck lands it
+   takes on a solid backdrop and collapses behind the gear. */
 body.remodel-storydoc-active .remodel-storydoc-page-rule {
-  display:flex !important; align-items:center !important; gap:15px !important; margin-bottom:30px !important;
-  color:rgba(242,219,66,.84) !important; font:9px/1 var(--remodel-serif,Georgia) !important;
+  position:sticky !important;
+  z-index:11 !important;
+  top:var(--remodel-storydoc-rule-top,76px) !important;
+  display:flex !important; align-items:center !important; gap:11px !important;
+  margin:0 -13px 30px !important; padding:7px 13px !important;
+  border:1px solid transparent !important; border-radius:11px !important;
+  color:rgba(242,219,66,.84) !important;
+  transition:background .2s ease,border-color .2s ease,box-shadow .2s ease !important;
+}
+/* Above the document header (z-index 12), because once pinned it shares that
+   header's row instead of hanging below it. */
+body.remodel-storydoc-active .remodel-storydoc-page-rule.is-stuck {
+  z-index:13 !important;
+  border-color:rgba(213,187,0,.2) !important;
+  background:rgba(11,10,16,.93) !important;
+  box-shadow:0 12px 28px rgba(0,0,0,.42) !important;
+  backdrop-filter:blur(10px) !important;
+  -webkit-backdrop-filter:blur(10px) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-rule-label {
+  flex:0 0 auto !important;
+  font:9px/1 var(--remodel-serif,Georgia) !important;
   letter-spacing:.2em !important; text-transform:uppercase !important;
   text-shadow:0 0 5px rgba(215,200,0,.48),0 0 12px rgba(215,200,0,.18) !important;
 }
-body.remodel-storydoc-active .remodel-storydoc-page-rule::after {
-  content:"" !important; flex:1 !important; height:1px !important;
+body.remodel-storydoc-active .remodel-storydoc-rule-line {
+  flex:1 1 auto !important; min-width:16px !important; height:1px !important;
   background:linear-gradient(90deg,rgba(210,188,32,.36),transparent) !important;
+}
+
+/* The gear: the standing visual cue that this rule is a control, and the
+   only way back to the bar once it's stuck. */
+body.remodel-storydoc-active .remodel-storydoc-format-toggle {
+  flex:0 0 auto !important;
+  display:inline-flex !important; align-items:center !important; justify-content:center !important;
+  width:23px !important; height:23px !important; padding:0 !important;
+  border:1px solid rgba(213,187,0,.3) !important; border-radius:7px !important;
+  background:rgba(8,8,12,.5) !important; color:rgba(242,219,66,.66) !important;
+  font-size:10px !important; cursor:pointer !important;
+  transition:color .18s ease,border-color .18s ease,box-shadow .18s ease !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-format-toggle:is(:hover,:focus-visible) {
+  color:#fff07a !important; border-color:rgba(235,219,35,.6) !important;
+  box-shadow:0 0 12px rgba(215,200,0,.16) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-page-rule.is-format-open .remodel-storydoc-format-toggle {
+  color:#f2db42 !important; border-color:rgba(235,219,35,.5) !important;
+}
+
+body.remodel-storydoc-active .remodel-storydoc-format-bar {
+  flex:0 0 auto !important;
+  display:flex !important; align-items:center !important; gap:6px !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-page-rule:not(.is-format-open) .remodel-storydoc-format-bar {
+  display:none !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-format-bar select {
+  height:23px !important; max-width:118px !important; padding:0 5px !important;
+  border:1px solid rgba(213,187,0,.26) !important; border-radius:6px !important;
+  background:rgba(8,8,12,.72) !important; color:rgba(240,234,214,.86) !important;
+  /* Not the Cinzel display face the rest of the chrome uses — it has no true
+     lowercase, so font names would read as small caps in the picker. */
+  font:11px/1 'Segoe UI',Helvetica,Arial,sans-serif !important;
+  letter-spacing:.02em !important; text-transform:none !important; cursor:pointer !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-format-bar select[data-remodel-storydoc-fontsize] {
+  max-width:52px !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-format-bar select:is(:hover,:focus-visible) {
+  border-color:rgba(235,219,35,.55) !important; color:#fff6a1 !important; outline:0 !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-format-bar button {
+  display:inline-flex !important; align-items:center !important; justify-content:center !important;
+  width:23px !important; height:23px !important; padding:0 !important;
+  border:1px solid rgba(213,187,0,.26) !important; border-radius:6px !important;
+  background:rgba(8,8,12,.72) !important; color:rgba(240,234,214,.72) !important;
+  font-size:10px !important; cursor:pointer !important;
+  transition:color .18s ease,border-color .18s ease,background .18s ease !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-format-bar button:is(:hover,:focus-visible) {
+  color:#fff6a1 !important; border-color:rgba(235,219,35,.55) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-format-bar button.is-active {
+  color:#0d0c11 !important; background:rgba(235,219,35,.82) !important;
+  border-color:rgba(235,219,35,.82) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-format-sep {
+  width:1px !important; height:15px !important; margin:0 2px !important;
+  background:rgba(212,190,33,.24) !important;
+}
+/* Says which of the two scopes the bar is about to act on — the difference
+   between restyling the whole manuscript and restyling four words. */
+body.remodel-storydoc-active .remodel-storydoc-format-scope {
+  flex:0 0 auto !important; margin-right:2px !important;
+  color:rgba(240,234,214,.42) !important;
+  font:8px/1 var(--remodel-serif,Georgia) !important;
+  letter-spacing:.14em !important; text-transform:uppercase !important; white-space:nowrap !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-page-rule.is-selection-scoped .remodel-storydoc-format-scope {
+  color:rgba(242,219,66,.8) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-format-scope[data-flash] {
+  color:#fff07a !important;
+}
+
+@media (max-width: 900px) {
+  body.remodel-storydoc-active .remodel-storydoc-format-scope { display:none !important; }
+  body.remodel-storydoc-active .remodel-storydoc-format-bar select { max-width:88px !important; }
 }
 body.remodel-storydoc-active .remodel-storydoc-prose {
   min-height:1.68em !important; outline:0 !important; color:#f4f0e6 !important;
-  font:15px/1.68 var(--remodel-manuscript-font,Georgia) !important;
+  font:var(--remodel-manuscript-size,15px)/1.68 var(--remodel-manuscript-font,Georgia) !important;
   text-shadow:0 1px 3px rgba(0,0,0,.95) !important;
+}
+/* Inline formatting from the format bar. Every property rides on the span's
+   own inline style (buildStyleRunSpan), so this only has to make sure the
+   spans keep the paragraph's rhythm and don't inherit a decoration colour
+   from elsewhere. */
+body.remodel-storydoc-active .remodel-storydoc-prose [data-remodel-storydoc-run] {
+  line-height:inherit !important;
+  text-decoration-color:currentColor !important;
+  text-underline-offset:.18em !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-prose > p {
   min-height:1.68em !important; margin:0 0 .9em !important; outline:0 !important;
@@ -5674,7 +6022,11 @@ body.remodel-storydoc-active .remodel-storydoc-beat-editor {
   display:grid !important; grid-template-columns:minmax(0,1fr) 44px !important; gap:9px !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-beat-editor textarea {
+  /* Height is driven by autosizeStoryBeatInput, which grows the field to fit
+     its text. `resize:vertical` stays so a beat can still be dragged smaller
+     by hand; overflow is hidden so no scrollbar flickers mid-grow. */
   width:100% !important; min-height:62px !important; padding:12px !important; resize:vertical !important;
+  overflow:hidden !important;
   box-sizing:border-box !important; border:1px solid rgba(212,190,33,.28) !important; border-radius:5px !important;
   outline:0 !important; background:rgba(8,8,13,.52) !important; color:#f4f0e6 !important;
   font:13px/1.5 var(--remodel-manuscript-font,Georgia) !important;
@@ -5686,8 +6038,65 @@ body.remodel-storydoc-active .remodel-storydoc-beat-editor > button {
 body.remodel-storydoc-active .remodel-storydoc-beat-card.is-hidden .remodel-storydoc-beat-editor,
 body.remodel-storydoc-active .remodel-storydoc-beat-card.is-hidden .remodel-storydoc-beat-regenerate { display:none !important; }
 
+/* Live streaming preview. Transient — it is removed the moment the finished
+   prose is inserted into the manuscript proper. */
+body.remodel-storydoc-active .remodel-storydoc-stream {
+  margin:14px 0 !important; padding:12px 14px !important;
+  border:1px dashed rgba(212,190,33,.34) !important; border-radius:6px !important;
+  background:rgba(8,8,13,.42) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-stream header {
+  display:flex !important; align-items:center !important; gap:7px !important;
+  margin-bottom:8px !important;
+  color:rgba(232,222,90,.76) !important;
+  font-size:.56rem !important; letter-spacing:.14em !important; text-transform:uppercase !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-stream-dots {
+  display:inline-flex !important; gap:3px !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-stream-dots i {
+  width:3px !important; height:3px !important; border-radius:50% !important;
+  background:rgba(232,222,90,.7) !important;
+  animation:remodel-storydoc-stream-pulse 1.1s infinite ease-in-out !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-stream-dots i:nth-child(2) { animation-delay:.16s !important; }
+body.remodel-storydoc-active .remodel-storydoc-stream-dots i:nth-child(3) { animation-delay:.32s !important; }
+@keyframes remodel-storydoc-stream-pulse { 0%,80%,100% { opacity:.25; } 40% { opacity:1; } }
+@media (prefers-reduced-motion:reduce) {
+  body.remodel-storydoc-active .remodel-storydoc-stream-dots i { animation:none !important; opacity:.7 !important; }
+}
+body.remodel-storydoc-active .remodel-storydoc-stream-text {
+  color:#f0ece0 !important;
+  font:15px/1.75 var(--remodel-manuscript-font,Georgia) !important;
+  white-space:pre-wrap !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-stream-reasoning {
+  margin-top:10px !important; border-top:1px solid rgba(212,190,33,.16) !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-stream-reasoning summary {
+  display:flex !important; align-items:center !important; gap:6px !important;
+  padding:8px 0 5px !important; cursor:pointer !important;
+  color:rgba(232,222,90,.66) !important;
+  font-size:.54rem !important; letter-spacing:.13em !important; text-transform:uppercase !important;
+}
+body.remodel-storydoc-active .remodel-storydoc-stream-reasoning pre {
+  max-height:200px !important; margin:0 !important; padding:8px 10px !important;
+  overflow:auto !important;
+  border:1px solid rgba(212,190,33,.12) !important;
+  background:rgba(4,4,8,.6) !important;
+  color:rgba(226,222,206,.7) !important;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace !important;
+  font-size:.66rem !important; line-height:1.5 !important;
+  white-space:pre-wrap !important; overflow-wrap:anywhere !important;
+}
+
 body.remodel-storydoc-active .remodel-storydoc-tools {
-  position:fixed !important; z-index:25 !important; top:174px !important; right:8px !important;
+  /* Centred on the viewport rather than pinned to a fixed top offset, so the
+     column stays balanced however many tools it holds — the old top:174px let
+     the last button hang low as the rail grew. */
+  position:fixed !important; z-index:25 !important; top:50% !important; right:8px !important;
+  transform:translateY(-50%) !important;
+  max-height:calc(100vh - 24px) !important; overflow-y:auto !important;
   display:flex !important; flex-direction:column !important; gap:8px !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-tools button,
@@ -7679,12 +8088,18 @@ body.remodel-roleplay-workspace-active #remodel-roleplay-root {
   grid-template-areas:
     "stream"
     "composer" !important;
-  padding-top:90px !important;
+  /* Only the collapsed header's worth of room is reserved — the expanded
+     state drops OVER the stream rather than pushing it down, so the chat
+     keeps the height. */
+  padding-top:46px !important;
   height:100% !important;
   max-height:100% !important;
   box-sizing:border-box !important;
 }
 
+/* Scene identity is a peek-on-demand strip: at rest it's just the back
+   button on nothing, and the title, cast and the shadow behind them only
+   drop down while the strip is hovered (or focused from the keyboard). */
 body.remodel-roleplay-workspace-active .remodel-rp-scene-header {
   position:fixed !important;
   z-index:22 !important;
@@ -7692,17 +8107,43 @@ body.remodel-roleplay-workspace-active .remodel-rp-scene-header {
   left:var(--remodel-left-edge) !important;
   display:grid !important;
   grid-template-columns:auto minmax(0,1fr) !important;
-  align-items:center !important;
+  align-items:start !important;
   gap:16px !important;
   width:var(--remodel-chat-width) !important;
-  min-height:90px !important;
-  padding:10px 28px 14px !important;
+  min-height:46px !important;
+  /* Clipped to the strip it reserves, so the collapsed header's hit area is
+     46px and never covers messages the reader is trying to click. */
+  max-height:46px !important;
+  padding:6px 28px !important;
   box-sizing:border-box !important;
-  background:linear-gradient(180deg,rgba(12,11,17,.86),rgba(12,11,17,.38) 72%,transparent) !important;
-  pointer-events:none !important;
+  overflow:hidden !important;
+  background:transparent !important;
+  transition:min-height .2s ease,max-height .2s ease,padding .2s ease,background .2s ease !important;
 }
 
-body.remodel-roleplay-workspace-active .remodel-rp-scene-header > * {
+/* Opaque further down than the resting treatment was: the dropped panel
+   lands ON TOP of live prose, so it has to actually cover it. */
+body.remodel-roleplay-workspace-active .remodel-rp-scene-header:is(:hover,:focus-within) {
+  min-height:90px !important;
+  max-height:150px !important;
+  padding:10px 28px 14px !important;
+  overflow:visible !important;
+  background:linear-gradient(180deg,rgba(10,9,15,.97) 0%,rgba(10,9,15,.94) 58%,rgba(10,9,15,.6) 84%,transparent) !important;
+}
+
+/* The heading itself is what actually "drops": hidden and lifted at rest,
+   and taken out of hit-testing so it can't swallow clicks meant for the
+   messages underneath. */
+body.remodel-roleplay-workspace-active .remodel-rp-scene-heading {
+  opacity:0 !important;
+  transform:translateY(-5px) !important;
+  pointer-events:none !important;
+  transition:opacity .2s ease,transform .2s ease !important;
+}
+
+body.remodel-roleplay-workspace-active .remodel-rp-scene-header:is(:hover,:focus-within) .remodel-rp-scene-heading {
+  opacity:1 !important;
+  transform:none !important;
   pointer-events:auto !important;
 }
 
@@ -7888,10 +8329,19 @@ body.remodel-roleplay-workspace-active #remodel-rp-panelgroup {
   body.remodel-roleplay-workspace-active #remodel-roleplay-root {
     padding-top:82px !important;
   }
+  /* No hover on touch, so the strip stays open at this width. */
   body.remodel-roleplay-workspace-active .remodel-rp-scene-header {
     min-height:82px !important;
+    max-height:none !important;
     padding:8px 12px 12px !important;
     gap:10px !important;
+    overflow:visible !important;
+    background:linear-gradient(180deg,rgba(12,11,17,.86),rgba(12,11,17,.38) 72%,transparent) !important;
+  }
+  body.remodel-roleplay-workspace-active .remodel-rp-scene-heading {
+    opacity:1 !important;
+    transform:none !important;
+    pointer-events:auto !important;
   }
   body.remodel-roleplay-workspace-active .remodel-rp-scene-title {
     max-width:68vw !important;
@@ -9159,7 +9609,10 @@ body.remodel-roleplay-workspace-active .remodel-rp-direction-stream-card {
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-direction-stream-inner {
-  width:min(760px,82%) !important;
+  /* Full stream width: the Director card is a record of what happened to the
+     scene, not a character speaking, so it spans the column rather than
+     sitting inset like a message bubble. Its foldable sections need the room. */
+  width:100% !important;
   padding:12px 15px !important;
   border:1px solid rgba(215,200,0,.34) !important;
   border-left:3px solid rgba(215,200,0,.78) !important;
@@ -9742,16 +10195,30 @@ body.st-remodel-active #WorldInfo .world_entry_edit > .flex-container:not(:first
 /* Compact roleplay composer: the command surface floats above the input
    instead of occupying three opaque toolbar rows. Controls keep their real
    handlers and disclose their full labels on hover or keyboard focus. */
+/* Two control rows, not four. The Directed and Goals pills share a line with
+   Pacing so they sit directly on top of the message box, and the whole zone
+   stays short enough that the stream keeps the height. */
 body.remodel-roleplay-workspace-active .remodel-rp-composer-zone {
   position:relative !important;
-  display:flex !important;
-  flex-direction:column !important;
-  gap:6px !important;
+  display:grid !important;
+  grid-template-columns:auto minmax(0,1fr) auto !important;
+  grid-template-areas:
+    "dock dock dock"
+    "flow tools pacing"
+    "composer composer composer" !important;
+  align-items:center !important;
+  gap:5px 10px !important;
   padding:0 clamp(12px,2.6vw,26px) 13px !important;
   border-top:0 !important;
   background:transparent !important;
   overflow:visible !important;
 }
+
+body.remodel-roleplay-workspace-active .remodel-rp-command-dock { grid-area:dock !important; }
+body.remodel-roleplay-workspace-active .remodel-live-flow { grid-area:flow !important; }
+body.remodel-roleplay-workspace-active .remodel-rp-composer-tools { grid-area:tools !important; }
+body.remodel-roleplay-workspace-active .remodel-live-pacing-row { grid-area:pacing !important; }
+body.remodel-roleplay-workspace-active .remodel-rp-composer { grid-area:composer !important; }
 
 body.remodel-roleplay-workspace-active .remodel-rp-command-dock {
   position:relative !important;
@@ -9762,6 +10229,8 @@ body.remodel-roleplay-workspace-active .remodel-rp-command-dock {
   gap:4px !important;
   min-width:0 !important;
   min-height:34px !important;
+  /* Breathing room down to the pacing pill it now sits on top of. */
+  margin:0 0 6px !important;
   padding:0 8px !important;
   overflow:visible !important;
 }
@@ -10499,4 +10968,211 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     .remodel-debug-grid { grid-template-columns: 1fr; grid-template-rows: minmax(260px, 55%) minmax(180px, 45%); }
     .remodel-debug-stream { border-right: 0; border-bottom: 1px solid rgba(201, 190, 0, .28); }
     .remodel-debug-row { grid-template-columns: 68px 48px 70px minmax(100px, .8fr) minmax(120px, 1.2fr); }
+}
+
+/* =====================================================================
+   TWO-SEAT ROLEPLAY: Director + Narrator
+   (timeline-spine.js: openRoleplayDuetPicker, renderRoleplayCast,
+    buildRoleplayMessage; timeline-state.js: ensemble === 'duet')
+
+   A Roleplay Scene is two cards with fixed jobs. The Narrator writes every
+   visible line and is set as manuscript prose rather than dialogue; the
+   Director decides what happens and never appears in the stream.
+   ===================================================================== */
+
+/* --- Narrator prose: the Story manuscript face, in the stream ---------
+   Mirrors .remodel-storydoc-prose (serif, 18px/1.75, indented paragraphs)
+   so narration reads as the same document the Story workspace edits. The
+   bubble, avatar, and centered rule-flanked framing are all removed. */
+/* Narration spans the whole stream column rather than sitting in a 680px
+   measure — it's the page speaking, not a speaker in the room. */
+body.remodel-roleplay-workspace-active .remodel-rp-msg.remodel-rp-manuscript {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 6px 0 18px !important;
+  text-align: left !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-bubble {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+/* The speaker line becomes a quiet byline rule instead of a name tag. */
+body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-meta {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  justify-content: flex-start !important;
+  margin: 0 0 14px !important;
+  opacity: 0.62 !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-meta::after {
+  content: "" !important;
+  flex: 1 !important;
+  height: 1px !important;
+  background: linear-gradient(90deg, var(--gold-faint, rgba(198, 164, 74, 0.22)), transparent) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-name {
+  font: 9px/1 var(--remodel-serif, Georgia) !important;
+  letter-spacing: 0.2em !important;
+  text-transform: uppercase !important;
+  color: rgba(242, 219, 66, 0.7) !important;
+}
+/* Deliberately NOT --remodel-manuscript-font: that variable belongs to the
+   Story workspace's per-document format bar, and narration must read the
+   same in every scene regardless of what a manuscript was set to. */
+body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-body {
+  font-family: Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', serif !important;
+  font-size: 16px !important;
+  line-height: 1.75 !important;
+  font-style: normal !important;
+  color: rgba(238, 235, 245, 0.94) !important;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95) !important;
+  text-align: left !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-body p {
+  margin: 0 0 1.1em !important;
+  text-indent: 1.6em !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-body p:first-child {
+  text-indent: 0 !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-body p:last-child {
+  margin-bottom: 0 !important;
+}
+/* Emphasis is ordinary novel italic here, not the "narrator voice" italic
+   the bubble style applies to the whole body. */
+body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-body em,
+body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-body i {
+  font-style: italic !important;
+  color: inherit !important;
+}
+/* Controls float over the prose instead of sitting inside a bubble. */
+body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-controls {
+  justify-content: flex-end !important;
+}
+/* Streaming reveal: same page, minus the paragraph indent jump while the
+   first line is still a fragment. */
+body.remodel-roleplay-workspace-active .remodel-rp-manuscript.remodel-rp-typing .remodel-rp-bubble {
+  width: 100% !important;
+  background: transparent !important;
+  border: none !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-typing-body {
+  white-space: pre-wrap !important;
+  text-indent: 0 !important;
+}
+
+/* --- Seat badges in the Cast column ---------------------------------- */
+body.remodel-roleplay-workspace-active .remodel-rp-seat-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 2px 7px !important;
+  border-radius: 999px !important;
+  font: 8px/1.4 var(--remodel-serif, Georgia) !important;
+  letter-spacing: 0.16em !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-seat-narrator {
+  color: rgba(242, 219, 66, 0.92) !important;
+  background: rgba(198, 164, 74, 0.14) !important;
+  border: 1px solid var(--tarot-gold-soft, rgba(198, 164, 74, 0.4)) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-seat-director {
+  color: rgba(206, 190, 220, 0.8) !important;
+  background: rgba(180, 142, 173, 0.12) !important;
+  border: 1px solid rgba(180, 142, 173, 0.34) !important;
+}
+/* The Director is present but never speaks - read it as recessed. */
+body.remodel-roleplay-workspace-active .remodel-rp-cast-member.is-seat-director .remodel-rp-cast-avatar {
+  opacity: 0.62 !important;
+  filter: saturate(0.7) !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-cast-member.is-seat-narrator {
+  border-color: var(--tarot-gold-soft, rgba(198, 164, 74, 0.4)) !important;
+}
+
+/* --- Two-seat cast picker -------------------------------------------- */
+.remodel-rp-duet-seats {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 10px !important;
+  margin: 0 0 14px !important;
+}
+.remodel-rp-duet-seat {
+  display: flex !important;
+  align-items: center !important;
+  gap: 11px !important;
+  padding: 11px 13px !important;
+  text-align: left !important;
+  border-radius: 10px !important;
+  border: 1px solid rgba(198, 164, 74, 0.2) !important;
+  background: rgba(20, 18, 28, 0.5) !important;
+  color: inherit !important;
+  cursor: pointer !important;
+  transition: border-color 0.16s ease, background 0.16s ease !important;
+}
+.remodel-rp-duet-seat:hover { border-color: rgba(198, 164, 74, 0.42) !important; }
+.remodel-rp-duet-seat.is-active {
+  border-color: var(--tarot-gold, #c6a44a) !important;
+  background: rgba(198, 164, 74, 0.1) !important;
+  box-shadow: 0 0 0 1px rgba(198, 164, 74, 0.22) !important;
+}
+.remodel-rp-duet-seat-av {
+  flex: 0 0 auto !important;
+  width: 42px !important;
+  height: 42px !important;
+  border-radius: 8px !important;
+  background: rgba(255, 255, 255, 0.05) center / cover no-repeat !important;
+  border: 1px solid rgba(198, 164, 74, 0.24) !important;
+  display: grid !important;
+  place-items: center !important;
+  color: rgba(198, 164, 74, 0.5) !important;
+}
+.remodel-rp-duet-seat-text { display: grid !important; gap: 2px !important; min-width: 0 !important; }
+.remodel-rp-duet-seat-role {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  font: 8px/1.4 var(--remodel-serif, Georgia) !important;
+  letter-spacing: 0.18em !important;
+  text-transform: uppercase !important;
+  color: rgba(242, 219, 66, 0.72) !important;
+}
+.remodel-rp-duet-seat-name {
+  font-size: 13px !important;
+  color: rgba(238, 235, 245, 0.92) !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+.remodel-rp-duet-seat:not(.is-filled) .remodel-rp-duet-seat-name {
+  color: rgba(238, 235, 245, 0.42) !important;
+  font-style: italic !important;
+}
+.remodel-rp-duet-seat-blurb {
+  font-size: 10px !important;
+  color: rgba(238, 235, 245, 0.38) !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+/* Held by the other seat: visible and clickable (it swaps), but clearly
+   spoken for. */
+.remodel-rp-picker-card.remodel-rp-duet-taken { opacity: 0.55 !important; }
+.remodel-rp-duet-taken-tag {
+  font: 7px/1.4 var(--remodel-serif, Georgia) !important;
+  letter-spacing: 0.16em !important;
+  text-transform: uppercase !important;
+  color: rgba(180, 142, 173, 0.9) !important;
+}
+
+@media (max-width: 620px) {
+  .remodel-rp-duet-seats { grid-template-columns: 1fr !important; }
 }

@@ -12,12 +12,10 @@ import {
     normalizeHolders,
 } from './story-goals-model.js';
 import {
-    createVariableDefinition,
-    createVariableInstance,
-    findVariableInstance,
-    getVariableDefinition,
-    normalizeOwnerRef,
-} from './story-variables-store.js';
+    createVariableValue,
+    getVariableValue,
+    listVariableValues,
+} from './variables-store.js';
 
 // Canonical Story Goals persistence. Goals and relationships belong to a
 // Timeline; Scenes contain only presentation state and links to those goals.
@@ -460,25 +458,28 @@ function migrateEmbeddedConstitutions(store) {
     for (const goal of Object.values(store.goals)) {
         if (!goal.constitution || goal.resolution?.kind === 'tracked') continue;
         const pool = goal.constitution;
-        const ownerRef = normalizeOwnerRef({ kind: 'goal', id: goal.id, label: goal.title });
-        let definition = getVariableDefinition(`legacy-constitution-${goal.id}`, goal.timelineId);
-        if (!definition) {
-            definition = createVariableDefinition({
-                id: `legacy-constitution-${goal.id}`,
-                key: `${goal.title}-constitution`,
+        const variableId = `legacy-constitution-${goal.id}`;
+        const instance = getVariableValue(variableId, goal.timelineId)
+            || listVariableValues({ timelineId: goal.timelineId }).find((item) => item.name === (pool.label || `${goal.title} Constitution`))
+            || createVariableValue({
+                id: variableId,
+                timelineId: goal.timelineId,
                 name: pool.label || `${goal.title} Constitution`,
-                kind: 'resource',
-                summary: 'Migrated from the former embedded Story Goal Constitution pool.',
-                defaultValue: pool.current,
-                constraints: { minimum: 0, defaultMaximum: pool.max },
-            }, { timelineId: goal.timelineId, actor: 'migration' });
-        }
-        const instance = definition && (findVariableInstance(goal.timelineId, ownerRef, definition.id)
-            || createVariableInstance({ timelineId: goal.timelineId, definitionId: definition.id, ownerRef, value: pool.current, maximum: pool.max }, { actor: 'migration' }));
+                description: 'Migrated from the former embedded Story Goal Constitution pool.',
+                valueType: 'number',
+                value: pool.current,
+                subvalues: [
+                    { key: 'minimum', label: 'Minimum', type: 'number', value: 0, role: 'minimum' },
+                    { key: 'maximum', label: 'Maximum', type: 'number', value: pool.max, role: 'maximum' },
+                ],
+                loreLinks: [],
+                retrieval: { mode: 'always' },
+                authority: 'world',
+            }, { actor: 'migration' });
         if (!instance) continue;
         goal.resolution = normalizeGoalResolution({
             kind: 'tracked',
-            variableInstanceId: instance.id,
+            variableId: instance.id,
             direction: pool.winDirection === 'fill' ? 'increase' : 'decrease',
             completionThreshold: pool.winDirection === 'fill' ? pool.max : 0,
         });

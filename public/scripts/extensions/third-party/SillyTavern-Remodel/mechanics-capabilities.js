@@ -1,21 +1,16 @@
 import {
     addVariableModifier,
-    adjustVariableInstance,
+    adjustVariableValue,
     computeVariable,
-    createVariableDefinition,
-    createVariableInstance,
-    getVariableDefinition,
-    getVariableScaleBand,
-    getVariableInstance,
+    getVariableValue,
     normalizeOwnerRef,
-    ownerKey,
     recordMechanicsTransaction,
     removeVariableModifier,
-    resolveImpactDelta,
+    setVariableField,
     restoreVariableStore,
     snapshotVariableStore,
-    transitionVariableInstance,
-} from './story-variables-store.js';
+    transitionVariableValue,
+} from './variables-store.js';
 import {
     createTimelineGoal,
     createTimelineGoalRelation,
@@ -33,7 +28,7 @@ export const MECHANICS_PROTOCOL = 'remodel-mechanics/1';
 
 const CAPABILITY_NAMES = Object.freeze([
     'goal.create', 'goal.shift', 'goal.reach', 'goal.relate', 'goal.close',
-    'variable.instantiate', 'variable.propose', 'variable.adjust', 'variable.transition',
+    'variable.set', 'variable.adjust', 'variable.transition', 'variable.subvalue.set',
     'modifier.add', 'modifier.remove',
 ]);
 
@@ -43,16 +38,46 @@ const CAPABILITIES = Object.freeze({
     'goal.reach': capability('Declare one decisive attempt against a Goal. Code freezes inputs and rolls d100.', ['goal'], 'hybrid'),
     'goal.relate': capability('Create or update a directional sympathetic or antagonistic Goal relationship.', ['goal'], 'hybrid'),
     'goal.close': capability('Mark a Goal achieved, abandoned, or impossible.', ['goal'], 'hybrid'),
-    'variable.instantiate': capability('Instantiate an existing Variable definition for a typed owner in this Timeline.', ['variable'], 'hybrid'),
-    'variable.propose': capability('Propose a Timeline-local resource or number definition and instantiate it.', ['variable'], 'hybrid'),
-    'variable.adjust': capability('Adjust a numeric or resource Variable by an explicit delta.', ['resource', 'number'], 'hybrid'),
-    'variable.transition': capability('Move an enum or boolean Variable through an allowed transition.', ['enum', 'boolean'], 'hybrid'),
-    'modifier.add': capability('Attach a bounded value, maximum, or reach modifier to a Variable instance.', ['variable'], 'hybrid'),
+    'variable.set': capability('Set the primary scalar value of an advertised Variable.', ['number', 'enum', 'text', 'boolean'], 'hybrid'),
+    'variable.adjust': capability('Adjust an advertised numeric Variable or numeric subvalue.', ['number'], 'hybrid'),
+    'variable.transition': capability('Move an advertised enum Variable or enum subvalue to an allowed state.', ['enum'], 'hybrid'),
+    'variable.subvalue.set': capability('Set one advertised scalar subvalue.', ['number', 'enum', 'text', 'boolean'], 'hybrid'),
+    'modifier.add': capability('Attach a bounded value or maximum modifier to an advertised Variable.', ['variable'], 'hybrid'),
     'modifier.remove': capability('Remove one existing Variable modifier by ID.', ['variable'], 'hybrid'),
 });
 
 export function getCapabilityDictionary() {
     return CAPABILITY_NAMES.map((name) => ({ name, ...CAPABILITIES[name] }));
+}
+
+/**
+ * Adapt one of our schema descriptors to the shape core actually reads.
+ *
+ * This boundary bites. Our builders describe a schema as `{ name, strict,
+ * schema }`, but core's `JsonSchema` typedef (script.js, `@typedef JsonSchema`)
+ * is `{ name, value, description?, strict? }` — the payload lives under
+ * **value**, not `schema`. The server then forwards it per provider, e.g. for
+ * OpenRouter (src/endpoints/backends/chat-completions.js):
+ *
+ *     response_format = { type: 'json_schema', json_schema: {
+ *         name: body.json_schema.name, schema: body.json_schema.value, … } }
+ *
+ * Hand it a bare schema object and both reads come back undefined, so what
+ * ships is `{"type":"json_schema","json_schema":{"strict":true}}` — a
+ * structured-output request with no schema in it. Nothing errors. The provider
+ * shrugs, the model never sees the protocol, and it invents a plausible reply
+ * shape instead. Always cross this boundary through here.
+ *
+ * @param {{name: string, description?: string, strict?: boolean, schema: object}} descriptor
+ * @returns {{name: string, description: string, strict: boolean, value: object}}
+ */
+export function toCoreJsonSchema(descriptor) {
+    return {
+        name: descriptor?.name || 'remodel_structured_reply',
+        description: descriptor?.description || 'Well-formed JSON object',
+        strict: descriptor?.strict !== false,
+        value: descriptor?.schema,
+    };
 }
 
 export function getMechanicsRequestSchema() {
@@ -78,14 +103,13 @@ export function getMechanicsRequestSchema() {
                                     title: { type: 'string' }, description: { type: 'string' }, visibility: { type: 'string', enum: ['public', 'secret'] },
                                     holderRefs: { type: 'array', items: ownerRefSchema() }, targetRefs: { type: 'array', items: ownerRefSchema() },
                                     openingBand: { type: 'string', enum: ['nearly_impossible', 'extreme', 'difficult', 'uncertain', 'favorable', 'strongly_favored', 'nearly_assured'] }, successRate: { type: 'number' },
-                                    resolution: { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['instant', 'tracked'] }, variableInstanceId: { type: 'string' }, direction: { type: 'string', enum: ['increase', 'decrease'] }, completionThreshold: { type: 'number' } } },
+                                    resolution: { type: 'object', additionalProperties: false, properties: { kind: { type: 'string', enum: ['instant', 'tracked'] }, variableRef: { type: 'string' }, field: { type: 'string' }, direction: { type: 'string', enum: ['increase', 'decrease'] }, completionThreshold: { type: 'number' } } },
                                     direction: { type: 'string', enum: ['up', 'down'] }, magnitude: { type: 'string', enum: ['minor', 'meaningful', 'major', 'decisive'] }, impactMagnitude: { type: 'string', enum: ['minor', 'meaningful', 'major', 'decisive'] },
                                     type: { type: 'string', enum: ['antagonistic', 'sympathetic'] }, status: { type: 'string', enum: ['achieved', 'abandoned', 'impossible'] },
-                                    definitionId: { type: 'string' }, variableInstanceId: { type: 'string' }, modifierInstanceId: { type: 'string' }, modifierId: { type: 'string' }, scaleBandId: { type: 'string' },
-                                    ownerRef: ownerRefSchema(), key: { type: 'string' }, name: { type: 'string' }, kind: { type: 'string', enum: ['resource', 'number'] }, summary: { type: 'string' },
-                                    defaultValue: { type: 'number' }, value: { type: ['number', 'string', 'boolean'] }, maximum: { type: 'number' }, constraints: { type: 'object' }, impactScale: { type: 'object' }, reachContribution: { type: 'object' },
+                                    variableRef: { type: 'string' }, modifierVariableRef: { type: 'string' }, modifierId: { type: 'string' }, field: { type: 'string' },
+                                    value: { type: ['number', 'string', 'boolean'] },
                                     delta: { type: 'number' }, nextState: { type: ['string', 'boolean'] }, label: { type: 'string' }, target: { type: 'string', enum: ['value', 'maximum', 'reach'] },
-                                    scope: { type: 'string', enum: ['persistent', 'scene'] }, endingCondition: { type: 'string' },
+                                    endingCondition: { type: 'string' },
                                 },
                             },
                             reason: { type: 'string', minLength: 1, maxLength: 1000 },
@@ -131,13 +155,13 @@ export function executeMechanicsRequest(envelope, context = {}) {
         sceneId: String(context.sceneId || ''),
         turnId: String(context.turnId || ''),
         aliases: new Map(),
+        variableRefs: context.variableRefs instanceof Map ? context.variableRefs : new Map(Object.entries(context.variableRefs || {})),
         receipts: [],
         pending: [],
         reached: new Set(),
         authorizedGoalIds: new Set((context.authorizedGoalIds || []).map(String)),
-        authorizedOwnerKeys: new Set((context.authorizedOwnerRefs || []).map(ownerKey)),
+        authorizedVariableRefs: new Set((context.authorizedVariableRefs || []).map(String)),
         allowUserGoalCreate: Boolean(context.allowUserGoalCreate),
-        allowVariableProposal: Boolean(context.allowVariableProposal),
         directionId: String(context.directionId || ''),
         messageId: context.messageId == null ? null : Number(context.messageId),
         checkpointId: String(context.checkpointId || ''),
@@ -179,13 +203,15 @@ export function approvePendingMechanics(sceneId, pendingId, timelineId) {
     if (!entry) return { ok: false, errors: ['Pending proposal not found.'] };
     const request = entry.op;
     const args = request.arguments || {};
-    const owner = args.ownerRef ? normalizeOwnerRef(args.ownerRef) : null;
+    const variableRef = String(args.variableRef || args.modifierVariableRef || '');
+    const variableRefs = args._resolvedVariableId && variableRef ? new Map([[variableRef, args._resolvedVariableId]]) : new Map();
+    if ('_resolvedVariableId' in args) delete args._resolvedVariableId;
     const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests: [request] }, {
         timelineId, sceneId,
         authorizedGoalIds: [args.goalId, args.fromGoalId].filter(Boolean),
-        authorizedOwnerRefs: owner ? [owner] : [],
+        authorizedVariableRefs: [variableRef].filter(Boolean),
+        variableRefs,
         allowUserGoalCreate: request.capability === 'goal.create',
-        allowVariableProposal: request.capability === 'variable.propose',
     });
     if (result.ok) takePendingOp(sceneId, entry.id);
     return result;
@@ -207,8 +233,8 @@ export function undoMechanicsTransaction(transaction) {
 function applyRequest(request, runtime) {
     const args = request.arguments;
     switch (request.capability) {
-        case 'variable.propose': return proposeVariable(request, args, runtime);
-        case 'variable.instantiate': return instantiateVariable(request, args, runtime);
+        case 'variable.set': return setVariable(request, args, runtime);
+        case 'variable.subvalue.set': return setVariable(request, args, runtime, true);
         case 'variable.adjust': return adjustVariable(request, args, runtime);
         case 'variable.transition': return transitionVariable(request, args, runtime);
         case 'modifier.add': return addModifier(request, args, runtime);
@@ -222,64 +248,50 @@ function applyRequest(request, runtime) {
     }
 }
 
-function proposeVariable(request, args, runtime) {
-    const ownerRef = requiredOwner(args.ownerRef);
-    if (!runtime.allowVariableProposal) return defer(request, runtime, `A new Variable definition and its owner-specific scale require review.`);
-    if (!isAuthorizedOwner(ownerRef, runtime)) return defer(request, runtime, `Changing ${ownerRef.label}'s Variables requires review.`);
-    const definition = createVariableDefinition({ key: args.key, name: args.name, kind: args.kind, summary: args.summary, defaultValue: args.kind === 'resource' ? null : args.defaultValue, constraints: args.kind === 'resource' ? { minimum: args.constraints?.minimum ?? 0 } : args.constraints, scaleBands: args.kind === 'resource' && args.maximum ? [{ id: 'proposed', label: 'Proposed scale', maximum: args.maximum }] : [], impactScale: args.impactScale, reachContribution: args.reachContribution }, { timelineId: runtime.timelineId, actor: 'mechanics' });
-    if (!definition) throw new MechanicsError(`${request.id}: Variable proposal was invalid.`);
-    const instance = createVariableInstance({ timelineId: runtime.timelineId, definitionId: definition.id, ownerRef, value: args.value, maximum: args.maximum, scaleBandId: args.maximum ? 'proposed' : '' }, txContext(runtime, request));
-    if (!instance) throw new MechanicsError(`${request.id}: Variable instance could not be created.`);
-    setAlias(runtime, args.alias, instance.id, 'variable');
-    receipt(runtime, request, null, instance, { definition });
-}
-
-function instantiateVariable(request, args, runtime) {
-    const ownerRef = requiredOwner(args.ownerRef);
-    if (!isAuthorizedOwner(ownerRef, runtime)) return defer(request, runtime, `Instantiating a Variable for ${ownerRef.label} requires review.`);
-    const definition = getVariableDefinition(String(args.definitionId || ''), runtime.timelineId);
-    if (definition?.kind === 'resource' && !getVariableScaleBand(definition, args.scaleBandId)) {
-        throw new MechanicsError(`${request.id}: Resource instances from an existing definition require an advertised scaleBandId.`);
-    }
-    const instance = createVariableInstance({ timelineId: runtime.timelineId, definitionId: String(args.definitionId || ''), ownerRef, value: args.value, scaleBandId: args.scaleBandId }, txContext(runtime, request));
-    if (!instance) throw new MechanicsError(`${request.id}: inaccessible definition or invalid owner.`);
-    setAlias(runtime, args.alias, instance.id, 'variable');
-    receipt(runtime, request, null, instance);
+function setVariable(request, args, runtime, subvalue = false) {
+    const variable = requireVariable(resolveVariableReference(args.variableRef, runtime), runtime);
+    if (!isAuthorizedVariable(variable, args.variableRef, runtime)) return deferVariable(request, runtime, variable, `Changing ${variable.name} requires review.`);
+    const field = subvalue ? String(args.field || '') : 'value';
+    if (subvalue && !variable.subvalues.some((item) => item.key === field)) throw new MechanicsError(`${request.id}: subvalue ${field || '(missing)'} was not advertised.`);
+    const before = copy(variable);
+    const after = setVariableField(variable.id, field, args.value, txContext(runtime, request));
+    if (!after) throw new MechanicsError(`${request.id}: value is invalid for ${variable.name}.`);
+    receipt(runtime, request, before, after);
 }
 
 function adjustVariable(request, args, runtime) {
-    const instance = requireVariable(resolveReference(args.variableInstanceId, runtime, 'variable'), runtime);
-    if (!isAuthorizedOwner(instance.ownerRef, runtime)) return defer(request, runtime, `Adjusting ${instance.ownerRef.label}'s Variable requires review.`);
+    const instance = requireVariable(resolveVariableReference(args.variableRef, runtime), runtime);
+    if (!isAuthorizedVariable(instance, args.variableRef, runtime)) return deferVariable(request, runtime, instance, `Adjusting ${instance.name} requires review.`);
     const before = copy(instance);
-    const after = adjustVariableInstance(instance.id, requiredNumber(args.delta, 'delta'), txContext(runtime, request));
+    const after = adjustVariableValue(instance.id, requiredNumber(args.delta, 'delta'), { ...txContext(runtime, request), field: args.field || 'value' });
     if (!after) throw new MechanicsError(`${request.id}: Variable cannot be numerically adjusted.`);
     receipt(runtime, request, before, after);
 }
 
 function transitionVariable(request, args, runtime) {
-    const instance = requireVariable(resolveReference(args.variableInstanceId, runtime, 'variable'), runtime);
-    if (!isAuthorizedOwner(instance.ownerRef, runtime)) return defer(request, runtime, `Transitioning ${instance.ownerRef.label}'s Variable requires review.`);
+    const instance = requireVariable(resolveVariableReference(args.variableRef, runtime), runtime);
+    if (!isAuthorizedVariable(instance, args.variableRef, runtime)) return deferVariable(request, runtime, instance, `Transitioning ${instance.name} requires review.`);
     const before = copy(instance);
-    const after = transitionVariableInstance(instance.id, args.nextState, txContext(runtime, request));
+    const after = transitionVariableValue(instance.id, args.nextState, { ...txContext(runtime, request), field: args.field || 'value' });
     if (!after) throw new MechanicsError(`${request.id}: transition is not permitted by the definition.`);
     receipt(runtime, request, before, after);
 }
 
 function addModifier(request, args, runtime) {
-    const instance = requireVariable(resolveReference(args.variableInstanceId, runtime, 'variable'), runtime);
-    if (!isAuthorizedOwner(instance.ownerRef, runtime)) return defer(request, runtime, `Modifying ${instance.ownerRef.label} requires review.`);
+    const instance = requireVariable(resolveVariableReference(args.variableRef, runtime), runtime);
+    if (!isAuthorizedVariable(instance, args.variableRef, runtime)) return deferVariable(request, runtime, instance, `Modifying ${instance.name} requires review.`);
     const before = copy(instance);
-    const modifier = addVariableModifier(instance.id, { label: args.label, delta: requiredNumber(args.delta, 'delta'), target: args.target, scope: args.scope, sceneId: args.scope === 'scene' ? runtime.sceneId : '', endingCondition: args.endingCondition, reason: request.reason, source: 'mechanics' }, txContext(runtime, request));
+    const modifier = addVariableModifier(instance.id, { label: args.label, amount: requiredNumber(args.delta, 'delta'), target: args.target, endingCondition: args.endingCondition, reason: request.reason, source: 'mechanics' }, txContext(runtime, request));
     if (!modifier) throw new MechanicsError(`${request.id}: modifier was invalid.`);
-    receipt(runtime, request, before, getVariableInstance(instance.id), { modifier });
+    receipt(runtime, request, before, getVariableValue(instance.id), { modifier });
 }
 
 function removeModifier(request, args, runtime) {
-    const instance = requireVariable(resolveReference(args.variableInstanceId, runtime, 'variable'), runtime);
-    if (!isAuthorizedOwner(instance.ownerRef, runtime)) return defer(request, runtime, `Changing ${instance.ownerRef.label}'s modifiers requires review.`);
+    const instance = requireVariable(resolveVariableReference(args.variableRef, runtime), runtime);
+    if (!isAuthorizedVariable(instance, args.variableRef, runtime)) return deferVariable(request, runtime, instance, `Changing ${instance.name}'s modifiers requires review.`);
     const before = copy(instance);
     if (!removeVariableModifier(instance.id, String(args.modifierId || ''), txContext(runtime, request))) throw new MechanicsError(`${request.id}: modifier not found.`);
-    receipt(runtime, request, before, getVariableInstance(instance.id));
+    receipt(runtime, request, before, getVariableValue(instance.id));
 }
 
 function createGoal(request, args, runtime) {
@@ -331,15 +343,15 @@ function reachGoal(request, args, runtime) {
     const before = copy(goal);
     let modifierInstance = null;
     let modifier = 0;
-    if (args.modifierInstanceId) {
-        modifierInstance = requireVariable(resolveReference(args.modifierInstanceId, runtime, 'variable'), runtime);
-        modifier = computeVariable(modifierInstance)?.reachModifier || 0;
+    if (args.modifierVariableRef) {
+        modifierInstance = requireVariable(resolveVariableReference(args.modifierVariableRef, runtime), runtime);
+        modifier = Number(computeVariable(modifierInstance)?.value || 0);
     }
-    const trackedInstance = goal.resolution?.kind === 'tracked' ? requireVariable(goal.resolution.variableInstanceId, runtime) : null;
+    const trackedInstance = goal.resolution?.kind === 'tracked' ? requireVariable(goal.resolution.variableId || goal.resolution.variableInstanceId, runtime) : null;
     const frozen = {
         successRate: goal.successRate,
-        modifierInstanceId: modifierInstance?.id || '', modifier,
-        variableInstanceId: trackedInstance?.id || '', direction: goal.resolution?.direction || '',
+        modifierVariableId: modifierInstance?.id || '', modifier,
+        variableId: trackedInstance?.id || '', field: goal.resolution?.field || 'value', direction: goal.resolution?.direction || '',
         completionThreshold: goal.resolution?.completionThreshold ?? null,
         impactMagnitude: String(args.impactMagnitude || 'meaningful'),
     };
@@ -351,13 +363,15 @@ function reachGoal(request, args, runtime) {
     } else if (goal.resolution.kind === 'instant') {
         goalAfter = updateStoryGoal(goal.id, { status: 'achieved' }, { ...txContext(runtime, request), type: 'goal.reach.hit' });
     } else {
-        const impact = resolveImpactDelta(trackedInstance, frozen.impactMagnitude);
-        if (impact == null) throw new MechanicsError(`${request.id}: tracked Goal requires a numeric or resource Variable and a valid impact magnitude.`);
+        const impact = shiftForMagnitude(frozen.impactMagnitude);
+        if (!impact) throw new MechanicsError(`${request.id}: tracked Goal requires a numeric Variable and a valid impact magnitude.`);
         const delta = goal.resolution.direction === 'increase' ? impact : -impact;
-        variableAfter = adjustVariableInstance(trackedInstance.id, delta, { ...txContext(runtime, request), type: 'goal.impact' });
+        variableAfter = adjustVariableValue(trackedInstance.id, delta, { ...txContext(runtime, request), field: frozen.field, type: 'goal.impact' });
+        if (!variableAfter) throw new MechanicsError(`${request.id}: tracked Goal field is not numeric.`);
+        const trackedValue = frozen.field === 'value' ? variableAfter.value : variableAfter.subvalues.find((item) => item.key === frozen.field)?.value;
         const reachedThreshold = goal.resolution.direction === 'increase'
-            ? Number(variableAfter.value) >= Number(goal.resolution.completionThreshold)
-            : Number(variableAfter.value) <= Number(goal.resolution.completionThreshold);
+            ? Number(trackedValue) >= Number(goal.resolution.completionThreshold)
+            : Number(trackedValue) <= Number(goal.resolution.completionThreshold);
         if (reachedThreshold) goalAfter = updateStoryGoal(goal.id, { status: 'achieved' }, { ...txContext(runtime, request), type: 'goal.reach.hit' });
     }
     receipt(runtime, request, before, goalAfter, { frozen, roll: result, variableAfter });
@@ -372,23 +386,23 @@ function validateArguments(request) {
         case 'goal.reach': require('goalId', 'impactMagnitude'); break;
         case 'goal.relate': require('fromGoalId', 'toGoalId', 'type'); break;
         case 'goal.close': require('goalId', 'status'); break;
-        case 'variable.instantiate': require('definitionId', 'ownerRef'); break;
-        case 'variable.propose': require('key', 'name', 'kind', 'ownerRef'); if (!['resource', 'number'].includes(args.kind)) throw new MechanicsError(`${request.id}: proposed definitions must be resource or number.`); break;
-        case 'variable.adjust': require('variableInstanceId', 'delta'); break;
-        case 'variable.transition': require('variableInstanceId', 'nextState'); break;
-        case 'modifier.add': require('variableInstanceId', 'label', 'delta', 'target'); break;
-        case 'modifier.remove': require('variableInstanceId', 'modifierId'); break;
+        case 'variable.set': require('variableRef', 'value'); break;
+        case 'variable.subvalue.set': require('variableRef', 'field', 'value'); break;
+        case 'variable.adjust': require('variableRef', 'delta'); break;
+        case 'variable.transition': require('variableRef', 'nextState'); break;
+        case 'modifier.add': require('variableRef', 'label', 'delta', 'target'); break;
+        case 'modifier.remove': require('variableRef', 'modifierId'); break;
     }
 }
 
 function normalizeResolutionArgs(value, runtime) {
     if (!value || value.kind !== 'tracked') return { kind: 'instant' };
-    return { kind: 'tracked', variableInstanceId: resolveKnownVariableReference(value.variableInstanceId, runtime), direction: value.direction, completionThreshold: value.completionThreshold };
+    return { kind: 'tracked', variableId: resolveVariableReference(value.variableRef, runtime), field: value.field || 'value', direction: value.direction, completionThreshold: value.completionThreshold };
 }
 
-function isAuthorizedOwner(ownerRef, runtime) {
-    if (ownerRef.kind !== 'persona') return true;
-    return runtime.authorizedOwnerKeys.has(ownerKey(ownerRef));
+function isAuthorizedVariable(variable, ref, runtime) {
+    if (variable.authority === 'world') return true;
+    return runtime.authorizedVariableRefs.has(String(ref || ''));
 }
 
 function isAuthorizedGoal(goal, runtime) {
@@ -400,6 +414,12 @@ function defer(request, runtime, reason) {
     const entry = { request: copy(request), receipt: { requestId: request.id, capability: request.capability, status: 'pending', approvalStatus: 'required', rejectionReason: reason, validatedInputs: copy(request.arguments) } };
     runtime.pending.push(entry);
     return entry.receipt;
+}
+
+function deferVariable(request, runtime, variable, reason) {
+    const copyRequest = copy(request);
+    copyRequest.arguments._resolvedVariableId = variable.id;
+    return defer(copyRequest, runtime, reason);
 }
 
 function receipt(runtime, request, before, after, extra = {}) {
@@ -425,15 +445,17 @@ function resolveReference(value, runtime, type) {
     return raw;
 }
 
-function resolveKnownVariableReference(value, runtime) {
-    const id = resolveReference(value, runtime, 'variable');
-    const instance = getVariableInstance(id);
-    if (!instance || instance.timelineId !== runtime.timelineId) throw new MechanicsError(`Variable instance ${id || '(missing)'} is unavailable in this Timeline.`);
-    return id;
+function resolveVariableReference(value, runtime) {
+    const ref = String(value || '');
+    const id = runtime.variableRefs.get(ref);
+    if (!id) throw new MechanicsError(`Variable reference ${ref || '(missing)'} was not advertised for this request.`);
+    const variable = getVariableValue(id, runtime.timelineId);
+    if (!variable) throw new MechanicsError(`Variable reference ${ref} is no longer available.`);
+    return variable.id;
 }
 
 function requireVariable(id, runtime = null) {
-    const instance = getVariableInstance(id);
+    const instance = getVariableValue(id, runtime?.timelineId || '');
     if (!instance || (runtime && instance.timelineId !== runtime.timelineId)) throw new MechanicsError(`Variable instance ${id || '(missing)'} is unavailable.`);
     return instance;
 }

@@ -63,3 +63,11 @@ yarn.lock
 *.code-workspace
 test-results/
 dev-tools/chrome-debug-profile/
+
+# Remodel design docs — local design reference, not for upstream
+/Roleplay_System.md
+
+# Remodel diagnostics — captured from live sessions, never repository fixtures
+test_logs/
+remodel-debug-*.json
+/*.png

@@ -1,6 +1,6 @@
 import { getContext } from '../../../st-context.js';
 import { detachStoryGoalsFromScene, deleteStoryGoalsForTimeline } from './story-goals-store.js';
-import { deleteVariablesForTimeline } from './story-variables-store.js';
+import { deleteVariablesForTimeline } from './variables-store.js';
 
 export const CHAT_METADATA_KEY = 'remodelScene';
 
@@ -222,6 +222,16 @@ export function createScene(arcId, mode = 'roleplay', title = 'New Scene') {
         // [{ job: 'director', characterId: 3 }, { job: 'narrator', characterId: 1 }].
         // Bound explicitly by the user; never matched by character name.
         roles: [],
+        // How the Scene's cast is shaped.
+        //   'open' : any number of cards; the Director seat is assigned after
+        //            the fact from whoever is in the group. Every Scene created
+        //            before the two-seat model is this, and keeps behaving
+        //            exactly as it did.
+        //   'duet' : exactly two bound cards, chosen when the Scene is cast —
+        //            one Director, one Narrator. The cast is not editable from
+        //            the Scene, because the two seats ARE the Scene.
+        // Set at creation; normalizeStore never upgrades an existing Scene.
+        ensemble: 'open',
         // Continuous direction state. A native character card may occupy the
         // non-speaking Roleplay Director seat while narratorRef points at a
         // stable visible performer identity. Direction records are extension
@@ -390,6 +400,11 @@ function normalizeStore(store) {
         // Backward-compat for scenes saved before staging existed. Every one of
         // them must keep behaving exactly as it did, so they default to 'free'.
         scene.staging = normalizeStaging(scene.staging);
+        // Absent means the Scene predates the two-seat model, so it stays
+        // 'open'. Deliberately not inferred from member count: a two-card
+        // Scene cast under the old flow is still an open cast the user may
+        // add to, and silently locking it would take that away.
+        scene.ensemble = normalizeEnsemble(scene.ensemble);
         scene.roles = normalizeSceneRoles(scene.roles);
         scene.liveDirection = normalizeLiveDirection(scene.liveDirection, scene.roles);
         scene.roles = scene.roles.filter((binding) => binding.job === 'narrator');
@@ -425,6 +440,7 @@ function sanitizeScenePatch(patch) {
         ...(patch.storyDocId !== undefined ? { storyDocId: patch.storyDocId || null } : {}),
         ...(patch.promptRecipeIds !== undefined ? { promptRecipeIds: normalizePromptRecipeIds(patch.promptRecipeIds) } : {}),
         ...(patch.staging !== undefined ? { staging: normalizeStaging(patch.staging) } : {}),
+        ...(patch.ensemble !== undefined ? { ensemble: normalizeEnsemble(patch.ensemble) } : {}),
         ...(patch.roles !== undefined ? { roles: normalizeSceneRoles(patch.roles) } : {}),
         ...(patch.liveDirection !== undefined ? { liveDirection: normalizeLiveDirection(patch.liveDirection) } : {}),
     };
@@ -440,9 +456,49 @@ function normalizePromptRecipeIds(value) {
 /** The jobs a bound cast member can hold in a directed Scene. */
 export const SCENE_STAGINGS = Object.freeze(['free', 'directed']);
 export const SCENE_ROLE_JOBS = Object.freeze(['director', 'narrator']);
+export const SCENE_ENSEMBLES = Object.freeze(['open', 'duet']);
 
 function normalizeStaging(value) {
     return SCENE_STAGINGS.includes(value) ? value : 'free';
+}
+
+function normalizeEnsemble(value) {
+    return SCENE_ENSEMBLES.includes(value) ? value : 'open';
+}
+
+/** A Scene cast as one Director and one Narrator, with both seats filled. */
+export function isDuetScene(scene) {
+    return Boolean(
+        scene?.mode === 'roleplay'
+        && scene.ensemble === 'duet'
+        && scene.liveDirection?.directorRef?.id
+        && scene.liveDirection?.narratorRef?.id,
+    );
+}
+
+/**
+ * Binds both seats of a two-seat Scene in one write.
+ *
+ * Separate from setSceneRoleplayDirector because that function exists to
+ * assign a Director seat over an already-cast open Scene. Here the two seats
+ * and the staging are established together, at creation, as one decision.
+ */
+export function setSceneDuetSeats(sceneId, { directorRef, narratorRef } = {}) {
+    const scene = getTimelineStore().scenes[sceneId];
+    if (!scene || scene.mode !== 'roleplay') return null;
+    const director = normalizeDirectionPerformerRef(directorRef);
+    const narrator = normalizeDirectionPerformerRef(narratorRef);
+    if (!director || !narrator || director.id === narrator.id) return null;
+    return updateScene(sceneId, {
+        ensemble: 'duet',
+        staging: 'directed',
+        liveDirection: {
+            ...scene.liveDirection,
+            enabled: true,
+            directorRef: director,
+            narratorRef: { ...narrator, kind: 'narrator' },
+        },
+    });
 }
 
 /**
@@ -525,6 +581,14 @@ function normalizeDirectionRecord(value) {
         })).filter((item) => item.id && item.label).slice(0, 20),
         immediateCount: Math.max(0, Math.round(Number(value.immediateCount) || 0)),
         checkpointCount: Math.max(0, Math.round(Number(value.checkpointCount) || 0)),
+        operations: (Array.isArray(value.operations) ? value.operations : []).map((item) => ({
+            kind: item?.kind === 'checkpoint' ? 'checkpoint' : 'immediate',
+            capability: String(item?.capability || '').trim(),
+            reason: String(item?.reason || '').trim(),
+        })).filter((item) => item.capability).slice(0, 40),
+        // Reasoning is stored per Scene and can be long, so it is capped:
+        // sixty of these live in the log at once and they all ride in settings.
+        reasoning: String(value.reasoning || '').slice(0, 4000),
         continueAfter: Boolean(value.continueAfter),
         hardPauseAfter: Boolean(value.hardPauseAfter),
     };
@@ -546,7 +610,13 @@ export function setSceneRoleplayDirector(sceneId, directorRef) {
     const scene = getTimelineStore().scenes[sceneId];
     if (!scene || scene.mode !== 'roleplay') return null;
     const normalized = directorRef ? normalizeDirectionPerformerRef(directorRef) : null;
-    return updateScene(sceneId, { liveDirection: { ...scene.liveDirection, directorRef: normalized } });
+    return updateScene(sceneId, {
+        // Assigning the explicit Director seat means the user is opting into
+        // Live Direction. Clearing the seat does not silently change their
+        // chosen staging mode.
+        ...(normalized ? { staging: 'directed' } : {}),
+        liveDirection: { ...scene.liveDirection, ...(normalized ? { enabled: true } : {}), directorRef: normalized },
+    });
 }
 
 function touchTimeline(timelineId) {

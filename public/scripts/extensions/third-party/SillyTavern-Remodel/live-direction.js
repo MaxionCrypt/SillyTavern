@@ -2,15 +2,19 @@ import {
     extension_prompt_roles,
     extension_prompt_types,
     main_api,
+    online_status,
     sendMessageAsUser,
     setExtensionPrompt,
 } from '../../../../script.js';
+import { extractReasoningFromData } from '../../../reasoning.js';
 import { getContext } from '../../../st-context.js';
+import { generateGroupWrapper, is_group_generating } from '../../../group-chats.js';
 import {
     executeMechanicsRequest,
     getCapabilityDictionary,
     getMechanicsRequestSchema,
     MECHANICS_PROTOCOL,
+    toCoreJsonSchema,
     undoMechanicsTransaction,
 } from './mechanics-capabilities.js';
 import {
@@ -18,16 +22,11 @@ import {
     formatMechanicsReceipts,
     mechanicalHandbook,
 } from './mechanics-runtime.js';
-import { getMechanicsProfile, listMechanicsTransactions } from './story-variables-store.js';
+import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
 import { readDirectionUnit, sanitizeDirectionText } from './live-direction-markers.js';
-import {
-    beginDirectionFlight,
-    finishDirectionFlight,
-    installLiveDirectionDiagnostics,
-    recordDirectionFlight,
-    setActiveDirectionFlight,
-} from './live-direction-diagnostics.js';
+import { directorResponseTokens, interpretStructuredReply } from './structured-reply.js';
 import { updateScene } from './timeline-state.js';
+import { recordDebugEvent } from './debug-console.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const DIRECTION_PROMPT_KEY = 'remodel_live_direction';
@@ -61,6 +60,72 @@ let ownedGenerationDepth = 0;
 let pendingSubmission = null;
 let testAdapters = null;
 
+/**
+ * The hidden half of a direction pass — everything before a visible run exists.
+ *
+ * WHY THIS EXISTS: `activeRun` is assigned only in generateDirectedPerformer,
+ * which is reached after the Director round-trip. That call is a real request
+ * costing many seconds, and for its entire duration `activeRun` was null. Every
+ * entry point guards on `activeRun`, so all of them — Send, Next, Continue,
+ * autoplay — saw an idle pipeline and happily started a second one. Two
+ * concurrent passes produce two performer generations (two bubbles), and the
+ * loser is orphaned: the winner overwrites `activeRun`, so the loser's message
+ * never reaches finalizeRunMessage and keeps its raw markers.
+ *
+ * The lock deliberately covers ONLY the hidden phase. It is released the moment
+ * `activeRun` exists, because interrupting a revealing response is a feature,
+ * not a collision — `activeRun` is the correct guard from that point on.
+ */
+let directionInFlight = null;
+
+/**
+ * Autoplay's handle. Previously an uncancellable setTimeout: Stop, an
+ * interruption, or leaving the Scene all left it armed, so a chain the user had
+ * ended fired anyway and spoke over whatever came next.
+ */
+let autoplayTimer = null;
+
+/** Correlate every record of one pass under its directionId. */
+function journal(type, detail = {}, { severity = 'info', correlationId = null, summary = '' } = {}) {
+    try {
+        recordDebugEvent('direction', type, detail, {
+            severity,
+            correlationId: correlationId || directionInFlight?.id || activeRun?.directionId || null,
+            summary: summary || type,
+        });
+    } catch {
+        // Diagnostics must never be able to break a generation.
+    }
+}
+
+function acquireDirectionLock({ scene, insertUser, autonomousSequence }) {
+    const token = {
+        id: createId('direction-pass'),
+        sceneId: scene?.id || null,
+        // A user intervention outranks an autonomous continuation; an
+        // autonomous pass never outranks anything.
+        userInitiated: Boolean(insertUser),
+        autonomousSequence: Number(autonomousSequence) || 0,
+        startedAt: Date.now(),
+        aborted: false,
+    };
+    directionInFlight = token;
+    return token;
+}
+
+/** Idempotent, and never releases a lock some later pass already took. */
+function releaseDirectionLock(token) {
+    if (token && directionInFlight === token) directionInFlight = null;
+}
+
+function cancelAutoplay(reason = 'superseded') {
+    if (!autoplayTimer) return false;
+    clearTimeout(autoplayTimer);
+    autoplayTimer = null;
+    journal('autoplay.cancelled', { reason });
+    return true;
+}
+
 // Browser tests may replace only the two nondeterministic model boundaries.
 // Production never calls this; clearing with null immediately restores the
 // native generateRaw/generate path.
@@ -72,13 +137,11 @@ export function initLiveDirection(options = {}) {
     Object.assign(hooks, Object.fromEntries(Object.entries(options).filter(([, value]) => typeof value === 'function')));
     if (initialized) return;
     initialized = true;
-    installLiveDirectionDiagnostics();
     const context = getContext();
     context.eventSource.on(context.eventTypes.STREAM_TOKEN_RECEIVED, (text) => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
         const messageId = Number(context.streamingProcessor?.messageId);
         if (Number.isInteger(messageId)) activeRun.messageId = messageId;
-        recordDirectionFlight('native.stream', { messageId: activeRun.messageId, rawLength: String(text ?? '').length }, activeRun.flightId);
         acceptNativeBuffer(text);
     });
     context.eventSource.on(context.eventTypes.MESSAGE_RECEIVED, (messageId) => {
@@ -87,14 +150,12 @@ export function initLiveDirection(options = {}) {
         const message = context.chat?.[id];
         if (!message || message.is_user) return;
         activeRun.messageId = id;
-        recordDirectionFlight('native.message.received', { messageId: id, messageLength: String(message.mes || '').length }, activeRun.flightId);
         acceptNativeBuffer(message.mes);
     });
     const finish = () => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
         activeRun.generationFinished = true;
         activeRun.generationSettled = true;
-        recordDirectionFlight('native.generation.settled', { messageId: activeRun.messageId }, activeRun.flightId);
         scheduleReveal(0);
     };
     context.eventSource.on(context.eventTypes.GENERATION_ENDED, finish);
@@ -103,6 +164,33 @@ export function initLiveDirection(options = {}) {
     context.eventSource.on(context.eventTypes.CHAT_LOADED, recover);
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, recover);
     recoverLiveDirectionMessages();
+}
+
+/**
+ * Why a native performer request would go nowhere, or '' when it can run.
+ *
+ * `generateGroupWrapper` opens with `if (online_status === 'no_connection')
+ * return Promise.resolve()` (group-chats.js). No throw, no toast, no event —
+ * it just resolves having done nothing, and `Generate()` has no matching guard
+ * of its own, so the caller sees a completed generation that produced no
+ * message. Directed sends then blame the performer ("X did not produce a
+ * response") and Free play spins its indicator forever waiting on a
+ * GENERATION_ENDED that will never arrive.
+ *
+ * The trap is that Remodel's Director and mechanics calls go through
+ * `generateRawData`, which fetches the backend directly and never consults
+ * `online_status`. So with Auto-connect off — or after any reload that leaves
+ * SillyTavern disconnected — the hidden passes all succeed while every visible
+ * performer silently produces nothing. Name it instead of guessing.
+ */
+export function describeNativeGenerationBlock() {
+    if (main_api !== 'openai') {
+        return 'Roleplay generation requires the current Chat Completion connection.';
+    }
+    if (online_status === 'no_connection') {
+        return 'SillyTavern is not connected to your API, so no performer can speak. Open the API panel (the plug icon) and press Connect — or turn on Auto-connect so it reconnects after a reload. Direction still runs while disconnected because it calls the backend directly, which is why only the visible reply goes missing.';
+    }
+    return '';
 }
 
 export function isDirectedLiveScene(scene = hooks.getActiveScene()) {
@@ -119,13 +207,20 @@ export function getLiveDirectionRun() {
 
 export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
     if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural' };
+    // A hidden Director pass is a busy pipeline with no visible run yet. It used
+    // to report 'Ready' with Stop disabled, which is what invited the second
+    // send that produced a second bubble — notifyTransient('Directing') is a
+    // one-shot push, and any re-render (onSettled calls renderRoleplayScene)
+    // repainted this idle state straight over it.
+    const directing = Boolean(directionInFlight && !activeRun);
     return {
         active: true,
-        state: activeRun?.state || 'Ready',
+        state: activeRun?.state || (directing ? 'Directing' : 'Ready'),
         pacing: scene.liveDirection?.pacing || 'natural',
         openingLabel: activeRun?.openingLabel || '',
         canContinue: activeRun?.state === 'Waiting for you',
-        canStop: Boolean(activeRun && !['Ready', 'Complete'].includes(activeRun.state)),
+        canSend: !directing,
+        canStop: directing || Boolean(activeRun && !['Ready', 'Complete'].includes(activeRun.state)),
         performerLabel: activeRun?.performer?.label || '',
     };
 }
@@ -159,20 +254,34 @@ export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = 
     if (!action.trim()) return false;
     const submissionKey = `${scene.id}\n${action.trim()}`;
     if (pendingSubmission === submissionKey) {
-        recordDirectionFlight('submission.duplicate.blocked', { sceneId: scene.id, action });
         return false;
     }
-    pendingSubmission = submissionKey;
-    const flightId = beginDirectionFlight({ sceneId: scene.id, timelineId: scene.timelineId, action, insertUser: true });
-    try {
-    if (activeRun?.acceptedComplete) {
-        await finalizeRunMessage(activeRun, { state: 'complete' });
-        activeRun = null;
-        notifyState();
-    } else if (activeRun) {
-        await interruptLiveDirection({ preserveForIntervention: true });
+    // An armed autoplay continuation is not the user's turn. Disarm it before
+    // anything else so it cannot fire alongside this intervention.
+    cancelAutoplay('user-intervention');
+    // A hidden pass is already running. If it is the world continuing on its
+    // own, the user outranks it and it is abandoned. If it is the user's own
+    // previous send still directing, this is a double-submit and is refused —
+    // starting a second pipeline is exactly what produced two bubbles.
+    if (directionInFlight) {
+        if (directionInFlight.userInitiated) {
+            journal('submit.rejected', { reason: 'a user-initiated direction is already in flight' }, { severity: 'warn' });
+            return false;
+        }
+        journal('submit.supersedes-autonomous', { supersededPassId: directionInFlight.id });
+        directionInFlight.aborted = true;
+        directionInFlight = null;
     }
-        return await beginDirection({ scene, action, insertUser: true, authorizedGoalIds, autonomousSequence: 0, flightId });
+    pendingSubmission = submissionKey;
+    try {
+        if (activeRun?.acceptedComplete) {
+            await finalizeRunMessage(activeRun, { state: 'complete' });
+            activeRun = null;
+            notifyState();
+        } else if (activeRun) {
+            await interruptLiveDirection({ preserveForIntervention: true });
+        }
+        return await beginDirection({ scene, action, insertUser: true, authorizedGoalIds, autonomousSequence: 0 });
     } finally {
         if (pendingSubmission === submissionKey) pendingSubmission = null;
     }
@@ -180,6 +289,14 @@ export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = 
 
 export async function requestNextDirection(scene = hooks.getActiveScene()) {
     if (!isDirectedLiveScene(scene) || activeRun && !['Waiting for you', 'Complete'].includes(activeRun.state)) return false;
+    // Guarded as well as activeRun: between a completed reveal and the moment a
+    // new run exists there is a multi-second hidden window in which activeRun is
+    // null, and Next used to sail straight through it into a parallel pass.
+    if (directionInFlight) {
+        journal('next.rejected', { reason: 'a direction is already in flight', passId: directionInFlight.id }, { severity: 'warn' });
+        return false;
+    }
+    cancelAutoplay('manual-next');
     const sequence = activeRun?.autonomousSequence || 0;
     if (activeRun?.messageId != null) await finalizeRunMessage(activeRun, { state: 'complete' });
     activeRun = null;
@@ -193,7 +310,6 @@ export function handleLiveDirectionDraft(value) {
         if (activeRun.holdReason !== 'hard') {
             activeRun.holdReason = 'typing';
             activeRun.state = 'Held while you write';
-            recordDirectionFlight('reveal.held.typing', { acceptedLength: activeRun.acceptedVisibleText.length, rawOffset: activeRun.rawOffset }, activeRun.flightId);
             clearRevealTimer();
             persistRun(activeRun, true);
             notifyState();
@@ -203,7 +319,6 @@ export function handleLiveDirectionDraft(value) {
     if (activeRun.holdReason === 'typing') {
         activeRun.holdReason = '';
         activeRun.state = 'Speaking';
-        recordDirectionFlight('reveal.resumed', { acceptedLength: activeRun.acceptedVisibleText.length, rawOffset: activeRun.rawOffset }, activeRun.flightId);
         notifyState();
         scheduleReveal(0);
     }
@@ -224,12 +339,28 @@ export function continueLiveDirection() {
 }
 
 export async function stopLiveDirection() {
-    if (!activeRun) return false;
+    const stoppedAutoplay = cancelAutoplay('stopped');
+    // Stop must also reach a pass that has not produced a visible run yet,
+    // otherwise pressing Stop during the Director call did nothing and the
+    // performer spoke anyway a few seconds later.
+    if (directionInFlight) {
+        journal('stopped.in-flight', { passId: directionInFlight.id });
+        directionInFlight.aborted = true;
+        directionInFlight = null;
+        notifyState();
+        hooks.onSettled();
+        if (!activeRun) return true;
+    }
+    if (!activeRun) return stoppedAutoplay;
     await interruptLiveDirection({ preserveForIntervention: false });
     return true;
 }
 
 export async function retryLiveDirection() {
+    if (directionInFlight) {
+        journal('retry.rejected', { reason: 'a direction is already in flight' }, { severity: 'warn' });
+        return false;
+    }
     const retry = pendingFailure;
     pendingFailure = null;
     if (!retry) return false;
@@ -244,8 +375,20 @@ export function sendWithoutLiveDirection() {
     return true;
 }
 
+/**
+ * Whether the pending failure has user text a bypass could actually send.
+ *
+ * A failure on an autonomous continuation has none — there is no intervention
+ * to re-send — so offering "Send Normally" there is a button that cannot do
+ * anything when clicked.
+ */
+export function canSendWithoutLiveDirection() {
+    return Boolean(pendingFailure?.insertUser);
+}
+
 export async function regenerateLastDirectedResponse(scene = hooks.getActiveScene()) {
-    if (!isDirectedLiveScene(scene) || activeRun) return false;
+    if (!isDirectedLiveScene(scene) || activeRun || directionInFlight) return false;
+    cancelAutoplay('regenerate');
     const context = getContext();
     const messageId = context.chat.length - 1;
     const message = context.chat[messageId];
@@ -265,45 +408,131 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     return generateDirectedPerformer({ scene, envelope, performer, autonomousSequence: Number(saved.autonomousSequence) || 0 });
 }
 
-async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, flightId = '' } = {}) {
-    flightId ||= beginDirectionFlight({ sceneId: scene?.id, timelineId: scene?.timelineId, action, insertUser: Boolean(insertUser), autonomousSequence });
-    setActiveDirectionFlight(flightId);
-    recordDirectionFlight('direction.begin', { sceneId: scene?.id, insertUser: Boolean(insertUser), autonomousSequence, chatLength: getContext().chat?.length || 0 }, flightId);
-    if (!scene || main_api !== 'openai') {
-        return directionFailure(new Error('Live Direction requires the current Chat Completion connection.'), { scene, action, insertUser, authorizedGoalIds, autonomousSequence, flightId }, flightId);
+async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0 } = {}) {
+    // Checked before the Director call, not after: the Director costs a real
+    // request and ~17s, and there is no point spending either when the
+    // performer that follows it cannot speak.
+    const blocked = !scene ? 'No active Scene.' : describeNativeGenerationBlock();
+    if (blocked) {
+        journal('blocked', { reason: blocked }, { severity: 'warn' });
+        return directionFailure(new Error(blocked), { scene, action, insertUser, authorizedGoalIds, autonomousSequence });
     }
+    // Last line of defence. Every caller checks the lock, but they are all async
+    // and a caller that awaited something in between could still arrive here
+    // after another pass took it.
+    if (directionInFlight) {
+        journal('begin.rejected', { reason: 'a direction is already in flight', passId: directionInFlight.id }, { severity: 'warn' });
+        return false;
+    }
+    const token = acquireDirectionLock({ scene, insertUser, autonomousSequence });
+    journal('begin', {
+        passId: token.id,
+        sceneId: scene.id,
+        insertUser: Boolean(insertUser),
+        autonomousSequence,
+        authorizedGoalIds,
+        actionLength: String(action || '').length,
+    }, { correlationId: token.id, summary: insertUser ? 'direction.begin (user)' : 'direction.begin (autonomous)' });
     try {
         pendingFailure = null;
         notifyTransient('Directing');
         const ready = await hooks.ensureSceneReady(scene);
-        recordDirectionFlight('scene.ready', { ready, groupId: getContext().groupId, chatId: getContext().chatId }, flightId);
         if (!ready) throw new Error('The native chat linked to this Scene could not be loaded.');
+        if (token.aborted) return abandonPass(token, 'scene-ready');
         const snapshot = await buildDirectionSnapshot(scene, action, authorizedGoalIds);
-        recordDirectionFlight('director.snapshot', { cast: snapshot.cast, director: snapshot.director?.ref || null, historyCount: snapshot.acceptedHistory.length }, flightId);
+        journal('snapshot', {
+            passId: token.id,
+            castCount: snapshot.cast.length,
+            castLabels: snapshot.cast.map((item) => item.label),
+            directorLabel: snapshot.director?.label || null,
+            // Key names deliberately avoid the journal's sensitive-key regex
+            // (debug-console.js SENSITIVE_KEY): it matches on the KEY before it
+            // looks at the value, so `historyCount: 12` would be redacted to a
+            // placeholder even though a count discloses nothing.
+            acceptedLines: snapshot.acceptedHistory.length,
+            goalCount: snapshot.mechanics?.goals?.length ?? null,
+            receiptCount: snapshot.recentReceipts.length,
+        }, { correlationId: token.id });
+        if (token.aborted) return abandonPass(token, 'snapshot');
+        const startedAt = Date.now();
         const envelope = await requestDirectionEnvelope(scene, snapshot);
-        recordDirectionFlight('director.envelope', envelope, flightId);
-        const performer = resolvePerformer(performerOverride || envelope.performerRef, scene);
+        journal('envelope', {
+            passId: token.id,
+            directionId: envelope.directionId,
+            durationMs: Date.now() - startedAt,
+            performerRef: envelope.performerRef || null,
+            movementChars: String(envelope.movement?.objective || '').length,
+            openings: envelope.openings.length,
+            immediateRequests: envelope.mechanics.immediateRequests.length,
+            checkpoints: envelope.mechanics.checkpoints.length,
+            continueAfter: envelope.flow.continueAfter,
+            hardPauseAfter: envelope.flow.hardPauseAfter,
+            reasoningLength: lastDirectorReasoning.length,
+            // Logged next to the reasoning it competes with, so headroom is
+            // readable straight off an export instead of inferred: reasoning
+            // and the envelope share this allowance, and overrunning it shows
+            // up as a truncated envelope rather than a shorter answer.
+            responseLimit: directorResponseTokens(getMechanicsProfile()),
+        }, { correlationId: token.id });
+        // The Director round-trip is the long window. Anything that happened
+        // during it — Stop, a user intervention outranking an autonomous pass —
+        // lands here, before a single native token is spent.
+        if (token.aborted) return abandonPass(token, 'envelope');
+        const requestedRef = performerOverride || envelope.performerRef;
+        const performer = resolvePerformer(requestedRef, scene);
         performerOverride = null;
         if (!performer) {
-            const requested = normalizeRef(performerOverride || envelope.performerRef);
+            const requested = normalizeRef(requestedRef);
             const available = snapshot.cast.map((item) => `${item.label} (${item.ref?.id || '?'})`).join(', ') || 'none';
             throw new Error(`The Director selected ${requested?.label || requested?.id || 'an unknown performer'}, but the available performers are: ${available}.`);
         }
+        journal('performer', {
+            passId: token.id,
+            requestedRef: normalizeRef(requestedRef),
+            resolvedRef: performer.ref,
+            nativeIndex: performer.characterId,
+            // resolvePerformer substitutes the Narrator (or the sole card) when
+            // the model names something that is not a native performer.
+            substituted: normalizeRef(requestedRef)?.id !== performer.ref.id,
+        }, { correlationId: token.id });
         const normalized = normalizeEnvelope(envelope, scene, performer.ref);
+        normalized.variableRefs = snapshot.mechanics.variableRefs;
+        normalized.authorizedGoalIds = authorizedGoalIds;
         const immediate = executeDirectionRequests(normalized.mechanics.immediateRequests, {
             scene, directionId: normalized.directionId, checkpointId: 'immediate', authorizedGoalIds,
+            variableRefs: normalized.variableRefs,
         });
+        journal('mechanics.immediate', {
+            passId: token.id,
+            requested: normalized.mechanics.immediateRequests.length,
+            ok: immediate.ok,
+            errors: immediate.errors || [],
+            transactionId: immediate.transaction?.id || null,
+        }, { correlationId: token.id, severity: immediate.ok ? 'info' : 'error' });
         if (!immediate.ok) throw new Error(immediate.errors?.join(' ') || 'Immediate mechanical requests were rejected.');
         normalized.immediateReceipts = immediate.receipts || [];
+        if (token.aborted) return abandonPass(token, 'mechanics');
         if (insertUser) {
             await sendMessageAsUser(action);
-            recordDirectionFlight('user.inserted', { chatLength: getContext().chat?.length || 0, messageId: (getContext().chat?.length || 1) - 1 }, flightId);
             hooks.clearComposer();
         }
-        return generateDirectedPerformer({ scene, envelope: normalized, performer, autonomousSequence, flightId });
+        return await generateDirectedPerformer({ scene, envelope: normalized, performer, autonomousSequence, token });
     } catch (error) {
-        return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence, flightId }, flightId);
+        return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence });
+    } finally {
+        // Normally already released the moment activeRun was assigned; this
+        // covers every early return and throw.
+        releaseDirectionLock(token);
     }
+}
+
+/** A pass cancelled before it spent a native generation. Leaves no wreckage. */
+function abandonPass(token, stage) {
+    journal('abandoned', { passId: token.id, stage }, { correlationId: token.id, severity: 'warn', summary: `direction.abandoned (${stage})` });
+    releaseDirectionLock(token);
+    notifyState();
+    hooks.onSettled();
+    return false;
 }
 
 async function buildDirectionSnapshot(scene, action, authorizedGoalIds) {
@@ -326,7 +555,11 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds) {
     const directorRef = normalizeRef(scene.liveDirection?.directorRef);
     const director = directorRef && cast.find((member) => normalizeRef(member.ref || member)?.id === directorRef.id);
     const performingCast = cast.filter((member) => !member.disabled && (!directorRef || normalizeRef(member.ref || member)?.id !== directorRef.id));
-    const mechanics = buildMechanicalSnapshot(scene, action, performingCast.map((member) => member.ref || member), persona, authorizedGoalIds);
+    const activatedEntries = [...(lore.allActivatedEntries || [])];
+    const mechanics = await buildMechanicalSnapshot(scene, action, performingCast.map((member) => member.ref || member), persona, authorizedGoalIds, {
+        history,
+        activatedEntries,
+    });
     return {
         scene: { id: scene.id, timelineId: scene.timelineId, title: scene.title },
         currentAction: action,
@@ -362,21 +595,48 @@ async function requestDirectionEnvelope(scene, snapshot) {
             : 'MECHANICAL AUTOMATION IS DISABLED. Return no immediate requests and no checkpoint requests; Goals and Variables are read-only memory.' },
         { role: 'user', content: `DIRECTOR SNAPSHOT\n${JSON.stringify(snapshot)}\n\nReturn exactly one ${DIRECTION_PROTOCOL} envelope. Choose only an advertised performerRef and capability IDs.` },
     ];
-    recordDirectionFlight('director.request.started', { promptMessages: prompt.length });
-    const raw = testAdapters?.requestDirection
-        ? await testAdapters.requestDirection({ scene, snapshot, prompt, schema: getDirectionEnvelopeSchema(snapshot.cast).schema })
-        : await getContext().generateRaw({
-            api: 'openai', prompt, responseLength: Math.max(512, Math.min(3000, Math.round(profile.contextBudget / 3))),
-            instructOverride: false, jsonSchema: getDirectionEnvelopeSchema(snapshot.cast).schema,
-        });
-    recordDirectionFlight('director.request.completed', { raw });
-    let envelope;
-    try { envelope = typeof raw === 'string' ? JSON.parse(raw) : structuredClone(raw); } catch { throw new Error('The Game Director returned invalid structured JSON.'); }
+    const schema = toCoreJsonSchema(getDirectionEnvelopeSchema(snapshot.cast));
+    let raw;
+    let reasoning = '';
+    if (testAdapters?.requestDirection) {
+        raw = await testAdapters.requestDirection({ scene, snapshot, prompt, schema });
+    } else {
+        const capture = await withCapturedResponse(() => getContext().generateRawData({
+            api: 'openai', prompt,
+            // Its own setting, not a third of the mechanical context budget.
+            // Those were the same number, but they measure different things:
+            // contextBudget is how much mechanical state goes INTO the prompt,
+            // while this is how much room the Director has to think and answer.
+            // A Scene with no Goals at all still needs the second one.
+            responseLength: directorResponseTokens(profile),
+            instructOverride: false, jsonSchema: schema,
+        }));
+        raw = capture.result;
+        reasoning = readReasoning(capture.captured);
+    }
+    lastDirectorReasoning = reasoning;
+    // Separates an exhausted token budget from genuinely malformed output. The
+    // old message blamed the model's formatting for what is usually a reasoning
+    // model spending its whole allowance before writing a character.
+    let envelope = interpretStructuredReply(raw, 'Game Director');
     if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) envelope = {};
     // Protocol identity is transport metadata owned by Remodel. Providers
     // vary in how faithfully they echo const-valued schema fields; accepting
     // their prose decision must never let them rename the local protocol.
     envelope.protocol = DIRECTION_PROTOCOL;
+    // The direction ID is transport identity owned by Remodel, for the same
+    // reason the protocol string above is.
+    //
+    // Observed live: a provider returned the literal `"dir-001"` for every
+    // single pass in a session. Because persistDirectionRecord keys the Scene's
+    // direction log by this id, each new record REPLACED the previous one — the
+    // log never held more than one card, and that card appeared to jump down
+    // the stream to whatever the newest pass's createdAt was. The same
+    // collision also let one run's setExtensionPrompt filter and completion
+    // guards match a different run's directionId.
+    //
+    // Never accept it from the model, even when it looks unique.
+    envelope.directionId = createId('direction');
     // Performer identity is extension-owned, not model-owned. When only one
     // native speaking card is available (the common Director + Narrator
     // setup), an empty, fictional, or malformed performerRef from the model
@@ -398,7 +658,6 @@ async function requestDirectionEnvelope(scene, snapshot) {
     ).trim();
     const safeObjective = returnedObjective
         || `Respond naturally to the current action while preserving accepted scene facts: ${String(snapshot.currentAction || '').trim()}`;
-    envelope.directionId = String(envelope.directionId || createId('direction'));
     envelope.movement = {
         objective: safeObjective,
         constraints: Array.isArray(envelope.movement?.constraints) ? envelope.movement.constraints : [],
@@ -427,13 +686,30 @@ async function requestDirectionEnvelope(scene, snapshot) {
     return envelope;
 }
 
-async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, flightId = '' }) {
-    flightId ||= beginDirectionFlight({ sceneId: scene?.id, timelineId: scene?.timelineId, directionId: envelope?.directionId, replay: true });
+/**
+ * How many times a performer that renders nothing is asked again before the
+ * pass is declared failed.
+ *
+ * Measured, not guessed: in one recorded session the same performer, prompt,
+ * model and parameters produced 664 and 756 characters on two generations and
+ * nothing at all on two others — once by spending the whole reply on reasoning,
+ * once by emitting thirteen empty tokens and stopping. At temperature 1 an
+ * empty completion is a transient provider outcome, so the correct response is
+ * to ask again rather than to surface a failure the user can only answer by
+ * pressing Retry themselves.
+ *
+ * The Director is NOT re-run: the direction was valid, only its rendering
+ * failed, and re-directing would cost a second long call and could change the
+ * movement the user is waiting on.
+ */
+const EMPTY_RESPONSE_RETRIES = 2;
+const EMPTY_RESPONSE_RETRY_DELAY_MS = 400;
+
+async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0 }) {
     const director = resolveDirector(scene);
     persistDirectionRecord(scene, envelope, performer, director);
     const movementPrompt = formatMovementPrompt(envelope, performer);
     activeRun = {
-        flightId,
         directionId: envelope.directionId,
         sceneId: scene.id,
         timelineId: scene.timelineId,
@@ -458,9 +734,14 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         pacing: scene.liveDirection?.pacing || 'natural',
         autonomousSequence: Number(autonomousSequence) || 0,
         authorizedGoalIds: envelope.authorizedGoalIds || [],
+        variableRefs: envelope.variableRefs instanceof Map ? envelope.variableRefs : new Map(),
+        emptyRetries: Number(emptyRetries) || 0,
     };
-    setActiveDirectionFlight(flightId);
-    recordDirectionFlight('performer.selected', { performer: performer.ref, characterId: performer.characterId, directionId: envelope.directionId }, flightId);
+    // A visible run now exists, so activeRun is the authoritative guard and the
+    // hidden-phase lock has done its job. Releasing it here — rather than when
+    // beginDirection returns — is what keeps interruption working: the user must
+    // be able to submit over a revealing response.
+    releaseDirectionLock(token);
     notifyState();
     setExtensionPrompt(DIRECTION_PROMPT_KEY, movementPrompt, extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM, () => activeRun?.directionId === envelope.directionId);
     // The user message was inserted explicitly above. Native normal
@@ -473,18 +754,76 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         nativeComposer.dispatchEvent(new Event('input', { bubbles: true }));
     }
     ownedGenerationDepth++;
-    recordDirectionFlight('performer.request.started', { ownedGenerationDepth, chatLength: getContext().chat?.length || 0 }, flightId);
+    const generationStartedAt = Date.now();
     try {
-        const options = getContext().groupId ? { force_chid: performer.characterId } : {};
+        const context = getContext();
+        // force_chid is read by generateGroupWrapper as `typeof … == 'number'`,
+        // and NaN passes that test — a member with no resolvable index would
+        // activate character NaN rather than falling back. Refuse instead.
+        if (context.groupId && !Number.isInteger(performer.characterId)) {
+            throw new Error(`${performer.label || 'The selected performer'} is not a loaded character card in this group, so no native index could be resolved for it.`);
+        }
+        const options = context.groupId ? { force_chid: performer.characterId } : {};
+        journal('generation.start', {
+            directionId: envelope.directionId,
+            performerLabel: performer.label,
+            nativeIndex: performer.characterId,
+            transport: context.groupId ? 'group' : 'solo',
+            pacing: activeRun.pacing,
+        }, { correlationId: envelope.directionId });
         if (testAdapters?.generatePerformer) {
-            await testAdapters.generatePerformer({ scene, envelope, performer, options, context: getContext() });
+            await testAdapters.generatePerformer({ scene, envelope, performer, options, context });
+        } else if (context.groupId) {
+            // Do not route an owned performer request back through generic
+            // Generate(). In a native group that function conditionally enters
+            // the group wrapper; if core still considers a preceding group
+            // operation active, it silently falls through as a solo request and
+            // can return after only /api/ping. The Director has already selected
+            // one validated cast member, so invoke the real group boundary
+            // explicitly and force that member.
+            const idleDeadline = Date.now() + 5000;
+            while (is_group_generating && Date.now() < idleDeadline) {
+                // eslint-disable-next-line no-await-in-loop
+                await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+            if (is_group_generating) {
+                throw new Error('The native group generator is still busy. Try Direction again.');
+            }
+            // Re-checked here as well as before the Director call: the Director
+            // round-trip takes many seconds, and the connection can drop inside
+            // that window.
+            const lateBlock = describeNativeGenerationBlock();
+            if (lateBlock) {
+                throw new Error(lateBlock);
+            }
+            const messageCount = context.chat?.length || 0;
+            await generateGroupWrapper(false, 'normal', options);
+            if ((getContext().chat?.length || 0) <= messageCount) {
+                // Reaching here means core accepted the request and returned
+                // without writing a message. Say that plainly rather than
+                // implying the model replied with nothing.
+                throw new Error(`${performer.name || performer.label || 'The selected performer'} was asked to speak, but SillyTavern's group generator returned without producing a message. ${describeNativeGenerationBlock() || 'Check the Debug Console for a failed request.'}`);
+            }
         } else {
-            await getContext().generate('normal', options);
+            await context.generate('normal', options);
         }
     } finally {
-        recordDirectionFlight('performer.request.returned', { chatLength: getContext().chat?.length || 0, messageId: activeRun?.messageId }, flightId);
         ownedGenerationDepth = Math.max(0, ownedGenerationDepth - 1);
-        setExtensionPrompt(DIRECTION_PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0);
+        // Only this run's own injection. Both runs of a concurrent pair shared
+        // this key, so the first to finish cleared the movement the second was
+        // still generating against — that performer received no direction at
+        // all and answered generically. The lock should now prevent the pair
+        // from forming; this keeps the damage impossible rather than unlikely.
+        if (activeRun == null || activeRun.directionId === envelope.directionId) {
+            setExtensionPrompt(DIRECTION_PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0);
+        }
+        journal('generation.end', {
+            directionId: envelope.directionId,
+            durationMs: Date.now() - generationStartedAt,
+            messageId: activeRun?.directionId === envelope.directionId ? activeRun.messageId : null,
+            bufferedLength: activeRun?.directionId === envelope.directionId ? activeRun.rawBufferedText.length : null,
+            stillOwned: activeRun?.directionId === envelope.directionId,
+        }, { correlationId: envelope.directionId });
         if (activeRun?.directionId === envelope.directionId) {
             activeRun.generationFinished = true;
             activeRun.generationSettled = true;
@@ -497,10 +836,17 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
 function acceptNativeBuffer(text) {
     if (!activeRun) return;
     activeRun.rawBufferedText = String(text ?? '');
-    // Core writes its cumulative streaming buffer immediately after emitting
-    // STREAM_TOKEN_RECEIVED. Reassert the accepted fragment on the next task
-    // so unrelated readers never inherit markers or unseen future prose.
-    setTimeout(() => mirrorAcceptedNative(activeRun), 0);
+    // Streaming fills our buffer and nothing else. We used to re-assert the
+    // accepted fragment into the native message on the next task after every
+    // token, which meant racing core's own streaming writer for ownership of
+    // message.mes for the whole generation.
+    //
+    // We do not need to win that race. The Roleplay workspace renders its own
+    // stream, so during generation the native message is a data record nobody
+    // is reading on screen. The accepted text is written once by
+    // finalizeRunMessage when the run completes, is interrupted, or is
+    // stopped — and recoverLiveDirectionMessages sanitizes any message that
+    // still carries markers if the browser dies mid-generation.
     scheduleReveal(0);
 }
 
@@ -533,14 +879,13 @@ async function revealStep() {
         }
         if (unit.kind === 'unknown') continue;
         if (unit.kind === 'commit') {
-            recordDirectionFlight('marker.commit', { checkpointId: unit.id, visibleOffset: run.acceptedVisibleText.length }, run.flightId);
             await executeCheckpoint(run, unit.id);
             continue;
         }
         if (unit.kind === 'hard-pause') {
             run.holdReason = 'hard';
             run.state = 'Waiting for you';
-            recordDirectionFlight('marker.hard-pause', { visibleOffset: run.acceptedVisibleText.length }, run.flightId);
+            journal('reveal.hard-pause', { directionId: run.directionId, atVisibleOffset: run.acceptedVisibleText.length }, { correlationId: run.directionId });
             persistRun(run, true);
             notifyState();
             return;
@@ -549,7 +894,6 @@ async function revealStep() {
         run.lastBreathOffset = run.acceptedVisibleText.length;
         run.state = unit.kind === 'opening' ? 'Opening' : 'Breathing';
         run.openingLabel = unit.kind === 'opening' ? openingLabel(run.envelope, unit.id) : '';
-        recordDirectionFlight(`marker.${unit.kind}`, { id: unit.id || '', visibleOffset: run.acceptedVisibleText.length, words }, run.flightId);
         persistRun(run, true);
         notifyState();
         const adaptive = pace.cps === Infinity ? 0 : Math.max(pace.min, Math.min(pace.max, words * pace.wordMs));
@@ -569,13 +913,29 @@ async function executeCheckpoint(run, checkpointId) {
     if (run.emittedCheckpointIds.has(checkpointId)) return;
     const checkpoint = run.envelope.mechanics.checkpoints.find((item) => item.id === checkpointId);
     run.emittedCheckpointIds.add(checkpointId);
-    if (!checkpoint) return;
+    if (!checkpoint) {
+        journal('checkpoint.unknown', { directionId: run.directionId, checkpointId }, { correlationId: run.directionId, severity: 'warn' });
+        return;
+    }
     const scene = hooks.getActiveScene();
-    if (!scene || scene.id !== run.sceneId) return;
+    if (!scene || scene.id !== run.sceneId) {
+        journal('checkpoint.skipped', { directionId: run.directionId, checkpointId, reason: 'the Scene changed before the marker was revealed' }, { correlationId: run.directionId, severity: 'warn' });
+        return;
+    }
     const result = executeDirectionRequests(checkpoint.requests, {
         scene, directionId: run.directionId, messageId: run.messageId, checkpointId,
         authorizedGoalIds: run.authorizedGoalIds,
+        variableRefs: run.variableRefs,
     });
+    journal('checkpoint', {
+        directionId: run.directionId,
+        checkpointId,
+        requests: checkpoint.requests.length,
+        ok: result.ok,
+        errors: result.errors || [],
+        transactionId: result.transaction?.id || null,
+        atVisibleOffset: run.acceptedVisibleText.length,
+    }, { correlationId: run.directionId, severity: result.ok ? 'info' : 'error' });
     if (result.transaction?.id) run.checkpointTransactionIds.push(result.transaction.id);
     if (!result.ok) run.checkpointDiagnostics = [...(run.checkpointDiagnostics || []), ...(result.errors || ['Checkpoint failed.'])];
     persistRun(run, true);
@@ -592,37 +952,74 @@ function executeDirectionRequests(requests, context) {
         messageId: context.messageId,
         checkpointId: context.checkpointId,
         authorizedGoalIds: context.authorizedGoalIds || [],
-        authorizedOwnerRefs: hooks.getPersona ? [hooks.getPersona()].filter(Boolean) : [],
+        authorizedVariableRefs: [],
+        variableRefs: context.variableRefs || new Map(),
         allowUserGoalCreate: false,
-        allowVariableProposal: false,
     });
 }
 
 async function completeVisibleRun(run) {
     if (activeRun !== run) return;
+    // revealStep is async and nulls revealTimer before it awaits, so a
+    // scheduleReveal landing while this function is inside finalizeRunMessage
+    // (which awaits saveChat over the network) re-enters it with activeRun
+    // still pointing at the same run. Every effect below would then happen
+    // twice — including arming a second autoplay continuation.
+    if (run.completing || run.acceptedComplete) return;
+    run.completing = true;
+    // A run that reveals nothing is a failed response, not a finished one.
+    // Treating it as complete wrote a blank Narrator row into the chat AND
+    // chained autoplay off it, so one silent provider reply became a run of
+    // empty rows that each fed the next Director pass as accepted history.
+    if (!sanitizeDirectionText(run.acceptedVisibleText)) {
+        await failEmptyVisibleRun(run);
+        return;
+    }
     await finalizeRunMessage(run, { state: 'complete' });
-    recordDirectionFlight('reveal.complete', { messageId: run.messageId, acceptedLength: run.acceptedVisibleText.length }, run.flightId);
     run.acceptedComplete = true;
     run.autonomousSequence += 1;
     const scene = hooks.getActiveScene();
     const draft = String(hooks.getComposerDraft() || '').trim();
     const limit = scene?.liveDirection?.autonomousResponseLimit || 3;
     const hard = run.envelope.flow.hardPauseAfter || !run.envelope.flow.continueAfter || run.autonomousSequence >= limit;
+    journal('complete', {
+        directionId: run.directionId,
+        acceptedLength: run.acceptedVisibleText.length,
+        autonomousSequence: run.autonomousSequence,
+        limit,
+        checkpointsFired: [...run.emittedCheckpointIds],
+        checkpointDiagnostics: run.checkpointDiagnostics || [],
+        continueAfter: run.envelope.flow.continueAfter,
+        hardPauseAfter: run.envelope.flow.hardPauseAfter,
+        heldByComposer: Boolean(draft),
+        next: hard || draft ? 'wait' : (scene?.liveDirection?.autoplay !== false ? 'autoplay' : 'idle'),
+    }, { correlationId: run.directionId });
     if (hard || draft) {
         run.waitingAtEnd = true;
         run.holdReason = 'hard';
         run.state = draft ? 'Held while you write' : 'Waiting for you';
         notifyState();
         hooks.onSettled();
-        finishDirectionFlight('waiting', { messageId: run.messageId, hard, draft: Boolean(draft) }, run.flightId);
         return;
     }
     if (scene?.liveDirection?.autoplay !== false) {
         const sequence = run.autonomousSequence;
+        const sceneId = scene?.id;
         activeRun = null;
         notifyState();
         hooks.onSettled();
-        setTimeout(() => {
+        cancelAutoplay('replaced');
+        journal('autoplay.scheduled', { directionId: run.directionId, autonomousSequence: sequence, delayMs: 250 }, { correlationId: run.directionId });
+        autoplayTimer = setTimeout(() => {
+            autoplayTimer = null;
+            // The Scene can change, or direction can be switched off, in the
+            // gap. Continuing into a Scene the user has left would speak into
+            // the wrong chat.
+            const current = hooks.getActiveScene();
+            if (!current || current.id !== sceneId || !isDirectedLiveScene(current)) {
+                journal('autoplay.dropped', { reason: 'scene is no longer the directed Scene that armed it' }, { severity: 'warn' });
+                return;
+            }
             if (String(hooks.getComposerDraft() || '').trim()) {
                 activeRun = run;
                 run.waitingAtEnd = true;
@@ -632,7 +1029,8 @@ async function completeVisibleRun(run) {
                 hooks.onSettled();
                 return;
             }
-            beginDirection({ scene, action: '[Autonomous continuation from accepted history.]', insertUser: false, autonomousSequence: sequence });
+            journal('autoplay.fired', { autonomousSequence: sequence });
+            beginDirection({ scene: current, action: '[Autonomous continuation from accepted history.]', insertUser: false, autonomousSequence: sequence });
         }, 250);
         return;
     }
@@ -641,13 +1039,117 @@ async function completeVisibleRun(run) {
     hooks.onSettled();
 }
 
+/**
+ * The performer produced no visible prose.
+ *
+ * Observed live with a reasoning model on an OpenAI-compatible backend: over a
+ * hundred STREAM_TOKEN_RECEIVED events all carried an empty string, the stream
+ * stats reported 109 tokens, and the entire response arrived through
+ * STREAM_REASONING_DONE instead. Core wrote an empty message, so there was
+ * nothing to reveal and nothing to accept.
+ *
+ * That is a provider-side outcome Remodel cannot fix, but it must not be
+ * presented as a completed response — so the empty message is removed, the
+ * chain is stopped, and the reason is named precisely enough to act on.
+ */
+async function failEmptyVisibleRun(run) {
+    const context = getContext();
+    const message = Number.isInteger(run.messageId) ? context.chat?.[run.messageId] : null;
+    // Core stores the provider's reasoning on the message, so the empty-text
+    // case can be distinguished from a genuinely empty reply without adding a
+    // listener for the reasoning stream.
+    const reasoning = String(message?.extra?.reasoning || '').trim();
+    const attempt = (run.emptyRetries || 0) + 1;
+    journal('complete.empty', {
+        directionId: run.directionId,
+        messageId: run.messageId,
+        attempt,
+        bufferedLength: run.rawBufferedText.length,
+        reasoningLength: reasoning.length,
+        performerLabel: run.performer?.label || '',
+    }, { correlationId: run.directionId, severity: 'warn', summary: `direction.complete: no visible text (attempt ${attempt})` });
+
+    // finalizeRunMessage removes a message with no accepted text, so the blank
+    // row never reaches the chat. Deliberately NOT marked interrupted: the user
+    // did nothing here, and recording it as an interruption would misreport the
+    // failure in the saved metadata.
+    await finalizeRunMessage(run, { state: 'empty' });
+    cancelAutoplay('empty-response');
+
+    const scene = hooks.getActiveScene();
+    const sceneIntact = scene && scene.id === run.sceneId && isDirectedLiveScene(scene);
+
+    // Ask again before giving up. The movement, performer and direction record
+    // are reused verbatim, so a retry is one native call and the user sees a
+    // continuous "Speaking" state rather than an error they must clear.
+    if (sceneIntact && run.emptyRetries < EMPTY_RESPONSE_RETRIES) {
+        journal('retry.empty', { directionId: run.directionId, attempt, of: EMPTY_RESPONSE_RETRIES + 1 }, { correlationId: run.directionId, severity: 'warn' });
+        // Held as a normal in-flight pass rather than dropping to idle: the
+        // pipeline is still working on the user's turn, so the chrome must keep
+        // saying so and Send must stay refused across the pause. Marked
+        // autonomous, which means a user intervention correctly supersedes it.
+        const retryToken = acquireDirectionLock({ scene, insertUser: false, autonomousSequence: run.autonomousSequence });
+        activeRun = null;
+        notifyState();
+        try {
+            await new Promise((resolve) => setTimeout(resolve, EMPTY_RESPONSE_RETRY_DELAY_MS));
+            const current = hooks.getActiveScene();
+            if (retryToken.aborted || !current || current.id !== run.sceneId) {
+                journal('retry.empty.dropped', {
+                    directionId: run.directionId,
+                    reason: retryToken.aborted ? 'superseded during the retry pause' : 'the Scene changed during the retry pause',
+                }, { correlationId: run.directionId, severity: 'warn' });
+                notifyState();
+                hooks.onSettled();
+                return;
+            }
+            await generateDirectedPerformer({
+                scene: current,
+                envelope: run.envelope,
+                performer: run.performer,
+                autonomousSequence: run.autonomousSequence,
+                token: retryToken,
+                emptyRetries: run.emptyRetries + 1,
+            });
+        } finally {
+            releaseDirectionLock(retryToken);
+        }
+        return;
+    }
+
+    const performer = run.performer?.label || 'The performer';
+    const exhausted = `${attempt} attempt${attempt === 1 ? '' : 's'} produced no visible text`;
+    const detail = reasoning.length > 200
+        ? `${exhausted}. The last reply spent its whole output on the model's reasoning channel (${reasoning.length} characters) and returned empty content. Lowering the reasoning effort, or using a model that returns reasoning alongside content rather than in place of it, will make this rarer.`
+        : `${exhausted}, and the provider returned empty content each time. This is usually transient — Retry asks again. If it persists, the model or provider is refusing this prompt.`;
+    activeRun = null;
+    directionFailure(new Error(`${performer} was directed but rendered nothing: ${detail}`), {
+        scene,
+        action: '[Continue the scene from accepted history.]',
+        insertUser: false,
+        autonomousSequence: run.autonomousSequence,
+    });
+    hooks.onSettled();
+}
+
 async function interruptLiveDirection({ preserveForIntervention }) {
     const run = activeRun;
     if (!run) return;
+    cancelAutoplay('interrupted');
     clearRevealTimer();
+    journal('interrupt', {
+        directionId: run.directionId,
+        preserveForIntervention: Boolean(preserveForIntervention),
+        acceptedLength: run.acceptedVisibleText.length,
+        bufferedLength: run.rawBufferedText.length,
+        discardedLength: Math.max(0, run.rawBufferedText.length - run.rawOffset),
+        generationSettled: run.generationSettled,
+        // An interruption before the first visible character deletes the
+        // message outright — the "it produced no bubble at all" case.
+        willDeleteMessage: !sanitizeDirectionText(run.acceptedVisibleText),
+    }, { correlationId: run.directionId, severity: 'warn' });
     run.interrupted = true;
     run.holdReason = 'interrupt';
-    recordDirectionFlight('reveal.interrupt', { preserveForIntervention, acceptedLength: run.acceptedVisibleText.length, rawLength: run.rawBufferedText.length }, run.flightId);
     if (!run.generationSettled && ownsLiveDirectionGeneration()) {
         getContext().stopGeneration?.();
         await waitFor(() => run.generationSettled, 2200);
@@ -655,7 +1157,6 @@ async function interruptLiveDirection({ preserveForIntervention }) {
     // A completed API call can still have an unseen suffix buffered. It no
     // longer owns a native generation, but it is equally discardable.
     await finalizeRunMessage(run, { state: preserveForIntervention ? 'interrupted' : 'stopped' });
-    finishDirectionFlight(preserveForIntervention ? 'interrupted' : 'stopped', { messageId: run.messageId, acceptedLength: run.acceptedVisibleText.length }, run.flightId);
     activeRun = null;
     notifyState();
     hooks.onSettled();
@@ -668,20 +1169,46 @@ async function finalizeRunMessage(run, { state }) {
         if (last >= 0 && !context.chat[last]?.is_user) run.messageId = last;
     }
     const message = context.chat?.[run.messageId];
-    if (!message || message.is_user) return;
+    if (!message || message.is_user) {
+        journal('finalize.no-message', {
+            directionId: run.directionId,
+            state,
+            messageId: run.messageId,
+            chatLength: context.chat?.length ?? null,
+            reason: message ? 'the resolved message is the user line' : 'no message at the resolved id',
+        }, { correlationId: run.directionId, severity: 'warn' });
+        return;
+    }
     const accepted = sanitizeDirectionText(run.acceptedVisibleText);
-    if (!accepted && run.interrupted) {
+    if (!accepted) {
+        // Nothing was ever accepted, so there is nothing to keep — whether the
+        // user interrupted before the first character or the performer returned
+        // no visible text at all. Writing the empty message was what left blank
+        // Narrator rows sitting in the stream.
+        journal('finalize.deleted-empty', {
+            directionId: run.directionId,
+            state,
+            messageId: run.messageId,
+            bufferedLength: run.rawBufferedText.length,
+        }, { correlationId: run.directionId, severity: 'warn', summary: 'direction.finalize: deleted an empty interrupted message' });
         await context.deleteMessage(run.messageId);
         run.messageId = null;
         return;
     }
+    journal('finalize', {
+        directionId: run.directionId,
+        state,
+        messageId: run.messageId,
+        acceptedLength: accepted.length,
+        discardedLength: Math.max(0, run.rawBufferedText.length - run.rawOffset),
+        interrupted: Boolean(run.interrupted),
+    }, { correlationId: run.directionId });
     message.mes = accepted;
     if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)) message.swipes[message.swipe_id] = accepted;
     message.extra ??= {};
     message.extra.remodelDirection = serializeRun(run, state);
     if (run.performer.ref.kind === 'narrator') message.extra.type = 'narrator';
     await context.saveChat();
-    recordDirectionFlight('chat.finalized', { state, messageId: run.messageId, acceptedLength: accepted.length, chatLength: context.chat.length }, run.flightId);
 }
 
 function persistRun(run, immediate) {
@@ -689,24 +1216,15 @@ function persistRun(run, immediate) {
     const commit = async () => {
         const message = getContext().chat?.[run.messageId];
         if (!message || message.is_user) return;
-        mirrorAcceptedNative(run);
+        // Metadata only. The visible body stays core's until the run finishes,
+        // so this never competes with the streaming writer; recovery reads
+        // acceptedText from here rather than from message.mes.
         message.extra ??= {};
         message.extra.remodelDirection = serializeRun(run, run.state.toLowerCase().replaceAll(' ', '-'));
         await getContext().saveChat();
     };
     if (immediate) commit();
     else persistTimer = setTimeout(commit, 350);
-}
-
-function mirrorAcceptedNative(run) {
-    if (!run || !Number.isInteger(run.messageId)) return;
-    const message = getContext().chat?.[run.messageId];
-    if (!message || message.is_user) return;
-    const accepted = sanitizeDirectionText(run.acceptedVisibleText);
-    message.mes = accepted;
-    if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id) && message.swipes[message.swipe_id] != null) {
-        message.swipes[message.swipe_id] = accepted;
-    }
 }
 
 async function recoverLiveDirectionMessages() {
@@ -719,12 +1237,24 @@ async function recoverLiveDirectionMessages() {
         const hadMarkers = String(message.mes || '').includes('[[RM:');
         const unfinished = !['complete', 'interrupted', 'stopped'].includes(metadata.state);
         if (!hadMarkers && !unfinished) continue;
+        const previousState = metadata.state;
         const accepted = sanitizeDirectionText(metadata.acceptedText ?? message.mes ?? '');
         message.mes = accepted;
         if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)) message.swipes[message.swipe_id] = accepted;
         metadata.acceptedText = accepted;
         metadata.state = 'recovered-hard-pause';
         metadata.recovered = true;
+        // Markers surviving into a saved message mean a run never reached
+        // finalizeRunMessage — a crash, or a pass that lost its activeRun to a
+        // concurrent one. Worth recording: it names the orphan after the fact.
+        journal('recovered', {
+            messageId,
+            directionId: metadata.directionId || null,
+            previousState,
+            hadMarkers,
+            unfinished,
+            acceptedLength: accepted.length,
+        }, { correlationId: metadata.directionId || null, severity: 'warn' });
         recovered = { messageId, message, metadata };
         changed = true;
     }
@@ -762,7 +1292,6 @@ async function recoverLiveDirectionMessages() {
 function serializeRun(run, state) {
     return {
         protocol: DIRECTION_PROTOCOL,
-        flightId: run.flightId,
         directionId: run.directionId,
         sceneId: run.sceneId,
         state,
@@ -791,13 +1320,23 @@ function notifyState() {
     hooks.onStateChange(activeRun ? publicRun(activeRun) : null);
 }
 
-function directionFailure(error, retry, flightId = retry?.flightId || '') {
+function directionFailure(error, retry) {
     console.error('Remodel Live Direction failed', error);
+    journal('failed', {
+        message: String(error?.message || error),
+        // structured-reply.js classifies empty / truncated / malformed replies,
+        // which have completely different fixes to a transport failure.
+        stage: error?.stage || null,
+        detail: error?.detail || null,
+        sceneId: retry?.scene?.id || null,
+        insertUser: Boolean(retry?.insertUser),
+        autonomousSequence: retry?.autonomousSequence || 0,
+    }, { severity: 'error', summary: `direction.failed: ${String(error?.message || error).slice(0, 80)}` });
+    cancelAutoplay('failed');
     pendingFailure = retry;
     activeRun = null;
     notifyState();
     hooks.onFailure(error);
-    finishDirectionFlight('failed', { error }, flightId);
     return false;
 }
 
@@ -867,6 +1406,78 @@ function resolveDirector(scene) {
     };
 }
 
+/**
+ * The Director's raw reasoning, from the most recent direction request.
+ *
+ * WHY THIS IS AWKWARD: core throws the reasoning away on any schema-constrained
+ * call. `generateRawData` ends with `return extractJsonFromData(data)` whenever
+ * a jsonSchema is supplied (script.js ~4043), so the provider's response object
+ * — the only place `reasoning` / `reasoning_content` / `thinking` lives — never
+ * escapes the function. There is no event and no accessor for it.
+ *
+ * The alternatives were worse: patching core is off the table, and dropping the
+ * schema to get a plain response would lose the enforcement that keeps the
+ * envelope valid in the first place. So we read the response off the wire for
+ * the duration of this one call instead.
+ */
+let lastDirectorReasoning = '';
+
+/**
+ * Run `task` with fetch temporarily wrapped so the backend's JSON response can
+ * be read alongside whatever core chooses to return.
+ *
+ * Deliberately narrow: it only ever reads a CLONE of the body (so core still
+ * consumes the original untouched), only looks at SillyTavern's own backend
+ * routes, and restores the original fetch in a finally — a throw inside the
+ * task can never leave a wrapped fetch behind.
+ */
+async function withCapturedResponse(task) {
+    const original = globalThis.fetch;
+    let captured = null;
+    globalThis.fetch = async (...args) => {
+        const response = await original(...args);
+        try {
+            const url = String(args[0]?.url || args[0] || '');
+            if (response.ok && /\/api\/backends\//.test(url)) {
+                captured = await response.clone().json();
+            }
+        } catch {
+            // A streamed or non-JSON body is simply not a source of reasoning.
+        }
+        return response;
+    };
+    try {
+        return { result: await task(), captured };
+    } finally {
+        globalThis.fetch = original;
+    }
+}
+
+function readReasoning(data) {
+    if (!data) return '';
+    try {
+        // ignoreShowThoughts: this card is our own surface, so it should not
+        // depend on SillyTavern's native "show thoughts" display toggle.
+        return String(extractReasoningFromData(data, { mainApi: 'openai', ignoreShowThoughts: true }) || '').trim();
+    } catch {
+        return '';
+    }
+}
+
+/** Compact, storable summary of what the Director asked the system to do. */
+function summarizeRequests(requests, kind) {
+    return (Array.isArray(requests) ? requests : []).flatMap((entry) => {
+        // A checkpoint carries its own nested request list; an immediate
+        // request is one operation on its own.
+        const inner = kind === 'checkpoint' ? (Array.isArray(entry?.requests) ? entry.requests : []) : [entry];
+        return inner.filter(Boolean).map((request) => ({
+            kind,
+            capability: String(request.capability || 'unknown'),
+            reason: String(request.reason || '').trim(),
+        }));
+    }).slice(0, 40);
+}
+
 function persistDirectionRecord(scene, envelope, performer, director) {
     if (!scene || !envelope?.movement?.objective) return;
     const existing = Array.isArray(scene.liveDirection?.directionLog) ? scene.liveDirection.directionLog : [];
@@ -887,6 +1498,13 @@ function persistDirectionRecord(scene, envelope, performer, director) {
         openings: envelope.openings,
         immediateCount: envelope.mechanics.immediateRequests.length,
         checkpointCount: envelope.mechanics.checkpoints.length,
+        // What it actually asked for, not just how many — so the card can show
+        // the operations instead of a bare count.
+        operations: [
+            ...summarizeRequests(envelope.mechanics.immediateRequests, 'immediate'),
+            ...summarizeRequests(envelope.mechanics.checkpoints, 'checkpoint'),
+        ],
+        reasoning: lastDirectorReasoning,
         continueAfter: envelope.flow.continueAfter,
         hardPauseAfter: envelope.flow.hardPauseAfter,
     };

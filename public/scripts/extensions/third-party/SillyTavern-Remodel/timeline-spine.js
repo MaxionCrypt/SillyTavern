@@ -12,6 +12,11 @@ import {
     setExtensionPrompt,
 } from '../../../../script.js';
 import { openGroupById } from '../../../group-chats.js';
+// The live Chat Completion prompt manager. Read-only here: after a preview dry
+// run it holds the assembled prompt broken down BY SOURCE (one collection per
+// prompt identifier), which is the only place that attribution exists — the
+// generateData.prompt array core hands back has already been flattened.
+import { promptManager } from '../../../openai.js';
 import { setUserAvatar } from '../../../personas.js';
 import { MacroRegistry, MacroCategory, MacroValueType } from '../../../macros/engine/MacroRegistry.js';
 import {
@@ -26,10 +31,12 @@ import {
     getScene,
     getSceneFromMetadata,
     getTimelineStore,
+    isDuetScene,
     setActiveArc,
     setActiveScene,
     setActiveTimeline,
     setInsertedTextSlot,
+    setSceneDuetSeats,
     setSceneRoleplayDirector,
     updateArc,
     updateScene,
@@ -71,21 +78,17 @@ import {
     renderStoryGoalsForRoleplay,
 } from './story-goals.js';
 import { getSceneGoals, updateSceneGoalState } from './story-goals-store.js';
-import {
-    handleVariableWorkspaceChange,
-    handleVariableWorkspaceClick,
-    renderVariablesWorkspace,
-    selectVariableLoreRef,
-} from './story-variables-ui.js';
 import { clearMechanicsReceiptInjection } from './mechanics-runtime.js';
-import { listDefinitionsForLoreRef } from './story-variables-store.js';
+import { listVariablesForLoreRef } from './variables-store.js';
 import {
+    canSendWithoutLiveDirection,
     clearLiveDirectionFailure,
     continueLiveDirection,
     getLiveDirectionRun,
     getLiveDirectionUiState,
     handleLiveDirectionDraft,
     initLiveDirection,
+    describeNativeGenerationBlock,
     isDirectedLiveScene,
     ownsLiveDirectionGeneration,
     regenerateLastDirectedResponse,
@@ -99,7 +102,6 @@ import {
     submitDirectedRoleplay,
 } from './live-direction.js';
 import { sanitizeDirectionText } from './live-direction-markers.js';
-import { downloadDirectionFlights, getDirectionFlights } from './live-direction-diagnostics.js';
 import {
     handleDebugConsoleChange,
     handleDebugConsoleClick,
@@ -172,11 +174,6 @@ const TAVERN_TABS = [
         icon: 'fa-wand-magic-sparkles',
     },
     {
-        id: 'variables',
-        label: 'Variables',
-        icon: 'fa-chart-simple',
-    },
-    {
         id: 'personas',
         label: 'Personas',
         icon: 'fa-face-smile',
@@ -234,6 +231,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindRoleplayComposerEvents();
     bindRoleplayGenerationFeedback();
     bindRoleplayCastPickerEvents();
+    bindRoleplayDuetPickerEvents();
     bindRoleplayCastDragEvents();
     registerSceneMacros();
     registerCharacterFieldMacro();
@@ -471,21 +469,6 @@ function bindTimelineEvents(drawer) {
             return;
         }
 
-        const variableLoreLink = event.target instanceof Element ? event.target.closest('[data-remodel-variable-lore-link]') : null;
-        if (variableLoreLink) {
-            event.preventDefault();
-            event.stopPropagation();
-            selectVariableLoreRef({ book: variableLoreLink.dataset.book, uid: variableLoreLink.dataset.uid });
-            await transitionToWindow({ kind: 'tavern', tab: 'variables' });
-            return;
-        }
-
-        if (event.target instanceof Element && handleVariableWorkspaceClick(event.target, queueRender)) {
-            event.preventDefault();
-            event.stopPropagation();
-            return;
-        }
-
         const characterActionElement = event.target instanceof Element
             ? event.target.closest('[data-remodel-character-action]')
             : null;
@@ -534,7 +517,6 @@ function bindTimelineEvents(drawer) {
 
     drawer.addEventListener('change', async (event) => {
         if (event.target instanceof Element && handleDebugConsoleChange(event.target, queueRender)) return;
-        if (event.target instanceof Element && handleVariableWorkspaceChange(event.target, queueRender)) return;
         const photoInput = event.target instanceof Element
             ? event.target.closest('[data-remodel-timeline-photo-input]')
             : null;
@@ -2449,6 +2431,86 @@ function formatPromptPreview(generateData) {
     return '(Unrecognized prompt format — nothing to show.)';
 }
 
+// --- Prompt preview, broken down by source ---------------------------------
+//
+// generateData.prompt is the FLATTENED message array — by the time core hands
+// it over, "which prompt did this come from" is gone. promptManager.messages,
+// set at the end of the same assembly (setChatCompletion), still has the
+// structure: one MessageCollection per prompt identifier, in prompt order.
+// Reading it straight after the dry run is what lets the preview say "this
+// paragraph is World Info (after)" instead of showing one undifferentiated
+// wall of text.
+function collectPromptPreviewSections() {
+    const root = promptManager?.messages;
+    if (!root || typeof root.getCollection !== 'function') {
+        return null;
+    }
+    const counts = promptManager.tokenHandler?.getCounts?.() || {};
+    const sections = root.getCollection().map((entry) => {
+        const identifier = String(entry?.identifier || '');
+        const prompt = promptManager.getPromptById?.(identifier);
+        // A marker expands to a collection of messages; a plain prompt is a
+        // single Message. Normalize both to a list.
+        const messages = typeof entry?.getChat === 'function'
+            ? entry.getChat()
+            : [{ role: entry?.role, content: entry?.content, name: entry?.name }];
+        const filled = messages.filter((message) => String(message?.content || '').trim().length > 0);
+        return {
+            identifier,
+            title: prompt?.name || prettifyPromptIdentifier(identifier),
+            role: prompt?.role || filled[0]?.role || 'system',
+            marker: Boolean(prompt?.marker),
+            tokens: Number(counts[identifier]) || 0,
+            messages: filled,
+        };
+    });
+    return sections.length ? sections : null;
+}
+
+function prettifyPromptIdentifier(identifier) {
+    if (!identifier) return 'Unnamed prompt';
+    return identifier
+        .replace(/[-_]+/g, ' ')
+        .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+        .replace(/^./, (character) => character.toUpperCase());
+}
+
+function renderPromptPreviewSections(sections) {
+    const total = sections.reduce((sum, section) => sum + section.tokens, 0);
+    const present = sections.filter((section) => section.messages.length).length;
+    const cards = sections.map((section) => {
+        const empty = section.messages.length === 0;
+        const body = section.messages
+            .map((message) => {
+                const speaker = String(message.name || '').trim();
+                const label = speaker
+                    ? `${String(message.role || 'system').toUpperCase()} · ${speaker}`
+                    : String(message.role || 'system').toUpperCase();
+                return `<div class="remodel-rp-preview-msg"><span class="remodel-rp-preview-msg-role">${escapeHtml(label)}</span><pre>${escapeHtml(message.content || '')}</pre></div>`;
+            })
+            .join('');
+        return `
+            <article class="remodel-rp-preview-card${empty ? ' is-empty' : ''}${section.marker ? ' is-marker' : ''}" data-remodel-preview-card${empty ? '' : ' open'}>
+                <details${empty ? '' : ' open'}>
+                    <summary>
+                        <span class="remodel-rp-preview-card-role">${escapeHtml(String(section.role || 'system').toUpperCase())}</span>
+                        <span class="remodel-rp-preview-card-title">${escapeHtml(section.title)}</span>
+                        <span class="remodel-rp-preview-card-meta">${escapeHtml(section.identifier)}${empty ? ' · empty' : ` · ${section.tokens} tok`}</span>
+                    </summary>
+                    <div class="remodel-rp-preview-card-body">${empty ? '<p class="remodel-rp-preview-empty">Nothing was contributed by this source on this turn.</p>' : body}</div>
+                </details>
+            </article>
+        `;
+    }).join('');
+    return `
+        <div class="remodel-rp-preview-summary">
+            <span><strong>${present}</strong> of ${sections.length} sources contributed</span>
+            <span><strong>${total}</strong> tokens total</span>
+        </div>
+        <div class="remodel-rp-preview-cards">${cards}</div>
+    `;
+}
+
 function ensurePromptPreviewPanel() {
     if (!isRealStoryWorkspaceActive()) {
         return;
@@ -2517,6 +2579,10 @@ function togglePromptPreviewPanel() {
 // body, which only the overlay's CSS reads (public/style.css) — no
 // chat[]/session-state persistence, matches "font" being a display
 // preference, not story content.
+const MANUSCRIPT_FONT_STORAGE_KEY = 'remodel-manuscript-font';
+const MANUSCRIPT_SIZE_STORAGE_KEY = 'remodel-manuscript-size';
+const MANUSCRIPT_DEFAULT_SIZE = '15px';
+
 const MANUSCRIPT_FONT_OPTIONS = [
     { label: 'Georgia (default)', value: "Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', serif" },
     { label: 'Garamond', value: "'EB Garamond', Garamond, 'Times New Roman', serif" },
@@ -2524,38 +2590,50 @@ const MANUSCRIPT_FONT_OPTIONS = [
     { label: 'Grotesque (sans)', value: "'Segoe UI', Helvetica, Arial, sans-serif" },
 ];
 
-function applyManuscriptFont(fontValue) {
-    document.body.style.setProperty('--remodel-manuscript-font', fontValue);
-}
+const MANUSCRIPT_SIZE_OPTIONS = ['13px', '14px', '15px', '16px', '17px', '18px', '20px', '22px', '26px'];
 
-function saveManuscriptFontPreference(fontValue) {
-    try {
-        localStorage.setItem(MANUSCRIPT_FONT_STORAGE_KEY, fontValue);
-    } catch (err) {
-        console.error('Remodel manuscript toolbar: failed to save font preference', err);
-    }
-}
-
-function restoreManuscriptFontPreference() {
-    let stored;
-    try {
-        stored = localStorage.getItem(MANUSCRIPT_FONT_STORAGE_KEY);
-    } catch (err) {
+// --remodel-manuscript-font is a SHARED variable — the roleplay stream reads
+// it too — so whole-manuscript typography is scoped to the story editor
+// element instead of being set on <body>. One scene's face and size can then
+// never reach another scene, and a roleplay scene always renders in the
+// default stack declared on body.st-remodel-active.
+function applyManuscriptTypography(doc) {
+    const editor = getRealStoryEditor();
+    if (!editor) {
         return;
     }
-    if (!stored) {
+    editor.style.setProperty('--remodel-manuscript-font', doc?.font || MANUSCRIPT_FONT_OPTIONS[0].value);
+    editor.style.setProperty('--remodel-manuscript-size', doc?.fontSize || MANUSCRIPT_DEFAULT_SIZE);
+    clearLegacyManuscriptTypography();
+}
+
+// Earlier builds wrote these two onto <body> (and into localStorage), which
+// is exactly the bleed this scoping fixes — strip whatever they left behind
+// so a returning reader isn't stuck with a roleplay scene in Courier.
+function clearLegacyManuscriptTypography() {
+    document.body.style.removeProperty('--remodel-manuscript-font');
+    document.body.style.removeProperty('--remodel-manuscript-size');
+    try {
+        localStorage.removeItem(MANUSCRIPT_FONT_STORAGE_KEY);
+        localStorage.removeItem(MANUSCRIPT_SIZE_STORAGE_KEY);
+    } catch (err) {
+        /* local storage unavailable — nothing to clean up */
+    }
+}
+
+// Whole-manuscript font/size writes: the doc owns them, so they persist with
+// the document and travel with the scene.
+function setManuscriptTypography(patch) {
+    if (!activeStoryDocId) {
         return;
     }
-    applyManuscriptFont(stored);
-    const select = document.querySelector('[data-remodel-manuscript-font-select]');
-    if (select) {
-        select.value = stored;
-    }
+    updateStoryDoc(activeStoryDocId, patch);
+    applyManuscriptTypography(getStoryDoc(activeStoryDocId));
+    setStorySaveState('Saved');
 }
 
 function handleManuscriptFontChange(selectEl) {
-    applyManuscriptFont(selectEl.value);
-    saveManuscriptFontPreference(selectEl.value);
+    setManuscriptTypography({ font: selectEl.value });
 }
 
 // Wraps the current selection (if it's inside a manuscript block) in the
@@ -2788,6 +2866,10 @@ function bindStoryGenerationStateEvents() {
     });
 
     context.eventSource.on(context.eventTypes.GENERATION_STOPPED, () => {
+        // A streamed Story request bypasses generateRawData, so it never sees
+        // core's own abort hook — Stop has to reach it through here.
+        storyStreamAbort?.abort(new Error('Generation stopped'));
+
         if (!isGenerationRunOurs()) {
             return;
         }
@@ -3190,7 +3272,6 @@ function renderTimelinePanel() {
     const isHeaderCollapsed = isTimelineFocused
         || activeTavernTab === 'characters'
         || activeTavernTab === 'prompts'
-        || activeTavernTab === 'variables'
         || activeTavernTab === 'debug'
         || Boolean(TAVERN_TABS.find((tab) => tab.id === activeTavernTab)?.panelId);
     viewport.classList.toggle('is-header-collapsed', isHeaderCollapsed);
@@ -3207,7 +3288,7 @@ function renderTimelinePanel() {
     const body = viewport.querySelector('.remodel-tavern-body');
     body.innerHTML = renderActiveWorkspace(store);
 
-    if (activeTavernTab === 'timeline' || activeTavernTab === 'characters' || activeTavernTab === 'prompts' || activeTavernTab === 'variables' || activeTavernTab === 'debug') {
+    if (activeTavernTab === 'timeline' || activeTavernTab === 'characters' || activeTavernTab === 'prompts' || activeTavernTab === 'debug') {
         restoreAdoptedPanel();
     } else {
         adoptLegacyPanel(activeTavernTab);
@@ -3271,10 +3352,6 @@ function renderActiveWorkspace(store) {
 
     if (activeTavernTab === 'prompts') {
         return renderPromptStudioWorkspace();
-    }
-
-    if (activeTavernTab === 'variables') {
-        return renderVariablesWorkspace(store);
     }
 
     if (activeTavernTab === 'personas') {
@@ -4058,25 +4135,36 @@ function attachLorebooksWorkspaceAdapter(panel) {
     panel.dataset.remodelLorebooksAdapterBound = 'true';
 }
 
+// Marks lorebook entries that Variables are attached to. The count is re-read on
+// every pass rather than guarded by presence, so an entry that gains or loses a
+// Variable does not keep a stale badge. Entries with no Variables carry no badge
+// at all — attaching happens inside the expanded entry, not from this row.
 function decorateLorebookVariableLinks(panel) {
     const book = panel.querySelector('#world_editor_select')?.value || '';
     if (!book) return;
+    const timelineId = getTimelineStore().activeTimelineId || '';
     panel.querySelectorAll('#world_popup_entries_list .world_entry').forEach((entry) => {
-        if (!(entry instanceof HTMLElement) || entry.querySelector('[data-remodel-variable-lore-link]')) return;
+        if (!(entry instanceof HTMLElement)) return;
         const uidNode = entry.matches('[data-uid]') ? entry : entry.querySelector('[data-uid]');
         const uid = entry.dataset.uid || uidNode?.getAttribute('data-uid') || entry.getAttribute('uid');
         if (uid == null || uid === '') return;
-        const anchor = entry.querySelector('.world_entry_form_control') || entry.querySelector('.world_entry_thin_controls') || entry;
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'menu_button fa-solid fa-chart-simple remodel-variable-lore-link';
-        button.dataset.remodelVariableLoreLink = '';
-        button.dataset.book = book;
-        button.dataset.uid = String(uid);
-        const linked = listDefinitionsForLoreRef({ book, uid }, { timelineId: getTimelineStore().activeTimelineId || '' });
-        button.title = linked.length ? `${linked.length} linked Variable definition${linked.length === 1 ? '' : 's'} · open Variables` : 'Create a Variable definition linked to this entry';
-        button.dataset.linkedCount = String(linked.length);
-        anchor.append(button);
+        const linked = listVariablesForLoreRef({ book, uid }, { timelineId });
+        let badge = entry.querySelector('[data-remodel-variable-lore-link]');
+        if (!linked.length) {
+            badge?.remove();
+            return;
+        }
+        if (!badge) {
+            const anchor = entry.querySelector('.world_entry_form_control') || entry.querySelector('.world_entry_thin_controls') || entry;
+            badge = document.createElement('span');
+            badge.className = 'fa-solid fa-chart-simple remodel-variable-lore-link';
+            badge.dataset.remodelVariableLoreLink = '';
+            anchor.append(badge);
+        }
+        badge.dataset.book = book;
+        badge.dataset.uid = String(uid);
+        badge.dataset.linkedCount = String(linked.length);
+        badge.title = `${linked.length} linked Variable${linked.length === 1 ? '' : 's'}: ${linked.map((variable) => variable.name).join(', ')}`;
     });
 }
 
@@ -4274,13 +4362,12 @@ async function openScene(sceneId) {
     }
 
     if (!scene.linkedChat) {
-        // Never-opened Roleplay Scene: let the user cast it. This replaces
-        // the old behavior of silently anchoring to the first character in
-        // the list — the cause of "every new roleplay opens the same
-        // Co-Author chat." One character → a solo chat; several → a group.
-        openRoleplayCastPicker({
-            mode: 'create',
-            onConfirm: (avatars) => beginRoleplaySceneWithCast(sceneId, avatars),
+        // Never-opened Roleplay Scene. A Roleplay Scene is a Director and a
+        // Narrator, so casting one is choosing those two seats rather than
+        // assembling a group and assigning jobs to it afterwards.
+        openRoleplayDuetPicker({
+            sceneTitle: scene.title,
+            onConfirm: (seats) => beginRoleplaySceneAsDuet(sceneId, seats),
         });
         return;
     }
@@ -4349,11 +4436,86 @@ async function openScene(sceneId) {
     }
 }
 
+/**
+ * Casts a fresh Roleplay Scene as a Director + Narrator pair.
+ *
+ * The native chat is still an ordinary group, because everything downstream —
+ * World Info, swipes, generation, force_chid — is native group machinery and
+ * stays that way. What changes is that the group has exactly two members with
+ * fixed jobs: the Director card supplies directing doctrine to the hidden pass
+ * and never speaks, and the Narrator card is the only visible performer.
+ *
+ * Both seats are written before the group is opened, so the Scene is already a
+ * complete directed Scene the first time anything renders it — there is no
+ * intermediate state where a two-card group has no assigned Director and could
+ * be mistaken for an ordinary free-play group.
+ */
+async function beginRoleplaySceneAsDuet(sceneId, { directorAvatar, narratorAvatar } = {}) {
+    const context = getContext();
+    const scene = getScene(sceneId);
+    if (!scene || !directorAvatar || !narratorAvatar || directorAvatar === narratorAvatar) {
+        return;
+    }
+    const findCard = (avatar) => (context.characters || []).find((item) => item?.avatar === avatar) || null;
+    const directorCard = findCard(directorAvatar);
+    const narratorCard = findCard(narratorAvatar);
+    if (!directorCard || !narratorCard) {
+        return;
+    }
+
+    // Narrator first, Director muted. Directed generation always forces the
+    // performer, so neither matters on that path — but a Scene switched to Free
+    // play, a swipe, or any native path that reaches the group without
+    // force_chid falls back to core's own activation over `enabledMembers`.
+    // Muting the Director there is what makes "the Director never speaks" a
+    // property of the group rather than a promise Remodel has to keep. It stays
+    // a member, so its card is still read for directing doctrine, and
+    // resolveDirector matches on the ref rather than on enabled membership.
+    const groupId = await createRoleplayGroup([narratorAvatar, directorAvatar], scene.title, {
+        disabledMembers: [directorAvatar],
+    });
+    if (!groupId) {
+        return;
+    }
+    // Ids read back off the real group object — openGroupChat guards with a
+    // strict === on id, so a stringified id silently fails and nothing opens.
+    const group = findRoleplayGroup(groupId);
+    const nativeGroupId = group?.id ?? groupId;
+    const nativeChatId = group?.chats?.[0] ?? group?.chat_id;
+    if (nativeChatId === undefined || nativeChatId === null) {
+        return;
+    }
+
+    updateScene(sceneId, {
+        linkedChat: { type: 'group', groupId: String(nativeGroupId), chatId: String(nativeChatId) },
+        status: 'active',
+    });
+    setSceneDuetSeats(sceneId, {
+        directorRef: { kind: 'character', id: directorAvatar, label: directorCard.name },
+        narratorRef: { kind: 'narrator', id: narratorAvatar, label: narratorCard.name },
+    });
+
+    setActiveScene(sceneId);
+    await openGroupById(nativeGroupId);
+    await waitForChatIdSettled();
+    dismissProgrammaticGroupEditor();
+    // A fresh group opens with both cards' greetings. In a directed Scene the
+    // Director must never appear as a visible line, and the Narrator's opening
+    // belongs to the Director's first movement, not to the card's own greeting.
+    await clearFreshRoleplayGreetingMessages();
+    writeSceneMetadata(getScene(sceneId));
+    syncStoryWorkspaceClass(getScene(sceneId));
+    await enterSceneViewport(getScene(sceneId));
+}
+
 // Casts a fresh roleplay scene from the picker's chosen characters. One
 // character → a solo character chat (selectCharacterById + new chat, bound
 // exactly like before). Two or more → a real group + a fresh group chat,
 // bound to the scene. Either way the scene ends up with a linkedChat and
 // drops into the viewport.
+//
+// Retained for Scenes cast before the two-seat model and for the "add a
+// character" path, which promotes a solo chat into a group.
 async function beginRoleplaySceneWithCast(sceneId, avatars) {
     const context = getContext();
     const scene = getScene(sceneId);
@@ -4372,6 +4534,7 @@ async function beginRoleplaySceneWithCast(sceneId, avatars) {
         if (!getScene(sceneId)?.linkedChat) {
             return;
         }
+        await clearFreshRoleplayGreetingMessages();
         await enterSceneViewport(getScene(sceneId));
         return;
     }
@@ -4406,12 +4569,27 @@ async function beginRoleplaySceneWithCast(sceneId, avatars) {
     await openGroupById(nativeGroupId);
     await waitForChatIdSettled();
     dismissProgrammaticGroupEditor();
+    await clearFreshRoleplayGreetingMessages();
     writeSceneMetadata(getScene(sceneId));
     // openGroupById's CHAT_CHANGED can land before the scene metadata write
     // settles, so set the workspace class directly here too (idempotent).
     syncStoryWorkspaceClass(getScene(sceneId));
     await enterSceneViewport(getScene(sceneId));
     renderRoleplayScene();
+}
+
+// Native solo and group chats begin by inserting each selected card's first
+// message. That is correct for ordinary SillyTavern chats, but a freshly cast
+// Remodel Scene has not begun yet: the Director should respond only after the
+// user's first accepted action. This helper is called only during creation of a
+// brand-new Scene chat, never while opening an existing chat.
+async function clearFreshRoleplayGreetingMessages() {
+    const context = getContext();
+    if (!Array.isArray(context.chat) || context.chat.length === 0) return;
+    if (context.chat.some((message) => message?.is_user)) return;
+    context.chat.splice(0, context.chat.length);
+    document.getElementById('chat')?.replaceChildren();
+    await context.saveChat();
 }
 
 async function ensureActiveCharacterContext() {
@@ -4516,12 +4694,13 @@ const REMODEL_DEFAULT_AVATAR = 'img/ai4.png';
 
 // Creates a brand-new group from a list of character avatars and returns its
 // id, without navigating anywhere. Mirrors core's createGroup() request body.
-async function createRoleplayGroup(memberAvatars, name) {
+async function createRoleplayGroup(memberAvatars, name, { disabledMembers = [] } = {}) {
     const context = getContext();
     const members = Array.isArray(memberAvatars) ? memberAvatars.filter(Boolean) : [];
     if (members.length === 0) {
         return null;
     }
+    const disabled = (Array.isArray(disabledMembers) ? disabledMembers : []).filter((avatar) => members.includes(avatar));
 
     const memberNames = (context.characters || [])
         .filter((c) => members.includes(c.avatar))
@@ -4537,7 +4716,7 @@ async function createRoleplayGroup(memberAvatars, name) {
         hideMutedSprites: false,
         activation_strategy: REMODEL_GROUP_ACTIVATION_NATURAL,
         generation_mode: REMODEL_GROUP_GENERATION_SWAP,
-        disabled_members: [],
+        disabled_members: disabled,
         fav: false,
         chat_id: chatName,
         chats: [chatName],
@@ -4572,6 +4751,18 @@ async function saveRoleplayGroup(group) {
 
 function findRoleplayGroup(groupId) {
     return (getContext().groups || []).find((g) => String(g.id) === String(groupId)) || null;
+}
+
+// The reverse of roleplayCharacterAvatar: a native character index from an
+// avatar filename. Returns null when the card is not loaded, which callers
+// must treat as "no native index" rather than coercing to a number — core
+// reads force_chid with `typeof … == 'number'`, and NaN passes that test.
+function roleplayCharacterIdForAvatar(avatar) {
+    if (!avatar) {
+        return null;
+    }
+    const index = (getContext().characters || []).findIndex((item) => item?.avatar === avatar);
+    return index >= 0 ? index : null;
 }
 
 // Resolves a character's avatar filename from a characterId or name.
@@ -4715,6 +4906,212 @@ async function reorderRoleplayCast(movedAvatar, targetAvatar) {
 // aesthetic matches and multi-select actually works.
 
 const ROLEPLAY_PICKER_ID = 'remodel-rp-cast-picker';
+const ROLEPLAY_DUET_PICKER_ID = 'remodel-rp-duet-picker';
+
+/**
+ * Casts a Roleplay Scene by filling two named seats.
+ *
+ * Deliberately not a multi-select: the two jobs are not interchangeable, and a
+ * flat "pick your cast" grid cannot express which card directs and which one
+ * speaks. The active seat is the one being filled; clicking a card fills it and
+ * advances. A card already holding the other seat is shown as taken rather than
+ * hidden, so swapping the two is one click rather than a reset.
+ *
+ * onConfirm: ({ directorAvatar, narratorAvatar }) => void
+ */
+function openRoleplayDuetPicker({ sceneTitle = '', onConfirm } = {}) {
+    document.getElementById(ROLEPLAY_DUET_PICKER_ID)?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = ROLEPLAY_DUET_PICKER_ID;
+    overlay.className = 'remodel-rp-picker-scrim';
+    overlay._remodelDuet = { seat: 'narrator', directorAvatar: '', narratorAvatar: '', onConfirm };
+
+    overlay.innerHTML = `
+        <div class="remodel-rp-picker remodel-rp-duet" role="dialog" aria-modal="true" data-remodel-rp-picker-stop>
+            <div class="remodel-rp-picker-head">
+                <div>
+                    <div class="remodel-rp-picker-title">Cast ${sceneTitle ? escapeHtml(sceneTitle) : 'this scene'}</div>
+                    <div class="remodel-rp-picker-hint">A Roleplay Scene is two cards. The Narrator performs every visible line; the Director decides what happens and never speaks.</div>
+                </div>
+                <button type="button" class="remodel-rp-picker-x" data-remodel-rp-duet-cancel aria-label="Close">×</button>
+            </div>
+            <div class="remodel-rp-duet-seats" data-remodel-rp-duet-seats></div>
+            <input type="text" class="remodel-rp-picker-search" data-remodel-rp-duet-search placeholder="Search characters…" spellcheck="false" />
+            <div class="remodel-rp-picker-grid" data-remodel-rp-duet-grid></div>
+            <div class="remodel-rp-picker-foot">
+                <span class="remodel-rp-picker-count" data-remodel-rp-duet-status></span>
+                <div class="remodel-rp-picker-actions">
+                    <button type="button" class="remodel-rp-picker-btn" data-remodel-rp-duet-cancel>Cancel</button>
+                    <button type="button" class="remodel-rp-picker-btn remodel-rp-picker-go" data-remodel-rp-duet-confirm disabled>Begin scene</button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+    renderRoleplayDuetPicker(overlay);
+    requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
+    overlay.querySelector('[data-remodel-rp-duet-search]')?.focus();
+}
+
+const ROLEPLAY_DUET_SEATS = Object.freeze([
+    {
+        key: 'narrator',
+        field: 'narratorAvatar',
+        label: 'Narrator',
+        icon: 'fa-microphone-lines',
+        blurb: 'Writes every visible line',
+        empty: 'Choose who tells this story',
+    },
+    {
+        key: 'director',
+        field: 'directorAvatar',
+        label: 'Director',
+        icon: 'fa-clapperboard',
+        blurb: 'Decides cause and consequence, unseen',
+        empty: 'Choose who directs it',
+    },
+]);
+
+function renderRoleplayDuetPicker(overlay) {
+    const state = overlay._remodelDuet;
+    const context = getContext();
+    const characters = (context.characters || []).filter((item) => item?.avatar && item.avatar !== 'none');
+    const byAvatar = new Map(characters.map((item) => [item.avatar, item]));
+
+    const seats = overlay.querySelector('[data-remodel-rp-duet-seats]');
+    if (seats) {
+        seats.innerHTML = ROLEPLAY_DUET_SEATS.map((seat) => {
+            const avatar = state[seat.field];
+            const card = avatar ? byAvatar.get(avatar) : null;
+            const thumb = card ? context.getThumbnailUrl('avatar', card.avatar) : '';
+            const active = state.seat === seat.key;
+            return `
+                <button type="button" class="remodel-rp-duet-seat${active ? ' is-active' : ''}${card ? ' is-filled' : ''}"
+                        data-remodel-rp-duet-seat="${escapeAttribute(seat.key)}"
+                        aria-pressed="${active}">
+                    <span class="remodel-rp-duet-seat-av" ${thumb ? `style="background-image:url('${escapeAttribute(thumb)}')"` : ''}>${card ? '' : '<i class="fa-solid fa-plus" aria-hidden="true"></i>'}</span>
+                    <span class="remodel-rp-duet-seat-text">
+                        <span class="remodel-rp-duet-seat-role"><i class="fa-solid ${seat.icon}" aria-hidden="true"></i>${escapeHtml(seat.label)}</span>
+                        <span class="remodel-rp-duet-seat-name">${card ? escapeHtml(card.name) : escapeHtml(seat.empty)}</span>
+                        <span class="remodel-rp-duet-seat-blurb">${escapeHtml(seat.blurb)}</span>
+                    </span>
+                </button>`;
+        }).join('');
+    }
+
+    const grid = overlay.querySelector('[data-remodel-rp-duet-grid]');
+    if (grid) {
+        const activeSeat = ROLEPLAY_DUET_SEATS.find((seat) => seat.key === state.seat) || ROLEPLAY_DUET_SEATS[0];
+        const otherSeat = ROLEPLAY_DUET_SEATS.find((seat) => seat.key !== state.seat);
+        grid.innerHTML = characters.map((card) => {
+            const thumb = context.getThumbnailUrl('avatar', card.avatar);
+            const isChosen = state[activeSeat.field] === card.avatar;
+            // Held by the OTHER seat. Shown, not hidden: clicking it swaps the
+            // two, which is the most common correction.
+            const isTaken = otherSeat && state[otherSeat.field] === card.avatar;
+            return `
+                <button type="button" class="remodel-rp-picker-card${isChosen ? ' remodel-rp-picked' : ''}${isTaken ? ' remodel-rp-duet-taken' : ''}"
+                        data-remodel-rp-duet-pick="${escapeAttribute(card.avatar)}"
+                        title="${escapeAttribute(isTaken ? `${card.name} — currently the ${otherSeat.label}; choosing here swaps the seats` : card.name)}">
+                    <span class="remodel-rp-picker-av" ${thumb ? `style="background-image:url('${escapeAttribute(thumb)}')"` : ''}>${thumb ? '' : escapeHtml(roleplayInitials(card.name))}</span>
+                    <span class="remodel-rp-picker-name">${escapeHtml(card.name)}</span>
+                    ${isTaken ? `<span class="remodel-rp-duet-taken-tag">${escapeHtml(otherSeat.label)}</span>` : '<span class="remodel-rp-picker-check" aria-hidden="true">✓</span>'}
+                </button>`;
+        }).join('') || '<div class="remodel-rp-picker-empty">No characters available.</div>';
+    }
+
+    const ready = Boolean(state.directorAvatar && state.narratorAvatar);
+    const status = overlay.querySelector('[data-remodel-rp-duet-status]');
+    if (status) {
+        const activeSeat = ROLEPLAY_DUET_SEATS.find((seat) => seat.key === state.seat);
+        status.textContent = ready
+            ? 'Both seats filled'
+            : `Choosing the ${activeSeat?.label || 'Narrator'}`;
+    }
+    const confirm = overlay.querySelector('[data-remodel-rp-duet-confirm]');
+    if (confirm) confirm.toggleAttribute('disabled', !ready);
+
+    // Re-apply the live filter so re-rendering the grid does not undo a search.
+    const search = overlay.querySelector('[data-remodel-rp-duet-search]');
+    if (search instanceof HTMLInputElement && search.value.trim()) filterRoleplayDuetGrid(overlay, search.value);
+}
+
+function filterRoleplayDuetGrid(overlay, query) {
+    const needle = String(query || '').trim().toLowerCase();
+    overlay.querySelectorAll('[data-remodel-rp-duet-pick]').forEach((card) => {
+        const name = card.querySelector('.remodel-rp-picker-name')?.textContent?.toLowerCase() ?? '';
+        card.style.display = !needle || name.includes(needle) ? '' : 'none';
+    });
+}
+
+function closeRoleplayDuetPicker() {
+    const overlay = document.getElementById(ROLEPLAY_DUET_PICKER_ID);
+    if (!overlay) return;
+    overlay.classList.remove('remodel-rp-picker-in');
+    setTimeout(() => overlay.remove(), 200);
+}
+
+// One delegated listener set, bound once at init, gated on the picker existing.
+function bindRoleplayDuetPickerEvents() {
+    document.addEventListener('click', (event) => {
+        const overlay = document.getElementById(ROLEPLAY_DUET_PICKER_ID);
+        if (!overlay) return;
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target) return;
+
+        if (target === overlay || target.closest('[data-remodel-rp-duet-cancel]')) {
+            closeRoleplayDuetPicker();
+            return;
+        }
+
+        const seatButton = target.closest('[data-remodel-rp-duet-seat]');
+        if (seatButton) {
+            overlay._remodelDuet.seat = seatButton.getAttribute('data-remodel-rp-duet-seat');
+            renderRoleplayDuetPicker(overlay);
+            return;
+        }
+
+        const card = target.closest('[data-remodel-rp-duet-pick]');
+        if (card) {
+            const avatar = card.getAttribute('data-remodel-rp-duet-pick');
+            const state = overlay._remodelDuet;
+            const activeSeat = ROLEPLAY_DUET_SEATS.find((seat) => seat.key === state.seat) || ROLEPLAY_DUET_SEATS[0];
+            const otherSeat = ROLEPLAY_DUET_SEATS.find((seat) => seat.key !== activeSeat.key);
+            // Picking the card the other seat holds swaps them, rather than
+            // leaving the same card in both seats — which setSceneDuetSeats
+            // would refuse anyway.
+            if (otherSeat && state[otherSeat.field] === avatar) {
+                state[otherSeat.field] = state[activeSeat.field];
+            }
+            state[activeSeat.field] = avatar;
+            // Advance to the empty seat if there is one, so the common path is
+            // two clicks with no seat-switching in between.
+            const unfilled = ROLEPLAY_DUET_SEATS.find((seat) => !state[seat.field]);
+            if (unfilled) state.seat = unfilled.key;
+            renderRoleplayDuetPicker(overlay);
+            return;
+        }
+
+        if (target.closest('[data-remodel-rp-duet-confirm]')) {
+            const state = overlay._remodelDuet;
+            if (!state.directorAvatar || !state.narratorAvatar) return;
+            const seats = { directorAvatar: state.directorAvatar, narratorAvatar: state.narratorAvatar };
+            const callback = state.onConfirm;
+            closeRoleplayDuetPicker();
+            callback?.(seats);
+        }
+    });
+
+    document.addEventListener('input', (event) => {
+        const overlay = document.getElementById(ROLEPLAY_DUET_PICKER_ID);
+        if (!overlay) return;
+        const search = event.target instanceof Element ? event.target.closest('[data-remodel-rp-duet-search]') : null;
+        if (!(search instanceof HTMLInputElement)) return;
+        filterRoleplayDuetGrid(overlay, search.value);
+    });
+}
 
 // mode: 'create' (choose a fresh cast) | 'add' (add to current scene).
 // excludeAvatars: characters already in the scene (hidden in 'add' mode).
@@ -4995,6 +5392,7 @@ function syncStoryWorkspaceClass(scene) {
 
     document.body.classList.remove('remodel-story-workspace-active', 'remodel-manuscript-editing');
     document.body.classList.toggle('remodel-storydoc-active', enteringStoryDoc);
+    manuscriptSelection = null;
     document.body.classList.toggle('remodel-roleplay-workspace-active', enteringRoleplay);
     if (enteringRoleplay) document.getElementById('remodel-direction-failure')?.remove();
 
@@ -5274,6 +5672,9 @@ function migrateLoadedLegacyStoryScene(sceneId) {
 function enterStoryDocWorkspace() {
     document.body.classList.add('remodel-storydoc-active');
     document.body.classList.remove('remodel-story-workspace-active', 'remodel-roleplay-workspace-active');
+    // Offsets from the document being closed mean nothing in the one being
+    // opened — a stale selection would format the wrong sentence.
+    manuscriptSelection = null;
     ensureStoryEditor();
     renderStoryEditor();
     relocateStoryDocNativeButtons();
@@ -5385,7 +5786,7 @@ function ensureStoryEditor() {
         </header>
         <main class="remodel-storydoc-workbench">
             <section class="remodel-storydoc-page" aria-label="Manuscript">
-                <div class="remodel-storydoc-page-rule"><span>Manuscript</span></div>
+                ${renderManuscriptRule()}
                 <div class="remodel-storydoc-prose" data-remodel-storydoc-prose contenteditable="true" spellcheck="true"></div>
                 <button type="button" class="remodel-storydoc-add-beat-marker" data-remodel-storydoc-add-beat>
                     <span class="remodel-storydoc-add-beat-tag"><i class="fa-solid fa-feather" aria-hidden="true"></i> Add Scene Beat</span>
@@ -5418,7 +5819,42 @@ function ensureStoryEditor() {
         </main>
     `;
     chatEl.after(editor);
+    clearLegacyManuscriptTypography();
+    syncManuscriptRuleControls();
+    bindManuscriptRuleStick(editor);
     return editor;
+}
+
+// The Manuscript rule doubles as the format bar. It's the page's own header:
+// sticky under the document header while you scroll, permanently open at the
+// top of the manuscript, and collapsed behind the gear once it sticks (see
+// bindManuscriptRuleStick).
+function renderManuscriptRule() {
+    const fonts = MANUSCRIPT_FONT_OPTIONS
+        .map((option) => `<option value="${escapeAttribute(option.value)}">${escapeHtml(option.label)}</option>`)
+        .join('');
+    const sizes = MANUSCRIPT_SIZE_OPTIONS
+        .map((size) => `<option value="${escapeAttribute(size)}">${escapeHtml(size.replace('px', ''))}</option>`)
+        .join('');
+    const marks = [['bold', 'fa-bold', 'Bold'], ['italic', 'fa-italic', 'Italic'], ['underline', 'fa-underline', 'Underline']]
+        .map(([format, icon, label]) => `<button type="button" data-remodel-storydoc-format="${format}" title="${label}" aria-label="${label}" aria-pressed="false"><i class="fa-solid ${icon}" aria-hidden="true"></i></button>`)
+        .join('');
+    return `
+        <div class="remodel-storydoc-page-rule is-format-open" data-remodel-storydoc-rule>
+            <span class="remodel-storydoc-rule-label">Manuscript</span>
+            <button type="button" class="remodel-storydoc-format-toggle" data-remodel-storydoc-format-toggle title="Formatting" aria-label="Formatting" aria-expanded="true">
+                <i class="fa-solid fa-gear" aria-hidden="true"></i>
+            </button>
+            <span class="remodel-storydoc-rule-line" aria-hidden="true"></span>
+            <div class="remodel-storydoc-format-bar" data-remodel-storydoc-format-bar>
+                <span class="remodel-storydoc-format-scope" data-remodel-storydoc-format-scope>Whole manuscript</span>
+                <select data-remodel-storydoc-font aria-label="Manuscript font" title="Font">${fonts}</select>
+                <select data-remodel-storydoc-fontsize aria-label="Manuscript font size" title="Font size">${sizes}</select>
+                <span class="remodel-storydoc-format-sep" aria-hidden="true"></span>
+                ${marks}
+            </div>
+        </div>
+    `;
 }
 
 // Renders the active doc's body into the editable prose surface. Only writes
@@ -5437,12 +5873,16 @@ function renderStoryEditor(force = false) {
     if (!doc) {
         return;
     }
+    // This document's own face and size, re-applied on every open so opening
+    // a second story never inherits the first one's typography.
+    applyManuscriptTypography(doc);
     // Split the doc body into paragraphs (blank-line separated) rendered as
     // <p> blocks — a real document look, not one run-on block. Only rebuild
     // when the editor isn't focused (never fight the user's caret).
     if (force || (document.activeElement !== prose && !prose.contains(document.activeElement))) {
-        renderProseParagraphs(prose, doc.body || '', doc.beats || []);
+        renderProseParagraphs(prose, doc.body || '', doc.beats || [], doc.styleRuns || []);
     }
+    syncManuscriptRuleControls();
     if (prose.dataset.placeholder === undefined) {
         prose.dataset.placeholder = 'Begin your story…';
     }
@@ -5463,18 +5903,19 @@ function renderStoryEditor(force = false) {
     }
 }
 
-// Renders plain text (paragraphs separated by blank lines) as <p> elements.
-function renderProseParagraphs(prose, text, beats = []) {
+// Renders plain text (paragraphs separated by blank lines) as <p> elements,
+// with the doc's style runs painted back on as inline spans.
+function renderProseParagraphs(prose, text, beats = [], styleRuns = []) {
     prose.textContent = '';
     let cursor = 0;
     const orderedBeats = [...beats].sort((a, b) => (a.position || 0) - (b.position || 0));
     for (const beat of orderedBeats) {
         const position = Math.max(cursor, Math.min(String(text).length, Number(beat.position) || 0));
-        appendStoryParagraphs(prose, String(text).slice(cursor, position));
+        appendStoryParagraphs(prose, String(text).slice(cursor, position), cursor, styleRuns);
         prose.appendChild(buildStoryDocBeat(beat));
         cursor = position;
     }
-    appendStoryParagraphs(prose, String(text).slice(cursor));
+    appendStoryParagraphs(prose, String(text).slice(cursor), cursor, styleRuns);
     if (!prose.lastElementChild || prose.lastElementChild.matches('[data-remodel-storydoc-beat-id]')) {
         const paragraph = document.createElement('p');
         paragraph.contentEditable = 'true';
@@ -5484,15 +5925,70 @@ function renderProseParagraphs(prose, text, beats = []) {
     }
 }
 
-function appendStoryParagraphs(prose, text) {
+// `base` is the slice's absolute offset in the doc body — style runs are
+// stored in body coordinates, so paragraph boundaries have to be tracked
+// exactly (hence walking the separators rather than a plain split()).
+function appendStoryParagraphs(prose, text, base = 0, styleRuns = []) {
     if (!text) return;
-    const paragraphs = String(text).split(/\n{2,}/);
-    for (const para of paragraphs) {
+    const source = String(text);
+    const separator = /\n{2,}/g;
+    const bounds = [];
+    let start = 0;
+    let match;
+    while ((match = separator.exec(source)) !== null) {
+        bounds.push([start, match.index]);
+        start = match.index + match[0].length;
+    }
+    bounds.push([start, source.length]);
+    for (const [from, to] of bounds) {
         const p = document.createElement('p');
         p.contentEditable = 'true';
-        p.textContent = para;
+        appendStyledText(p, source.slice(from, to), base + from, styleRuns);
         prose.appendChild(p);
     }
+}
+
+// Splits one paragraph's text at every style-run boundary that falls inside
+// it, wrapping the covered stretches in spans and leaving the rest as bare
+// text nodes (so unformatted prose keeps exactly the DOM shape it had before
+// style runs existed).
+function appendStyledText(paragraph, text, base, styleRuns = []) {
+    if (!text) {
+        paragraph.textContent = '';
+        return;
+    }
+    const end = base + text.length;
+    const overlapping = (styleRuns || [])
+        .filter((run) => run && run.end > base && run.start < end)
+        .sort((a, b) => a.start - b.start);
+    let cursor = base;
+    for (const run of overlapping) {
+        const from = Math.max(base, run.start);
+        const to = Math.min(end, run.end);
+        if (to <= cursor) continue;
+        if (from > cursor) {
+            paragraph.appendChild(document.createTextNode(text.slice(cursor - base, from - base)));
+        }
+        paragraph.appendChild(buildStyleRunSpan(text.slice(from - base, to - base), run));
+        cursor = to;
+    }
+    if (cursor < end) {
+        paragraph.appendChild(document.createTextNode(text.slice(cursor - base)));
+    }
+}
+
+function buildStyleRunSpan(text, run) {
+    const span = document.createElement('span');
+    span.setAttribute('data-remodel-storydoc-run', '');
+    // Assigned through CSSOM, never interpolated into markup: a stored font
+    // value is arbitrary text and the browser drops anything it can't parse.
+    if (run.font) span.style.fontFamily = run.font;
+    if (run.size) span.style.fontSize = run.size;
+    if (run.bold) span.style.fontWeight = '700';
+    if (run.italic) span.style.fontStyle = 'italic';
+    if (run.underline) span.style.textDecoration = 'underline';
+    span.textContent = text;
+    return span;
 }
 
 // Reads the editor's current prose back to plain text (paragraphs joined by
@@ -5507,10 +6003,16 @@ function readStoryEditorText(prose) {
     return paras.join('\n\n').replace(/\n{3,}/g, '\n\n').trimEnd();
 }
 
+// Body text, beat positions and style runs all come out of the SAME walk —
+// they're three views of one set of offsets, and computing them separately
+// is how they'd drift. Runs are re-derived from the live DOM on every save
+// rather than patched, so ordinary typing (which grows or splits the spans
+// natively) keeps them aligned without any offset bookkeeping.
 function readStoryEditorState(prose) {
     const doc = getStoryDoc(activeStoryDocId);
     let body = '';
     const positions = new Map();
+    const styleRuns = [];
     for (const child of prose.children) {
         if (child.matches('[data-remodel-storydoc-beat-id]')) {
             positions.set(child.dataset.remodelStorydocBeatId, body.length);
@@ -5518,14 +6020,465 @@ function readStoryEditorState(prose) {
         }
         if (child.tagName !== 'P') continue;
         if (body) body += '\n\n';
-        body += child.textContent || '';
+        const walker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const text = node.nodeValue || '';
+            if (!text) continue;
+            const span = node.parentElement?.closest('[data-remodel-storydoc-run]');
+            if (span) {
+                pushStyleRun(styleRuns, body.length, body.length + text.length, readStyleRunSpan(span));
+            }
+            body += text;
+        }
     }
+    const trimmed = body.trimEnd();
     return {
-        body: body.trimEnd(),
+        body: trimmed,
         beats: (doc?.beats || []).map((beat) => positions.has(beat.id)
             ? { ...beat, position: positions.get(beat.id) }
             : beat),
+        styleRuns: clampStyleRuns(styleRuns, trimmed.length),
     };
+}
+
+function readStyleRunSpan(span) {
+    const style = {};
+    if (span.style.fontFamily) style.font = span.style.fontFamily;
+    if (span.style.fontSize) style.size = span.style.fontSize;
+    if (span.style.fontWeight === '700' || span.style.fontWeight === 'bold') style.bold = true;
+    if (span.style.fontStyle === 'italic') style.italic = true;
+    if (span.style.textDecoration.includes('underline')) style.underline = true;
+    return style;
+}
+
+// Appends a run, coalescing with the previous one when they touch and carry
+// the same style — a paragraph re-read after typing is otherwise one run per
+// text node.
+function pushStyleRun(runs, start, end, style) {
+    if (end <= start || !hasStyle(style)) return;
+    const last = runs[runs.length - 1];
+    if (last && last.end === start && sameStyle(last, style)) {
+        last.end = end;
+        return;
+    }
+    runs.push({ start, end, ...style });
+}
+
+function clampStyleRuns(runs, length) {
+    return runs
+        .map((run) => ({ ...run, start: Math.max(0, run.start), end: Math.min(length, run.end) }))
+        .filter((run) => run.end > run.start);
+}
+
+function hasStyle(style) {
+    return Boolean(style && (style.font || style.size || style.bold || style.italic || style.underline));
+}
+
+function sameStyle(a, b) {
+    return (a.font || '') === (b.font || '')
+        && (a.size || '') === (b.size || '')
+        && Boolean(a.bold) === Boolean(b.bold)
+        && Boolean(a.italic) === Boolean(b.italic)
+        && Boolean(a.underline) === Boolean(b.underline);
+}
+
+// --- Manuscript format bar -------------------------------------------------
+//
+// The bar edits two different things, and the split is the whole feature:
+// with NOTHING selected, font and size are a reading preference and move the
+// entire manuscript (one body-level custom property, remembered in
+// localStorage, never part of the story). With text SELECTED they're
+// manuscript content and land in the doc's styleRuns. Bold/italic/underline
+// are only ever the second kind, so they ask for a selection.
+//
+// The last manuscript selection is kept in body coordinates rather than as a
+// live Range: clicking a <select> in the bar blurs the contenteditable, and
+// character offsets survive that (and the re-render that follows) where a
+// Range would not.
+let manuscriptSelection = null;
+let manuscriptStickFrame = 0;
+let manuscriptScopeFlashTimer = null;
+
+function getManuscriptRule() {
+    return getRealStoryEditor()?.querySelector('[data-remodel-storydoc-rule]') || null;
+}
+
+function getManuscriptProse() {
+    return getRealStoryEditor()?.querySelector('[data-remodel-storydoc-prose]') || null;
+}
+
+// Sticky rule: pinned under the document header once the manuscript scrolls
+// past it. The pin is CSS (position:sticky); this only reports WHEN it
+// happens, so the bar can collapse behind the gear while stuck and reopen on
+// its own back at the top of the page.
+function bindManuscriptRuleStick(editor) {
+    const rule = editor.querySelector('[data-remodel-storydoc-rule]');
+    const header = editor.querySelector('.remodel-storydoc-header');
+    if (!rule || !header || editor.dataset.remodelRuleBound) {
+        return;
+    }
+    editor.dataset.remodelRuleBound = '1';
+    // The pinned bar parks INSIDE the document header's band — centred on the
+    // same row as the back button, title and save state — rather than sitting
+    // as a second bar underneath it. Measured while unstuck: once it sticks
+    // the format controls collapse and its height changes, and feeding that
+    // back into its own pin position would make the two states chase each
+    // other.
+    let pinnedTop = 0;
+    const sync = () => {
+        manuscriptStickFrame = 0;
+        const headerHeight = Math.round(header.getBoundingClientRect().height) || 76;
+        if (!rule.classList.contains('is-stuck')) {
+            const ruleHeight = Math.round(rule.getBoundingClientRect().height) || 38;
+            pinnedTop = Math.max(0, Math.round((headerHeight - ruleHeight) / 2));
+            editor.style.setProperty('--remodel-storydoc-rule-top', `${pinnedTop}px`);
+        }
+        const offset = rule.getBoundingClientRect().top - editor.getBoundingClientRect().top;
+        const stuck = offset <= pinnedTop + 0.5;
+        if (stuck === rule.classList.contains('is-stuck')) {
+            return;
+        }
+        rule.classList.toggle('is-stuck', stuck);
+        setManuscriptFormatOpen(rule, !stuck);
+    };
+    const schedule = () => {
+        if (manuscriptStickFrame) {
+            return;
+        }
+        manuscriptStickFrame = requestAnimationFrame(sync);
+    };
+    editor.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule, { passive: true });
+    schedule();
+}
+
+function setManuscriptFormatOpen(rule, open) {
+    rule.classList.toggle('is-format-open', open);
+    rule.querySelector('[data-remodel-storydoc-format-toggle]')?.setAttribute('aria-expanded', String(open));
+}
+
+function toggleManuscriptFormatBar() {
+    const rule = getManuscriptRule();
+    if (rule) {
+        setManuscriptFormatOpen(rule, !rule.classList.contains('is-format-open'));
+    }
+}
+
+// --- selection tracking ----------------------------------------------------
+
+function bindManuscriptSelectionTracking() {
+    document.addEventListener('selectionchange', () => {
+        if (!isRealStoryDocSceneActive()) {
+            return;
+        }
+        const prose = getManuscriptProse();
+        const selection = window.getSelection();
+        if (!prose || !selection || selection.rangeCount === 0) {
+            return;
+        }
+        const range = selection.getRangeAt(0);
+        // Selections that leave the prose (a click into the bar itself) are
+        // ignored rather than cleared — the button being clicked still needs
+        // the manuscript selection it was aimed at.
+        if (!prose.contains(range.startContainer) || !prose.contains(range.endContainer)) {
+            return;
+        }
+        setManuscriptSelection(range.collapsed ? null : {
+            start: storyProseOffset(prose, range.startContainer, range.startOffset),
+            end: storyProseOffset(prose, range.endContainer, range.endOffset),
+        });
+    });
+}
+
+function setManuscriptSelection(next) {
+    manuscriptSelection = next && Number.isFinite(next.start) && Number.isFinite(next.end) && next.end > next.start
+        ? next
+        : null;
+    syncManuscriptRuleControls();
+}
+
+// Absolute offset of a DOM point inside the doc body — the same walk
+// readStoryEditorState uses to build that body, so the two always agree.
+function storyProseOffset(prose, node, offset) {
+    if (!node || !prose.contains(node)) {
+        return null;
+    }
+    if (node === prose) {
+        // Boundary on the container itself, which is what a select-all
+        // produces: count the paragraphs that end before the boundary index.
+        let total = 0;
+        for (const child of [...prose.childNodes].slice(0, offset)) {
+            if (!(child instanceof Element) || child.tagName !== 'P') continue;
+            if (total) total += 2;
+            total += child.textContent.length;
+        }
+        return total;
+    }
+    let total = 0;
+    for (const child of prose.children) {
+        if (child.matches('[data-remodel-storydoc-beat-id]')) continue;
+        if (child.tagName !== 'P') continue;
+        if (total) total += 2;
+        if (child === node || child.contains(node)) {
+            return total + textLengthBefore(child, node, offset);
+        }
+        total += child.textContent.length;
+    }
+    return null;
+}
+
+function textLengthBefore(root, node, offset) {
+    if (node.nodeType === Node.TEXT_NODE) {
+        let total = 0;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+            if (text === node) {
+                return total + Math.min(offset, (text.nodeValue || '').length);
+            }
+            total += (text.nodeValue || '').length;
+        }
+        return total;
+    }
+    let total = 0;
+    for (const child of [...node.childNodes].slice(0, offset)) {
+        total += child.textContent?.length || 0;
+    }
+    if (node === root || !node.parentNode) {
+        return total;
+    }
+    return total + textLengthBefore(root, node.parentNode, [...node.parentNode.childNodes].indexOf(node));
+}
+
+// Inverse of storyProseOffset: the DOM point for a body offset, used to put
+// the selection back after a re-render.
+function storyProsePoint(prose, target) {
+    let total = 0;
+    for (const child of prose.children) {
+        if (child.matches('[data-remodel-storydoc-beat-id]')) continue;
+        if (child.tagName !== 'P') continue;
+        if (total) total += 2;
+        const length = child.textContent.length;
+        if (target <= total + length) {
+            let local = Math.max(0, target - total);
+            const walker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
+            for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                const size = (text.nodeValue || '').length;
+                if (local <= size) {
+                    return { node: text, offset: local };
+                }
+                local -= size;
+            }
+            return { node: child, offset: child.childNodes.length };
+        }
+        total += length;
+    }
+    const last = prose.lastElementChild;
+    return last ? { node: last, offset: last.childNodes.length } : null;
+}
+
+function restoreStoryProseSelection(prose, start, end) {
+    const from = storyProsePoint(prose, start);
+    const to = storyProsePoint(prose, end);
+    const selection = window.getSelection();
+    if (!from || !to || !selection) {
+        return;
+    }
+    const range = document.createRange();
+    range.setStart(from.node, from.offset);
+    range.setEnd(to.node, to.offset);
+    selection.removeAllRanges();
+    selection.addRange(range);
+}
+
+// --- style runs ------------------------------------------------------------
+
+// Rewrites the run list so [start,end) carries `patch` on top of whatever was
+// already there. Boundary-sweep rather than in-place splicing: every existing
+// edge plus the two new ones becomes a segment, each segment gets its
+// covering run's style merged with the patch, and touching segments with an
+// identical style are folded back together.
+function mergeStyleRuns(runs, start, end, patch) {
+    const points = new Set([start, end]);
+    for (const run of runs) {
+        points.add(run.start);
+        points.add(run.end);
+    }
+    const ordered = [...points].sort((a, b) => a - b);
+    const merged = [];
+    for (let index = 0; index < ordered.length - 1; index++) {
+        const from = ordered[index];
+        const to = ordered[index + 1];
+        const covering = runs.find((run) => run.start <= from && run.end >= to);
+        const inPatch = from >= start && to <= end;
+        const style = pickStyle({ ...(covering || {}), ...(inPatch ? patch : {}) });
+        if (!hasStyle(style)) {
+            continue;
+        }
+        const last = merged[merged.length - 1];
+        if (last && last.end === from && sameStyle(last, style)) {
+            last.end = to;
+            continue;
+        }
+        merged.push({ start: from, end: to, ...style });
+    }
+    return merged;
+}
+
+function pickStyle(value) {
+    const style = {};
+    if (value.font) style.font = value.font;
+    if (value.size) style.size = value.size;
+    if (value.bold) style.bold = true;
+    if (value.italic) style.italic = true;
+    if (value.underline) style.underline = true;
+    return style;
+}
+
+// Shifts runs after an insertion point — the one place body text changes by
+// splicing a string instead of by editing the DOM (insertStoryBeatProse).
+function shiftStyleRuns(runs, position, length) {
+    if (!length) {
+        return runs || [];
+    }
+    return (runs || []).map((run) => ({
+        ...run,
+        start: run.start >= position ? run.start + length : run.start,
+        end: run.end > position ? run.end + length : run.end,
+    }));
+}
+
+// The style shared by the ENTIRE selection. A mark that only covers part of
+// it reads as off, so the button turns it on for the whole range first —
+// the behaviour every word processor has.
+function manuscriptSelectionStyle() {
+    const doc = getStoryDoc(activeStoryDocId);
+    const selection = manuscriptSelection;
+    const style = {};
+    if (!doc || !selection) {
+        return style;
+    }
+    const span = selection.end - selection.start;
+    const runs = (doc.styleRuns || []).filter((run) => run.end > selection.start && run.start < selection.end);
+    const coverage = (predicate) => runs
+        .filter(predicate)
+        .reduce((sum, run) => sum + (Math.min(run.end, selection.end) - Math.max(run.start, selection.start)), 0);
+    for (const key of ['bold', 'italic', 'underline']) {
+        if (coverage((run) => run[key]) >= span) {
+            style[key] = true;
+        }
+    }
+    for (const key of ['font', 'size']) {
+        const values = new Set(runs.filter((run) => run[key]).map((run) => run[key]));
+        if (values.size === 1 && coverage((run) => run[key]) >= span) {
+            style[key] = [...values][0];
+        }
+    }
+    return style;
+}
+
+// --- applying ---------------------------------------------------------------
+
+function applyManuscriptSelectionStyle(patch) {
+    const prose = getManuscriptProse();
+    if (!prose || !activeStoryDocId || !manuscriptSelection) {
+        return false;
+    }
+    // Beat the pending autosave to the document, then work from the state we
+    // just read — the DOM is the truth for both text and existing runs.
+    clearTimeout(storyEditorSaveTimer);
+    const state = readStoryEditorState(prose);
+    const start = Math.max(0, Math.min(state.body.length, manuscriptSelection.start));
+    const end = Math.max(0, Math.min(state.body.length, manuscriptSelection.end));
+    if (end <= start) {
+        return false;
+    }
+    updateStoryDoc(activeStoryDocId, { ...state, styleRuns: mergeStyleRuns(state.styleRuns, start, end, patch) });
+    setStorySaveState('Saved');
+    renderStoryEditor(true);
+    prose.focus({ preventScroll: true });
+    restoreStoryProseSelection(prose, start, end);
+    manuscriptSelection = { start, end };
+    syncManuscriptRuleControls();
+    return true;
+}
+
+function handleManuscriptMarkClick(format) {
+    if (!manuscriptSelection) {
+        flashManuscriptScope('Select text first');
+        return;
+    }
+    applyManuscriptSelectionStyle({ [format]: !manuscriptSelectionStyle()[format] });
+}
+
+function handleManuscriptFontSelect(select) {
+    if (manuscriptSelection) {
+        applyManuscriptSelectionStyle({ font: select.value });
+        return;
+    }
+    handleManuscriptFontChange(select);
+}
+
+function handleManuscriptSizeSelect(select) {
+    if (manuscriptSelection) {
+        applyManuscriptSelectionStyle({ size: select.value });
+        return;
+    }
+    setManuscriptTypography({ fontSize: select.value });
+}
+
+// --- bar state -------------------------------------------------------------
+
+function documentManuscriptFont() {
+    return getStoryDoc(activeStoryDocId)?.font || MANUSCRIPT_FONT_OPTIONS[0].value;
+}
+
+function documentManuscriptSize() {
+    return getStoryDoc(activeStoryDocId)?.fontSize || MANUSCRIPT_DEFAULT_SIZE;
+}
+
+function syncManuscriptRuleControls() {
+    const rule = getManuscriptRule();
+    if (!rule) {
+        return;
+    }
+    const scoped = Boolean(manuscriptSelection);
+    const style = manuscriptSelectionStyle();
+    rule.classList.toggle('is-selection-scoped', scoped);
+    const scope = rule.querySelector('[data-remodel-storydoc-format-scope]');
+    if (scope && !scope.dataset.flash) {
+        scope.textContent = scoped ? 'Selection' : 'Whole manuscript';
+    }
+    const font = rule.querySelector('[data-remodel-storydoc-font]');
+    if (font) {
+        font.value = matchingOptionValue(font, style.font || documentManuscriptFont());
+    }
+    const size = rule.querySelector('[data-remodel-storydoc-fontsize]');
+    if (size) {
+        size.value = matchingOptionValue(size, style.size || documentManuscriptSize());
+    }
+    for (const button of rule.querySelectorAll('[data-remodel-storydoc-format]')) {
+        const active = Boolean(style[button.dataset.remodelStorydocFormat]);
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-pressed', String(active));
+    }
+}
+
+function matchingOptionValue(select, value) {
+    return [...select.options].some((option) => option.value === value) ? value : select.value;
+}
+
+function flashManuscriptScope(message) {
+    const scope = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-format-scope]');
+    if (!scope) {
+        return;
+    }
+    scope.dataset.flash = '1';
+    scope.textContent = message;
+    clearTimeout(manuscriptScopeFlashTimer);
+    manuscriptScopeFlashTimer = setTimeout(() => {
+        delete scope.dataset.flash;
+        syncManuscriptRuleControls();
+    }, 2200);
 }
 
 // Autosave: debounced write of the edited prose back to the StoryDoc. No
@@ -5561,11 +6514,37 @@ function bindStoryEditorEvents() {
     });
 
     document.addEventListener('change', (event) => {
-        const title = event.target instanceof Element ? event.target.closest('[data-remodel-storydoc-title]') : null;
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target) return;
+        const font = target.closest('[data-remodel-storydoc-font]');
+        if (font) {
+            handleManuscriptFontSelect(font);
+            return;
+        }
+        const size = target.closest('[data-remodel-storydoc-fontsize]');
+        if (size) {
+            handleManuscriptSizeSelect(size);
+            return;
+        }
+        const title = target.closest('[data-remodel-storydoc-title]');
         if (!title || !activeStoryDocId) return;
         updateStoryDoc(activeStoryDocId, { title: title.value });
         setStorySaveState('Saved');
     });
+
+    // Keep the manuscript selection alive across a toolbar click: without
+    // this, mousedown on a button collapses the very selection the button is
+    // about to format. (Selects are left alone — they need the mousedown to
+    // open their popup.)
+    document.addEventListener('mousedown', (event) => {
+        if (!isRealStoryDocSceneActive()) return;
+        const control = event.target instanceof Element
+            ? event.target.closest('[data-remodel-storydoc-rule] [data-remodel-storydoc-format],[data-remodel-storydoc-format-toggle]')
+            : null;
+        if (control) event.preventDefault();
+    });
+
+    bindManuscriptSelectionTracking();
 
     // Story editor controls, including the right-side Continue / Stop rail.
     document.addEventListener('click', (event) => {
@@ -5597,6 +6576,20 @@ function bindStoryEditorEvents() {
         if (previewOverlay && (target.closest('[data-remodel-storydoc-preview-close]') || target === previewOverlay)) {
             event.preventDefault();
             closeStoryPromptPreview();
+            return;
+        }
+
+        if (target.closest('[data-remodel-storydoc-format-toggle]')) {
+            event.preventDefault();
+            toggleManuscriptFormatBar();
+            return;
+        }
+        // Scoped to the rule on purpose: the legacy "Manuscript toolbar"
+        // panel reuses this attribute for its own markdown-wrapping buttons.
+        const formatMark = target.closest('[data-remodel-storydoc-rule] [data-remodel-storydoc-format]');
+        if (formatMark) {
+            event.preventDefault();
+            handleManuscriptMarkClick(formatMark.dataset.remodelStorydocFormat);
             return;
         }
 
@@ -5717,6 +6710,7 @@ function bindStoryEditorEvents() {
         const field = event.target instanceof Element ? event.target.closest('[data-remodel-storydoc-beat-instruction]') : null;
         const card = field?.closest('[data-remodel-storydoc-beat-id]');
         if (!field || !card) return;
+        autosizeStoryBeatInput(field);
         patchStoryDocBeat(card.dataset.remodelStorydocBeatId, { instruction: field.value });
     }, true);
 
@@ -5881,8 +6875,29 @@ function buildStoryDocBeat(beat) {
         </div>
         ${beat.generatedText ? '<button type="button" class="remodel-storydoc-beat-regenerate" data-remodel-storydoc-beat-send>Regenerate</button>' : ''}
     `;
-    card.querySelector('[data-remodel-storydoc-beat-instruction]').value = beat.instruction || '';
+    const instruction = card.querySelector('[data-remodel-storydoc-beat-instruction]');
+    instruction.value = beat.instruction || '';
+    // Size it to the text it already holds. The card is not in the document
+    // yet, so scrollHeight is unavailable until it is attached — measure on the
+    // next frame instead of reading zero here.
+    requestAnimationFrame(() => autosizeStoryBeatInput(instruction));
     return card;
+}
+
+/**
+ * Grow a Scene Beat field to fit its content.
+ *
+ * Beats are written as prose and are routinely several sentences long, so a
+ * fixed 62px box hid most of what had been typed behind an inner scrollbar.
+ * There is no upper clamp on purpose — unlike the roleplay composer, a beat is
+ * a document element and should show the whole instruction.
+ */
+function autosizeStoryBeatInput(input) {
+    if (!(input instanceof HTMLTextAreaElement)) {
+        return;
+    }
+    input.style.height = 'auto';
+    input.style.height = `${Math.max(input.scrollHeight, 62)}px`;
 }
 
 function setStorySaveState(label) {
@@ -6444,6 +7459,25 @@ function buildStoryPromptSources(doc, assembled, { mode = 'continue', beat = '' 
 // expensive, so it now applies to Horde alone. Everywhere else we honour the
 // response length the user has already configured for their API — which also
 // makes "raise the response length" real advice they can act on.
+/**
+ * Hover text for the Live Direction pill.
+ *
+ * States what is CURRENTLY on, first and plainly, then what clicking does.
+ * The old title said only "Enable/Disable Live Direction", which describes the
+ * action — so combined with a label that showed the run state, there was no way
+ * to read the Scene's actual mode off the control.
+ */
+function liveModeTitle(ui) {
+    if (!ui?.active) {
+        return 'Live Direction is OFF. This Scene is on Free play: replies come straight from SillyTavern, with no directing pass and no paced reveal. Click to turn Live Direction on.';
+    }
+    const parts = ['Live Direction is ON. A hidden directing pass chooses the performer and paces the reply.'];
+    if (ui.state) parts.push(`Right now: ${ui.state}.`);
+    if (ui.performerLabel) parts.push(`Performer: ${ui.performerLabel}.`);
+    parts.push('Click to switch this Scene back to Free play.');
+    return parts.join(' ');
+}
+
 /** The lorebook bound to the Timeline that owns the active Scene, if any. */
 function getActiveTimelineLorebook() {
     const scene = getActiveScene();
@@ -6460,6 +7494,64 @@ function storyResponseLength() {
 // True while a story generation is in flight, so the controls can flip to a
 // Stop state and a second Continue can't stack.
 let storyGenerating = false;
+// Aborts an in-flight streamed Story generation. Null whenever nothing is
+// streaming; Stop reaches the request through this.
+let storyStreamAbort = null;
+
+/**
+ * A transient preview shown while prose streams in.
+ *
+ * Sits directly below the Scene Beat that asked for it (or at the end of the
+ * manuscript for a plain continue), and carries a reasoning console that fills
+ * in as the model thinks — the same generator supplies both, so the reasoning
+ * costs nothing extra once the text is streaming.
+ */
+function openStoryStreamPreview(beatId) {
+    const editor = getRealStoryEditor();
+    const prose = editor?.querySelector('[data-remodel-storydoc-prose]');
+    if (!prose) {
+        return null;
+    }
+    const live = document.createElement('section');
+    live.className = 'remodel-storydoc-stream';
+    live.contentEditable = 'false';
+    live.innerHTML = `
+        <header><i class="fa-solid fa-feather-pointed"></i> Writing<span class="remodel-storydoc-stream-dots"><i></i><i></i><i></i></span></header>
+        <div class="remodel-storydoc-stream-text" data-remodel-stream-text></div>
+        <details class="remodel-storydoc-stream-reasoning" data-remodel-stream-reasoning hidden>
+            <summary><i class="fa-solid fa-brain"></i> Reasoning</summary>
+            <pre data-remodel-stream-reasoning-body></pre>
+        </details>`;
+    const anchor = beatId ? prose.querySelector(`[data-remodel-storydoc-beat-id="${CSS.escape(beatId)}"]`) : null;
+    if (anchor) anchor.after(live);
+    else prose.append(live);
+    live.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    return live;
+}
+
+function updateStoryStreamPreview(live, text, reasoning) {
+    if (!live?.isConnected) {
+        return;
+    }
+    const body = live.querySelector('[data-remodel-stream-text]');
+    if (body) body.textContent = String(text || '');
+    const panel = live.querySelector('[data-remodel-stream-reasoning]');
+    const thoughts = String(reasoning || '').trim();
+    if (panel) {
+        // The panel only appears once the model actually reasons, so a
+        // non-reasoning model shows no empty console.
+        panel.hidden = !thoughts;
+        const pre = panel.querySelector('[data-remodel-stream-reasoning-body]');
+        if (pre && pre.textContent !== thoughts) {
+            pre.textContent = thoughts;
+            pre.scrollTop = pre.scrollHeight;
+        }
+    }
+}
+
+function closeStoryStreamPreview(live) {
+    live?.remove();
+}
 
 // Generates prose for the active document. mode 'continue' extends the prose
 // from where it is; mode 'beat' writes the scene the user described. Inserts
@@ -6496,11 +7588,26 @@ async function generateStory({ mode = 'continue', beat = '', beatId = null } = {
             { macroOptions: assembled.macroOptions, outlets: assembled.outlets },
         ).messages;
 
-        const { text: prose } = await generateProse({
-            prompt,
-            responseLength: storyResponseLength(),
-            instructOverride: false,
-        });
+        // The live region is a PREVIEW, deliberately separate from the
+        // manuscript: streaming straight into the contenteditable would fight
+        // autosave and the paragraph structure on every chunk. The finished
+        // text still goes through the same insert path as before, so nothing
+        // about persistence changes.
+        storyStreamAbort = new AbortController();
+        const live = openStoryStreamPreview(beatId);
+        let prose = '';
+        try {
+            ({ text: prose } = await generateProse({
+                prompt,
+                responseLength: storyResponseLength(),
+                instructOverride: false,
+                signal: storyStreamAbort.signal,
+                onStream: ({ text, reasoning }) => updateStoryStreamPreview(live, text, reasoning),
+            }));
+        } finally {
+            closeStoryStreamPreview(live);
+            storyStreamAbort = null;
+        }
 
         if (beatId) insertStoryBeatProse(beatId, prose);
         else appendStoryProse(prose);
@@ -6590,7 +7697,13 @@ function insertStoryBeatProse(beatId, text) {
     const beats = doc.beats.map((item) => item.id === beatId
         ? { ...item, generatedText: text, updatedAt: new Date().toISOString() }
         : { ...item, position: item.position > position ? item.position + inserted.length : item.position });
-    updateStoryDoc(activeStoryDocId, { body: `${prefix}${inserted}${suffix}`, beats });
+    updateStoryDoc(activeStoryDocId, {
+        body: `${prefix}${inserted}${suffix}`,
+        beats,
+        // Beat prose lands mid-document, so any formatting further down has
+        // to move with it (beat positions above do the same thing).
+        styleRuns: shiftStyleRuns(doc.styleRuns, position, inserted.length),
+    });
 }
 
 function buildStoryGenerationPrompt({ docText = '', contextBlock = '', mode = 'continue', beat = '' } = {}) {
@@ -6743,22 +7856,6 @@ function renderRoleplayComposer(root) {
         : 'data-remodel-rp-act-disabled="Only in group scenes — there\'s just one character here"';
 
     zone.innerHTML = `
-        <div class="remodel-live-flow${directionUi.active ? ' is-directed' : ''}" data-remodel-live-flow>
-            <button type="button" class="remodel-live-mode" data-remodel-live-mode title="${directionUi.active ? 'Disable Live Direction for this Scene' : 'Enable Live Direction for this Scene'}">
-                <i class="fa-solid ${directionUi.active ? 'fa-wave-square' : 'fa-feather'}" aria-hidden="true"></i>
-                <span>${directionUi.active ? escapeHtml(directionUi.state) : 'Free play'}</span>
-            </button>
-            ${directionUi.performerLabel ? `<small>${escapeHtml(directionUi.performerLabel)}</small>` : ''}
-            <em data-remodel-live-opening${directionUi.openingLabel ? '' : ' hidden'}><i class="fa-regular fa-lightbulb"></i> <span>${escapeHtml(directionUi.openingLabel || '')}</span></em>
-            <label class="remodel-live-pacing">Pacing
-                <select data-remodel-live-pacing aria-label="Live Direction pacing">
-                    ${['slow', 'natural', 'fast', 'instant'].map((value) => `<option value="${value}"${directionUi.pacing === value ? ' selected' : ''}>${value[0].toUpperCase() + value.slice(1)}</option>`).join('')}
-                </select>
-            </label>
-            <button type="button" data-remodel-live-continue${directionUi.canContinue ? '' : ' hidden'}><i class="fa-solid fa-play"></i> Continue</button>
-            <button type="button" data-remodel-live-stop${directionUi.canStop ? '' : ' hidden'}><i class="fa-solid fa-stop"></i> Stop</button>
-            <button type="button" class="remodel-live-diagnostics" data-remodel-live-diagnostics title="Open the Live Direction flight recorder"><i class="fa-solid fa-stethoscope"></i> Diagnose</button>
-        </div>
         <div class="remodel-rp-command-dock" aria-label="Roleplay commands">
             <button type="button" class="remodel-rp-command remodel-rp-nextspeaker" ${nextSpeakerAttrs} title="${inGroup ? 'Choose the next speaker' : 'Next speaker is only available in group scenes'}">
                 <span class="remodel-rp-command-icon"><i class="fa-solid fa-users" aria-hidden="true"></i></span>
@@ -6781,6 +7878,22 @@ function renderRoleplayComposer(root) {
                 <span class="remodel-rp-command-icon"><i class="fa-solid fa-eye" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Preview</span>
             </button>
             <span class="remodel-rp-command-prompt">${renderScenePromptChoice(getActiveScene(), true)}</span>
+            <span class="remodel-live-flow-actions">
+                <button type="button" data-remodel-live-continue${directionUi.canContinue ? '' : ' hidden'}><i class="fa-solid fa-play"></i> Continue</button>
+                <button type="button" data-remodel-live-stop${directionUi.canStop ? '' : ' hidden'}><i class="fa-solid fa-stop"></i> Stop</button>
+            </span>
+        </div>
+
+        <div class="remodel-live-flow${directionUi.active ? ' is-directed' : ''}" data-remodel-live-flow>
+            <button type="button" class="remodel-live-mode${directionUi.active ? ' is-on' : ''}" data-remodel-live-mode
+                aria-pressed="${directionUi.active ? 'true' : 'false'}"
+                title="${escapeAttribute(liveModeTitle(directionUi))}">
+                <i class="fa-solid ${directionUi.active ? 'fa-wave-square' : 'fa-feather'}" aria-hidden="true"></i>
+                <span>${directionUi.active ? 'Directed' : 'Free play'}</span>
+            </button>
+            ${directionUi.active ? `<small class="remodel-live-state" data-remodel-live-state>${escapeHtml(directionUi.state)}</small>` : ''}
+            ${directionUi.performerLabel ? `<small>${escapeHtml(directionUi.performerLabel)}</small>` : ''}
+            <em data-remodel-live-opening${directionUi.openingLabel ? '' : ' hidden'}><i class="fa-regular fa-lightbulb"></i> <span>${escapeHtml(directionUi.openingLabel || '')}</span></em>
         </div>
 
         <div class="remodel-rp-composer-tools">
@@ -6790,6 +7903,14 @@ function renderRoleplayComposer(root) {
             <div class="remodel-rp-goal-chips" aria-label="Goals available for this action">
                 ${goalChips.map((goal) => `<button type="button" class="${attachedGoals.has(goal.id) ? 'is-attached' : ''}" data-remodel-goal-intent="${escapeAttribute(goal.id)}" title="${attachedGoals.has(goal.id) ? 'Remove decisive attempt' : 'Attach as a decisive attempt'}: ${escapeAttribute(goal.title)}"><i class="fa-solid fa-dice-d20"></i><span>${escapeHtml(goal.title)}</span><small>${goal.successRate}%</small></button>`).join('')}
             </div>
+        </div>
+
+        <div class="remodel-live-pacing-row">
+            <label class="remodel-live-pacing">Pacing
+                <select data-remodel-live-pacing aria-label="Live Direction pacing">
+                    ${['slow', 'natural', 'fast', 'instant'].map((value) => `<option value="${value}"${directionUi.pacing === value ? ' selected' : ''}>${value[0].toUpperCase() + value.slice(1)}</option>`).join('')}
+                </select>
+            </label>
         </div>
 
         <div class="remodel-rp-composer">
@@ -6881,6 +8002,7 @@ async function ensureRoleplaySceneChatReady(scene) {
         const settled = await waitForChatIdSettled();
         if (!settled || String(getContext().groupId || '') !== String(group.id)) return false;
         if (openedGroup) dismissProgrammaticGroupEditor();
+        await removeLeakedNativeRoleplayGreetings(scene);
         writeSceneMetadata(scene);
         syncStoryWorkspaceClass(scene);
         ensureRoleplayRoot();
@@ -6898,11 +8020,31 @@ async function ensureRoleplaySceneChatReady(scene) {
     if (currentFile !== targetFile) {
         await context.openCharacterChat(linked.fileName);
     }
+    await removeLeakedNativeRoleplayGreetings(scene);
     writeSceneMetadata(scene);
     syncStoryWorkspaceClass(scene);
     ensureRoleplayRoot();
     renderRoleplayScene();
     return Boolean(getContext().chatId);
+}
+
+function isLeakedNativeRoleplayGreeting(message) {
+    if (!message || message.is_user || message.is_system || !message.original_avatar) return false;
+    if (message.extra?.remodelDirection || message.extra?.api || message.gen_started || message.gen_finished) return false;
+    return true;
+}
+
+async function removeLeakedNativeRoleplayGreetings(scene) {
+    if (!isDirectedLiveScene(scene)) return false;
+    const context = getContext();
+    const firstUserIndex = (context.chat || []).findIndex((message) => message?.is_user);
+    const boundary = firstUserIndex < 0 ? context.chat.length : firstUserIndex;
+    let count = 0;
+    while (count < boundary && isLeakedNativeRoleplayGreeting(context.chat[count])) count++;
+    if (!count) return false;
+    context.chat.splice(0, count);
+    await context.saveChat();
+    return true;
 }
 
 function openRoleplayDirectorMenu(anchor) {
@@ -7120,6 +8262,11 @@ async function openRoleplayPromptPreview() {
                 <button type="button" class="remodel-rp-picker-x" data-remodel-rp-preview-close aria-label="Close">×</button>
             </div>
             <div class="remodel-rp-preview-warn" data-remodel-rp-preview-warn hidden></div>
+            <div class="remodel-rp-preview-views" data-remodel-rp-preview-views hidden>
+                <button type="button" class="is-active" data-remodel-rp-preview-view="sources">By source</button>
+                <button type="button" data-remodel-rp-preview-view="raw">Raw prompt</button>
+            </div>
+            <div class="remodel-rp-preview-sources" data-remodel-rp-preview-sources hidden></div>
             <pre class="remodel-rp-preview-body" data-remodel-rp-preview-body>Assembling prompt…</pre>
         </div>
     `;
@@ -7139,6 +8286,18 @@ async function openRoleplayPromptPreview() {
         if (bodyEl) {
             bodyEl.textContent = formatPromptPreview(generateData);
         }
+        // Source breakdown is the default view when it's available — Text
+        // Completion scenes never populate the prompt manager, so those keep
+        // the raw dump with no view switcher at all.
+        const sections = collectPromptPreviewSections();
+        const sourcesEl = overlay.querySelector('[data-remodel-rp-preview-sources]');
+        const viewsEl = overlay.querySelector('[data-remodel-rp-preview-views]');
+        if (sections && sourcesEl && viewsEl && bodyEl) {
+            sourcesEl.innerHTML = renderPromptPreviewSections(sections);
+            sourcesEl.hidden = false;
+            viewsEl.hidden = false;
+            bodyEl.hidden = true;
+        }
         if (warnEl && Array.isArray(warnings) && warnings.length > 0) {
             warnEl.textContent = `⚠ ${warnings.join(' · ')}`;
             warnEl.hidden = false;
@@ -7148,6 +8307,15 @@ async function openRoleplayPromptPreview() {
         if (bodyEl) {
             bodyEl.textContent = `Could not assemble a preview.\n\n${String(err)}`;
         }
+    }
+}
+
+function setRoleplayPreviewView(overlay, view) {
+    const showRaw = view === 'raw';
+    overlay.querySelector('[data-remodel-rp-preview-sources]').hidden = showRaw;
+    overlay.querySelector('[data-remodel-rp-preview-body]').hidden = !showRaw;
+    for (const button of overlay.querySelectorAll('[data-remodel-rp-preview-view]')) {
+        button.classList.toggle('is-active', button.dataset.remodelRpPreviewView === view);
     }
 }
 
@@ -7179,6 +8347,15 @@ async function handleRoleplaySend(root) {
         return;
     }
     const scene = getActiveScene();
+    // Free play hands the line to core's native group generator, which returns
+    // silently when SillyTavern is disconnected — no message, no error, and no
+    // GENERATION_ENDED to clear the composing indicator. Refuse the send with a
+    // reason instead of spinning forever. Directed sends carry their own check.
+    const blocked = describeNativeGenerationBlock();
+    if (blocked && !isDirectedLiveScene(scene)) {
+        showLiveDirectionFailure(new Error(blocked), { heading: 'Cannot send.', recoverable: false });
+        return;
+    }
     if (isDirectedLiveScene(scene)) {
         root.dataset.remodelRpSubmitting = 'true';
         setRoleplayGenerating(true);
@@ -7223,50 +8400,65 @@ function sendRoleplayNormally(value) {
     button.click();
 }
 
-function showLiveDirectionFailure(error) {
+/**
+ * @param {Error|string} error
+ * @param {{ heading?: string, recoverable?: boolean }} [options]
+ *        `recoverable: false` omits Retry / Send Normally. Both of those re-run
+ *        the same request, so offering them for a blocked connection would only
+ *        reproduce the failure the panel just reported.
+ */
+function showLiveDirectionFailure(error, { heading = 'Direction paused.', recoverable = true } = {}) {
     document.getElementById('remodel-direction-failure')?.remove();
     setRoleplayGenerating(false);
+    removeRoleplayTypingIndicator();
     const panel = document.createElement('div');
     panel.id = 'remodel-direction-failure';
     panel.className = 'remodel-mechanics-failure remodel-direction-failure';
-    panel.innerHTML = `<span><strong>Direction paused.</strong> ${escapeHtml(error?.message || String(error))}</span><button type="button" data-remodel-direction-retry>Retry Direction</button><button type="button" data-remodel-direction-bypass>Send Normally</button>`;
+    // Send Normally re-sends the user's own intervention. An autonomous
+    // continuation has none, so the button would be inert — offer only Retry.
+    const actions = recoverable
+        ? `<button type="button" data-remodel-direction-retry>Retry Direction</button>${canSendWithoutLiveDirection() ? '<button type="button" data-remodel-direction-bypass>Send Normally</button>' : ''}`
+        : '';
+    panel.innerHTML = `<span><strong>${escapeHtml(heading)}</strong> ${escapeHtml(error?.message || String(error))}</span>${actions}`;
     getRealRoleplayRoot()?.append(panel);
-}
-
-function openLiveDirectionDiagnostics() {
-    document.getElementById('remodel-live-diagnostics-modal')?.remove();
-    const flights = getDirectionFlights().slice().reverse();
-    const modal = document.createElement('div');
-    modal.id = 'remodel-live-diagnostics-modal';
-    modal.className = 'remodel-live-diagnostics-modal';
-    const rows = flights.length ? flights.map((flight) => {
-        const interesting = flight.events.filter((event) => !['native.stream'].includes(event.type)).slice(-18);
-        return `<details${flight === flights[0] ? ' open' : ''}><summary><strong>${escapeHtml(flight.status)}</strong><span>${escapeHtml(flight.metadata?.action || flight.metadata?.directionId || flight.id)}</span><small>${escapeHtml(flight.startedAt || '')}</small></summary><div class="remodel-live-diagnostics-counts">${Object.entries(flight.counters || {}).map(([key, value]) => `<span>${escapeHtml(key)} <b>${Number(value)}</b></span>`).join('')}</div><ol>${interesting.map((event) => `<li><time>+${Number(event.elapsedMs || 0)}ms</time><strong>${escapeHtml(event.type)}</strong><pre>${escapeHtml(JSON.stringify(event.detail, null, 2))}</pre></li>`).join('')}</ol></details>`;
-    }).join('') : '<p>No directed-roleplay flight has been recorded in this browser session yet.</p>';
-    modal.innerHTML = `<section><header><div><small>LIVE DIRECTION</small><h2>Flight Recorder</h2></div><div><button type="button" data-remodel-live-diagnostics-export><i class="fa-solid fa-download"></i> Export JSON</button><button type="button" data-remodel-live-diagnostics-close aria-label="Close"><i class="fa-solid fa-xmark"></i></button></div></header><div class="remodel-live-diagnostics-body">${rows}</div></section>`;
-    document.body.append(modal);
 }
 
 function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
     const root = getRealRoleplayRoot();
     if (!root) return;
     renderRoleplayDirectionFeed(root, getActiveScene());
+    ensureLiveDirectionCardInStream(root, run);
     const body = root.querySelector('[data-remodel-rp-typing-body]');
     if (body && run?.acceptedVisibleText != null) body.textContent = run.acceptedVisibleText;
     const zone = root.querySelector('[data-remodel-rp-composer]');
     const flow = zone?.querySelector('[data-remodel-live-flow]');
     if (flow) {
         const ui = getLiveDirectionUiState(getActiveScene());
-        flow.querySelector('.remodel-live-mode span')?.replaceChildren(document.createTextNode(run?.state || ui.state));
+        // The mode label is left alone on purpose: it names which mode the
+        // Scene is IN ("Directed" / "Free play") and must not be overwritten
+        // with the transient run state, which is what used to make it
+        // impossible to tell whether Live Direction was on.
+        flow.querySelector('[data-remodel-live-state]')?.replaceChildren(document.createTextNode(run?.state || ui.state || ''));
+        flow.querySelector('[data-remodel-live-mode]')?.setAttribute('title', liveModeTitle({ ...ui, state: run?.state || ui.state }));
         const opening = flow.querySelector('[data-remodel-live-opening]');
         if (opening) {
             opening.hidden = !run?.openingLabel;
             opening.querySelector('span')?.replaceChildren(document.createTextNode(run?.openingLabel || ''));
         }
-        const continueButton = flow.querySelector('[data-remodel-live-continue]');
+        // Run controls live in the command dock, not in the flow row — looked
+        // up from the zone so this keeps working wherever the dock puts them.
+        const continueButton = zone.querySelector('[data-remodel-live-continue]');
         if (continueButton) continueButton.hidden = run?.state !== 'Waiting for you';
-        const stopButton = flow.querySelector('[data-remodel-live-stop]');
-        if (stopButton) stopButton.hidden = !run || ['Ready', 'Complete'].includes(run.state);
+        const stopButton = zone.querySelector('[data-remodel-live-stop]');
+        // ui.canStop, not the existence of a run: a Director pass that has not
+        // produced a visible run yet is still a busy pipeline the user must be
+        // able to abandon. Keyed on `run` alone, Stop was hidden for the whole
+        // multi-second hidden call and pressing nothing did nothing.
+        if (stopButton) stopButton.hidden = !ui.canStop;
+        // Same reason — refusing a send while the Director is out is only
+        // legible if the composer says so.
+        const sendButton = zone?.querySelector('[data-remodel-rp-send]');
+        if (sendButton instanceof HTMLButtonElement) sendButton.disabled = ui.canSend === false;
     }
     // A recovered run at the end of its accepted response is deliberately
     // represented as "Waiting for you" so Continue can start a fresh
@@ -7276,7 +8468,41 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
     // time a directed Scene was opened after a page reload.
     if (run && !run.acceptedComplete && !root.querySelector('.remodel-rp-typing')) {
         showRoleplayTypingIndicator(run.performer || null);
+        return;
     }
+    // No run yet, but a Director pass is out. Survives re-render, unlike the
+    // one-shot indicator handleRoleplaySend puts up at submit time — losing it
+    // was half of why a hidden pass looked like an idle Scene.
+    if (!run && getLiveDirectionUiState(getActiveScene()).state === 'Directing' && !root.querySelector('.remodel-rp-typing')) {
+        showRoleplayTypingIndicator(null);
+    }
+}
+
+/**
+ * Puts the current pass's Director card into the stream as soon as the pass has
+ * one, rather than whenever the next full rebuild happens to run.
+ *
+ * The card was only ever painted by renderRoleplayScene(), so which side of the
+ * narration it landed on depended on which incidental re-render fired first: an
+ * autonomous continuation had one before the prose, a user send did not, and the
+ * card only appeared once the response settled. Direction is decided BEFORE the
+ * performer speaks, so the card belongs above the prose in both cases.
+ *
+ * Insert-before-the-typing-indicator keeps it there while the response reveals.
+ */
+function ensureLiveDirectionCardInStream(root, run) {
+    if (!run?.directionId) return;
+    const stream = root.querySelector('[data-remodel-rp-stream]');
+    if (!stream) return;
+    if (stream.querySelector(`[data-remodel-direction-id="${CSS.escape(run.directionId)}"]`)) return;
+    const record = (getActiveScene()?.liveDirection?.directionLog || []).find((item) => item?.id === run.directionId);
+    if (!record) return;
+    stream.querySelector('.remodel-rp-empty')?.remove();
+    const card = buildRoleplayDirectionCard(record);
+    const typing = stream.querySelector('.remodel-rp-typing');
+    if (typing) stream.insertBefore(card, typing);
+    else stream.appendChild(card);
+    requestAnimationFrame(() => { stream.scrollTop = stream.scrollHeight; });
 }
 
 // One-line-growing textarea, capped so a long message scrolls inside the
@@ -7426,6 +8652,12 @@ function bindRoleplayComposerEvents() {
                 closeRoleplayPromptPreview();
                 return;
             }
+            const viewButton = target.closest('[data-remodel-rp-preview-view]');
+            if (viewButton && previewOverlay.contains(viewButton)) {
+                event.preventDefault();
+                setRoleplayPreviewView(previewOverlay, viewButton.dataset.remodelRpPreviewView);
+                return;
+            }
         }
 
         // Popover menu (persona / next-speaker / Director) lives in <body>, outside the
@@ -7520,22 +8752,6 @@ function bindRoleplayComposerEvents() {
             stopLiveDirection();
             return;
         }
-        if (target.closest('[data-remodel-live-diagnostics]')) {
-            event.preventDefault();
-            openLiveDirectionDiagnostics();
-            return;
-        }
-        if (target.closest('[data-remodel-live-diagnostics-export]')) {
-            event.preventDefault();
-            downloadDirectionFlights();
-            return;
-        }
-        if (target.closest('[data-remodel-live-diagnostics-close]') || target.id === 'remodel-live-diagnostics-modal') {
-            event.preventDefault();
-            document.getElementById('remodel-live-diagnostics-modal')?.remove();
-            return;
-        }
-
         if (target.closest('[data-remodel-rp-scene-back]')) {
             event.preventDefault();
             setRoleplayCastOpen(root, false);
@@ -7852,19 +9068,35 @@ function showRoleplayTypingIndicator(forcedPerformer = null) {
     }
 
     const context = getContext();
-    const members = roleplaySceneMembers(context);
-    const speaker = forcedPerformer
-        ? members.find((member) => member.characterId === forcedPerformer.characterId) || null
-        : (context.groupId ? null : members[0]);
-    const name = forcedPerformer?.label || speaker?.name || '';
-    const color = name ? roleplaySpeakerColor(name) : null;
-
     const scene = getActiveScene();
     const narratorId = scene?.liveDirection?.narratorRef?.id || '';
-    const performerId = forcedPerformer?.ref?.id || '';
+    // In a directed Scene the upcoming speaker is not a guess — it is the
+    // Scene's bound Narrator. Without this, every call that could not name a
+    // performer yet (the send handler's first paint, a stream rebuild during
+    // generation, the hidden Director pass) fell through to the group's "we
+    // cannot know" branch and drew a CHARACTER bubble labelled "Composing",
+    // while the calls that did know a performer drew the Narrator's manuscript
+    // byline. Same pending response, two completely different rows depending
+    // on which code path happened to paint it.
+    const performer = forcedPerformer
+        || (narratorId && isDirectedLiveScene(scene)
+            ? { label: scene.liveDirection.narratorRef.label, ref: scene.liveDirection.narratorRef, characterId: roleplayCharacterIdForAvatar(narratorId) }
+            : null);
+
+    const members = roleplaySceneMembers(context);
+    const speaker = performer
+        ? members.find((member) => member.characterId === performer.characterId) || null
+        : (context.groupId ? null : members[0]);
+    const name = performer?.label || speaker?.name || '';
+    const color = name ? roleplaySpeakerColor(name) : null;
+
+    const performerId = performer?.ref?.id || '';
     const isNarrator = Boolean(narratorId && performerId === narratorId);
     const row = document.createElement('div');
     row.className = `remodel-rp-msg remodel-rp-${isNarrator ? 'narrator' : 'character'} remodel-rp-typing`;
+    // The revealing text must already be set as manuscript, or the prose visibly
+    // reflows out of a bubble and into a page the instant the run settles.
+    if (isNarrator) row.classList.add('remodel-rp-manuscript');
     if (color) {
         row.classList.add(`remodel-rp-color-${color}`);
     }
@@ -8047,9 +9279,15 @@ function buildRoleplayMessage(mesId, message, { messagesSince = 0 } = {}) {
     const isBoundNarrator = !isUser && narratorId && speakerAvatar === narratorId;
     const kind = isUser ? 'user' : (isSystem || message.extra?.type === 'narrator' || isBoundNarrator ? 'narrator' : 'character');
     const color = kind === 'character' ? roleplaySpeakerColor(name) : null;
+    // Narration is prose, not dialogue, so it is set like the Story document
+    // rather than boxed in a speaker bubble. Scoped to the Scene's actual bound
+    // Narrator and to text a directed run produced — a system notice or a dice
+    // card is also `kind === 'narrator'` and is not manuscript.
+    const isManuscript = !isSystem && (isBoundNarrator || Boolean(message.extra?.remodelDirection));
 
     const row = document.createElement('div');
     row.className = `remodel-rp-msg remodel-rp-${kind}`;
+    if (isManuscript) row.classList.add('remodel-rp-manuscript');
     if (message.extra?.remodelDirection?.interrupted) row.classList.add('remodel-rp-interrupted');
     if (color) {
         row.classList.add(`remodel-rp-color-${color}`);
@@ -8354,7 +9592,15 @@ function renderRoleplayScene() {
     stream.textContent = '';
     const liveRun = getLiveDirectionRun();
 
-    const mesEls = Array.from(chatEl?.querySelectorAll(':scope > .mes') ?? []);
+    const firstUserIndex = (context.chat || []).findIndex((message) => message?.is_user);
+    const greetingBoundary = firstUserIndex < 0 ? context.chat.length : firstUserIndex;
+    const mesEls = Array.from(chatEl?.querySelectorAll(':scope > .mes') ?? []).filter((mesEl) => {
+        const mesId = Number(mesEl.getAttribute('mesid'));
+        const message = context.chat[mesId];
+        return !(isDirectedLiveScene(activeRoleplayScene)
+            && mesId >= 0 && mesId < greetingBoundary
+            && isLeakedNativeRoleplayGreeting(message));
+    });
 
     if (mesEls.length === 0) {
         const empty = document.createElement('div');
@@ -8838,23 +10084,28 @@ function renderRoleplayCast(root) {
     }
     cast.textContent = '';
 
-    const label = document.createElement('div');
-    label.className = 'remodel-rp-cast-label';
-    label.textContent = 'Cast';
-    cast.appendChild(label);
-
     const context = getContext();
     const members = roleplaySceneMembers(context);
     const scene = getActiveScene();
     const directorId = scene?.liveDirection?.directorRef?.id || '';
     const narratorId = scene?.liveDirection?.narratorRef?.id || '';
     const speakingName = roleplayCurrentSpeakerName(context);
+    // A two-seat Scene's cast is not a list that happens to have two entries —
+    // it is two named jobs. Both seats were bound when the Scene was cast, so
+    // there is nothing to assign, add, remove, or reorder here.
+    const duet = isDuetScene(scene);
+
+    const label = document.createElement('div');
+    label.className = 'remodel-rp-cast-label';
+    label.textContent = duet ? 'Seats' : 'Cast';
+    cast.appendChild(label);
+
     // Remove + reorder are only meaningful in a group with more than one
     // member (a scene needs at least one character; order matters for the
     // group's turn/activation ordering).
     const isMultiMemberGroup = Boolean(context.groupId) && members.length > 1;
-    const canRemove = isMultiMemberGroup;
-    const canReorder = isMultiMemberGroup;
+    const canRemove = isMultiMemberGroup && !duet;
+    const canReorder = isMultiMemberGroup && !duet;
 
     members.forEach((member) => {
         const avatar = roleplayCharacterAvatar({ characterId: member.characterId, name: member.name });
@@ -8877,7 +10128,23 @@ function renderRoleplayCast(root) {
         const av = buildRoleplayAvatar(member.name, { className: 'remodel-rp-cast-avatar' });
         chip.appendChild(av);
 
-        if (avatar && avatar !== narratorId) {
+        if (duet) {
+            // Fixed badges. The seat is a property of the Scene, so it reads as
+            // a statement of what this card IS, not a control that might move.
+            const seat = avatar === directorId ? 'director' : (avatar === narratorId ? 'narrator' : '');
+            if (seat) {
+                const badge = document.createElement('span');
+                badge.className = `remodel-rp-seat-badge remodel-rp-seat-${seat}`;
+                badge.innerHTML = seat === 'director'
+                    ? '<i class="fa-solid fa-clapperboard" aria-hidden="true"></i><span>Director</span>'
+                    : '<i class="fa-solid fa-microphone-lines" aria-hidden="true"></i><span>Narrator</span>';
+                badge.title = seat === 'director'
+                    ? `${member.name} directs this scene and never speaks in it.`
+                    : `${member.name} performs every visible line in this scene.`;
+                chip.classList.add(`is-seat-${seat}`);
+                chip.appendChild(badge);
+            }
+        } else if (avatar && avatar !== narratorId) {
             const director = document.createElement('button');
             director.type = 'button';
             director.className = 'remodel-rp-director-plaque';
@@ -8913,6 +10180,13 @@ function renderRoleplayCast(root) {
 
         cast.appendChild(chip);
     });
+
+    // A two-seat Scene has no third seat to add a card to. Offering "+" here
+    // would promote the group to three members and hand the extra card to
+    // native activation, which is precisely the shape this model removes.
+    if (duet) {
+        return;
+    }
 
     // Divider + add-character affordance. In a group this opens core's
     // group management; solo scenes surface it too so the path to "add a
@@ -8953,12 +10227,53 @@ function buildRoleplayDirectionCard(record) {
         ...(trace.intent ? [`<li><span>Intent</span>${escapeHtml(trace.intent)}</li>`] : []),
         ...(trace.performerReason ? [`<li><span>Performer</span>${escapeHtml(trace.performerReason)}</li>`] : []),
     ].join('');
+    // Each section folds independently so the card stays a one-line summary
+    // until you want the detail behind it.
+    const operations = Array.isArray(record.operations) ? record.operations : [];
+    const operationsSection = operations.length
+        ? `<details class="remodel-rp-direction-section">
+            <summary><i class="fa-solid fa-gears"></i> What it changed <b>${operations.length}</b></summary>
+            <ul class="remodel-rp-direction-ops">
+                ${operations.map((op) => `<li>
+                    <code>${escapeHtml(op.capability)}</code>
+                    <em>${op.kind === 'checkpoint' ? 'on a narrated beat' : 'immediately'}</em>
+                    ${op.reason ? `<span>${escapeHtml(op.reason)}</span>` : ''}
+                </li>`).join('')}
+            </ul>
+        </details>`
+        : (mechanicalCount
+            ? `<details class="remodel-rp-direction-section"><summary><i class="fa-solid fa-gears"></i> What it changed <b>${mechanicalCount}</b></summary><p class="remodel-rp-direction-note">Recorded before per-operation detail was captured, so only the count survives for this one.</p></details>`
+            : '');
+    const traceSection = traceItems
+        ? `<details class="remodel-rp-direction-section">
+            <summary><i class="fa-solid fa-diagram-project"></i> Decision trace</summary>
+            <p class="remodel-rp-direction-note">The Director's own declared rationale — a summary it wrote for you, not its private thinking.</p>
+            <ul class="remodel-rp-direction-trace-list">${traceItems}</ul>
+        </details>`
+        : '';
+    const reasoning = String(record.reasoning || '').trim();
+    const reasoningSection = reasoning
+        ? `<details class="remodel-rp-direction-section is-reasoning">
+            <summary><i class="fa-solid fa-brain"></i> Raw reasoning</summary>
+            <p class="remodel-rp-direction-note">Unedited chain-of-thought as the model returned it.</p>
+            <pre class="remodel-rp-direction-reasoning">${escapeHtml(reasoning)}</pre>
+        </details>`
+        : '';
+    const beatsSection = beats
+        ? `<details class="remodel-rp-direction-section" open>
+            <summary><i class="fa-solid fa-list-ol"></i> Beats for ${escapeHtml(record.performerLabel || 'the performer')}</summary>
+            ${beats}
+        </details>`
+        : '';
+
     row.innerHTML = `<div class="remodel-rp-direction-stream-inner">
         <header><span class="remodel-rp-direction-badge"><i class="fa-solid fa-clapperboard"></i> Roleplay Director</span><strong>${escapeHtml(record.directorLabel || 'Game Director')}</strong><small>${escapeHtml(formatRoleplayTime(record.createdAt))}</small></header>
         <p>${escapeHtml(record.objective)}</p>
-        ${beats}
-        ${traceItems ? `<details class="remodel-rp-direction-trace"><summary><i class="fa-solid fa-diagram-project"></i> Decision trace</summary><p>This is a concise rationale summary, not private chain-of-thought.</p><ul>${traceItems}</ul></details>` : ''}
-        <footer><span>Directing ${escapeHtml(record.performerLabel || 'the next performer')}</span>${openings}${mechanicalCount ? `<span><i class="fa-solid fa-gears"></i> ${mechanicalCount} mechanical operation${mechanicalCount === 1 ? '' : 's'}</span>` : ''}${record.hardPauseAfter ? '<span><i class="fa-solid fa-hand"></i> Hard pause</span>' : ''}</footer>
+        ${beatsSection}
+        ${operationsSection}
+        ${traceSection}
+        ${reasoningSection}
+        <footer><span>Directing ${escapeHtml(record.performerLabel || 'the next performer')}</span>${openings}${record.hardPauseAfter ? '<span><i class="fa-solid fa-hand"></i> Hard pause</span>' : ''}</footer>
     </div>`;
     return row;
 }

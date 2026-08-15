@@ -3,7 +3,7 @@ import {
 } from './story-goals-model.js';
 import { getSceneGoalState, getSceneGoals, updateSceneGoalState } from './story-goals-store.js';
 import { registerStoryStatMacros } from './story-stats-macros.js';
-import { formatVariable, getVariableInstance } from './story-variables-store.js';
+import { formatVariable, getVariableValue } from './variables-store.js';
 
 // Story Goals — the roleplay-facing surface.
 //
@@ -181,7 +181,7 @@ function renderGoalTarotCard(goal, index) {
 // with the display title and numbered record rows.
 function renderGoalDetailMarkup(goal, goals) {
     const index = Math.max(0, goals.indexOf(goal));
-    const pool = goal.resolution?.kind === 'tracked' ? getVariableInstance(goal.resolution.variableInstanceId) : null;
+    const pool = goal.resolution?.kind === 'tracked' ? getVariableValue(goal.resolution.variableId || goal.resolution.variableInstanceId) : null;
     const rows = [];
     rows.push({ label: 'Success rate', value: `${goal.successRate}%`, sub: 'The chance a determined reach lands.' });
     rows.push({
@@ -196,7 +196,7 @@ function renderGoalDetailMarkup(goal, goals) {
             value: formatVariable(pool),
             // When the pool points at a character stat, say so: the goal is
             // grinding a real, shared number rather than a private copy.
-            sub: `${pool.ownerRef.label} · ${direction} · threshold ${goal.resolution.completionThreshold}`,
+            sub: `${pool.name} · ${direction} · threshold ${goal.resolution.completionThreshold}`,
         });
     }
     rows.push({ label: 'Token', value: goal.token, sub: goal.status });
