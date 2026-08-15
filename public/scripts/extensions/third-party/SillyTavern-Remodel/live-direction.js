@@ -431,6 +431,10 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     envelope.variableRefs = new Map(Object.entries(saved.variableRefs || {}));
     envelope.goalRefs = new Map(Object.entries(saved.goalRefs || {}));
     envelope.addressBook = saved.addressBook || { entries: [], duplicates: [] };
+    // Same reason: without the original authorization a persona-held Goal
+    // request would be deferred for review on the replay of a turn the user
+    // already authorized.
+    envelope.authorizedGoalIds = [...(saved.authorizedGoalIds || [])];
     return generateDirectedPerformer({ scene, envelope, performer, autonomousSequence: Number(saved.autonomousSequence) || 0 });
 }
 
@@ -1453,7 +1457,11 @@ async function recoverLiveDirectionMessages() {
                 waitingAtEnd: true, acceptedComplete: true,
                 pacing: scene.liveDirection?.pacing || 'natural',
                 autonomousSequence: Number(recovered.metadata.autonomousSequence) || 0,
-                authorizedGoalIds: [],
+                // Restored, not dropped. Rebuilding with [] meant a request
+                // applied after recovery + Continue lost the Goal authority
+                // the user granted and was deferred for review instead of
+                // applying — fail-safe, but surprising and unexplained.
+                authorizedGoalIds: [...(recovered.metadata.authorizedGoalIds || [])],
             };
             notifyState();
         }
@@ -1461,6 +1469,12 @@ async function recoverLiveDirectionMessages() {
 }
 
 function serializeRun(run, state) {
+    // beginDirection attaches the pass's runtime state to the envelope; none
+    // of it belongs in the saved copy. The two Maps stringify to `{}`, which
+    // reads like data and is not, and addressBook/authorizedGoalIds are
+    // written once at the top level below — storing them twice per message
+    // made the inert copy look like the authoritative one.
+    const { variableRefs, goalRefs, addressBook, authorizedGoalIds, ...envelope } = run.envelope || {};
     return {
         protocol: DIRECTION_PROTOCOL,
         directionId: run.directionId,
@@ -1469,7 +1483,7 @@ function serializeRun(run, state) {
         acceptedText: sanitizeDirectionText(run.acceptedVisibleText),
         revealOffset: run.rawOffset,
         performerRef: run.performer.ref,
-        envelope: run.envelope,
+        envelope,
         checkpointTransactionIds: [...run.checkpointTransactionIds],
         // As plain objects: a Map stringifies to {}, so a recovered run would
         // otherwise resolve no refs at all and every surviving request would
@@ -1477,6 +1491,11 @@ function serializeRun(run, state) {
         variableRefs: Object.fromEntries(run.variableRefs || []),
         goalRefs: Object.fromEntries(run.goalRefs || []),
         addressBook: run.addressBook || { entries: [], duplicates: [] },
+        // The user's attached Goal attempts. Without these a request applied
+        // after recovery or regenerate loses its authority and is deferred to
+        // the pending-review queue instead of applying — fail-safe, but the
+        // user already read the fiction that earned it.
+        authorizedGoalIds: [...(run.authorizedGoalIds || [])],
         pendingRequestsApplied: Boolean(run.pendingRequestsApplied),
         interrupted: Boolean(run.interrupted),
         autonomousSequence: run.autonomousSequence,

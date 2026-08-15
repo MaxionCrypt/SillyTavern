@@ -17,6 +17,7 @@ import {
     initLiveDirection,
     setLiveDirectionTestAdapters,
     requestNextDirection,
+    submitDirectedRoleplay,
     stopLiveDirection,
     getLiveDirectionRun,
     clearLiveDirectionFailure,
@@ -226,6 +227,25 @@ test('acceptance is exactly once even when finalize is re-entered', async () => 
     expect(hp()).toBe(8);
     expect(listMechanicsTransactions({ timelineId: scene.timelineId })
         .filter((transaction) => transaction.status === 'applied')).toHaveLength(1);
+});
+
+test('the saved record stores the address book once and keeps the Goal authority', async () => {
+    await submitDirectedRoleplay({ scene, text: 'Wren steps in.', authorizedGoalIds: ['goal-abc'] });
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    const saved = __getChat().at(-1).extra.remodelDirection;
+    expect(saved.addressBook.entries.some((entry) => entry.name === "Wren's HP")).toBe(true);
+    // Stored once, at the top level. The envelope used to carry a second copy
+    // of the address book plus two Maps that stringify to `{}` — data-shaped
+    // in the saved message, and completely inert.
+    expect(saved.envelope.addressBook).toBeUndefined();
+    expect(saved.envelope.variableRefs).toBeUndefined();
+    expect(saved.envelope.goalRefs).toBeUndefined();
+    // What the envelope must still carry, since applyPendingRequests reads it.
+    expect(saved.envelope.mechanics.pendingRequests).toHaveLength(1);
+    // Recovery rebuilt this as [], so a request applied after a reload lost
+    // the user's attached Goal attempts and was deferred for review instead.
+    expect(saved.authorizedGoalIds).toEqual(['goal-abc']);
 });
 
 // --------------------------------------------------------------- regenerate

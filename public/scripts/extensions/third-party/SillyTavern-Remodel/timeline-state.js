@@ -569,6 +569,13 @@ function normalizeDirectionRecord(value) {
         performerRef: normalizeDirectionPerformerRef(value.performerRef),
         performerLabel: String(value.performerLabel || 'Performer').trim() || 'Performer',
         objective,
+        // LEGACY ONLY — nothing writes these any more. The director rework
+        // deleted decision traces, constraints, openings, and the immediate/
+        // checkpoint split; persistDirectionRecord emits none of them, so for
+        // every new record they normalize to empty and the roleplay stream's
+        // corresponding sections simply do not render. They are still read
+        // back so records saved before the rework keep displaying what they
+        // captured. Delete this block once those records no longer matter.
         decisionTrace: {
             observations: (Array.isArray(value.decisionTrace?.observations) ? value.decisionTrace.observations : []).map(String).filter(Boolean).slice(0, 8),
             intent: String(value.decisionTrace?.intent || '').trim(),
@@ -581,8 +588,12 @@ function normalizeDirectionRecord(value) {
         })).filter((item) => item.id && item.label).slice(0, 20),
         immediateCount: Math.max(0, Math.round(Number(value.immediateCount) || 0)),
         checkpointCount: Math.max(0, Math.round(Number(value.checkpointCount) || 0)),
+        // `kind` is deliberately not defaulted. Every operation now applies at
+        // the same point — when the response is accepted — so defaulting a
+        // missing kind to 'immediate' invented a distinction that no longer
+        // exists, and nothing reads it.
         operations: (Array.isArray(value.operations) ? value.operations : []).map((item) => ({
-            kind: item?.kind === 'checkpoint' ? 'checkpoint' : 'immediate',
+            ...(item?.kind === 'checkpoint' || item?.kind === 'immediate' ? { kind: item.kind } : {}),
             capability: String(item?.capability || '').trim(),
             reason: String(item?.reason || '').trim(),
         })).filter((item) => item.capability).slice(0, 40),

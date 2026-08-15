@@ -172,8 +172,12 @@ export function applyPromptStudioRuntimeRecipe() {
     const mode = normalizeMode(state.getRuntimeMode());
     const apiType = getPromptApiType();
     const recipe = getCurrentPromptStudioRecipe(mode, apiType);
-    if (!isNativeApplicableMode(recipe?.mode)) return;
-    applyRecipeToNative(recipe);
+    // The guard wraps only the native application. Returning early also
+    // skipped the binding bookkeeping below, which would leave state.bound*
+    // describing a recipe that is no longer current. Unreachable today (a
+    // recipe is always seeded), and applyRecipeToNative's own guard makes the
+    // invariant unconditional either way.
+    if (isNativeApplicableMode(recipe?.mode)) applyRecipeToNative(recipe);
     state.boundMode = mode;
     state.boundApiType = apiType;
     state.boundRecipeId = recipe?.id || null;
@@ -187,8 +191,10 @@ export function syncPromptStudioForCurrentMode({ apply = false } = {}) {
     const changed = mode !== state.boundMode || apiType !== state.boundApiType || recipe?.id !== state.boundRecipeId;
     if (apply && changed) {
         captureNativeSettingsFor(state.boundMode, state.boundApiType, state.boundRecipeId);
-        if (!isNativeApplicableMode(recipe?.mode)) return;
-        applyRecipeToNative(recipe);
+        // As above: the early return also skipped ensureSelectedRecipe() and
+        // requestRender() below, so switching to a mode with no native-
+        // applicable recipe would have left the editor showing the old one.
+        if (isNativeApplicableMode(recipe?.mode)) applyRecipeToNative(recipe);
     }
     state.boundMode = mode;
     state.boundApiType = apiType;

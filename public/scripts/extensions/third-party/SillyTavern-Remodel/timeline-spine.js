@@ -8443,7 +8443,11 @@ async function openRoleplayPromptPreview() {
         if (attachedGoalIntents.length) {
             warnings.push(`${attachedGoalIntents.length} attached Story Goal attempt${attachedGoalIntents.length === 1 ? '' : 's'} will be assessed by the hidden Game Director when sent; preview never rolls or mutates.`);
         }
-        if (directed) warnings.push('Live performer selection, openings, and future checkpoints require a Director assessment and are not executed by preview.');
+        // Names what actually still happens. Performer selection, openings and
+        // checkpoints were all deleted by the director rework: the Narrator
+        // badge decides who speaks, pacing is derived from the finished prose,
+        // and every mechanical request applies once the response is accepted.
+        if (directed) warnings.push('The Director has not run: its instruction to the performer, and any Goal or Variable change it requests, are decided when you send and applied once the response is accepted. Preview never rolls or mutates.');
         const bodyEl = overlay.querySelector('[data-remodel-rp-preview-body]');
         const warnEl = overlay.querySelector('[data-remodel-rp-preview-warn]');
         if (bodyEl) {

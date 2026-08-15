@@ -1,45 +1,26 @@
 import { extension_prompt_roles, extension_prompt_types, main_api, setExtensionPrompt } from '../../../../script.js';
-import { getContext } from '../../../st-context.js';
-import { executeMechanicsRequest, getCapabilityDictionary, getMechanicsRequestSchema, MECHANICS_PROTOCOL, toCoreJsonSchema } from './mechanics-capabilities.js';
-import { getSceneGoals, getSceneGoalRelations, nextStoryGoalTurn } from './story-goals-store.js';
-import { interpretStructuredReply, structuredResponseLength } from './structured-reply.js';
+import { getCapabilityDictionary } from './mechanics-capabilities.js';
+import { getSceneGoals, getSceneGoalRelations } from './story-goals-store.js';
 import { getMechanicsProfile } from './variables-store.js';
 import { resolveVariableContext } from './variables-context.js';
 import { buildAddressBook } from './direction-address.js';
+
+// Retired with the director rework: `runMechanicalPreflight` (a second hidden
+// model call that adjudicated mechanics before the Director existed), and with
+// it `mechanicalHandbook` and `formatMechanicalSnapshot`. All three had lost
+// their last caller — the Director's own requests replaced them — and
+// `mechanicalHandbook` still taught the opposite of what the code now does:
+// "addressing Variables by their temporary v1, v2... references and Goals by
+// their temporary g1, g2... references". Names are the only address now
+// (design section 3), so that text was the most misleading string in the
+// extension. `profile.handbookAdditions` was its only input and is now unread;
+// it is left in the store rather than migrated out, since nothing writes it.
 
 const RECEIPT_PROMPT_KEY = 'remodel_mechanics_receipts';
 let pendingReceipt = null;
 
 export function canRunAutomaticMechanics() {
     return getMechanicsProfile().enabled && main_api === 'openai';
-}
-
-export async function runMechanicalPreflight({ scene, action, cast = [], persona = null, authorizedGoalIds = [] } = {}) {
-    if (!scene?.timelineId || !String(action || '').trim()) return { skipped: true, reason: 'No mechanical action.' };
-    const profile = getMechanicsProfile();
-    if (!profile.enabled) return { skipped: true, reason: 'Mechanics are disabled for this account.' };
-    if (main_api !== 'openai') throw new Error('Automatic mechanics require the current Chat Completion connection.');
-    const turnId = nextStoryGoalTurn(scene.id, { timelineId: scene.timelineId });
-    const snapshot = await buildMechanicalSnapshot(scene, action, cast, persona, authorizedGoalIds);
-    const prompt = [
-        { role: 'system', content: mechanicalHandbook(profile.handbookAdditions) },
-        { role: 'system', content: `CAPABILITY DICTIONARY\n${JSON.stringify(getCapabilityDictionary())}` },
-        { role: 'user', content: `MECHANICAL SNAPSHOT\n${formatMechanicalSnapshot(snapshot)}\n\nReturn one ${MECHANICS_PROTOCOL} envelope. Return an empty requests array when no authoritative fact changes.` },
-    ];
-    const raw = await getContext().generateRaw({
-        api: 'openai', prompt,
-        responseLength: structuredResponseLength(profile.contextBudget, { divisor: 4, ceiling: 2048 }),
-        instructOverride: false, jsonSchema: toCoreJsonSchema(getMechanicsRequestSchema()),
-    });
-    const envelope = interpretStructuredReply(raw, 'Mechanical AI');
-    const result = executeMechanicsRequest(envelope, {
-        timelineId: scene.timelineId, sceneId: scene.id, turnId,
-        authorizedGoalIds, authorizedVariableRefs: [],
-        variableRefs: snapshot.variableRefs, goalRefs: snapshot.goalRefs,
-        allowUserGoalCreate: false,
-    });
-    if (!result.ok) throw new Error(result.errors?.join(' ') || 'The mechanical transaction was rejected.');
-    return { ...result, turnId, snapshot };
 }
 
 export function prepareMechanicsReceiptInjection(scene, result) {
@@ -110,8 +91,10 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
         entities: subjects,
         goals: listedGoals,
         relationships: describeRelations(getSceneGoalRelations(scene.id), refByGoalId),
-        // Variables travel as compact lines rather than inside the JSON — see
-        // formatMechanicalSnapshot. Held here so callers need one object.
+        // Variables travel as the compact lines serializeRetrievedVariables
+        // produces — the format design section 3 specifies, and far cheaper
+        // than a nested object each. Held here so callers need one object;
+        // direction-sources.js renders them under its VARIABLES heading.
         serializedVariables: resolved.serialized,
         addressBook,
         // The operations a Director may request, carried in the snapshot so
@@ -158,23 +141,6 @@ function describeRelations(relations, refByGoalId) {
         toRef: refByGoalId.get(String(relation.toGoalId ?? relation.relatedGoalId ?? '')) || '',
         fromGoalId: undefined, toGoalId: undefined, goalId: undefined, relatedGoalId: undefined,
     }));
-}
-
-/**
- * Render a snapshot for a prompt.
- *
- * Variables leave the JSON and arrive as the compact lines
- * `serializeRetrievedVariables` produces — the format the design specifies, and
- * far cheaper than a nested object per Variable. The Maps carrying persistent
- * IDs are dropped rather than relied on stringifying to `{}`.
- */
-export function formatMechanicalSnapshot(snapshot) {
-    const { serializedVariables, variableRefs, goalRefs, ...rest } = snapshot;
-    return `${JSON.stringify(rest)}\n\nVARIABLES\n${serializedVariables || 'No relevant Variables were retrieved.'}`;
-}
-
-export function mechanicalHandbook(additions) {
-    return `You are the hidden mechanical adjudicator for a continuous roleplay. Goals and Variables are persistent memory, not a turn structure. Never narrate, invent references, emit dice, or mutate state directly. Submit only advertised capabilities, addressing Variables by their temporary v1, v2... references and Goals by their temporary g1, g2... references from the current snapshot. Those references are valid only for this request; a reference you were not given this time will be rejected. Code owns validation, bounds, authority, transactions, and any roll.\n\nVARIABLES\nLorebook prose supplies meaning. Variables supply authoritative current scalar facts. Use variable.set for an exact correction, variable.adjust for numeric change, variable.transition for enum change, and variable.subvalue.set only for an advertised field. Do not request a Variable that is absent from the temporary address book.\n\nAUTHORITY\nUser/persona state requires direct authorization or review. Bounded world state may apply automatically.\n${String(additions || '').trim()}`;
 }
 
 export function formatMechanicsReceipts(receipts) {
