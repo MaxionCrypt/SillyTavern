@@ -19,6 +19,7 @@ import { resolveByName } from './direction-address.js';
 import { deriveBeats } from './direction-beats.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
 import { parseDirectorReply } from './director-reply.js';
+import { filterNarratorHistory } from './narrator-history.js';
 import {
     abandonDirectorTurn,
     appendDirectorEntries,
@@ -175,6 +176,29 @@ export function initLiveDirection(options = {}) {
         if (!message || message.is_user) return;
         activeRun.messageId = id;
         acceptNativeBuffer(message.mes);
+    });
+    // The Narrator is a passive voice (see the module doc on
+    // narrator-history.js): it renders what the Director decided, informed
+    // only by its OWN prior prose, never by the user's words or another cast
+    // member's. Everything the user did reaches it solely through the
+    // Director's notes, which arrive as a separate injected system-role entry
+    // (setExtensionPrompt('remodel_director_notes', …) above) — not through
+    // this array — so this listener only ever narrows chat history, never
+    // context.chat itself (still the true record other surfaces read) and
+    // never the notes block.
+    //
+    // Guarded exactly like the listeners above: this fires for every native
+    // Chat Completion request in the app, not only the directed performer's,
+    // so it must do nothing outside the window Remodel's own
+    // generateDirectedPerformer owns. Remodel's OWN hidden calls (the
+    // Director's own request, Story prose) go out through story-stream.js's
+    // sendOpenAIRequest directly and never reach prepareOpenAIMessages, so
+    // they never fire this event at all — only the visible performer's native
+    // context.generate()/generateGroupWrapper call does.
+    context.eventSource.on(context.eventTypes.CHAT_COMPLETION_PROMPT_READY, (eventData) => {
+        if (!ownsLiveDirectionGeneration() || !activeRun) return;
+        if (!eventData || !Array.isArray(eventData.chat)) return;
+        eventData.chat = filterNarratorHistory(eventData.chat, { narratorName: activeRun.performer?.label || '' });
     });
     const finish = () => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
