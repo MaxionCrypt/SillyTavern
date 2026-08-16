@@ -44,11 +44,18 @@ function saveDirectorNotesStore() {
  * Returns only the entries that were actually stored, each with its
  * assigned id.
  *
- * `incomplete` records that an entry is a severed one: the Director was
- * streaming and the user stopped it mid-sentence. Stored rather than dropped,
- * because what it managed to say is still part of this turn's record — and
- * flagged rather than stored plain, because a truncated ruling read as a
- * finished one is a ruling the Director never actually made.
+ * Two flags describe a Director the user stopped mid-reply. Both are stored
+ * rather than dropped, because what it managed to say is still part of this
+ * turn's record — the owner may want to read it, keep it, or edit it.
+ *
+ * - `abandoned`: the take as a whole was cancelled. `readNarratorEntries`
+ *   withholds these entirely. A cancelled take produced no message and changed
+ *   no state, so promoting its rulings to "settled fact" on the next turn
+ *   would let a take the user explicitly discarded legislate over the one that
+ *   replaced it.
+ * - `incomplete`: this specific entry is where the reply was severed. An
+ *   owner-facing detail — it marks a fragment as a fragment in a store the
+ *   owner edits by hand.
  */
 export function appendDirectorEntries(timelineId, { sceneId, turn, entries } = {}) {
     const id = String(timelineId || '');
@@ -65,6 +72,7 @@ export function appendDirectorEntries(timelineId, { sceneId, turn, entries } = {
             at: timestamp,
             type: entry.type,
             text: String(entry.text || ''),
+            abandoned: entry.abandoned === true,
             incomplete: entry.incomplete === true,
         }));
     if (!stored.length) return [];
@@ -79,12 +87,22 @@ export function appendDirectorEntries(timelineId, { sceneId, turn, entries } = {
 }
 
 /**
- * The Narrator-facing read: never returns `secret` entries, and `depth`
- * selects the most recent N turns (not the most recent N entries) of the
- * Scene, so a turn is always delivered whole or not at all.
+ * The Narrator-facing read: never returns `secret` entries, never returns a
+ * cancelled take's entries, and `depth` selects the most recent N turns (not
+ * the most recent N entries) of the Scene, so a turn is always delivered whole
+ * or not at all.
+ *
+ * The two exclusions are applied at different points, and the difference is
+ * the point. A turn containing a secret still HAPPENED — its other entries are
+ * real, its results stand — so it consumes a slot in the depth window and only
+ * the secret line is withheld. An `abandoned` turn did not happen at all: the
+ * user cancelled it, nothing was generated from it and nothing was stored by
+ * it, so it is removed BEFORE the window is counted. Otherwise a cancelled
+ * take would push a real turn out of the Narrator's view while contributing
+ * nothing in its place.
  */
 export function readNarratorEntries(timelineId, { sceneId, depth } = {}) {
-    const entries = entriesForScene(timelineId, sceneId);
+    const entries = entriesForScene(timelineId, sceneId).filter((entry) => !entry.abandoned);
     const allowedTurns = turnsForDepth(entries, depth);
     return entries
         .filter((entry) => entry.type !== 'secret' && allowedTurns.has(entry.turn))

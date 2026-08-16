@@ -310,7 +310,14 @@ export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = 
     }
 }
 
-export async function requestNextDirection(scene = hooks.getActiveScene()) {
+/**
+ * @param {object} scene
+ * @param {{notebookTurn?: number|null}} [options] `notebookTurn` files this
+ *        pass's entries under an existing turn number instead of a new one.
+ *        Regenerate supplies it after discarding the superseded take, so the
+ *        retake occupies the moment it is a retake OF.
+ */
+export async function requestNextDirection(scene = hooks.getActiveScene(), { notebookTurn = null } = {}) {
     if (!isDirectedLiveScene(scene) || activeRun && !['Waiting for you', 'Complete'].includes(activeRun.state)) return false;
     // Guarded as well as activeRun: between a completed reveal and the moment a
     // new run exists there is a multi-second hidden window in which activeRun is
@@ -323,7 +330,7 @@ export async function requestNextDirection(scene = hooks.getActiveScene()) {
     const sequence = activeRun?.autonomousSequence || 0;
     if (activeRun?.messageId != null) await finalizeRunMessage(activeRun, { state: 'complete' });
     activeRun = null;
-    return beginDirection({ scene, action: '[Continue the scene from accepted history.]', insertUser: false, autonomousSequence: sequence });
+    return beginDirection({ scene, action: '[Continue the scene from accepted history.]', insertUser: false, autonomousSequence: sequence, notebookTurn });
 }
 
 export function handleLiveDirectionDraft(value) {
@@ -450,17 +457,25 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     // owner's own connection measured 101–202 seconds. A message saved before
     // this build carries no notebookTurn and is never replayable; it earns a
     // fresh pass instead, which is also what a deleted turn earns.
-    const savedTurn = Number.isFinite(Number(saved.envelope?.notebookTurn)) ? Number(saved.envelope.notebookTurn) : null;
+    const savedTurn = toTurnNumber(saved.envelope?.notebookTurn);
     const replayable = savedTurn !== null && notebookTurnEntries(scene, savedTurn).length > 0;
     if (!replayable || !performer) {
-        // A fresh Director pass is about to write a new turn. Whatever the
-        // discarded take left behind must go with the message it belonged to —
-        // otherwise the notebook accumulates rulings from takes the user never
-        // saw, and the Narrator reads a discarded attempt's judgment beside the
-        // one that replaced it. Scoped to that turn, and a no-op when the turn
-        // is already empty (which is why it can sit on this branch).
+        // A fresh Director pass is about to write this moment again. Whatever
+        // the discarded take left behind must go with the message it belonged
+        // to — otherwise the notebook accumulates rulings from takes the user
+        // never saw, and the Narrator reads a discarded attempt's judgment
+        // beside the one that replaced it. Scoped to that turn, and a no-op
+        // when the turn is already empty (which is why it can sit here).
+        //
+        // The retake is then filed under the SAME turn number rather than a
+        // fresh one. `nextNotebookTurn` is max+1, so recomputing would only
+        // give the freed number back when the discarded turn happened to be
+        // the highest; with any later turn present, a retake of the earliest
+        // moment would be filed as the newest turn and
+        // groupNotebookEntriesByTurn would hand the Narrator the fiction out
+        // of order.
         discardNotebookTurn(scene, savedTurn);
-        return requestNextDirection(scene);
+        return requestNextDirection(scene, { notebookTurn: savedTurn });
     }
     const envelope = normalizeEnvelope(saved.envelope, scene);
     // Every pending request that survived to this point (the undo loop above
@@ -479,7 +494,7 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     return generateDirectedPerformer({ scene, envelope, performer, autonomousSequence: Number(saved.autonomousSequence) || 0 });
 }
 
-async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0 } = {}) {
+async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null } = {}) {
     // Checked before the Director call, not after: the Director costs a real
     // request and ~17s, and there is no point spending either when the
     // performer that follows it cannot speak.
@@ -540,17 +555,41 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // The notebook is written whatever happens next, including for a
         // Director the user interrupted: what it managed to say is a record of
         // this turn, and discarding it silently would be the one failure this
-        // rework cannot afford. `interrupted` marks the trailing entry so no
-        // reader mistakes a severed line for a finished thought.
-        const turn = nextNotebookTurn(scene);
+        // rework cannot afford. A cancelled take is stamped `abandoned` so it
+        // never binds a later turn, and its trailing entry `incomplete` so the
+        // owner's own record says where the cut landed.
+        //
+        // `notebookTurn` is supplied only by regenerate, which frees the
+        // superseded take's turn and needs the retake to occupy that same
+        // number — recomputing max+1 would file a retake of the earliest
+        // moment as the newest turn and hand the Narrator the fiction out of
+        // order.
+        const turn = toTurnNumber(notebookTurn) ?? nextNotebookTurn(scene);
         const stored = appendDirectorEntries(scene.timelineId, {
             sceneId: scene.id,
             turn,
-            entries: markLastIncomplete(reply.entries, reply.interrupted),
+            entries: markCancelledTake(reply.entries, reply.interrupted),
         });
+        // The one place that knows both facts: this pass stored entries, and
+        // nothing is configured to carry them. Since the depth-0 injection was
+        // removed, that combination is a scene about to generate with no
+        // direction at all — and every other symptom looks healthy.
+        if (stored.length && !findDirectorNotesBlock()) {
+            journal('notes.unrouted', {
+                passId: token.id,
+                turn,
+                entryCount: stored.length,
+                remedy: 'The active Roleplay · Chat recipe has no enabled "Director\'s Notes" block, so this turn\'s direction reaches no one. Add it in Prompt Studio (Add context → Director\'s Notes), or re-enable it if its eye toggle is off.',
+            }, { correlationId: token.id, severity: 'warn', summary: 'direction.notes: stored, but no block carries them to the Narrator' });
+        }
+        const envelope = buildDirectionEnvelope(reply, turn);
         journal('notebook', {
             passId: token.id,
             turn,
+            // Kept, as the old `envelope` event carried it: correlationId joins
+            // records by pass, but this is what joins this record to
+            // generation.start/end, which are keyed by directionId.
+            directionId: envelope.directionId,
             durationMs: Date.now() - startedAt,
             firstChunkMs: token.firstChunkAt ? token.firstChunkAt - startedAt : null,
             streamed: reply.streamed,
@@ -573,7 +612,6 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // during it — Stop, a user intervention outranking an autonomous pass —
         // lands here, before a single native token is spent.
         if (token.aborted) return abandonPass(token, 'director');
-        const envelope = buildDirectionEnvelope(reply, turn);
         // Performer selection is no longer the Director's to make — whoever
         // holds the Scene's Narrator badge speaks. A manual "speak next"
         // override still outranks it when one is armed.
@@ -913,6 +951,23 @@ function usableRequests(requests) {
     return (Array.isArray(requests) ? requests : []).filter((request) => request && typeof request === 'object' && !Array.isArray(request));
 }
 
+/**
+ * A usable notebook turn number, or null.
+ *
+ * `Number.isFinite(Number(value))` is NOT this test: `Number(null)` is 0 and
+ * passes it, which silently files a whole pass under turn 0. This codebase has
+ * now been bitten by that exact coercion three times — `clampNumber` in
+ * variables-store.js, `coerceSettingValue` in prompt-studio-store.js, and here
+ * — so it gets one answer that every caller shares. Turn 0 is rejected on
+ * purpose: `appendDirectorEntries` uses it as its own "unknown" fallback, and
+ * real turns start at 1.
+ */
+function toTurnNumber(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const turn = Math.floor(Number(value));
+    return Number.isFinite(turn) && turn > 0 ? turn : null;
+}
+
 /** The next turn number for this Scene's notebook: one past the highest stored. */
 function nextNotebookTurn(scene) {
     return readAllEntriesForOwner(scene.timelineId, { sceneId: scene.id })
@@ -927,9 +982,10 @@ function nextNotebookTurn(scene) {
  * turn that consists only of secrets is still a turn that happened.
  */
 function notebookTurnEntries(scene, turn) {
-    if (!scene?.timelineId || !Number.isFinite(Number(turn))) return [];
+    const wanted = toTurnNumber(turn);
+    if (!scene?.timelineId || wanted === null) return [];
     return readAllEntriesForOwner(scene.timelineId, { sceneId: scene.id })
-        .filter((entry) => Number(entry.turn) === Number(turn));
+        .filter((entry) => Number(entry.turn) === wanted);
 }
 
 /** Erase one turn from the notebook. Used only when its take is discarded. */
@@ -937,21 +993,31 @@ function discardNotebookTurn(scene, turn) {
     const entries = notebookTurnEntries(scene, turn);
     if (!entries.length) return 0;
     for (const entry of entries) deleteDirectorEntry(scene.timelineId, entry.id);
-    journal('notebook.discarded', { turn: Number(turn), entryCount: entries.length }, { severity: 'warn', summary: `direction.notebook: turn ${turn} discarded with its take` });
+    journal('notebook.discarded', { turn: toTurnNumber(turn), entryCount: entries.length }, { severity: 'warn', summary: `direction.notebook: turn ${turn} discarded with its take` });
     return entries.length;
 }
 
 /**
- * Mark the trailing entry of an interrupted reply as what it is.
+ * Stamp an interrupted reply with the two facts a later reader needs.
  *
- * The LAST entry only: every earlier one was closed by a newline the Director
- * did write, so it is whole. The cut landed inside the final entry — or, at
- * best, exactly at its end, which is the direction worth erring in.
+ * `abandoned` on EVERY entry — the take as a whole was cancelled. It produced
+ * no message, changed no state, and the user is the one who stopped it, so
+ * none of it may bind a later turn. `readNarratorEntries` withholds these the
+ * way it withholds a secret; the owner still sees them.
+ *
+ * `incomplete` on the LAST entry only — that is where the cut landed. Every
+ * earlier entry was closed by a newline the Director did write. This one is
+ * the owner's record of what was severed, not a signal to the Narrator, who
+ * never receives a cancelled take at all.
  */
-function markLastIncomplete(entries, interrupted) {
+function markCancelledTake(entries, interrupted) {
     const list = Array.isArray(entries) ? entries : [];
     if (!interrupted || !list.length) return list;
-    return list.map((entry, index) => (index === list.length - 1 ? { ...entry, incomplete: true } : entry));
+    return list.map((entry, index) => ({
+        ...entry,
+        abandoned: true,
+        ...(index === list.length - 1 ? { incomplete: true } : {}),
+    }));
 }
 
 /**
@@ -1898,7 +1964,7 @@ function normalizeEnvelope(value, scene) {
     return {
         protocol: DIRECTION_PROTOCOL,
         directionId,
-        notebookTurn: Number.isFinite(Number(value.notebookTurn)) ? Number(value.notebookTurn) : null,
+        notebookTurn: toTurnNumber(value.notebookTurn),
         flow: { continueAfter: Boolean(value.flow?.continueAfter), hardPauseAfter: Boolean(value.flow?.hardPauseAfter) },
         mechanics: { pendingRequests },
         sceneId: scene.id,
@@ -1955,16 +2021,17 @@ function describeNotebookTurn(turn, turnEntries) {
 }
 
 /**
- * A severed entry says so. The Director was stopped mid-sentence, and a
- * half-written ruling delivered as a whole one is a decision nobody made — the
- * performer needs to know it is reading a fragment before it treats it as
- * binding.
+ * No `incomplete` marker here, deliberately. A severed entry only ever exists
+ * inside a cancelled take, and `readNarratorEntries` withholds a cancelled
+ * take in full — so a fragment cannot reach this function through any
+ * production path, and a marker rendered here would be a caption for
+ * something the performer never sees. The flag is the owner's record; the
+ * withholding is the performer's protection.
  */
 function describeNotebookEntry(entry) {
     const text = String(entry?.text || '').trim();
     if (!text) return '';
-    const cut = entry?.incomplete ? ' … (cut off — the director was interrupted here)' : '';
-    return `- ${NOTEBOOK_ENTRY_LABELS[entry?.type] || ''}${text}${cut}`;
+    return `- ${NOTEBOOK_ENTRY_LABELS[entry?.type] || ''}${text}`;
 }
 
 /**
@@ -1983,14 +2050,26 @@ function describeNotebookEntry(entry) {
  * is merely disabled (Prompt Studio's per-block eye toggle) is the same
  * opt-out: the toggle is a visible, discoverable control and must not be the
  * one thing on this block that silently does nothing.
+ *
+ * Since the depth-0 direction injection was removed, this block is the ONLY
+ * route the Director's direction takes to the Narrator — so its absence is no
+ * longer a missing extra, it is a scene generating against no direction at
+ * all. That is why beginDirection journals a warning when a pass stores
+ * entries and findDirectorNotesBlock returns nothing: silence here is
+ * indistinguishable from a Director that had nothing to say.
  */
 export function formatDirectorNotesPrompt(scene) {
     if (!scene?.timelineId) return '';
-    const recipe = getCurrentPromptStudioRecipe('roleplay', 'chat');
-    const block = (recipe?.blocks || []).find((entry) => entry.kind === 'source' && entry.sourceKey === 'directorNotes' && entry.enabled !== false);
+    const block = findDirectorNotesBlock();
     if (!block) return '';
     const entries = readNarratorEntries(scene.timelineId, { sceneId: scene.id, depth: block.settings?.depth });
     return buildDirectorNotesSource(entries);
+}
+
+/** The active Roleplay/Chat recipe's enabled Director's Notes block, or null. */
+function findDirectorNotesBlock() {
+    const recipe = getCurrentPromptStudioRecipe('roleplay', 'chat');
+    return (recipe?.blocks || []).find((entry) => entry.kind === 'source' && entry.sourceKey === 'directorNotes' && entry.enabled !== false) || null;
 }
 
 function clearRevealTimer() {

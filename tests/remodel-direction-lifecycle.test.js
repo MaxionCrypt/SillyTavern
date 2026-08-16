@@ -22,7 +22,6 @@ import {
     getLiveDirectionRun,
     clearLiveDirectionFailure,
     regenerateLastDirectedResponse,
-    buildDirectorNotesSource,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import {
     createVariableValue,
@@ -31,7 +30,9 @@ import {
     listMechanicsTransactions,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
 import { createTimelineGoal, linkGoalToScene } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js';
-import { readAllEntriesForOwner } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-notes-store.js';
+import { createArc, createScene, createTimeline, getScene, updateScene } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/timeline-state.js';
+import { createPromptRecipe, setActivePromptRecipe } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/prompt-studio-store.js';
+import { appendDirectorEntries, readAllEntriesForOwner, readNarratorEntries } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-notes-store.js';
 import { __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
 import { __setOnlineStatus, __getExtensionPrompt, __clearExtensionPromptCalls } from './util/script-stub.js';
 import { __setOpenAIRequestHandler } from './util/openai-stub.js';
@@ -568,15 +569,52 @@ test('an interrupted Director is not read for state even when its fence did arri
     expect(notebookEvent.detail).toMatchObject({ interrupted: true, requestCount: 0, continueAfter: false });
 });
 
-test('an interrupted turn tells the performer the entry was cut off', () => {
-    // The flag has to reach the prompt, or a half-written ruling is delivered
-    // to the Narrator as a finished one.
-    expect(buildDirectorNotesSource([
-        { turn: 1, type: 'ruling', text: 'The blade is still', incomplete: true },
-    ])).toMatch(/cut off/i);
-    expect(buildDirectorNotesSource([
-        { turn: 1, type: 'ruling', text: 'The blade is still rising.' },
-    ])).not.toMatch(/cut off/i);
+test('a cancelled take never binds the turn that replaces it', async () => {
+    // The failure this replaces: entries from a take the user stopped — which
+    // produced no message and changed no state — were delivered on the NEXT
+    // turn under "treat as settled fact" with "Ruling — binding:" in front of
+    // them. A discarded take must not legislate.
+    streamDirector([
+        '[ruling] Wren will lose the arm.\n',
+        '[note] The blade is still',
+        ' rising.',
+    ], {
+        onChunkEmitted: ({ index }) => {
+            if (index === 1) stopLiveDirection();
+        },
+    });
+    await requestNextDirection(scene);
+    expect(notebook()).toHaveLength(2);
+
+    // The next turn runs normally.
+    streamDirector(['[ruling] The real ruling for this turn.']);
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    const prompt = performerPrompt();
+    expect(prompt).toContain('The real ruling for this turn.');
+    expect(prompt).not.toContain('Wren will lose the arm.');
+    expect(prompt).not.toContain('The blade is still');
+    // Withheld, not erased: the owner keeps the whole record of what the
+    // Director managed to say before it was stopped.
+    expect(notebook().map((entry) => entry.text)).toEqual([
+        'Wren will lose the arm.',
+        'The blade is still',
+        'The real ruling for this turn.',
+    ]);
+    expect(notebook().map((entry) => entry.abandoned)).toEqual([true, true, false]);
+});
+
+test('a cancelled take does not consume a slot in the Narrator depth window', () => {
+    // A turn withheld in full must not also push a real turn out of view: it
+    // is removed before the window is counted, unlike a secret, whose turn
+    // genuinely happened.
+    appendDirectorEntries('tl-window', { sceneId: 's', turn: 1, entries: [{ type: 'ruling', text: 'oldest real turn' }] });
+    appendDirectorEntries('tl-window', { sceneId: 's', turn: 2, entries: [{ type: 'ruling', text: 'cancelled', abandoned: true }] });
+    appendDirectorEntries('tl-window', { sceneId: 's', turn: 3, entries: [{ type: 'ruling', text: 'newest real turn' }] });
+
+    const window = readNarratorEntries('tl-window', { sceneId: 's', depth: 2 });
+    expect(window.map((entry) => entry.text)).toEqual(['oldest real turn', 'newest real turn']);
 });
 
 test('a request the mechanics layer cannot read does not void its valid siblings', async () => {
@@ -650,6 +688,68 @@ test('a regenerate that has to re-direct discards the superseded take rather tha
     expect(journalEntries('notebook.discarded')[0].detail).toMatchObject({ turn: 1, entryCount: 1 });
 });
 
+test('a retake of an earlier moment is filed under that moment, not after the turns that follow it', async () => {
+    // The regenerate-discard test above cannot see this: its notebook only
+    // ever holds one turn, which is exactly the case where "one past the
+    // highest" happens to equal the freed number.
+    //
+    // Reaching the real case needs a turn ABOVE the one being retaken, which
+    // an interrupted pass produces for free: it consumes a turn number and
+    // writes no message, so the chat's last message is no longer the highest
+    // turn. Recomputing max+1 then files the retake of the EARLIER moment as
+    // the NEWEST turn, and groupNotebookEntriesByTurn hands the Narrator the
+    // fiction out of order.
+    streamDirector(['[ruling] Turn one.']);
+    await completeAndSettle();
+
+    streamDirector(['[ruling] A take that was cancelled.', ' And more.'], {
+        onChunkEmitted: ({ index }) => {
+            if (index === 0) stopLiveDirection();
+        },
+    });
+    await requestNextDirection(scene);
+    expect(notebook().map((entry) => entry.turn)).toEqual([1, 2]);
+
+    // The chat's last message is still turn ONE's. Regenerate it on the
+    // re-direct branch, with turn 2 sitting above it in the notebook.
+    const performers = cast.splice(0, cast.length);
+    streamDirector(['[ruling] Turn one, retaken.']);
+    const consoleError = console.error;
+    console.error = () => {};
+    try {
+        await regenerateLastDirectedResponse(scene);
+    } finally {
+        console.error = consoleError;
+        cast.push(...performers);
+    }
+
+    const retake = notebook().find((entry) => entry.text === 'Turn one, retaken.');
+    expect(retake).toBeTruthy();
+    // 1, because that is the moment it is a retake OF. Recomputing max+1 files
+    // it as 3 — after a turn that happened later than the one it replaces.
+    expect(retake.turn).toBe(1);
+    expect(notebook().map((entry) => entry.text)).not.toContain('Turn one.');
+});
+
+test('consecutive passes advance the notebook turn', async () => {
+    // Every other notebook assertion in this suite lives inside turn 1, so
+    // `nextNotebookTurn` returning a constant would satisfy all of them —
+    // including the regenerate assertions, which is why the ordering defect
+    // above went unnoticed. This is the test that a constant cannot pass.
+    streamDirector(['[ruling] First.']);
+    await completeAndSettle();
+    streamDirector(['[ruling] Second.']);
+    await completeAndSettle();
+    streamDirector(['[ruling] Third.']);
+    await completeAndSettle();
+
+    expect(notebook().map((entry) => entry.turn)).toEqual([1, 2, 3]);
+    // Depth is what turn numbering feeds: three distinct turns, not three
+    // entries in one.
+    expect(readNarratorEntries(scene.timelineId, { sceneId: scene.id, depth: 2 }).map((entry) => entry.text))
+        .toEqual(['Second.', 'Third.']);
+});
+
 test('a Director that returns nothing at all is reported rather than silently directing nothing', async () => {
     const failures = [];
     initLiveDirection({ onFailure: (error) => failures.push(error) });
@@ -666,4 +766,107 @@ test('a Director that returns nothing at all is reported rather than silently di
     expect(String(failures[0].message)).toMatch(/returned nothing at all/i);
     expect(notebook()).toHaveLength(0);
     expect(__getChat()).toHaveLength(0);
+});
+
+test('a turn whose notes nothing will carry says so instead of generating in silence', async () => {
+    // Since the depth-0 injection was removed, the Director's Notes block is
+    // the ONLY route direction takes to the Narrator. A recipe without one
+    // looks completely healthy from outside — notebook fills, card renders,
+    // prose generates — so the absence has to be reported, or it is
+    // indistinguishable from a Director that had nothing to say.
+    const recipe = createPromptRecipe({
+        name: 'RP without notes', mode: 'roleplay', apiType: 'chat',
+        blocks: [{ kind: 'message', role: 'instruction', content: 'no notes block here' }],
+    });
+    setActivePromptRecipe('roleplay', 'chat', recipe.id);
+
+    streamDirector(['[ruling] Nobody will ever read this.']);
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    // The turn ran and stored its entries…
+    expect(notebook()).toHaveLength(1);
+    expect(performerPrompt()).toBe('');
+    // …and said, once, that they reach no one.
+    const [warning] = journalEntries('notes.unrouted');
+    expect(warning).toBeTruthy();
+    expect(warning.severity).toBe('warn');
+    expect(warning.detail.entryCount).toBe(1);
+    expect(warning.detail.remedy).toMatch(/Director's Notes/);
+});
+
+test('the warning stays quiet when a block is there to carry the notes', async () => {
+    // Proves the warning discriminates rather than firing on every pass.
+    streamDirector(['[ruling] Someone will read this.']);
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    expect(performerPrompt()).toContain('Someone will read this.');
+    expect(journalEntries('notes.unrouted')).toHaveLength(0);
+});
+
+test('reasoning survives a connection that answers in one piece instead of streaming', async () => {
+    // The deleted fetch patch captured reasoning regardless of streaming.
+    // Every user with SillyTavern's streaming toggle off — plus o1 and Workers
+    // AI JSON mode — gets a whole response object rather than a generator, and
+    // returning '' there would leave the direction card's reasoning
+    // permanently blank for them while everything else looked fine.
+    setLiveDirectionTestAdapters({ generatePerformer: speak });
+    __setOpenAIRequestHandler(() => ({
+        choices: [{
+            message: {
+                content: '[ruling] Wren steps in.',
+                reasoning_content: 'She is the only one close enough.',
+            },
+        }],
+    }));
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    const [notebookEvent] = journalEntries('notebook');
+    expect(notebookEvent.detail.streamed).toBe(false);
+    expect(notebookEvent.detail.reasoningLength).toBe('She is the only one close enough.'.length);
+    // And the one-piece text still parsed into the notebook.
+    expect(notebook().map((entry) => entry.text)).toEqual(['Wren steps in.']);
+});
+
+// ------------------------------------ the direction card is a second surface
+//
+// persistDirectionRecord writes the turn's notebook into the Scene's
+// directionLog, and timeline-spine renders that record's `objective` inline in
+// the Roleplay stream. That is a NEW place a `secret` could surface, created by
+// this task — and the design names secret leakage as the risk most in need of a
+// test that fails if it ever happens. This one drives the real record through a
+// real Scene in the real timeline store, because `updateScene` writes nothing
+// for a Scene that does not exist in it.
+
+test('a secret never reaches the direction card the user reads beside the prose', async () => {
+    const timeline = createTimeline('Card Timeline');
+    const arc = createArc(timeline.id, 'Card Arc');
+    const realScene = createScene(arc.id, 'roleplay', 'Card Scene');
+    updateScene(realScene.id, {
+        staging: 'directed',
+        liveDirection: { enabled: true, directorRef: null, narratorRef: null, pacing: 'instant', autoplay: false },
+    });
+    const directedScene = getScene(realScene.id);
+    initLiveDirection({ getActiveScene: () => directedScene });
+
+    streamDirector([
+        '[ruling] Wren steps in front of the boy.\n',
+        '[secret] The boy is the one who called them here.',
+    ]);
+    await requestNextDirection(directedScene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    const [record] = getScene(realScene.id).liveDirection.directionLog;
+    expect(record).toBeTruthy();
+    // The card carries the direction the user is entitled to read…
+    expect(record.objective).toContain('Wren steps in front of the boy.');
+    // …and not the one entry whose whole purpose is that it stays hidden.
+    expect(record.objective).not.toContain('The boy is the one who called them here.');
+    expect(JSON.stringify(record)).not.toContain('called them here');
+    // The secret is still stored — withheld from surfaces, not discarded.
+    expect(readAllEntriesForOwner(timeline.id, { sceneId: realScene.id }).map((entry) => entry.type))
+        .toEqual(['ruling', 'secret']);
 });

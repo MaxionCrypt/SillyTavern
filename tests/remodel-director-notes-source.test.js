@@ -10,7 +10,13 @@ import {
     stopLiveDirection,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { appendDirectorEntries, readNarratorEntries } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-notes-store.js';
-import { compilePromptRecipe, getCurrentPromptStudioRecipe } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/prompt-studio.js';
+import {
+    capturePromptStudioRuntimeSettings,
+    compilePromptRecipe,
+    getCurrentPromptStudioRecipe,
+    initPromptStudio,
+} from '../public/scripts/extensions/third-party/SillyTavern-Remodel/prompt-studio.js';
+import { oai_settings } from './util/openai-stub.js';
 import {
     PROMPT_SOURCE_DEFINITIONS,
     createBlocksFromNativeChat,
@@ -146,6 +152,58 @@ test('a pre-existing store (no directorNotes block yet) is migrated to carry one
     const block = migrated.blocks.find((entry) => entry.kind === 'source' && entry.sourceKey === 'directorNotes');
     expect(block).toBeDefined();
     expect(block.settings.depth).toBe(3);
+});
+
+// --- Fix round 1, Critical 1: the migration is version-gated, so it is not on
+// its own enough. Two further paths produced a roleplay/chat recipe with no
+// Director's Notes block AFTER the upgrade — and since the depth-0 direction
+// injection was removed, such a recipe leaves the Narrator with no direction
+// at all while the notebook fills and the prose generates normally.
+
+test('a roleplay/chat recipe created after the upgrade carries the notes block', () => {
+    // The migration only ever runs once per store version, so a recipe created
+    // later gets nothing from it. Defaults have to carry the block themselves.
+    const created = createPromptRecipe({ name: 'Made later', mode: 'roleplay', apiType: 'chat' });
+    const block = created.blocks.find((entry) => entry.kind === 'source' && entry.sourceKey === 'directorNotes');
+    expect(block).toBeDefined();
+    expect(block.nativeIdentifier).toBe('remodel_director_notes');
+    expect(block.settings.depth).toBe(3);
+});
+
+test('a native re-sync keeps the notes block that the loaded preset does not know about', () => {
+    // The worst of the three paths: an EXISTING user, already migrated, loads
+    // any Chat Completion preset authored before Remodel. captureNativeSettingsFor
+    // replaces the recipe's blocks wholesale from oai_settings, and the preset's
+    // prompt order has no remodel_director_notes in it.
+    //
+    // Driven through the real exported entry point rather than through
+    // withRemodelSources directly — the defect was that the call site did not
+    // apply it, so a test of the helper alone would have stayed green.
+    globalThis.document.addEventListener ??= () => {};
+    oai_settings.prompts = [
+        { identifier: 'main', name: 'Main Prompt', content: 'You are a narrator.', system_prompt: true },
+        { identifier: 'chatHistory', name: 'Chat History', marker: true },
+    ];
+    oai_settings.prompt_order = [{
+        character_id: 100001,
+        order: [{ identifier: 'main', enabled: true }, { identifier: 'chatHistory', enabled: true }],
+    }];
+
+    initPromptStudio({ getRuntimeMode: () => 'roleplay' });
+    const before = getCurrentPromptStudioRecipe('roleplay', 'chat');
+    expect(before.blocks.some((block) => block.sourceKey === 'directorNotes')).toBe(true);
+
+    // A preset change fires this. It is the same call the SETTINGS_UPDATED /
+    // OAI_PRESET_CHANGED_AFTER / PRESET_CHANGED listeners make.
+    capturePromptStudioRuntimeSettings();
+
+    const after = getCurrentPromptStudioRecipe('roleplay', 'chat');
+    const block = after.blocks.find((entry) => entry.kind === 'source' && entry.sourceKey === 'directorNotes');
+    expect(block).toBeDefined();
+    expect(block.settings.depth).toBe(3);
+    // The preset's own blocks are still what the re-sync captured — this
+    // restores Remodel's sources, it does not ignore the preset.
+    expect(after.blocks.some((entry) => entry.sourceKey === 'chatHistory')).toBe(true);
 });
 
 // --- formatDirectorNotesPrompt: the glue timeline-spine.js calls -----------

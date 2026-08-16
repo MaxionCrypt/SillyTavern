@@ -210,6 +210,27 @@ export function createBlocksFromNativeChat(prompts, promptOrder) {
     return blocksFromNativeChat(prompts, promptOrder);
 }
 
+/**
+ * Add back the sources Remodel owns but the native prompt manager may not
+ * carry — the same composition `createSeededStore` applies when it first
+ * derives a roleplay/chat recipe from native settings.
+ *
+ * WHY THIS IS EXPORTED: a native re-sync (prompt-studio.js's
+ * captureNativeSettingsFor) replaces a roleplay/chat recipe's blocks wholesale
+ * from `oai_settings`, and every Chat Completion preset authored before Remodel
+ * existed lacks `remodel_director_notes` and `remodel_story_goals` in its
+ * prompt order. Without this, loading such a preset silently strips both
+ * blocks out of an already-migrated recipe — and since the Director's notebook
+ * is now the ONLY route its direction takes to the Narrator, that leaves a
+ * scene generating prose against no direction at all.
+ *
+ * Both helpers are no-ops when the block is already present, so applying this
+ * to blocks that already carry them changes nothing.
+ */
+export function withRemodelSources(blocks) {
+    return withDirectorNotesSource(withStoryGoalsSource(blocks));
+}
+
 function getNamespace() {
     const context = getContext();
     context.extensionSettings[SETTINGS_NAMESPACE] ??= {};
@@ -359,7 +380,12 @@ function defaultBlocksFor(mode, apiType) {
     if (apiType === 'text') {
         return [createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'nativeContext', enabled: true, locked: true })];
     }
-    return [createPromptBlock({ kind: 'message', role: 'instruction', content: '' })];
+    // roleplay/chat. Remodel's own sources are seeded here rather than only by
+    // the version migrations, which are version-gated and so never run again:
+    // a recipe CREATED after the upgrade would otherwise start life without the
+    // Director's Notes block, and the Narrator would read no direction at all
+    // while the notebook filled normally behind it.
+    return withRemodelSources([createPromptBlock({ kind: 'message', role: 'instruction', content: '' })]);
 }
 
 function blocksFromNativeChat(prompts, promptOrder) {

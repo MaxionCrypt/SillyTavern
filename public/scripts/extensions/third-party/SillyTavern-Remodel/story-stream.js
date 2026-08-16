@@ -1,4 +1,5 @@
 import { sendOpenAIRequest } from '../../../openai.js';
+import { extractReasoningFromData } from '../../../reasoning.js';
 import { getContext } from '../../../st-context.js';
 
 // Streaming transport for Remodel's own hidden Chat Completion calls — Story
@@ -61,7 +62,7 @@ export async function streamChatPrompt({ prompt, onChunk, signal } = {}) {
     // A provider that ignores `stream` (or a source core refuses to stream, such
     // as o1) returns the plain response object instead of a generator.
     if (typeof response !== 'function') {
-        return { text: readWholeResponse(response), reasoning: '', streamed: false };
+        return { text: readWholeResponse(response), reasoning: readWholeReasoning(response), streamed: false };
     }
 
     let text = '';
@@ -75,6 +76,34 @@ export async function streamChatPrompt({ prompt, onChunk, signal } = {}) {
         onChunk?.({ text, reasoning });
     }
     return { text: text.trim(), reasoning: reasoning.trim(), streamed: true };
+}
+
+/**
+ * Reasoning off a non-streamed reply.
+ *
+ * A streaming reply carries reasoning on the generator's `state`; a one-piece
+ * reply carries it on the response object, in a different place for every
+ * provider (`choices[0].message.reasoning_content`, `.reasoning`, Claude's
+ * `thinking` content parts, Gemini's thought parts…). Core already knows all
+ * of them, so ask core rather than re-deriving the list here and drifting from
+ * it.
+ *
+ * WHY THIS EXISTS AT ALL: the deleted `withCapturedResponse` fetch patch read
+ * reasoning off the wire regardless of streaming. Returning `reasoning: ''`
+ * here would have made the Director's reasoning permanently blank for every
+ * user with SillyTavern's streaming toggle off, plus o1 and Workers AI JSON
+ * mode — a capability regression disguised as a neutral trade, since the text
+ * still arrives and nothing looks broken.
+ *
+ * `ignoreShowThoughts`: this feeds Remodel's own surfaces, so it must not
+ * depend on SillyTavern's native "show thoughts" display toggle.
+ */
+function readWholeReasoning(data) {
+    try {
+        return String(extractReasoningFromData(data, { mainApi: 'openai', ignoreShowThoughts: true }) || '').trim();
+    } catch {
+        return '';
+    }
 }
 
 /** Best-effort read of a non-streamed reply, mirroring core's own shapes. */

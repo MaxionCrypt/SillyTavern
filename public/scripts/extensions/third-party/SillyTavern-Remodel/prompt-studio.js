@@ -29,6 +29,7 @@ import {
     isPromptRecipeActive,
     setActivePromptRecipe,
     updatePromptRecipe,
+    withRemodelSources,
 } from './prompt-studio-store.js';
 
 const CHAT_PROMPT_ORDER_ID = 100001;
@@ -903,7 +904,14 @@ function captureNativeSettingsFor(mode, apiType, recipeId = null) {
     const recipe = recipeId ? getPromptRecipe(recipeId) : getCurrentPromptStudioRecipe(mode, apiType);
     if (!recipe) return;
     if (mode === 'roleplay' && apiType === 'chat') {
-        updatePromptRecipe(recipe.id, { blocks: createBlocksFromNativeChat(oai_settings.prompts || [], oai_settings.prompt_order || []) });
+        // withRemodelSources, for the same reason createSeededStore applies it:
+        // this replaces the recipe's blocks wholesale from native settings, and
+        // a Chat Completion preset authored before Remodel has no
+        // remodel_director_notes / remodel_story_goals in its prompt order. It
+        // used to strip both out of an already-migrated recipe on any preset
+        // change — and the Director's notebook is now the only route its
+        // direction takes to the Narrator.
+        updatePromptRecipe(recipe.id, { blocks: withRemodelSources(createBlocksFromNativeChat(oai_settings.prompts || [], oai_settings.prompt_order || [])) });
     }
     if (apiType === 'text') {
         updatePromptRecipe(recipe.id, { transport: captureTextTransport(power_user) });
