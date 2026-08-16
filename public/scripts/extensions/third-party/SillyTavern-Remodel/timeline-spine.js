@@ -6703,6 +6703,19 @@ function bindStoryEditorEvents() {
             closeStoryPromptPreview();
             return;
         }
+        if (previewOverlay) {
+            // Same BY SOURCE / RAW PROMPT toggle the Roleplay preview's panels
+            // use, reused rather than rebuilt — see setRoleplayPreviewView.
+            // The Story modal has no tab panels of its own, so the overlay
+            // itself stands in for the "panel" that function scopes its
+            // lookups to.
+            const viewButton = target.closest('[data-remodel-rp-preview-view]');
+            if (viewButton && previewOverlay.contains(viewButton)) {
+                event.preventDefault();
+                setRoleplayPreviewView(previewOverlay, viewButton.dataset.remodelRpPreviewView);
+                return;
+            }
+        }
 
         if (target.closest('[data-remodel-storydoc-format-toggle]')) {
             event.preventDefault();
@@ -7159,6 +7172,17 @@ function openPromptStudioPreviewModal(title) {
     return overlay;
 }
 
+// Informational, not a fault: the compiled prompt below is exact for the beat
+// text currently sitting in the composer. World Info activation is scored
+// against that same text (resolveStoryWorldInfo's corpus scan reads doc+beat),
+// so further edits the user makes before actually sending can change what
+// activates — the one part of this preview that cannot be pinned down ahead
+// of time. Mirrors DIRECTOR_RETRIEVAL_NOTE's treatment of the Director's own
+// retrieval caveat: same neutral callout, same reasoning, a different source
+// of drift. Always shown — unlike the diagnostics note below, this is not
+// conditional on what happened to resolve, it is a property of every preview.
+const STORY_WORLD_INFO_NOTE = '<p class="remodel-rp-preview-note">This compiles exactly for the beat text currently entered. World Info activation is scored from that same text, so further edits before you send can change what resolves.</p>';
+
 async function openStoryPromptPreview() {
     document.getElementById(STORY_PREVIEW_ID)?.remove();
     const overlay = document.createElement('div');
@@ -7169,19 +7193,21 @@ async function openStoryPromptPreview() {
             <div class="remodel-rp-picker-head">
                 <div>
                     <div class="remodel-rp-picker-title">Prompt preview</div>
-                    <div class="remodel-rp-picker-hint">Exactly what the model will receive on the next turn — nothing is sent.</div>
+                    <div class="remodel-rp-picker-hint">What the model will receive if you send now — nothing is sent.</div>
                 </div>
                 <button type="button" class="remodel-rp-picker-x" data-remodel-storydoc-preview-close aria-label="Close">×</button>
             </div>
             <div class="remodel-rp-preview-warn" data-remodel-storydoc-preview-warning hidden></div>
+            <div class="remodel-rp-preview-note" data-remodel-storydoc-preview-diagnostics hidden></div>
+            ${STORY_WORLD_INFO_NOTE}
             <details class="remodel-story-resolver-report" data-remodel-storydoc-preview-report hidden><summary>World Info resolution</summary><pre></pre></details>
-            <pre class="remodel-rp-preview-body" data-remodel-storydoc-preview-body>Assembling prompt…</pre>
+            ${PREVIEW_VIEWS_MARKUP}
         </div>
     `;
     document.body.appendChild(overlay);
     requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
 
-    const body = overlay.querySelector('[data-remodel-storydoc-preview-body]');
+    const body = overlay.querySelector('[data-remodel-rp-preview-body]');
     const doc = getStoryDoc(activeStoryDocId);
     if (!body || !doc) return;
     try {
@@ -7189,13 +7215,36 @@ async function openStoryPromptPreview() {
         const assembled = await assembleStoryContext({ doc, ...request, dryRun: true });
         const recipe = getCurrentPromptStudioRecipe('story', getPromptApiType());
         const sources = buildStoryPromptSources(doc, assembled, request);
-        const compiled = compilePromptRecipe(recipe, sources, { macroOptions: assembled.macroOptions, outlets: assembled.outlets });
+        const compiled = compilePromptRecipe(recipe, sources, { macroOptions: assembled.macroOptions, outlets: assembled.outlets, trace: true });
         body.textContent = formatPromptStudioPreview(compiled);
         populateStoryWorldInfoReport(overlay.querySelector('[data-remodel-storydoc-preview-report]'), assembled);
+
+        // Same by-source treatment the Director tab gets, off the same trace
+        // shape and the same renderer — see renderPromptTraceSections. Story
+        // has no fallback-prompt path the way the Director does, so a trace
+        // is always present here; the guard stays anyway rather than assuming
+        // that instead of defending against an empty or malformed compile.
+        const sourcesEl = overlay.querySelector('[data-remodel-rp-preview-sources]');
+        const viewsEl = overlay.querySelector('[data-remodel-rp-preview-views]');
+        if (Array.isArray(compiled.trace) && compiled.trace.length && sourcesEl && viewsEl) {
+            sourcesEl.innerHTML = await renderPromptTraceSections(compiled.trace, compiled.messages);
+            sourcesEl.hidden = false;
+            viewsEl.hidden = false;
+            body.hidden = true;
+        }
+
+        // assembled.diagnostics is the World Info resolver's own accounting of
+        // how resolution went — an unbound character, a budget cut, a missing
+        // lorebook — which is information, not a sign anything broke. Only
+        // usedFallback (the whole context seam throwing) is a genuine fault,
+        // so that is the only case that reaches the red box; everything else
+        // gets the same neutral callout as STORY_WORLD_INFO_NOTE above.
         const warning = overlay.querySelector('[data-remodel-storydoc-preview-warning]');
-        if (warning && assembled.diagnostics?.length) {
-            warning.hidden = false;
-            warning.textContent = assembled.diagnostics.join(' · ');
+        const note = overlay.querySelector('[data-remodel-storydoc-preview-diagnostics]');
+        const target = assembled.usedFallback ? warning : note;
+        if (target && assembled.diagnostics?.length) {
+            target.hidden = false;
+            target.textContent = assembled.diagnostics.join(' · ');
         }
     } catch (error) {
         body.textContent = `Could not assemble a preview.\n\n${String(error)}`;
@@ -7524,6 +7573,13 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
             outlets: wi.outlets || {},
             activatedEntries: wi.activatedEntries || [],
             diagnostics: wi.diagnostics || [],
+            // False here: everything below is the resolver's own accounting of
+            // what it did (an unbound character, a budget cut, a missing
+            // lorebook) — information about how resolution went, not a sign the
+            // seam itself broke. See usedFallback: true below for the one case
+            // that actually is a fault, and openStoryPromptPreview for where
+            // this decides red-warn vs neutral-note.
+            usedFallback: false,
             notes: wi.notes || [],
             books: wi.books || {},
             budget: wi.budget || null,
@@ -7549,6 +7605,10 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
             outlets: {},
             activatedEntries: [],
             diagnostics: [`Story World Info resolver failed: ${String(err?.message || err)}`],
+            // True here, unlike the success path above: the whole World
+            // Info/character seam threw, so the prompt being previewed is a
+            // guidance-only degradation, not a normal resolution outcome.
+            usedFallback: true,
             notes: [],
             books: {},
             budget: null,
@@ -8534,7 +8594,7 @@ async function fillDirectorPreviewPanel(panel, scene, directed) {
         const sourcesEl = panel.querySelector('[data-remodel-rp-preview-sources]');
         const viewsEl = panel.querySelector('[data-remodel-rp-preview-views]');
         if (Array.isArray(trace) && trace.length && sourcesEl && viewsEl) {
-            sourcesEl.innerHTML = await renderDirectorTraceSections(trace, prompt);
+            sourcesEl.innerHTML = await renderPromptTraceSections(trace, prompt);
             sourcesEl.hidden = false;
             viewsEl.hidden = false;
             bodyEl.hidden = true;
@@ -8547,14 +8607,15 @@ async function fillDirectorPreviewPanel(panel, scene, directed) {
 /**
  * Sizes a list of prompt texts, and says what unit it managed to size them in.
  *
- * The Narrator's per-source figures come from core's promptManager
- * tokenHandler, keyed by native identifier — which does not apply here at all:
- * the Director compiles its own message array and sends it through
- * generateRawData, never touching the native prompt manager. The only counter
- * reachable from this path is core's own tokenizer. Ask it; if it is missing
- * or throws, fall back to character counts for the WHOLE set and say so in the
- * label, rather than printing characters under a "tok" heading or mixing units
- * card to card.
+ * The Narrator's own per-source figures come from core's promptManager
+ * tokenHandler, keyed by native identifier — which does not apply to the
+ * Director or Story previews at all: neither one populates the native prompt
+ * manager (the Director sends its own message array through generateRawData;
+ * the Story preview compiles through compilePromptRecipe directly). The only
+ * counter reachable from either path is core's own tokenizer. Ask it; if it
+ * is missing or throws, fall back to character counts for the WHOLE set and
+ * say so in the label, rather than printing characters under a "tok" heading
+ * or mixing units card to card.
  */
 async function measurePreviewTexts(texts) {
     try {
@@ -8572,21 +8633,30 @@ async function measurePreviewTexts(texts) {
 }
 
 /**
- * The Director's BY SOURCE view.
+ * The BY SOURCE view for any surface that compiles through compilePromptRecipe
+ * with `trace: true` — currently the Director tab and the Story preview.
+ * One function, not one per surface: both recipes concatenate adjacent
+ * same-role blocks (the seeded Director recipe's five authored blocks arrive
+ * as two messages; a Story recipe's several same-role World Info/context
+ * blocks fold the same way), and a second near-identical renderer is exactly
+ * the shape of defect this codebase has repeatedly shipped — a rule or
+ * renderer duplicated and then left to drift.
  *
  * Deliberately grouped by the message each block landed in rather than shown
  * as a flat list: the whole reason this view beats the raw dump is that the
- * raw dump cannot show a user that the five blocks they authored arrive as two
- * messages. Blocks that resolved to nothing get a group of their own so they
+ * raw dump cannot show a user which authored blocks arrive folded into one
+ * message. Blocks that resolved to nothing get a group of their own so they
  * are visibly empty rather than simply absent, which is the same treatment
  * renderPromptPreviewSections gives an empty Narrator source.
  */
-async function renderDirectorTraceSections(trace, messages) {
+async function renderPromptTraceSections(trace, messages) {
     // Measured per contribution rather than per block: a block that straddled
     // two messages would otherwise have its whole size counted into both of
-    // the groups it appears in. No Director source can straddle — every one
-    // resolves to a single string — but a figure that is only accidentally
-    // right is not a figure worth printing.
+    // the groups it appears in. No Director source straddles — every one
+    // resolves to a single string — but a Story source can: worldInfoDepth
+    // resolves to a `{messages: [...]}` array (see compilePromptRecipe), and
+    // its parts can land in more than one message. Sizing per part rather
+    // than per block is what keeps that case honest too.
     const parts = trace.flatMap((entry) => entry.parts);
     const { unit, unitLabel, sizes } = await measurePreviewTexts(parts.map((part) => part.content || ''));
     const sizeOfPart = new Map(parts.map((part, index) => [part, sizes[index]]));
@@ -8669,8 +8739,11 @@ function setRoleplayPreviewTab(overlay, tab) {
     if (hintEl && PREVIEW_TAB_HINTS[tab]) hintEl.textContent = PREVIEW_TAB_HINTS[tab];
 }
 
-// Takes the panel, not the overlay: both tabs carry this toggle now, and each
-// one switches only its own body and cards.
+// Takes a scoping element, not necessarily the whole overlay: the Director
+// and Narrator tabs each pass their own panel so the toggle only switches
+// that tab's own body and cards, while the Story preview — which has no tab
+// panels of its own — passes its overlay directly, the same shape one level
+// up.
 function setRoleplayPreviewView(panel, view) {
     if (!panel) return;
     const showRaw = view === 'raw';
