@@ -205,39 +205,70 @@ export function syncPromptStudioForCurrentMode({ apply = false } = {}) {
     }
 }
 
-export function compilePromptRecipe(recipe, sources = {}, { includeUnresolved = false, macroOptions = {}, outlets = {} } = {}) {
-    if (!recipe) return { apiType: 'chat', messages: [], text: '' };
+/**
+ * Compiles a recipe into the message array a request actually sends.
+ *
+ * Adjacent blocks that share a role are merged into one message (see
+ * appendMessage below), and `messages` records only `{role, content}` — so by
+ * the time any caller sees the result, which authored block produced which
+ * paragraph is gone. The default Director recipe's five blocks arrive as two
+ * messages this way. `trace: true` asks for that accounting back: one record
+ * per enabled block, naming its source key, its human label, its role, its own
+ * resolved text before merging, and the index of the message it landed in.
+ *
+ * The trace is built unconditionally and only *returned* under the flag. The
+ * flag gates the return shape and nothing else, so there is no second compile
+ * path that could produce different `messages`. That property is load-bearing:
+ * the Prompt Studio preview and the real request compile through this same
+ * function and must agree byte for byte, which is the only reason the preview
+ * can be trusted. It is asserted directly in
+ * tests/remodel-director-preview-trace.test.js and again, end to end, by
+ * tests/remodel-director-preview-parity.test.js (the preview side asks for a
+ * trace, the real side does not, and the two message arrays must still match).
+ */
+export function compilePromptRecipe(recipe, sources = {}, { includeUnresolved = false, macroOptions = {}, outlets = {}, trace = false } = {}) {
+    if (!recipe) return withPromptTrace({ apiType: 'chat', messages: [], text: '' }, [], trace);
     const messages = [];
+    const traceEntries = [];
+    // Returns where this content landed, or null when it contributed nothing.
+    // The return value is bookkeeping only — every mutation of `messages` below
+    // is exactly what it always was.
     const appendMessage = (role, rawContent) => {
         let content = resolvePromptOutlets(String(rawContent || ''), outlets);
         content = substituteParams(content, macroOptions).trim();
-        if (!content) return;
+        if (!content) return null;
         role = role === 'instruction' ? 'system' : role;
         const previous = messages[messages.length - 1];
-        if (previous && previous.role === role) previous.content += `\n\n${content}`;
-        else messages.push({ role, content });
+        if (previous && previous.role === role) {
+            previous.content += `\n\n${content}`;
+            return { role, content, messageIndex: messages.length - 1, merged: true };
+        }
+        messages.push({ role, content });
+        return { role, content, messageIndex: messages.length - 1, merged: false };
     };
     for (const block of recipe.blocks || []) {
         if (!block.enabled) continue;
+        const parts = [];
         if (block.kind === 'message') {
-            appendMessage(block.role, block.content || '');
-            continue;
-        }
-        const resolved = sources[block.sourceKey];
-        if (resolved && typeof resolved === 'object' && Array.isArray(resolved.messages)) {
-            for (const message of resolved.messages) {
-                appendMessage(message?.role || block.role, message?.content || '');
+            parts.push(appendMessage(block.role, block.content || ''));
+        } else {
+            const resolved = sources[block.sourceKey];
+            if (resolved && typeof resolved === 'object' && Array.isArray(resolved.messages)) {
+                for (const message of resolved.messages) {
+                    parts.push(appendMessage(message?.role || block.role, message?.content || ''));
+                }
+            } else {
+                const content = resolved == null && includeUnresolved
+                    ? `[Source: ${getSourceLabel(recipe, block.sourceKey)}]`
+                    : String(resolved || '');
+                parts.push(appendMessage(block.role, content));
             }
-            continue;
         }
-        const content = resolved == null && includeUnresolved
-            ? `[Source: ${getSourceLabel(recipe, block.sourceKey)}]`
-            : String(resolved || '');
-        appendMessage(block.role, content);
+        traceEntries.push(describeTracedBlock(recipe, block, parts.filter(Boolean)));
     }
 
     if (recipe.apiType === 'chat') {
-        return { apiType: 'chat', messages, text: '' };
+        return withPromptTrace({ apiType: 'chat', messages, text: '' }, traceEntries, trace);
     }
 
     let text = '';
@@ -259,7 +290,42 @@ export function compilePromptRecipe(recipe, sources = {}, { includeUnresolved = 
         replaceObject(power_user.context, nativeTransport.context);
         replaceObject(power_user.instruct, nativeTransport.instruct);
     }
-    return { apiType: 'text', messages, text };
+    return withPromptTrace({ apiType: 'text', messages, text }, traceEntries, trace);
+}
+
+/**
+ * The provenance record for one enabled block.
+ *
+ * `parts` are the contributions this block actually made — a source that
+ * resolves to a message array can make several, and a block whose text
+ * resolved empty makes none (messageIndex -1, and the panel shows it as
+ * having contributed nothing rather than dropping it silently).
+ */
+function describeTracedBlock(recipe, block, parts) {
+    return {
+        blockId: block.id || null,
+        kind: block.kind,
+        sourceKey: block.kind === 'source' ? block.sourceKey || null : null,
+        label: block.kind === 'source' ? getSourceLabel(recipe, block.sourceKey) : 'Authored message',
+        role: parts[0]?.role || (block.role === 'instruction' ? 'system' : block.role),
+        // The block's own resolved text, before it was concatenated into a
+        // shared message — the thing the raw dump can no longer show.
+        text: parts.map((part) => part.content).join('\n\n'),
+        messageIndex: parts.length ? parts[0].messageIndex : -1,
+        messageIndices: [...new Set(parts.map((part) => part.messageIndex))],
+        merged: Boolean(parts[0]?.merged),
+        // Every individual contribution, in the order it was appended. A block
+        // whose source resolved to several messages can straddle more than one
+        // of them, so `messageIndex` alone cannot account for the whole block;
+        // walking `parts` in block-then-part order reproduces exactly how the
+        // merged messages were assembled.
+        parts,
+    };
+}
+
+/** Attaches the trace only when the caller asked for it; never touches `messages`. */
+function withPromptTrace(compiled, traceEntries, wanted) {
+    return wanted ? { ...compiled, trace: traceEntries } : compiled;
 }
 
 function resolvePromptOutlets(content, outlets) {

@@ -653,12 +653,18 @@ function scrubReceipt(receipt) {
  * nothing (emptied, or missing its protocol block) falls back to a minimal
  * built-in prompt rather than silently producing an unusable request.
  */
-function compileDirectorPrompt(snapshot, { mechanicsEnabled = false } = {}) {
+function compileDirectorPrompt(snapshot, { mechanicsEnabled = false, trace = false } = {}) {
     const recipe = resolveDirectorRecipe();
     const sources = buildDirectionSources(snapshot, { mechanicsEnabled });
     let prompt;
+    // Per-block provenance for the preview panel. Asking for it cannot change
+    // `messages` (see compilePromptRecipe's own note), so the real send path
+    // below is compiling the identical prompt whether or not this is on.
+    let trail = [];
     if (recipe) {
-        prompt = compilePromptRecipe(recipe, sources).messages;
+        const compiled = compilePromptRecipe(recipe, sources, { trace });
+        prompt = compiled.messages;
+        trail = compiled.trace || [];
     }
     // Captured before any fallback swap: this is what the user's OWN recipe
     // compiled to, which is the number a diagnostic needs — after the swap
@@ -672,8 +678,12 @@ function compileDirectorPrompt(snapshot, { mechanicsEnabled = false } = {}) {
             ...(sources.mechanicsSkill ? [{ role: 'system', content: sources.mechanicsSkill }] : []),
             { role: 'user', content: sources.directorSnapshot },
         ];
+        // The trace describes the user's recipe, and the recipe is no longer
+        // what is being sent. Dropping it is what keeps the by-source panel
+        // from captioning the built-in fallback with the blocks it replaced.
+        trail = [];
     }
-    return { recipe, sources, prompt, usedFallback, compiledCount };
+    return { recipe, sources, prompt, usedFallback, compiledCount, trace: trail };
 }
 
 /**
@@ -690,14 +700,20 @@ function compileDirectorPrompt(snapshot, { mechanicsEnabled = false } = {}) {
  * history, the real activated lore entries, and the current composer draft as
  * the action — the best available stand-in — but the retrieved set can still
  * differ from a real pass once the user's actual next action is known.
+ *
+ * Also returns `trace`: one record per enabled recipe block, saying which of
+ * the compiled messages it merged into. Requesting it cannot change `prompt`
+ * — see compilePromptRecipe — which is what lets the preview show the merge
+ * without spending the parity that makes the preview worth showing. Empty when
+ * `usedFallback`, because then the recipe's blocks are not what is being sent.
  */
 export async function previewDirectorPrompt(scene) {
-    if (!scene) return { prompt: [], recipe: null, snapshot: null, usedFallback: false };
+    if (!scene) return { prompt: [], recipe: null, snapshot: null, usedFallback: false, trace: [] };
     const action = hooks.getComposerDraft() || '[preview only: retrieve state; do not mutate or roll]';
     const snapshot = await buildDirectionSnapshot(scene, action, [], { preview: true });
     const profile = getMechanicsProfile();
-    const { recipe, prompt, usedFallback } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled });
-    return { prompt, recipe, snapshot, usedFallback };
+    const { recipe, prompt, usedFallback, trace } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled, trace: true });
+    return { prompt, recipe, snapshot, usedFallback, trace };
 }
 
 async function requestDirectionEnvelope(scene, snapshot) {
