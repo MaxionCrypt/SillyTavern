@@ -1905,8 +1905,13 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
 }
 
 /* --- Prompt preview modal --- */
-#remodel-rp-preview-modal .remodel-rp-preview,
-#remodel-story-preview-modal .remodel-rp-preview {
+/* Scoped by class for the same reason .remodel-rp-picker-head below is: three
+   surfaces emit this shell — the Roleplay preview, the Story preview and the
+   Prompt Studio preview — and the id list named only the first two, so the
+   Prompt Studio preview rendered as an unstyled box on a scrim. The markup is
+   the contract; enumerating ids just leaves the next surface to be found by a
+   user. */
+.remodel-rp-preview {
   width: min(760px, 94vw) !important;
   max-height: 86vh !important;
   display: flex !important;
@@ -1919,10 +1924,8 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   transition: transform 0.2s ease !important;
   overflow: hidden !important;
 }
-#remodel-rp-preview-modal.remodel-rp-picker-in .remodel-rp-preview,
-#remodel-story-preview-modal.remodel-rp-picker-in .remodel-rp-preview { transform: translateY(0) !important; }
-#remodel-rp-preview-modal .remodel-rp-preview-warn,
-#remodel-story-preview-modal .remodel-rp-preview-warn {
+.remodel-rp-picker-scrim.remodel-rp-picker-in .remodel-rp-preview { transform: translateY(0) !important; }
+.remodel-rp-preview-warn {
   margin: 12px 20px 0 !important;
   padding: 8px 12px !important;
   border-radius: 8px !important;
@@ -1930,6 +1933,30 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   border: 1px solid rgba(191, 97, 106, 0.4) !important;
   color: var(--nord-aurora-red, #bf616a) !important;
   font-size: 12px !important;
+  font-family: var(--remodel-manuscript-font, Georgia) !important;
+}
+
+/* The neutral sibling of .remodel-rp-preview-warn above.
+   Red means something is wrong — a recipe that would not compile, a
+   diagnostic from the resolver. The Director's caveat is not a fault:
+   "retrieval may select differently when you actually send" is a true
+   statement about a preview that is otherwise exact, and painting it red
+   taught the user to distrust a panel that is working. Same box, same
+   rhythm, no alarm. Kept distinct from .remodel-rp-direction-note, which
+   is a plain caption shared with the reasoning summaries elsewhere. */
+.remodel-rp-preview-note {
+  /* The panel is a flex column whose scrolling child is the cards/raw body;
+     this callout wraps to two or three lines and must not be squeezed. */
+  flex: 0 0 auto !important;
+  margin: 12px 20px 0 !important;
+  padding: 8px 12px !important;
+  border-radius: 8px !important;
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(198, 164, 74, 0.24) !important;
+  border-left: 2px solid rgba(215, 200, 0, 0.4) !important;
+  color: rgba(238, 235, 245, 0.62) !important;
+  font-size: 12px !important;
+  line-height: 1.5 !important;
   font-family: var(--remodel-manuscript-font, Georgia) !important;
 }
 
@@ -2009,8 +2036,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   color: inherit !important;
   font: 11px/1.5 var(--monoFontFamily, monospace) !important;
 }
-#remodel-rp-preview-modal .remodel-rp-preview-body,
-#remodel-story-preview-modal .remodel-rp-preview-body {
+.remodel-rp-preview-body {
   margin: 16px 20px 20px !important;
   padding: 16px !important;
   overflow: auto !important;
@@ -2034,6 +2060,14 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   gap: 6px !important;
   margin: 12px 20px 0 !important;
 }
+/* `display: flex !important` above outranks the user-agent's plain
+   `[hidden] { display: none }`, so setting the `hidden` property in JS did
+   nothing at all — this control was on screen even for the Text Completion
+   Roleplay scenes that have no by-source breakdown to switch to. Same reason
+   .remodel-rp-preview-panel[hidden] exists above. It matters more now that the
+   Director panel carries the toggle too and has to keep it down on Free play
+   and on the fallback prompt. */
+#remodel-rp-preview-modal .remodel-rp-preview-views[hidden] { display: none !important; }
 /* Shared pill declarations live with .remodel-rp-preview-tabs button above;
    only this variant's smaller size differs. */
 #remodel-rp-preview-modal .remodel-rp-preview-views button { padding: 6px 13px !important; font-size: 10px !important; }
@@ -2127,6 +2161,58 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   margin: 0 !important;
   color: rgba(238, 235, 245, 0.4) !important;
   font: italic 11px/1.4 var(--remodel-serif, Georgia) !important;
+}
+
+/* --- Prompt preview: the Director's merge groups -----------------------
+   The Narrator's sources map one-to-one onto prompt identifiers, so a flat
+   list of cards says everything. A Director recipe does not: adjacent
+   same-role blocks are concatenated, and the seeded recipe's five authored
+   blocks leave as two messages. That is the single thing the raw dump
+   cannot show, so the cards are bracketed by the message they were folded
+   into — the grouping IS the information. Cards themselves reuse the
+   .remodel-rp-preview-card treatment above unchanged, so the two tabs read
+   as one component. */
+#remodel-rp-preview-modal .remodel-rp-preview-merges {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 14px !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-merge {
+  padding-left: 10px !important;
+  border-left: 2px solid rgba(215, 200, 0, 0.28) !important;
+}
+/* Blocks that resolved to nothing are grouped too, but they were not sent —
+   the rail loses its gold so the group cannot be mistaken for a message. */
+#remodel-rp-preview-modal .remodel-rp-preview-merge.is-unsent {
+  border-left-color: rgba(255, 255, 255, 0.1) !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-merge-head {
+  display: flex !important;
+  align-items: baseline !important;
+  flex-wrap: wrap !important;
+  gap: 9px !important;
+  margin-bottom: 7px !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-merge-index {
+  color: #f2db42 !important;
+  font: 11px/1.3 var(--remodel-serif, Georgia) !important;
+  letter-spacing: 0.12em !important;
+  text-transform: uppercase !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-merge.is-unsent .remodel-rp-preview-merge-index {
+  color: rgba(238, 235, 245, 0.45) !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-merge-role {
+  padding: 2px 7px !important;
+  border: 1px solid rgba(215, 200, 0, 0.28) !important;
+  border-radius: 999px !important;
+  color: rgba(242, 219, 66, 0.82) !important;
+  font: 8px/1.3 var(--remodel-serif, Georgia) !important;
+  letter-spacing: 0.14em !important;
+}
+#remodel-rp-preview-modal .remodel-rp-preview-merge-note {
+  color: rgba(238, 235, 245, 0.4) !important;
+  font: 10px/1.4 var(--monoFontFamily, monospace) !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-action-row {
@@ -2883,7 +2969,16 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
 }
 #remodel-rp-cast-picker.remodel-rp-picker-in .remodel-rp-picker { transform: translateY(0) !important; }
 
-#remodel-rp-cast-picker .remodel-rp-picker-head {
+/* Scoped by class, not by id. Five surfaces emit this exact header markup —
+   the cast picker, the duet picker, the roleplay prompt preview, the story
+   prompt preview and the Prompt Studio preview — and under the old
+   #remodel-rp-cast-picker scope only the first one got any of it, so the
+   other four rendered their title, hint and × completely unstyled. The
+   markup is the contract here; one definition serves all of it, and a sixth
+   surface using the same header will be styled by existing.
+   The .remodel-rp-picker-scrim rule above is scoped the same way and for the
+   same reason. */
+.remodel-rp-picker-head {
   display: flex !important;
   align-items: flex-start !important;
   justify-content: space-between !important;
@@ -2891,19 +2986,19 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
   padding: 20px 22px 14px !important;
   border-bottom: 1px solid var(--gold-faint, rgba(198, 164, 74, 0.14)) !important;
 }
-#remodel-rp-cast-picker .remodel-rp-picker-title {
+.remodel-rp-picker-title {
   font-family: var(--remodel-serif, 'Cinzel') !important;
   font-size: 18px !important;
   letter-spacing: 0.04em !important;
   color: var(--tarot-gold-bright, #f4e7c4) !important;
 }
-#remodel-rp-cast-picker .remodel-rp-picker-hint {
+.remodel-rp-picker-hint {
   margin-top: 4px !important;
   font-size: 12.5px !important;
   color: rgba(238, 235, 245, 0.5) !important;
   font-family: var(--remodel-manuscript-font, Georgia) !important;
 }
-#remodel-rp-cast-picker .remodel-rp-picker-x {
+.remodel-rp-picker-x {
   appearance: none !important;
   background: transparent !important;
   border: none !important;
@@ -2913,7 +3008,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
   cursor: pointer !important;
   padding: 0 4px !important;
 }
-#remodel-rp-cast-picker .remodel-rp-picker-x:hover { color: var(--tarot-gold-bright, #f4e7c4) !important; }
+.remodel-rp-picker-x:hover { color: var(--tarot-gold-bright, #f4e7c4) !important; }
 
 #remodel-rp-cast-picker .remodel-rp-picker-search {
   margin: 14px 22px 4px !important;
