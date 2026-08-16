@@ -1,16 +1,40 @@
-import { buildDirectorNotesSource, formatDirectorNotesPrompt } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
+import { readFileSync } from 'node:fs';
+import {
+    DIRECTION_PROTOCOL,
+    buildDirectorNotesSource,
+    clearLiveDirectionFailure,
+    formatDirectorNotesPrompt,
+    getLiveDirectionRun,
+    initLiveDirection,
+    requestNextDirection,
+    setLiveDirectionTestAdapters,
+    stopLiveDirection,
+} from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { appendDirectorEntries, readNarratorEntries } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-notes-store.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/prompt-studio.js';
 import {
     PROMPT_SOURCE_DEFINITIONS,
+    createBlocksFromNativeChat,
     createPromptRecipe,
     getPromptStudioStore,
     normalizeRecipe,
     setActivePromptRecipe,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/prompt-studio-store.js';
-import { __setExtensionSettings } from './util/st-context-stub.js';
+import { __emit, __getChat, __setExtensionSettings } from './util/st-context-stub.js';
+import { __clearExtensionPromptCalls, __getExtensionPrompt, __setOnlineStatus } from './util/script-stub.js';
 
-beforeEach(() => { __setExtensionSettings({}); });
+// generateDirectedPerformer (reached only by the lifecycle test near the
+// bottom of this file) clears SillyTavern's native composer before handing
+// generation to core, touching the DOM once. Jest's environment is `node`;
+// these are the two bindings it reaches for. Same stubs as
+// remodel-direction-lifecycle.test.js, which exercises the same function.
+globalThis.document ??= { getElementById: () => null };
+globalThis.HTMLTextAreaElement ??= class HTMLTextAreaElement {};
+
+beforeEach(() => {
+    __setExtensionSettings({});
+    __clearExtensionPromptCalls();
+});
 
 // --- buildDirectorNotesSource: the brief's own fixtures, verbatim -----------
 
@@ -154,4 +178,171 @@ test('formatDirectorNotesPrompt renders nothing when the active recipe carries n
     setActivePromptRecipe('roleplay', 'chat', recipe.id);
     appendDirectorEntries('tl-notes-4', { sceneId: 's4', turn: 1, entries: [{ type: 'note', text: 'would render if enabled' }] });
     expect(formatDirectorNotesPrompt({ id: 's4', timelineId: 'tl-notes-4' })).toBe('');
+});
+
+// Fix round 1, Important #1: the block-enabled toggle is visible in Prompt
+// Studio (the per-block eye icon) and must not be the one control on this
+// source that silently does nothing.
+test('formatDirectorNotesPrompt renders nothing when the directorNotes block is disabled, not just when it is deleted', () => {
+    const recipe = createPromptRecipe({
+        name: 'RP disabled notes', mode: 'roleplay', apiType: 'chat',
+        blocks: [{ kind: 'source', sourceKey: 'directorNotes', role: 'system', enabled: false, settings: { depth: 5 } }],
+    });
+    setActivePromptRecipe('roleplay', 'chat', recipe.id);
+    appendDirectorEntries('tl-notes-5', { sceneId: 's5', turn: 1, entries: [{ type: 'note', text: 'should be off' }] });
+    expect(formatDirectorNotesPrompt({ id: 's5', timelineId: 'tl-notes-5' })).toBe('');
+});
+
+// --- Fix round 1: the delivery call and the reverse mapping, both covered --
+
+// Important #2: deleting the setExtensionPrompt registration in
+// timeline-spine.js (the line that is Finding 1's actual fix) left the suite
+// at 136/136 green. timeline-spine.js is not import-testable (it touches the
+// DOM at module scope through its many downstream imports), so this reads it
+// as text: every Remodel-owned native source must be registered as a real
+// setExtensionPrompt(...) call in the idle-state mirror (renderRoleplayScene).
+// Generic over PROMPT_SOURCE_DEFINITIONS.roleplay rather than hardcoding
+// 'remodel_director_notes', so the next Remodel-owned source is covered by
+// construction, not by remembering to extend this test. Checked against
+// timeline-spine.js ALONE — not merged with live-direction.js's text — so
+// deleting either file's registration is individually caught: the fix-round
+// review's mutation (MR-B) deleted only the timeline-spine.js line, and a
+// combined-text check would have missed that because live-direction.js's own
+// generation-seam registration (Critical 1's fix, added this round) would
+// still have matched.
+test('every Remodel-owned native source is registered in the idle-state mirror (timeline-spine.js)', () => {
+    const timelineSpineSource = readFileSync(
+        new URL('../public/scripts/extensions/third-party/SillyTavern-Remodel/timeline-spine.js', import.meta.url),
+        'utf8',
+    );
+    const remodelSources = PROMPT_SOURCE_DEFINITIONS.roleplay.filter((source) => String(source.nativeIdentifier || '').startsWith('remodel_'));
+    expect(remodelSources.length).toBeGreaterThan(0);
+    for (const source of remodelSources) {
+        expect(timelineSpineSource).toMatch(new RegExp(`setExtensionPrompt\\(\\s*['"\`]${source.nativeIdentifier}['"\`]`));
+    }
+});
+
+// Critical 1's fix specifically: the generation-seam registration in
+// live-direction.js (added this round, alongside the idle mirror above) must
+// also exist as literal source text, independent of the behavioural lifecycle
+// test further down — a textual regression here should fail fast without
+// needing the full lifecycle harness to diagnose it.
+test('directorNotes is also registered at the generation seam (live-direction.js), not only the idle mirror', () => {
+    const liveDirectionSource = readFileSync(
+        new URL('../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js', import.meta.url),
+        'utf8',
+    );
+    expect(liveDirectionSource).toMatch(/setExtensionPrompt\(\s*['"`]remodel_director_notes['"`]/);
+});
+
+// Important #3: deleting the reverse mapping (nativeMarkerToSource's
+// remodel_director_notes -> directorNotes entry) also left the suite at
+// 136/136 green, and its failure mode is silent: a recipe re-imported from
+// native settings would key the block by the raw identifier instead of the
+// source key, and formatDirectorNotesPrompt's sourceKey === 'directorNotes'
+// lookup would miss it with no error. Asserts the actual round trip through
+// the exported entry point, not the internal map.
+test('a recipe re-imported from native settings resolves remodel_director_notes back to the directorNotes source key', () => {
+    const blocks = createBlocksFromNativeChat(
+        [{ identifier: 'remodel_director_notes', marker: true, system_prompt: true }],
+        [{ character_id: '100001', order: [{ identifier: 'remodel_director_notes', enabled: true }] }],
+    );
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].sourceKey).toBe('directorNotes');
+});
+
+// --- Fix round 1, Critical: the notes must arrive the SAME turn they were
+// written, not the render before it ------------------------------------------
+//
+// renderRoleplayScene's mirror (timeline-spine.js) only runs on UI and
+// post-generation events — nothing calls it between the Director's entries
+// landing in the store and the Narrator's context.generate(). This drives
+// the real directed-turn lifecycle (the same harness
+// remodel-direction-lifecycle.test.js uses) with a stubbed Director call that
+// appends a fresh entry — standing in for Task 6's eventual
+// parseDirectorReply -> appendDirectorEntries wiring — and inspects the
+// script-stub's recorded setExtensionPrompt calls to prove the value the
+// generation actually saw included that entry.
+
+const lifecycleScene = {
+    id: 'scene-notes-lifecycle',
+    timelineId: 'timeline-notes-lifecycle',
+    title: 'Notes Lifecycle Scene',
+    mode: 'roleplay',
+    staging: 'directed',
+    liveDirection: { enabled: true, directorRef: null, narratorRef: null, pacing: 'instant', autoplay: false },
+};
+const lifecycleCast = [{ ref: { kind: 'character', id: 'char-narrator', label: 'Wren' }, label: 'Wren', characterId: 0 }];
+
+function lifecycleDirectionEnvelope() {
+    return {
+        protocol: DIRECTION_PROTOCOL,
+        instruction: 'Wren answers Teo.',
+        flow: { continueAfter: false, hardPauseAfter: true },
+        requests: [],
+    };
+}
+
+async function speakInLifecycle() {
+    const chat = __getChat();
+    chat.push({ name: 'Wren', is_user: false, mes: 'Wren answers.', extra: {} });
+    await __emit('MESSAGE_RECEIVED', chat.length - 1);
+}
+
+/** Poll rather than sleep: the reveal loop chains through its own timers (see remodel-direction-lifecycle.test.js's identical helper). */
+async function untilLifecycle(predicate, timeoutMs = 3000) {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+        if (Date.now() > deadline) return false;
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    return true;
+}
+
+afterEach(async () => {
+    await stopLiveDirection();
+    clearLiveDirectionFailure();
+    setLiveDirectionTestAdapters(null);
+});
+
+test('an entry appended during the Director call reaches the mirror the SAME turn, before the Narrator generates', async () => {
+    const recipe = createPromptRecipe({
+        name: 'RP lifecycle', mode: 'roleplay', apiType: 'chat',
+        blocks: [{ kind: 'source', sourceKey: 'directorNotes', role: 'system', enabled: true, settings: { depth: 5 } }],
+    });
+    setActivePromptRecipe('roleplay', 'chat', recipe.id);
+    __setOnlineStatus('connected');
+
+    initLiveDirection({
+        getActiveScene: () => lifecycleScene,
+        getCast: () => lifecycleCast,
+        getPersona: () => null,
+        ensureSceneReady: async () => true,
+        getComposerDraft: () => '',
+        clearComposer: () => {},
+        sendNormally: () => {},
+        onStateChange: () => {},
+        onSettled: () => {},
+        onFailure: () => {},
+    });
+    setLiveDirectionTestAdapters({
+        // Stands in for Task 6's streamed reply -> parseDirectorReply ->
+        // appendDirectorEntries wiring: by the time this resolves, this
+        // turn's entries are in the store — exactly the moment Critical 1
+        // was about.
+        requestDirection: async () => {
+            appendDirectorEntries(lifecycleScene.timelineId, {
+                sceneId: lifecycleScene.id, turn: 1,
+                entries: [{ type: 'ruling', text: 'Teo finally answers Eli.' }],
+            });
+            return lifecycleDirectionEnvelope();
+        },
+        generatePerformer: speakInLifecycle,
+    });
+
+    await requestNextDirection(lifecycleScene);
+    expect(await untilLifecycle(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    expect(__getExtensionPrompt('remodel_director_notes')).toContain('Teo finally answers Eli.');
 });

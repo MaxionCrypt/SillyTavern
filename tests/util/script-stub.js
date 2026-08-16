@@ -62,7 +62,30 @@ export function __setOnlineStatus(value) {
 
 export async function sendMessageAsUser() {}
 
-export function setExtensionPrompt() {}
+// Recorded rather than a pure no-op so a test can assert not just THAT a
+// caller registered a given key, but WHAT it set it to and in what order —
+// load-bearing for proving a value was re-mirrored at the right moment
+// relative to some other call, not merely that it was set at some point.
+let extensionPromptCalls = [];
+
+export function setExtensionPrompt(key, value, ...rest) {
+    extensionPromptCalls.push({ key, value, args: rest });
+}
+
+/** Test-only: the most recently set value for `key`, or undefined if it was never set. */
+export function __getExtensionPrompt(key) {
+    const calls = extensionPromptCalls.filter((call) => call.key === key);
+    return calls.length ? calls[calls.length - 1].value : undefined;
+}
+
+/** Test-only: every recorded call, in order — for asserting relative timing/ordering. */
+export function __getExtensionPromptCalls() {
+    return [...extensionPromptCalls];
+}
+
+export function __clearExtensionPromptCalls() {
+    extensionPromptCalls = [];
+}
 
 // variables-vector.js's binding, for its cache-key request headers.
 export function getRequestHeaders() { return {}; }

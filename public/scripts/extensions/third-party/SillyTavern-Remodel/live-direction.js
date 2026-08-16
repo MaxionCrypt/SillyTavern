@@ -845,6 +845,16 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     releaseDirectionLock(token);
     notifyState();
     setExtensionPrompt(DIRECTION_PROMPT_KEY, movementPrompt, extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM, () => activeRun?.directionId === envelope.directionId);
+    // Re-mirror the Director's Notes HERE, at the generation seam — not only
+    // from renderRoleplayScene's idle-state mirror (which stays in place for
+    // when no generation is in flight). renderRoleplayScene only runs on UI
+    // and post-generation events; nothing calls it in the window between this
+    // turn's entries landing in the store (appendDirectorEntries) and
+    // context.generate() a few lines below. Without this call the Narrator
+    // would always read last turn's notebook and never the one just written
+    // for it — reproducing, from outside, the exact "Narrator ignoring the
+    // direction" symptom this whole rework exists to fix.
+    setExtensionPrompt('remodel_director_notes', formatDirectorNotesPrompt(scene), extension_prompt_types.IN_CHAT, 1, false, extension_prompt_roles.SYSTEM, () => hooks.getActiveScene()?.id === scene.id);
     // The user message was inserted explicitly above. Native normal
     // generation also reads #send_textarea and would send any stale draft a
     // second time, producing a duplicate user line and a second response.
@@ -1823,12 +1833,15 @@ function describeNotebookEntry(entry) {
  *
  * No directorNotes block on the recipe (removed by the user, or a recipe
  * imported from native settings that never carried one) means the Narrator
- * gets no notes — an explicit opt-out, not a fallback default.
+ * gets no notes — an explicit opt-out, not a fallback default. A block that
+ * is merely disabled (Prompt Studio's per-block eye toggle) is the same
+ * opt-out: the toggle is a visible, discoverable control and must not be the
+ * one thing on this block that silently does nothing.
  */
 export function formatDirectorNotesPrompt(scene) {
     if (!scene?.timelineId) return '';
     const recipe = getCurrentPromptStudioRecipe('roleplay', 'chat');
-    const block = (recipe?.blocks || []).find((entry) => entry.kind === 'source' && entry.sourceKey === 'directorNotes');
+    const block = (recipe?.blocks || []).find((entry) => entry.kind === 'source' && entry.sourceKey === 'directorNotes' && entry.enabled !== false);
     if (!block) return '';
     const entries = readNarratorEntries(scene.timelineId, { sceneId: scene.id, depth: block.settings?.depth });
     return buildDirectorNotesSource(entries);
