@@ -643,17 +643,36 @@ test('a take that stored entries and then failed does not bind the turn that fol
     expect(prompt).not.toContain('A ruling from a pass that produced nothing.');
 });
 
-test('a take that reached the performer keeps its notes, so a retry can still read them', async () => {
-    // The boundary is "the performer was asked", not "a message survived".
-    // failEmptyVisibleRun re-runs this same turn against the same notes, so a
-    // generation that produced nothing must NOT withhold them.
-    streamDirector(['[ruling] Asked, and answered.']);
-    await requestNextDirection(scene);
-    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+test('a take whose generation failed keeps its notes, because the performer was already asked', async () => {
+    // The boundary is "the performer was asked", not "a message survived", and
+    // this is the case that decides between them: generation itself fails
+    // AFTER the turn went live.
+    //
+    // Withholding here would be defensible on the letter of "produced
+    // nothing" — and would break the more common repair. failEmptyVisibleRun
+    // re-runs THIS turn against THESE notes when a provider returns empty
+    // content (measured repeatedly in one recorded session), and it runs after
+    // beginDirection has already returned. Notes withheld here would make that
+    // retry generate with no direction at all, silently — the exact failure
+    // this rework exists to end. A stale turn from a hard generation failure
+    // is the cheaper mistake, and the user sees a Retry button for it.
+    setLiveDirectionTestAdapters({
+        generatePerformer: async () => { throw new Error('the native group generator is still busy'); },
+    });
+    __setOpenAIRequestHandler(() => async function* streamData() {
+        yield { text: '[ruling] Asked, and the generator failed.', state: { reasoning: '' } };
+    });
+    const consoleError = console.error;
+    console.error = () => {};
+    try {
+        await requestNextDirection(scene);
+    } finally {
+        console.error = consoleError;
+    }
 
+    expect(__getChat()).toHaveLength(0);
     expect(notebook().map((entry) => entry.abandoned)).toEqual([false]);
     expect(journalEntries('notebook.abandoned')).toHaveLength(0);
-    expect(performerPrompt()).toContain('Asked, and answered.');
 });
 
 test('a cancelled take does not consume a slot in the Narrator depth window', () => {
