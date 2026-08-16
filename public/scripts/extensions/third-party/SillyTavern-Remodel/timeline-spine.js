@@ -319,11 +319,10 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
         onStateChange: refreshLiveDirectionChrome,
         onSettled: () => { setRoleplayGenerating(false); renderRoleplayScene(); },
         onFailure: showLiveDirectionFailure,
-        // Not called by anything yet — see updateDirectionStreamCard's own
-        // comment. Registered here so the receiving end is ready the moment
-        // live-direction.js forwards a chunk; initLiveDirection folds any
-        // function-valued option into its hooks object regardless of whether
-        // its own code currently invokes it.
+        // Called on EVERY chunk of the Director's streamed reply —
+        // beginDirection's onChunk closure forwards each one unconditionally
+        // (live-direction.js). This is the receiving half; do not add a
+        // second forward, or every chunk arrives twice.
         onDirectorChunk: updateDirectionStreamCard,
     });
     // Initial extension startup can occur after core has already loaded a
@@ -8891,8 +8890,10 @@ async function fillDirectorPreviewPanel(panel, scene, directed) {
  * The Narrator's own per-source figures come from core's promptManager
  * tokenHandler, keyed by native identifier — which does not apply to the
  * Director or Story previews at all: neither one populates the native prompt
- * manager (the Director sends its own message array through generateRawData;
- * the Story preview compiles through compilePromptRecipe directly). The only
+ * manager (the Director streams its own message array through
+ * sendOpenAIRequest — generateRawData and its schema were deleted with the
+ * envelope; the Story preview compiles through compilePromptRecipe
+ * directly). The only
  * counter reachable from either path is core's own tokenizer. Ask it; if it
  * is missing or throws, fall back to character counts for the WHOLE set and
  * say so in the label, rather than printing characters under a "tok" heading
@@ -9282,18 +9283,17 @@ function ensureDirectionStreamCard(root) {
  * exactly — `{ text, reasoning }`, cumulative, same as
  * updateStoryStreamPreview reads.
  *
- * KNOWN GAP, disclosed in the task report: nothing currently calls this with
- * real chunk text. live-direction.js's requestDirection already collects
- * `{text, reasoning}` on every chunk (its internal `collect` closure), but
- * beginDirection's onChunk callback forwards only the FIRST chunk to a debug
- * journal entry — it never reaches a UI hook, and that forwarding line lives
- * in live-direction.js, outside this task's file scope. This function and
- * the hook it is registered under are the ready-to-receive half of that
- * wiring; the other half is a single line inside beginDirection's onChunk
- * closure. Until it lands, the shell above appears at the start of the call
- * (a real improvement — today nothing Director-specific shows until the
- * whole pass completes) but its text stays empty for the pass's full
- * duration, same as before.
+ * Fed for real: `beginDirection`'s onChunk closure calls
+ * `hooks.onDirectorChunk(update)` on every chunk, unconditionally (the
+ * once-per-pass journal entry beside it is a separate, first-chunk-only
+ * record). So this fills live for the whole 101-202s of a Director call, and
+ * the shell `ensureDirectionStreamCard` opened is not an empty placeholder.
+ *
+ * Returns silently when no shell is open. That is not a gap either: the shell
+ * is opened by `refreshLiveDirectionChrome`/`renderRoleplayScene` whenever the
+ * pass is in the Directing state (see `resolveDirectionChromeMode`), and a
+ * chunk arriving when the Roleplay workspace is not on screen has nowhere to
+ * go by definition.
  */
 function updateDirectionStreamCard(update) {
     const live = getRealRoleplayRoot()?.querySelector('[data-remodel-direction-live]');
