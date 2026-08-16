@@ -362,8 +362,10 @@ export function renderPromptStudioWorkspace() {
                     </button>
                 </div>
                 <div class="remodel-prompt-matrix" aria-label="Prompt category">
-                    ${renderFilterGroup('mode', PROMPT_MODES, state.mode)}
-                    ${renderFilterGroup('api', PROMPT_API_TYPES, state.apiType)}
+                    ${renderFilterGroup('mode', PROMPT_MODES, state.mode, 'Mode')}
+                    ${renderFilterGroup('api', PROMPT_API_TYPES, state.apiType, 'Transport', state.mode === 'director'
+                        ? { text: 'Director recipes are Chat Completion only' }
+                        : null)}
                 </div>
                 <label class="remodel-prompt-search">
                     <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
@@ -380,11 +382,19 @@ export function renderPromptStudioWorkspace() {
     `;
 }
 
-function renderFilterGroup(kind, values, active) {
-    return `<div class="remodel-prompt-filter-group">${values.map((value) => `
-        <button type="button" class="${active === value ? 'is-active' : ''}" data-remodel-prompt-filter="${kind}" data-value="${escapeAttribute(value)}">
+function renderFilterGroup(kind, values, active, groupLabel, disabledValues) {
+    const labelId = `remodel-prompt-filter-${kind}-label`;
+    return `<div class="remodel-prompt-filter-block">
+        <span class="remodel-prompt-filter-label" id="${labelId}">${escapeHtml(groupLabel)}</span>
+        <div class="remodel-prompt-filter-group" role="group" aria-labelledby="${labelId}">${values.map((value) => {
+            const isActive = active === value;
+            const disabledReason = disabledValues?.[value];
+            return `
+        <button type="button" class="${isActive ? 'is-active' : ''}" data-remodel-prompt-filter="${kind}" data-value="${escapeAttribute(value)}" aria-pressed="${isActive ? 'true' : 'false'}"${disabledReason ? ` disabled title="${escapeAttribute(disabledReason)}"` : ''}>
             ${escapeHtml(value === 'chat' ? 'Chat Completion' : value === 'text' ? 'Text Completion' : capitalize(value))}
-        </button>`).join('')}</div>`;
+        </button>`;
+        }).join('')}</div>
+    </div>`;
 }
 
 function renderRecipeRow(recipe) {
@@ -547,8 +557,21 @@ function bindPromptStudioEvents() {
 
         const filter = target.closest('[data-remodel-prompt-filter]');
         if (filter) {
+            // Belt-and-suspenders alongside the `disabled` attribute rendered
+            // by renderFilterGroup: a disabled chip should never register a
+            // filter change even if something re-enables the pointer.
+            if (filter.disabled) return;
             const value = filter.dataset.value;
-            if (filter.dataset.remodelPromptFilter === 'mode' && PROMPT_MODES.includes(value)) state.mode = value;
+            if (filter.dataset.remodelPromptFilter === 'mode' && PROMPT_MODES.includes(value)) {
+                state.mode = value;
+                // Director recipes are Chat Completion only (enforced in the
+                // data model — see normalizeRecipe in prompt-studio-store.js).
+                // Switching into director mode while the Transport filter is
+                // still on 'text' would leave it pointing at a filter
+                // combination with no matching recipes, so pull it back to
+                // 'chat' the same way the data model would.
+                if (state.mode === 'director' && state.apiType === 'text') state.apiType = 'chat';
+            }
             if (filter.dataset.remodelPromptFilter === 'api' && PROMPT_API_TYPES.includes(value)) state.apiType = value;
             ensureSelectedRecipe(true);
             state.requestRender();

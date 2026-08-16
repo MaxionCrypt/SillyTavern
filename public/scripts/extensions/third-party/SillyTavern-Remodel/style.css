@@ -6314,27 +6314,61 @@ body.remodel-storydoc-active .remodel-storydoc-check input {
   border-radius:50%;
 }
 .remodel-prompt-matrix { padding:0 18px 12px; }
+/* Two independent decisions (Mode, Transport), each its own labelled group of
+   pills. The pill count inside a group is never assumed — flex-wrap lays out
+   however many PROMPT_MODES/PROMPT_API_TYPES hands it, unlike the old fixed
+   two-column grid this replaces (see commit dd650e7a5 for the same defect in
+   the rail panels). */
+.remodel-prompt-filter-block { margin-top:14px; }
+.remodel-prompt-filter-block:first-child { margin-top:6px; }
+.remodel-prompt-filter-label {
+  display:block;
+  margin:0 0 6px;
+  color:rgba(238,235,245,.42);
+  font:9px/1.2 var(--remodel-serif,Georgia);
+  letter-spacing:.16em;
+  text-transform:uppercase;
+}
 .remodel-prompt-filter-group {
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:5px;
-  margin-top:6px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
 }
 .remodel-prompt-filter-group button {
   min-width:0;
-  padding:8px 5px;
-  border:1px solid rgba(255,255,255,.08);
+  padding:7px 13px;
+  border:1px solid rgba(255,255,255,.1);
+  border-radius:999px;
   background:rgba(255,255,255,.025);
-  color:#9997a2;
+  color:rgba(238,235,245,.62);
   font:10px/1 var(--remodel-serif,Georgia);
   letter-spacing:.1em;
   text-transform:uppercase;
   cursor:pointer;
+  transition:border-color .16s ease,background .16s ease,color .16s ease,box-shadow .16s ease;
+}
+.remodel-prompt-filter-group button:hover:not(:disabled) {
+  border-color:rgba(215,200,0,.4);
+  color:#f5e94e;
+  background:rgba(215,200,0,.06);
+}
+.remodel-prompt-filter-group button:focus-visible {
+  outline:2px solid rgba(241,223,24,.85);
+  outline-offset:2px;
 }
 .remodel-prompt-filter-group button.is-active {
-  border-color:rgba(215,200,0,.52);
-  color:#f5e94e;
-  background:rgba(215,200,0,.08);
+  border-color:rgba(235,219,35,.66);
+  color:#fff6a1;
+  background:rgba(215,200,0,.14);
+}
+.remodel-prompt-filter-group button.is-active:hover:not(:disabled) {
+  border-color:rgba(235,219,35,.85);
+  background:rgba(215,200,0,.19);
+}
+.remodel-prompt-filter-group button:disabled {
+  opacity:.35;
+  cursor:not-allowed;
+  color:#635f68;
 }
 .remodel-prompt-search {
   display:flex;
@@ -6800,6 +6834,8 @@ body.remodel-storydoc-active .remodel-storydoc-check input {
   .remodel-prompt-library-head { padding:16px 18px 11px; }
   .remodel-prompt-library h2 { font-size:18px; }
   .remodel-prompt-matrix { display:grid; grid-template-columns:1fr 1fr; gap:6px; padding:0 18px 10px; }
+  .remodel-prompt-filter-block { margin-top:0; }
+  .remodel-prompt-filter-label { margin-bottom:3px; }
   .remodel-prompt-search { margin-bottom:9px; }
   .remodel-prompt-recipe-list { display:flex; gap:6px; padding:0 18px 10px; overflow:auto hidden; }
   .remodel-prompt-recipe-row { min-width:190px; margin:0; }
