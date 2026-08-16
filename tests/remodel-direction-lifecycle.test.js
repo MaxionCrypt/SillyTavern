@@ -33,6 +33,7 @@ import { createTimelineGoal, linkGoalToScene } from '../public/scripts/extension
 import { createArc, createScene, createTimeline, getScene, updateScene } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/timeline-state.js';
 import { createPromptRecipe, setActivePromptRecipe } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/prompt-studio-store.js';
 import { appendDirectorEntries, readAllEntriesForOwner, readNarratorEntries } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-notes-store.js';
+import { buildDirectionSources } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/direction-sources.js';
 import { __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
 import { __setOnlineStatus, __getExtensionPrompt, __clearExtensionPromptCalls } from './util/script-stub.js';
 import { __setOpenAIRequestHandler } from './util/openai-stub.js';
@@ -340,6 +341,70 @@ test('the saved record stores the address book once and keeps the Goal authority
     // Recovery rebuilt this as [], so a request applied after a reload lost
     // the user's attached Goal attempts and was deferred for review instead.
     expect(saved.authorizedGoalIds).toEqual(['goal-abc']);
+});
+
+// --------------------------------------- posting the user's message first
+//
+// beginDirection now calls sendMessageAsUser before building the Director's
+// snapshot, not after the round trip returns — a real Director call has
+// measured 101-202s, during which the user's own words used to be nowhere
+// on screen. The trap: acceptedHistory is built from context.chat, so
+// without excluding the newest entry the same text would render twice in
+// the Director's prompt (once via STORY SO FAR, once via CURRENT ACTION).
+//
+// Both assertions below are on what the Director actually receives / when
+// it receives it — not on internal bookkeeping like `insertUser` or
+// `storedTurn`. The second one in particular captures state at the moment
+// the (stubbed) Director is called, not after the run settles: this branch
+// has already shipped a test whose named ordering property survived the
+// ordering being inverted, precisely because it only checked state once
+// everything had finished.
+
+/**
+ * Captures the snapshot handed to the (stubbed) Director for one submitted
+ * action, and renders it through the real, pure buildDirectionSources —
+ * the same function direction-sources.js's own tests exercise — so an
+ * assertion here is about the compiled text the Director reads, not about
+ * some intermediate shape nobody actually sends anywhere.
+ */
+async function capturedDirectorSourcesForAction(actionText) {
+    let capturedSnapshot = null;
+    setLiveDirectionTestAdapters({
+        requestDirection: async ({ snapshot }) => {
+            capturedSnapshot = snapshot;
+            return directorReply();
+        },
+        generatePerformer: speak,
+    });
+    await submitDirectedRoleplay({ scene, text: actionText });
+    await until(() => getLiveDirectionRun()?.state === 'Waiting for you');
+    return buildDirectionSources(capturedSnapshot, { mechanicsEnabled: true });
+}
+
+test("the user's action appears exactly once in the Director's prompt", async () => {
+    const sources = await capturedDirectorSourcesForAction('I push the door open.');
+    const occurrences = sources.directorSnapshot.split('I push the door open.').length - 1;
+    expect(occurrences).toBe(1);
+});
+
+test("the user's message is in the chat before the Director is called", async () => {
+    // Captured from INSIDE the (stubbed) Director call, which is the
+    // earliest point a test can stand in for "the Director stream begins" —
+    // not by inspecting the chat after submitDirectedRoleplay resolves,
+    // which would prove nothing about ordering.
+    let chatAtDirectorCall = null;
+    setLiveDirectionTestAdapters({
+        requestDirection: async () => {
+            chatAtDirectorCall = __getChat().map((message) => ({ is_user: message.is_user, mes: message.mes }));
+            return directorReply();
+        },
+        generatePerformer: speak,
+    });
+
+    await submitDirectedRoleplay({ scene, text: 'I push the door open.' });
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    expect(chatAtDirectorCall).toEqual([{ is_user: true, mes: 'I push the door open.' }]);
 });
 
 // --------------------------------------------------------------- regenerate

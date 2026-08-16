@@ -532,7 +532,28 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         const ready = await hooks.ensureSceneReady(scene);
         if (!ready) throw new Error('The native chat linked to this Scene could not be loaded.');
         if (token.aborted) return abandonPass(token, 'scene-ready');
-        const snapshot = await buildDirectionSnapshot(scene, action, authorizedGoalIds);
+        // Posted here, before the Director is asked anything, rather than
+        // after the round trip returns — a real request that has measured
+        // 101-202s, during which the user's own words used to be nowhere on
+        // screen. buildDirectionSnapshot is told to leave this same entry out
+        // of acceptedHistory below: it is still the newest thing in
+        // context.chat, but the Director must see it exactly once, under
+        // CURRENT ACTION (direction-sources.js's describeSnapshot), not once
+        // there and once more inside STORY SO FAR. `action` stays the single
+        // source handed to the World Info scan and buildMechanicalSnapshot
+        // just below, so neither scores it twice either.
+        //
+        // Once this runs there is no undoing it on a later failure in this
+        // same pass: nothing downstream removes the message, so it stays in
+        // the chat even if the Director call or the performer that follows it
+        // never succeeds — including on a retry, which calls back in here
+        // with the same `insertUser: true` and would post it a second time.
+        if (insertUser) {
+            await sendMessageAsUser(action);
+            hooks.clearComposer();
+        }
+        if (token.aborted) return abandonPass(token, 'insert-user');
+        const snapshot = await buildDirectionSnapshot(scene, action, authorizedGoalIds, { excludeNewestFromHistory: insertUser });
         journal('snapshot', {
             passId: token.id,
             castCount: snapshot.cast.length,
@@ -659,10 +680,6 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         normalized.addressBook = snapshot.mechanics.addressBook;
         normalized.authorizedGoalIds = authorizedGoalIds;
         if (token.aborted) return abandonPass(token, 'normalized');
-        if (insertUser) {
-            await sendMessageAsUser(action);
-            hooks.clearComposer();
-        }
         // Set BEFORE the call, not after: from here the performer has been
         // asked, so the turn is live even if generation then fails. The
         // empty-response retry path (failEmptyVisibleRun) re-runs this same
@@ -707,12 +724,23 @@ function abandonPass(token, stage) {
     return false;
 }
 
-async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { preview = false } = {}) {
+async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { preview = false, excludeNewestFromHistory = false } = {}) {
     const context = getContext();
     const cast = hooks.getCast() || [];
     const persona = hooks.getPersona() || null;
-    const history = (context.chat || []).slice(-40).map((message, index) => ({
-        id: context.chat.length - Math.min(40, context.chat.length) + index,
+    // beginDirection now posts the user's message to context.chat BEFORE
+    // calling this function, so on a real (non-preview) user-initiated pass
+    // it is already the newest entry here. `excludeNewestFromHistory` drops
+    // that one entry from the window this function slices — not from
+    // context.chat itself — so it is read back into the Director's prompt
+    // exactly once, as `action` (CURRENT ACTION), rather than a second time
+    // here (STORY SO FAR). Computing `id` against this trimmed length rather
+    // than against context.chat.length is what keeps every other message's
+    // id identical to what it would have been without the insertion.
+    const rawChat = context.chat || [];
+    const effectiveChat = excludeNewestFromHistory ? rawChat.slice(0, -1) : rawChat;
+    const history = effectiveChat.slice(-40).map((message, index) => ({
+        id: effectiveChat.length - Math.min(40, effectiveChat.length) + index,
         role: message.is_user ? 'user' : 'assistant',
         name: message.name || '',
         content: sanitizeDirectionText(message.extra?.remodelDirection?.acceptedText ?? message.mes ?? ''),

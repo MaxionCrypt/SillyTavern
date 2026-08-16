@@ -259,10 +259,13 @@ function describeSnapshot(snapshot) {
         section('RECENT CHANGES', describeReceipts(recentReceipts)),
         section('STORY SO FAR', describeHistory(acceptedHistory, persona)),
         // Last, and alone under its own heading: this is the event the
-        // direction is about, it is the newest thing in the block, and it is
-        // the one line here that is not yet anywhere in STORY SO FAR — the
-        // user's message is not written to the chat until after this pass
-        // returns (see beginDirection's `insertUser`).
+        // direction is about, and it is the one line here that is not also
+        // inside STORY SO FAR. The user's message IS written to the chat
+        // before this pass asks the Director anything now (beginDirection
+        // posts it ahead of building this very snapshot), which would put it
+        // in context.chat's newest slot — but buildDirectionSnapshot leaves
+        // that same newest entry out of acceptedHistory, so it still reaches
+        // this prompt exactly once, here, rather than twice.
         section('CURRENT ACTION', currentAction),
     ].filter(Boolean).join('\n\n');
 }

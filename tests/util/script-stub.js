@@ -13,6 +13,11 @@
 // do more than hold a value, that's a signal the module under test should
 // be reaching through st-context.js instead of importing script.js
 // directly — widen st-context.js/its stub, don't grow this one.
+//
+// sendMessageAsUser is the one exception: it has to write into the same chat
+// getContext().chat hands out, so it reaches into st-context-stub.js's array
+// rather than staying a value with no behaviour. See the note on it below.
+import { __getChat } from './st-context-stub.js';
 
 export function createRawPrompt() { return ''; }
 
@@ -60,7 +65,24 @@ export function __setOnlineStatus(value) {
     online_status = value;
 }
 
-export async function sendMessageAsUser() {}
+// Pushes onto the SAME chat array st-context-stub.js hands out through
+// getContext().chat — not a private array of this module's own. Task 7 moved
+// live-direction.js's call to this function ahead of the Director round trip
+// specifically so the message is already in context.chat by the time the
+// snapshot is built, and a test-only no-op here would make that ordering
+// untestable: __getChat() would never show the insertion this stub is meant
+// to stand in for. Shaped like core's own sendMessageAsUser (script.js) only
+// as far as the fields live-direction.js and its tests actually read.
+export async function sendMessageAsUser(messageText, messageBias, insertAt = null) {
+    const chat = __getChat();
+    const message = { name: name1, is_user: true, is_system: false, mes: String(messageText ?? ''), extra: {} };
+    if (typeof insertAt === 'number' && insertAt >= 0 && insertAt <= chat.length) {
+        chat.splice(insertAt, 0, message);
+    } else {
+        chat.push(message);
+    }
+    return message;
+}
 
 // Recorded rather than a pure no-op so a test can assert not just THAT a
 // caller registered a given key, but WHAT it set it to and in what order —
