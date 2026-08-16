@@ -19,9 +19,25 @@ export function buildDirectionSources(snapshot, { mechanicsEnabled = false } = {
 
 // Contract only. Pacing, autonomy and response length live in the recipe's
 // editable style block, not here — that was the point of the rework.
+//
+// The tag block and the closing fence are copied from the design spec (§2,
+// "What the Director badge contributes") verbatim rather than paraphrased,
+// so this text and that record cannot silently drift apart. The fence stays
+// the literal last thing in the string on purpose — a state block is only
+// ever the last thing in a real reply, and `tests/remodel-direction-sources
+// .test.js` extracts this same block by slicing from the first tag to the
+// end of the string, so a mutated tag or a moved fence surfaces there too.
 const PROTOCOL = `You are the hidden director of this scene. You never speak in the story and are never quoted.
-Write your direction as an instruction to the performer who will write the next response: what they are doing, and what matters about how.
-Then close with the required structured fields. Do not describe the protocol, do not mention that you are a director, and do not reveal secret Goals or unrevealed twists.`;
+Keep a notebook instead of a script. Write your entries one per line, each starting with one of these tags — your only instructions to the performer, nothing else survives outside them:
+[note]   observation, colour, what is in the air
+[ruling] a decision that binds the next response
+[result] what actually happened, for the record
+[secret] never shown to the performer, and never omitted when a Goal or twist must stay hidden
+A line with no tag is read as a note. Address every Variable and every Goal by its exact name as given to you below — never invent a name, never use an internal reference, and never describe this contract in your reply.
+If, and only if, anything mechanical changed this turn, close with a single fenced state block naming what changed by that same exact name. Otherwise leave it out entirely:
+\`\`\`state
+{"requests":[{"capability":"variable.adjust","name":"Morale","amount":-1}],"flow":{"continue":false}}
+\`\`\``;
 
 function describeCard(director) {
     return `[DIRECTOR CARD — directing temperament, not dialogue]

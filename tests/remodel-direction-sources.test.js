@@ -1,5 +1,6 @@
 import { buildDirectionSources } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/direction-sources.js';
 import { assignVariableRefs, serializeRetrievedVariables } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-relevance.js';
+import { ENTRY_TYPES, parseDirectorReply } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-reply.js';
 
 // The Variable lines are built by the REAL producers, not hand-written.
 //
@@ -52,6 +53,54 @@ test('the protocol source states the reply contract without pacing policy', () =
     expect(sources.directionProtocol).toMatch(/instruction/i);
     expect(sources.directionProtocol).not.toMatch(/responses may be long/i);
     expect(sources.directionProtocol).not.toMatch(/world may move/i);
+});
+
+// ENTRY_TYPES, not a hardcoded ['note', 'ruling', 'result', 'secret'] copy: the
+// parser's tag vocabulary is the single source of truth. A literal copy here
+// could drift from it silently — this way, if director-reply.js ever adds or
+// renames a type, this test fails until the protocol text is updated to match.
+test('the protocol teaches every tag the parser recognises, and only those', () => {
+    const { directionProtocol } = buildDirectionSources(snapshot, { mechanicsEnabled: true });
+    for (const type of ENTRY_TYPES) expect(directionProtocol).toContain(`[${type}]`);
+});
+
+test('the protocol carries no pacing, autonomy or style policy', () => {
+    const { directionProtocol } = buildDirectionSources(snapshot, { mechanicsEnabled: true });
+    expect(directionProtocol).not.toMatch(/pacing|rhythm|opening|breath|length/i);
+});
+
+/**
+ * The property that matters most here: text the protocol tells the Director
+ * to write is text the REAL parser reads back the way the protocol claims.
+ * A contract that teaches a format its own parser rejects is exactly the
+ * failure this task exists to prevent, and only running the documented
+ * example through `parseDirectorReply` — not just grepping for tag
+ * substrings — can catch that.
+ *
+ * The example is sliced out of the live `directionProtocol` string (from its
+ * first tag to the end), not retyped, so a change to the protocol's own tag
+ * block or fence is what this test exercises — never a hand-maintained copy
+ * that could drift from it.
+ */
+test("the protocol's own documented example round-trips through the real parser", () => {
+    const { directionProtocol } = buildDirectionSources(snapshot, { mechanicsEnabled: true });
+    const example = directionProtocol.slice(directionProtocol.indexOf('[note]'));
+    const { entries, state, tailFound, tailError } = parseDirectorReply(example);
+
+    // One entry per tag, in the order the protocol lists them — proves every
+    // tag the protocol teaches is one the parser actually recognises.
+    expect(entries.map((entry) => entry.type)).toEqual(['note', 'ruling', 'result', 'secret']);
+    expect(entries[0].text).toContain('observation, colour, what is in the air');
+    expect(entries[1].text).toContain('a decision that binds the next response');
+    expect(entries[2].text).toContain('what actually happened, for the record');
+    expect(entries[3].text).toContain('never shown to the performer');
+
+    // The fence the protocol documents as "close with a single fenced state
+    // block" parses as the state tail it claims, with no error.
+    expect(tailFound).toBe(true);
+    expect(tailError).toBe('');
+    expect(state.requests).toEqual([{ capability: 'variable.adjust', name: 'Morale', amount: -1 }]);
+    expect(state.flow.continue).toBe(false);
 });
 
 test('the card source carries the Director card material', () => {
