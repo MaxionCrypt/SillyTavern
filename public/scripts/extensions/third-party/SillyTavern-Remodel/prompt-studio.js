@@ -252,7 +252,16 @@ export function compilePromptRecipe(recipe, sources = {}, { includeUnresolved = 
         if (block.kind === 'message') {
             parts.push(appendMessage(block.role, block.content || ''));
         } else {
-            const resolved = sources[block.sourceKey];
+            const provided = sources[block.sourceKey];
+            // A source may resolve lazily from the block's own settings (e.g.
+            // directorNotes' `depth`) instead of a flat value the caller
+            // already computed. This is the only way settings reach the
+            // compile: the resolver function receives block.settings as its
+            // argument and returns ordinary content, so whatever it computes
+            // from a setting still has to go through the same appendMessage
+            // path as everything else. The settings object itself is never
+            // written into `messages`.
+            const resolved = typeof provided === 'function' ? provided(block.settings) : provided;
             if (resolved && typeof resolved === 'object' && Array.isArray(resolved.messages)) {
                 for (const message of resolved.messages) {
                     parts.push(appendMessage(message?.role || block.role, message?.content || ''));
@@ -1012,6 +1021,7 @@ function sourceDescription(recipe, key) {
         scenario: 'The Scenario field from the character card bound to the active Roleplay scene.',
         dialogueExamples: 'Example Dialogue from the bound character card, formatted by SillyTavern at generation time.',
         storyGoals: 'The active Scene’s public goals plus private NPC instructions and the latest resolved Goal events.',
+        directorNotes: 'The hidden Director’s recent notes for this Scene, rendered by Remodel and mirrored into the native Roleplay prompt at this position. Never includes a secret entry.',
         chatHistory: 'The token-budgeted messages from the active Roleplay conversation, including the newest user turn.',
         currentInput: 'The newest user message, carried through SillyTavern’s native Chat History marker.',
         generationNudge: 'The generation-specific quiet prompt or nudge supplied by SillyTavern for the current request.',

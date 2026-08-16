@@ -94,6 +94,7 @@ import {
     canSendWithoutLiveDirection,
     clearLiveDirectionFailure,
     continueLiveDirection,
+    formatDirectorNotesPrompt,
     getLiveDirectionRun,
     getLiveDirectionUiState,
     handleLiveDirectionDraft,
@@ -9950,6 +9951,19 @@ function renderRoleplayScene() {
     setExtensionPrompt(
         'remodel_story_goals',
         formatStoryGoalsPrompt(activeRoleplayScene),
+        extension_prompt_types.IN_CHAT,
+        1,
+        false,
+        extension_prompt_roles.SYSTEM,
+        () => getActiveScene()?.id === activeRoleplayScene?.id,
+    );
+    // Same mirroring as Story Goals above, under the Director's Notes source's
+    // own native identifier (remodel_director_notes) — this call, not the
+    // recipe editor, is what actually gets the Director's notebook into a real
+    // Narrator generation.
+    setExtensionPrompt(
+        'remodel_director_notes',
+        formatDirectorNotesPrompt(activeRoleplayScene),
         extension_prompt_types.IN_CHAT,
         1,
         false,

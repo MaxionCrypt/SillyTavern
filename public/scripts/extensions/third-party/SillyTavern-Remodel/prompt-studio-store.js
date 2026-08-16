@@ -2,7 +2,7 @@ import { getContext } from '../../../st-context.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 5;
+const STORE_VERSION = 6;
 
 export const PROMPT_MODES = ['story', 'roleplay', 'director'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
@@ -30,14 +30,15 @@ export const PROMPT_SOURCE_DEFINITIONS = Object.freeze({
         { key: 'worldInfoAfter', label: 'World Info (after)', role: 'system', nativeIdentifier: 'worldInfoAfter' },
         { key: 'dialogueExamples', label: 'Dialogue Examples', role: 'user', nativeIdentifier: 'dialogueExamples' },
         { key: 'storyGoals', label: 'Story Goals', role: 'system', nativeIdentifier: 'remodel_story_goals' },
-        // Declaration only: this task builds the settings mechanism, not the
-        // source. Task 4 gives directorNotes its resolution; the depth shape
-        // here is exactly what that task specifies. `description` is set
-        // explicitly because prompt-studio.js's sourceDescription() falls
-        // through to a roleplay default claiming native-prompt-manager
-        // resolution — false for this source, and the same false-fallback
-        // bug already fixed once for director-mode sources (see that file).
-        { key: 'directorNotes', label: 'Director’s Notes', role: 'system', description: 'The Director’s recent notes for this Scene, assembled by Remodel — not resolved by SillyTavern’s native prompt manager.', settings: { depth: { type: 'number', label: 'Turns to include', min: 1, max: 20, default: 3 } } },
+        // Rendered by Remodel (live-direction.js's buildDirectorNotesSource),
+        // same as storyGoals above — not resolved from a card or lorebook.
+        // `nativeIdentifier` is required, not decorative: a roleplay recipe is
+        // mirrored into SillyTavern's native Prompt Manager (applyRoleplayChatRecipe),
+        // and that mirroring is the only thing that gets this block's content
+        // into the real Narrator generation. A source with no native identifier
+        // renders in the editor, accepts a depth setting, and reaches nothing —
+        // this is the storyGoals precedent, followed exactly.
+        { key: 'directorNotes', label: 'Director’s Notes', role: 'system', nativeIdentifier: 'remodel_director_notes', settings: { depth: { type: 'number', label: 'Turns to include', min: 1, max: 20, default: 3 } } },
         { key: 'chatHistory', label: 'Chat History', role: 'user', nativeIdentifier: 'chatHistory' },
         // Native Chat Completion keeps the latest input inside chatHistory;
         // exposing it as an alias preserves that real marker boundary.
@@ -70,6 +71,7 @@ const nativeMarkerToSource = Object.freeze({
     dialogueExamples: 'dialogueExamples',
     chatHistory: 'chatHistory',
     remodel_story_goals: 'storyGoals',
+    remodel_director_notes: 'directorNotes',
     quietPrompt: 'generationNudge',
 });
 
@@ -254,7 +256,7 @@ function createSeededStore(seed) {
             description: 'Imported from the native Chat Completion prompt manager.',
             mode: 'roleplay',
             apiType: 'chat',
-            blocks: withStoryGoalsSource(blocksFromNativeChat(seed.chatPrompts || [], seed.chatPromptOrder || [])),
+            blocks: withDirectorNotesSource(withStoryGoalsSource(blocksFromNativeChat(seed.chatPrompts || [], seed.chatPromptOrder || []))),
             transport: null,
         },
         {
@@ -481,6 +483,21 @@ function normalizeStore(store, seed) {
             if (recipe?.mode === 'director') changed = migrateDirectorStyleBlock(recipe) || changed;
         }
     }
+    // Same shape as the previousVersion < 3 migration above, and for the same
+    // reason: ensureDirectorNotesSource splices a freshly-built block into an
+    // already-normalized recipe.blocks with no settings-defaulting pass of its
+    // own, so the re-normalize afterward is required, not optional — without
+    // it a pre-existing user's migrated block would carry settings: {} instead
+    // of the declared { depth: 3 } default, and the Narrator would read a
+    // depth-undefined notes source that resolves to nothing.
+    if (previousVersion < 6) {
+        for (const recipe of Object.values(store.recipes)) {
+            if (recipe?.mode === 'roleplay' && recipe.apiType === 'chat' && ensureDirectorNotesSource(recipe.blocks)) {
+                recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
+                changed = true;
+            }
+        }
+    }
     return changed;
 }
 
@@ -494,6 +511,26 @@ function ensureStoryGoalsSource(blocks) {
 
 function withStoryGoalsSource(blocks) {
     ensureStoryGoalsSource(blocks);
+    return blocks;
+}
+
+/** Same shape as ensureStoryGoalsSource, for the same reason: directorNotes is
+ *  a second Remodel-owned native source, mirrored into the native Prompt
+ *  Manager under 'remodel_director_notes' the same way storyGoals is under
+ *  'remodel_story_goals'. Inserted right before chatHistory/currentInput —
+ *  after storyGoals lands there first, so the declared source order
+ *  (storyGoals, then directorNotes, then chatHistory) holds even when both
+ *  helpers run back to back. */
+function ensureDirectorNotesSource(blocks) {
+    if (!Array.isArray(blocks) || blocks.some((block) => block.kind === 'source' && block.sourceKey === 'directorNotes')) return false;
+    const source = createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directorNotes', nativeIdentifier: 'remodel_director_notes' });
+    const historyIndex = blocks.findIndex((block) => block.kind === 'source' && ['chatHistory', 'currentInput'].includes(block.sourceKey));
+    blocks.splice(historyIndex >= 0 ? historyIndex : blocks.length, 0, source);
+    return true;
+}
+
+function withDirectorNotesSource(blocks) {
+    ensureDirectorNotesSource(blocks);
     return blocks;
 }
 

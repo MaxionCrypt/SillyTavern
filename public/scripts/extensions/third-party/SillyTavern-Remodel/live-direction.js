@@ -20,7 +20,8 @@ import { buildMechanicalSnapshot, previewMechanicalContext } from './mechanics-r
 import { buildDirectionSources } from './direction-sources.js';
 import { resolveByName } from './direction-address.js';
 import { deriveBeats } from './direction-beats.js';
-import { compilePromptRecipe, resolveDirectorRecipe } from './prompt-studio.js';
+import { compilePromptRecipe, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
+import { readNarratorEntries } from './director-notes-store.js';
 import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
 import { readDirectionUnit, sanitizeDirectionText } from './live-direction-markers.js';
 import { directorResponseTokens, interpretStructuredReply } from './structured-reply.js';
@@ -1753,6 +1754,84 @@ export function formatMovementPrompt(envelope) {
     const instruction = String(envelope?.instruction || '').trim();
     if (!instruction) return '';
     return `[Direction for this response only]\n${instruction}`;
+}
+
+/**
+ * The Director's recent notes for this Scene, as prose for the Narrator's
+ * directorNotes recipe block — the counterpart to direction-sources.js's
+ * `section()` register: a heading with nothing under it tells the Narrator
+ * less than no heading, so no entries renders nothing at all, never an empty
+ * bracketed block.
+ *
+ * `entries` is expected to already be Narrator-safe (readNarratorEntries has
+ * filtered `secret` and applied the depth window) — this function only
+ * renders what it is given and does not re-check `type` itself. Re-checking
+ * here would suggest the boundary might not already be enforced, when the
+ * whole point of readNarratorEntries is that it is.
+ *
+ * Grouped by turn and sorted ascending, so the newest turn's notes land last
+ * — closest to the generation point, the same ordering direction-sources.js
+ * uses for STORY SO FAR. `ruling` and `result` are labelled, because unlike a
+ * `note` they are not colour: a ruling binds the next response and a result
+ * is a settled fact, and the performer needs to tell those apart from
+ * scene-setting observation.
+ */
+export function buildDirectorNotesSource(entries) {
+    const turns = groupNotebookEntriesByTurn(entries);
+    if (!turns.length) return '';
+    const body = turns
+        .map(([turn, turnEntries]) => describeNotebookTurn(turn, turnEntries))
+        .filter(Boolean)
+        .join('\n\n');
+    if (!body) return '';
+    return `[DIRECTOR'S NOTES — established by the hidden director; treat as settled fact]\n${body}`;
+}
+
+function groupNotebookEntriesByTurn(entries) {
+    const byTurn = new Map();
+    for (const entry of Array.isArray(entries) ? entries : []) {
+        if (!entry) continue;
+        const turn = Number.isFinite(Number(entry.turn)) ? Number(entry.turn) : 0;
+        if (!byTurn.has(turn)) byTurn.set(turn, []);
+        byTurn.get(turn).push(entry);
+    }
+    return [...byTurn.entries()].sort((a, b) => a[0] - b[0]);
+}
+
+const NOTEBOOK_ENTRY_LABELS = Object.freeze({ ruling: 'Ruling — binding: ', result: 'Established: ' });
+
+function describeNotebookTurn(turn, turnEntries) {
+    const lines = turnEntries.map(describeNotebookEntry).filter(Boolean);
+    return lines.length ? `Turn ${turn}\n${lines.join('\n')}` : '';
+}
+
+function describeNotebookEntry(entry) {
+    const text = String(entry?.text || '').trim();
+    if (!text) return '';
+    return `- ${NOTEBOOK_ENTRY_LABELS[entry?.type] || ''}${text}`;
+}
+
+/**
+ * Ties the notes source to the currently active Roleplay/Chat recipe: reads
+ * that recipe's OWN directorNotes block for its `settings.depth`, rather than
+ * a hardcoded default, so the depth the user configured in Prompt Studio is
+ * the one that actually governs what the Narrator reads — this is the
+ * "settings feed the compile" requirement, applied at the one real call site
+ * that reaches production generation (timeline-spine.js mirrors this into
+ * SillyTavern's native prompt manager via setExtensionPrompt, the same way it
+ * does for Story Goals).
+ *
+ * No directorNotes block on the recipe (removed by the user, or a recipe
+ * imported from native settings that never carried one) means the Narrator
+ * gets no notes — an explicit opt-out, not a fallback default.
+ */
+export function formatDirectorNotesPrompt(scene) {
+    if (!scene?.timelineId) return '';
+    const recipe = getCurrentPromptStudioRecipe('roleplay', 'chat');
+    const block = (recipe?.blocks || []).find((entry) => entry.kind === 'source' && entry.sourceKey === 'directorNotes');
+    if (!block) return '';
+    const entries = readNarratorEntries(scene.timelineId, { sceneId: scene.id, depth: block.settings?.depth });
+    return buildDirectorNotesSource(entries);
 }
 
 /**
