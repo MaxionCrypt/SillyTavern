@@ -156,10 +156,20 @@ function describeAttempts(authorizedGoalRefs, titleByRef) {
     ].join('\n');
 }
 
-/** Retrieval that fell back is a caveat on the Variable list, not a section. */
+/**
+ * Retrieval that fell back is a caveat on the Variable list, not a section.
+ *
+ * Deliberately no `retrieval.warning`. That field holds a raw transport error
+ * — observed reaching the Director as "Failed to parse URL from
+ * /api/vector/list" — which tells the model nothing it can act on and asks it
+ * to parse machine text mid-prompt. What it needs is the consequence: this
+ * list may be short. The error itself is already journalled by
+ * variables-context.js (`retrieval.resolved`, `degradeCause`), which is where
+ * it is useful, and it stays on the snapshot for the debug surfaces.
+ */
 function describeRetrieval(retrieval) {
     if (!retrieval?.degraded) return '';
-    return `Semantic retrieval was unavailable this turn${retrieval.warning ? ` (${retrieval.warning})` : ''}, so this list was selected deterministically and may be incomplete.`;
+    return 'Semantic retrieval was unavailable this turn, so this list was selected by direct reference alone and may be missing Variables that are relevant.';
 }
 
 /**

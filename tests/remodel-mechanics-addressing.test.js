@@ -1,5 +1,5 @@
 import { addressRequestsByName } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
-import { buildAddressBook } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/direction-address.js';
+import { buildAddressBook, resolveByName } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/direction-address.js';
 
 const book = buildAddressBook([
     { id: 'var-hp', name: "Aiden's HP" },
@@ -54,18 +54,57 @@ test('a Variable literally named like a synthetic ref is not shadowed by an inhe
     expect(unresolvedReasons).toEqual([]);
 });
 
-test('the base map is preserved for goal.reach\'s "was this retrieved" check, not replaced', () => {
-    const baseVariableRefs = new Map([['v3', 'var-untouched']]);
+test('what retrieval advertised travels separately from what a request may address', () => {
+    const baseVariableRefs = new Map([['v3', 'var-untouched'], ['v4', 'var-hp']]);
     const requests = [{ id: 'r1', capability: 'variable.adjust', arguments: { variableRef: "Aiden's HP", delta: 1 } }];
-    const { variableRefs } = addressRequestsByName(requests, book, baseVariableRefs, new Map());
-    // goal.reach reads exactly two things off this Map — `.size` and
-    // `.values()` (mechanics-capabilities.js:392-396). Both must survive.
-    expect(variableRefs.size).toBe(2);
-    expect([...variableRefs.values()]).toEqual(expect.arrayContaining(['var-untouched', 'var-hp']));
-    // ...but the retrieval layer's own positional key must NOT be a second,
-    // unvalidated way in. It was: `resolveVariableReference` does
-    // `runtime.variableRefs.get(ref)`, so an inherited 'v3' answered.
-    expect(variableRefs.get('v3')).toBeUndefined();
+    const { variableRefs, retrievedVariableIds } = addressRequestsByName(requests, book, baseVariableRefs, new Map());
+    // goal.reach's question — "was this tracked Variable retrieved this pass" —
+    // is answered from here, so the whole retrieved set must survive.
+    expect(retrievedVariableIds).toEqual(['var-untouched', 'var-hp']);
+    // The address table answers a different question, and holds only what a
+    // request actually named and resolved. Nothing else is in it at all.
+    expect([...variableRefs.keys()]).toEqual(["Aiden's HP"]);
+});
+
+test('the address table contains name-resolved entries and nothing else', () => {
+    const baseVariableRefs = new Map([['v1', 'var-hp'], ['v2', 'var-heat']]);
+    const baseGoalRefs = new Map([['g1', 'goal-survive']]);
+    // No request names anything, so nothing may be addressed — even though
+    // retrieval advertised three records.
+    const { variableRefs, goalRefs, retrievedVariableIds, retrievedGoalIds } =
+        addressRequestsByName([], book, baseVariableRefs, baseGoalRefs);
+    expect(variableRefs.size).toBe(0);
+    expect(goalRefs.size).toBe(0);
+    expect(retrievedVariableIds).toEqual(['var-hp', 'var-heat']);
+    expect(retrievedGoalIds).toEqual(['goal-survive']);
+});
+
+// The residual the re-review demonstrated end to end: the previous fix moved
+// the base entries under an unguessable placeholder key rather than removing
+// them, so `.get('\0retrieved:0')` still hit a real id and still applied a
+// write while the diagnostic reported the request refused. Unguessable is not
+// unresolvable, and probability is not a validation boundary.
+test('no synthetic placeholder key survives into the address table', () => {
+    const baseVariableRefs = new Map([['v1', 'var-hp'], ['v2', 'var-heat']]);
+    const probes = ['\0retrieved:0', '\0retrieved:1', ' retrieved:0', 'retrieved:0'];
+    for (const probe of probes) {
+        const { variableRefs, unresolvedReasons } = addressRequestsByName(
+            [{ id: 'r1', capability: 'variable.adjust', arguments: { variableRef: probe, delta: -4 } }],
+            book, baseVariableRefs, new Map(),
+        );
+        expect(variableRefs.get(probe)).toBeUndefined();
+        expect(unresolvedReasons[0]).toMatch(/not advertised/i);
+    }
+    // Every key that IS present got there through resolveByName. Asserted as a
+    // property of the whole table rather than as a list of rejected probes,
+    // because the point is that there is no unguessed key left to try.
+    const named = addressRequestsByName(
+        [{ id: 'r1', capability: 'variable.adjust', arguments: { variableRef: "Aiden's HP", delta: -4 } }],
+        book, baseVariableRefs, new Map(),
+    );
+    for (const key of named.variableRefs.keys()) {
+        expect(resolveByName(book, key).ok).toBe(true);
+    }
 });
 
 // Everything below is the regression surface for the whole-branch review's

@@ -182,8 +182,22 @@ export function executeMechanicsRequest(envelope, context = {}) {
         sceneId: String(context.sceneId || ''),
         turnId: String(context.turnId || ''),
         aliases: new Map(),
+        // Address tables: a key here is a name this pass advertised, and
+        // nothing else. `.get()` answering anything else is a validation hole
+        // (design section 3), so callers must not seed these with entries a
+        // request could not legitimately have named.
         variableRefs: context.variableRefs instanceof Map ? context.variableRefs : new Map(Object.entries(context.variableRefs || {})),
         goalRefs: context.goalRefs instanceof Map ? context.goalRefs : new Map(Object.entries(context.goalRefs || {})),
+        // What retrieval put in front of the model this pass, which is a
+        // different question from what a request may address — goal.reach asks
+        // the first, everything else asks the second. Defaults to the address
+        // table's ids for callers that have no separate retrieval step, which
+        // is what approvePendingMechanics wants: its one-entry table IS its
+        // retrieved set.
+        retrievedVariableIds: new Set((Array.isArray(context.retrievedVariableIds)
+            ? context.retrievedVariableIds
+            : [...(context.variableRefs instanceof Map ? context.variableRefs.values() : Object.values(context.variableRefs || {}))]
+        ).map(String)),
         receipts: [],
         pending: [],
         reached: new Set(),
@@ -387,12 +401,17 @@ function reachGoal(request, args, runtime) {
     // The tracked Variable comes from stored Goal data, not from model input, so
     // it is resolved by id rather than by ref — but it must still be a Variable
     // this pass advertised. Otherwise a reach reads and writes a Variable the
-    // Director was never shown, which is the containment the refs exist for.
+    // Director was never shown, which is the containment this check exists for.
+    //
+    // Read off retrievedVariableIds, not the address table: the address table
+    // holds only the names THIS BATCH resolved, so a reach that names no
+    // Variable of its own would otherwise look like a pass that retrieved
+    // nothing.
     const trackedId = String(goal.resolution?.variableId || goal.resolution?.variableInstanceId || '');
-    if (goal.resolution?.kind === 'tracked' && trackedId && !runtime.variableRefs.size) {
+    if (goal.resolution?.kind === 'tracked' && trackedId && !runtime.retrievedVariableIds.size) {
         throw new MechanicsError(`${request.id}: the Goal tracks a Variable that was not retrieved for this request.`);
     }
-    if (goal.resolution?.kind === 'tracked' && trackedId && ![...runtime.variableRefs.values()].includes(trackedId)) {
+    if (goal.resolution?.kind === 'tracked' && trackedId && !runtime.retrievedVariableIds.has(trackedId)) {
         throw new MechanicsError(`${request.id}: the Goal tracks a Variable that was not advertised for this request.`);
     }
     const trackedInstance = goal.resolution?.kind === 'tracked' ? requireVariable(trackedId, runtime) : null;

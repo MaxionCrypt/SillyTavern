@@ -993,38 +993,42 @@ async function revealStep() {
 /**
  * Requests name Variables and Goals by the Timeline's address book (see
  * direction-address.js), not by an opaque ref. This resolves each request's
- * name against the book this pass actually advertised and adds a name-keyed
- * entry to a NEW map the capability layer already reads with `.get(ref)` — so
- * mechanics-capabilities.js needs no change, it just gets handed names as keys
- * instead of synthetic refs. A name absent from the book
- * is simply left unresolved, which the capability layer already refuses as
- * "not advertised for this request"; the specific reason (unknown vs.
- * duplicated) is collected in `unresolvedReasons` for the caller to surface
- * — the generic downstream refusal alone is actively misleading for a
- * duplicated name, since it *was* advertised, twice.
+ * name against the book this pass actually advertised and returns maps the
+ * capability layer reads with `.get(ref)` — so mechanics-capabilities.js needs
+ * no change, it just gets handed names as keys instead of synthetic refs. A
+ * name absent from the book is simply left unresolved, which the capability
+ * layer already refuses as "not advertised for this request"; the specific
+ * reason (unknown vs. duplicated) is collected in `unresolvedReasons` for the
+ * caller to surface — the generic downstream refusal alone is actively
+ * misleading for a duplicated name, since it *was* advertised, twice.
  *
- * The base Maps' VALUES are carried in, but never their keys. goal.reach is
- * the only reader of the base entries and it uses exactly two things —
- * `runtime.variableRefs.size` and `[...runtime.variableRefs.values()]`
- * (mechanics-capabilities.js:392-396) — so re-keying costs nothing there.
- * The keys, on the other hand, are the synthetic `v1…vN` / `g1…gN` refs the
- * retrieval layer assigns internally (assignVariableRefs /
- * buildMechanicalSnapshot), and inheriting them made every one of them a
- * second, unvalidated address: `resolveVariableReference` does
- * `runtime.variableRefs.get(ref)`, so a Director replying `variableRef: "v1"`
- * wrote to whatever Variable happened to rank first, with no name check at
- * all — and defeated the duplicate-name refusal design §3 requires, since a
- * name excluded from the book was still reachable positionally. The
- * placeholder keys below are NUL-prefixed: nothing a model can type collides
- * with them, so the ONLY way into this Map is a name resolved against the
- * book this pass advertised.
+ * **The returned maps contain name-resolved entries and nothing else.** That
+ * is the validation boundary design §3 asks for — "code validates the name
+ * against the set advertised this turn and rejects anything else" — and it is
+ * structural rather than probabilistic: there is no key in these maps that was
+ * not resolved through `resolveByName`, so there is nothing to guess, mistype,
+ * or collide with. Two earlier shapes both failed this. Seeding from the base
+ * maps inherited their `v1…vN` / `g1…gN` keys and made every one of them a
+ * second unvalidated address. Re-keying those entries under an unguessable
+ * placeholder made them unlikely to be reached rather than unreachable — a
+ * request carrying that placeholder still resolved and still wrote, while the
+ * diagnostic reported it refused. Probability is not a validation boundary.
+ *
+ * The base maps are still read, but only for their VALUES, and those leave
+ * through `retrievedVariableIds` / `retrievedGoalIds` instead. `goal.reach`
+ * is their only consumer — it asks whether a Goal's tracked Variable was
+ * retrieved this pass — and it now reads those arrays directly rather than
+ * inferring the answer from a map that has to double as an address table.
+ *
+ * @returns {{variableRefs: Map<string, string>, goalRefs: Map<string, string>,
+ *   retrievedVariableIds: string[], retrievedGoalIds: string[], unresolvedReasons: string[]}}
  */
 export function addressRequestsByName(requests, addressBook, variableRefs, goalRefs) {
-    const unaddressable = (refs) => new Map(
-        (refs instanceof Map ? [...refs.values()] : []).map((id, index) => [`\0retrieved:${index}`, id]),
-    );
-    const resolvedVariableRefs = unaddressable(variableRefs);
-    const resolvedGoalRefs = unaddressable(goalRefs);
+    const idsOf = (refs) => (refs instanceof Map ? [...refs.values()] : []);
+    const retrievedVariableIds = idsOf(variableRefs);
+    const retrievedGoalIds = idsOf(goalRefs);
+    const resolvedVariableRefs = new Map();
+    const resolvedGoalRefs = new Map();
     const unresolvedReasons = [];
     const attempted = new Set();
     const addResolved = (refs, tag, name) => {
@@ -1049,13 +1053,13 @@ export function addressRequestsByName(requests, addressBook, variableRefs, goalR
         addResolved(resolvedGoalRefs, 'goal', args.fromGoalRef);
         addResolved(resolvedGoalRefs, 'goal', args.toGoalRef);
     }
-    return { variableRefs: resolvedVariableRefs, goalRefs: resolvedGoalRefs, unresolvedReasons };
+    return { variableRefs: resolvedVariableRefs, goalRefs: resolvedGoalRefs, retrievedVariableIds, retrievedGoalIds, unresolvedReasons };
 }
 
 function executeDirectionRequests(requests, context) {
     const scene = context.scene;
     if (!Array.isArray(requests) || requests.length === 0) return { ok: true, receipts: [], transaction: null, unresolvedReasons: [] };
-    const { variableRefs, goalRefs, unresolvedReasons } = addressRequestsByName(requests, context.addressBook, context.variableRefs, context.goalRefs);
+    const { variableRefs, goalRefs, retrievedVariableIds, unresolvedReasons } = addressRequestsByName(requests, context.addressBook, context.variableRefs, context.goalRefs);
     const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests }, {
         timelineId: scene.timelineId,
         sceneId: scene.id,
@@ -1066,6 +1070,11 @@ function executeDirectionRequests(requests, context) {
         authorizedGoalIds: context.authorizedGoalIds || [],
         authorizedVariableRefs: [],
         variableRefs, goalRefs,
+        // What retrieval advertised this pass, carried separately from the
+        // address table so goal.reach can answer "was this tracked Variable
+        // retrieved" without the address table having to hold entries nobody
+        // may address.
+        retrievedVariableIds,
         allowUserGoalCreate: false,
     });
     return { ...result, unresolvedReasons };

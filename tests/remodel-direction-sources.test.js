@@ -104,6 +104,26 @@ test('mechanics being disabled says so instead of silently deleting Variables an
     expect(sources.mechanicsSkill).toMatch(/empty/i);
 });
 
+test('a degraded retrieval says what degraded, without quoting the transport error', () => {
+    const degraded = {
+        ...snapshot,
+        mechanics: {
+            ...snapshot.mechanics,
+            retrieval: { degraded: true, warning: 'Failed to parse URL from /api/vector/list', selected: 2 },
+        },
+    };
+    const sources = buildDirectionSources(degraded, { mechanicsEnabled: true });
+    expect(sources.mechanicsSkill).toMatch(/Semantic retrieval was unavailable/i);
+    // Raw internal error text belongs in the journal, where it is debuggable —
+    // not in the prompt, where the model has to parse machine noise it cannot
+    // act on. This exact string was observed reaching the Director.
+    expect(sources.mechanicsSkill).not.toContain('/api/vector/list');
+    expect(sources.mechanicsSkill).not.toMatch(/failed to parse/i);
+    // And a healthy retrieval says nothing at all.
+    expect(buildDirectionSources(snapshot, { mechanicsEnabled: true }).mechanicsSkill)
+        .not.toMatch(/semantic retrieval/i);
+});
+
 test('the snapshot source carries the current action', () => {
     const sources = buildDirectionSources(snapshot, { mechanicsEnabled: true });
     expect(sources.directorSnapshot).toContain('He swings.');

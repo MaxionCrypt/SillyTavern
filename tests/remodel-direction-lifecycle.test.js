@@ -30,6 +30,7 @@ import {
     updateMechanicsProfile,
     listMechanicsTransactions,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
+import { createTimelineGoal, linkGoalToScene } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js';
 import { __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
 import { __setOnlineStatus } from './util/script-stub.js';
 
@@ -227,6 +228,54 @@ test('acceptance is exactly once even when finalize is re-entered', async () => 
     expect(hp()).toBe(8);
     expect(listMechanicsTransactions({ timelineId: scene.timelineId })
         .filter((transaction) => transaction.status === 'applied')).toHaveLength(1);
+});
+
+// goal.reach asks "was this Goal's tracked Variable retrieved this pass?".
+// That question is about retrieval, not about addressing, and it used to be
+// answered by inspecting the address table — which worked only because the
+// address table was seeded with everything retrieval found. Now that the table
+// holds nothing but name-resolved entries, a reach that names no Variable of
+// its own would look like a pass that retrieved nothing, and fail closed on a
+// perfectly valid request. It reads retrievedVariableIds instead.
+test('a tracked goal.reach still sees the retrieved Variable it never names', async () => {
+    const goal = createTimelineGoal(scene.timelineId, {
+        title: 'Bleed her out',
+        successRate: 60,
+        visibility: 'public',
+        // A world-held Goal: no persona holder, so no review deferral.
+        holderRefs: [{ kind: 'character', id: 'char-n', label: 'Wren' }],
+        resolution: { kind: 'tracked', variableId, field: 'value', direction: 'decrease', completionThreshold: 0 },
+    }, { sceneId: scene.id });
+    linkGoalToScene(scene.id, goal.id, 'active', { timelineId: scene.timelineId });
+
+    setLiveDirectionTestAdapters({
+        requestDirection: async () => ({
+            ...directionEnvelope(),
+            // The ONLY request. It names the Goal, never the Variable, so the
+            // address table ends the pass holding one goal entry and zero
+            // variable entries.
+            requests: [{
+                id: 'req-1', capability: 'goal.reach',
+                arguments: { goalRef: 'Bleed her out', impactMagnitude: 'meaningful' },
+                reason: 'She is between the blade and the boy.',
+            }],
+        }),
+        generatePerformer: speak,
+    });
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    // The roll is a real d100, so a hit adjusts the Variable and a miss drops
+    // the success rate — either is a valid outcome. What must never happen is
+    // the request being refused for a containment reason that does not apply.
+    const diagnostics = (getLiveDirectionRun()?.checkpointDiagnostics || []).join(' ');
+    expect(diagnostics).not.toMatch(/not retrieved for this request/i);
+    expect(diagnostics).not.toMatch(/not advertised for this request/i);
+    const applied = listMechanicsTransactions({ timelineId: scene.timelineId })
+        .flatMap((transaction) => transaction.receipts || [])
+        .filter((receipt) => receipt.status === 'applied' && receipt.capability === 'goal.reach');
+    expect(applied).toHaveLength(1);
 });
 
 test('the saved record stores the address book once and keeps the Goal authority', async () => {
