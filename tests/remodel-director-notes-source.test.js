@@ -21,7 +21,7 @@ import {
     setActivePromptRecipe,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/prompt-studio-store.js';
 import { __emit, __getChat, __setExtensionSettings } from './util/st-context-stub.js';
-import { __clearExtensionPromptCalls, __getExtensionPrompt, __setOnlineStatus } from './util/script-stub.js';
+import { __clearExtensionPromptCalls, __getExtensionPrompt, __getExtensionPromptCalls, __setOnlineStatus } from './util/script-stub.js';
 
 // generateDirectedPerformer (reached only by the lifecycle test near the
 // bottom of this file) clears SillyTavern's native composer before handing
@@ -260,9 +260,20 @@ test('a recipe re-imported from native settings resolves remodel_director_notes 
 // the real directed-turn lifecycle (the same harness
 // remodel-direction-lifecycle.test.js uses) with a stubbed Director call that
 // appends a fresh entry — standing in for Task 6's eventual
-// parseDirectorReply -> appendDirectorEntries wiring — and inspects the
-// script-stub's recorded setExtensionPrompt calls to prove the value the
-// generation actually saw included that entry.
+// parseDirectorReply -> appendDirectorEntries wiring.
+//
+// Fix round 2: the original version of this test read the mock's
+// *last-recorded* value for 'remodel_director_notes' after the whole run had
+// settled. That cannot distinguish "mirrored before generation" from
+// "mirrored after" — either ordering ends with the same final recorded
+// value, since setExtensionPrompt only ever gets called once per turn either
+// way. When the reviewer moved the real mirror call to fire after
+// generation, this test still passed at 16/16 green: a test named for an
+// ordering property that survives the ordering being inverted. Fixed by
+// capturing the value INSIDE the generatePerformer test adapter itself — the
+// exact stand-in for context.generate(), so this is the value visible at the
+// moment generation actually began, not whatever the recorder holds once
+// everything is done.
 
 const lifecycleScene = {
     id: 'scene-notes-lifecycle',
@@ -287,6 +298,21 @@ async function speakInLifecycle() {
     const chat = __getChat();
     chat.push({ name: 'Wren', is_user: false, mes: 'Wren answers.', extra: {} });
     await __emit('MESSAGE_RECEIVED', chat.length - 1);
+}
+
+/**
+ * Wraps `speakInLifecycle` (the `generatePerformer` test adapter, the exact
+ * stand-in for `context.generate()`) so the FIRST thing it does — before
+ * anything else runs — is read what `remodel_director_notes` currently holds,
+ * and store it on `capture.value`. This is what "the Narrator generates"
+ * means operationally in this harness: whatever the mirror holds at this
+ * synchronous instant is what a real generation would have read.
+ */
+function capturingPerformer(capture) {
+    return async (...args) => {
+        capture.value = __getExtensionPrompt('remodel_director_notes');
+        return speakInLifecycle(...args);
+    };
 }
 
 /** Poll rather than sleep: the reveal loop chains through its own timers (see remodel-direction-lifecycle.test.js's identical helper). */
@@ -326,6 +352,7 @@ test('an entry appended during the Director call reaches the mirror the SAME tur
         onSettled: () => {},
         onFailure: () => {},
     });
+    const capture = { value: undefined };
     setLiveDirectionTestAdapters({
         // Stands in for Task 6's streamed reply -> parseDirectorReply ->
         // appendDirectorEntries wiring: by the time this resolves, this
@@ -338,11 +365,67 @@ test('an entry appended during the Director call reaches the mirror the SAME tur
             });
             return lifecycleDirectionEnvelope();
         },
+        generatePerformer: capturingPerformer(capture),
+    });
+
+    await requestNextDirection(lifecycleScene);
+    expect(await untilLifecycle(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    // Asserts what generation actually SAW, captured at the moment it began
+    // — not the mock's final state once the whole run has settled (which
+    // cannot tell "mirrored before" from "mirrored after" apart).
+    expect(capture.value).toContain('Teo finally answers Eli.');
+});
+
+// Fix round 2, Important #2: the generation-seam call's scene-identity filter
+// (`() => hooks.getActiveScene()?.id === scene.id`) had zero coverage —
+// replacing it with `() => true` left the whole suite green. That filter is
+// exactly what protects against the cross-scene race the reviewer identified:
+// core's Generate() spans a real async gap, during which the user could
+// switch Scenes, and without the filter the wrong Scene's notes could land in
+// the new Scene's generation. Exercises the actual recorded filter function
+// directly, under both a matching and a since-switched active Scene.
+test("the generation-seam mirror's filter refuses once the active Scene has changed", async () => {
+    const recipe = createPromptRecipe({
+        name: 'RP lifecycle filter', mode: 'roleplay', apiType: 'chat',
+        blocks: [{ kind: 'source', sourceKey: 'directorNotes', role: 'system', enabled: true, settings: { depth: 5 } }],
+    });
+    setActivePromptRecipe('roleplay', 'chat', recipe.id);
+    __setOnlineStatus('connected');
+
+    let activeSceneOverride = lifecycleScene;
+    initLiveDirection({
+        getActiveScene: () => activeSceneOverride,
+        getCast: () => lifecycleCast,
+        getPersona: () => null,
+        ensureSceneReady: async () => true,
+        getComposerDraft: () => '',
+        clearComposer: () => {},
+        sendNormally: () => {},
+        onStateChange: () => {},
+        onSettled: () => {},
+        onFailure: () => {},
+    });
+    setLiveDirectionTestAdapters({
+        requestDirection: async () => lifecycleDirectionEnvelope(),
         generatePerformer: speakInLifecycle,
     });
 
     await requestNextDirection(lifecycleScene);
     expect(await untilLifecycle(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
-    expect(__getExtensionPrompt('remodel_director_notes')).toContain('Teo finally answers Eli.');
+    const calls = __getExtensionPromptCalls().filter((call) => call.key === 'remodel_director_notes');
+    expect(calls.length).toBeGreaterThan(0);
+    const filter = calls.at(-1).args.at(-1);
+    expect(typeof filter).toBe('function');
+
+    // The Scene this direction belongs to is still the active one.
+    activeSceneOverride = lifecycleScene;
+    expect(filter()).toBe(true);
+
+    // The active Scene changed after the mirror was set. The filter must
+    // refuse, or the notes for the OLD Scene would leak into whatever
+    // generates next in the NEW one.
+    activeSceneOverride = { ...lifecycleScene, id: 'scene-elsewhere' };
+    expect(filter()).toBe(false);
 });
