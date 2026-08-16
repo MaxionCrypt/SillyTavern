@@ -81,6 +81,15 @@ test('the protocol carries no pacing, autonomy or style policy', () => {
  * first tag to the end), not retyped, so a change to the protocol's own tag
  * block or fence is what this test exercises — never a hand-maintained copy
  * that could drift from it.
+ *
+ * The request's field names matter as much as its shape: the capability
+ * layer that actually applies a request (mechanics-capabilities.js,
+ * addressRequestsByName in live-direction.js) reads `variableRef`/`delta`
+ * for variable.adjust, not `name`/`amount` — the design spec's own §2
+ * example used the wrong names. This test asserts on the field names
+ * themselves, not just that a `requests` array exists, so if the protocol's
+ * example ever regresses to the field names the capability layer does not
+ * read, this is the test that has to notice.
  */
 test("the protocol's own documented example round-trips through the real parser", () => {
     const { directionProtocol } = buildDirectionSources(snapshot, { mechanicsEnabled: true });
@@ -99,7 +108,12 @@ test("the protocol's own documented example round-trips through the real parser"
     // block" parses as the state tail it claims, with no error.
     expect(tailFound).toBe(true);
     expect(tailError).toBe('');
-    expect(state.requests).toEqual([{ capability: 'variable.adjust', name: 'Morale', amount: -1 }]);
+    // Field names, not just shape: the capability layer reads variableRef
+    // and delta off a variable.adjust request (mechanics-capabilities.js,
+    // addressRequestsByName) — name/amount would resolve nothing.
+    expect(state.requests).toEqual([{ capability: 'variable.adjust', variableRef: 'Morale', delta: -1 }]);
+    expect(state.requests[0]).toHaveProperty('variableRef', 'Morale');
+    expect(state.requests[0]).toHaveProperty('delta', -1);
     expect(state.flow.continue).toBe(false);
 });
 
