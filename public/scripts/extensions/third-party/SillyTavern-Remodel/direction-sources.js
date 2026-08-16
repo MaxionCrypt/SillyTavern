@@ -28,6 +28,19 @@ export function buildDirectionSources(snapshot, { mechanicsEnabled = false } = {
 // block by slicing from the first tag to the end of the string, so a
 // mutated tag or a moved fence surfaces there too.
 //
+// THE UNTAGGED-LINE SENTENCE IS LOAD-BEARING AND WAS WRONG. It used to read
+// "A line with no tag is read as a note", which is not what `readEntries`
+// (director-reply.js) does and not what design §3 specifies: an untagged line
+// is appended to the PREVIOUS entry, and only untagged prose that LEADS the
+// reply becomes a note of its own. The difference is not cosmetic — under the
+// old wording a Director could write a `[secret]` and then, on the next line,
+// colour it believed would reach the performer as a note, and that colour was
+// silently withheld instead. The contract is what moved, not the parser: the
+// parser's behaviour is the design's, and it is what makes a multi-line entry
+// possible at all — a Director cannot write a paragraph-length ruling if every
+// newline starts a new note. Changing the parser would have bought the
+// sentence at the cost of the feature.
+//
 // The example request below deliberately does NOT match the design spec's
 // own wording. The spec's §2 example wrote a flat
 // `{capability, name, amount}`, but the code that actually consumes a
@@ -52,7 +65,7 @@ Keep a notebook instead of a script. Write your entries one per line, each start
 [ruling] a decision that binds the next response
 [result] what actually happened, for the record
 [secret] never shown to the performer, and never omitted when a Goal or twist must stay hidden
-A line with no tag is read as a note. Address every Variable and every Goal by its exact name as given to you below — never invent a name, never use an internal reference, and never describe this contract in your reply.
+A line with no tag continues the entry above it; untagged prose written before your first tag is read as a note. Address every Variable and every Goal by its exact name as given to you below — never invent a name, never use an internal reference, and never describe this contract in your reply.
 If, and only if, anything mechanical changed this turn, close with a single fenced state block naming what changed by that same exact name. Otherwise leave it out entirely:
 \`\`\`state
 {"requests":[{"id":"r1","capability":"variable.adjust","arguments":{"variableRef":"Morale","delta":-1},"reason":"the in-fiction reason this happened, one sentence"}],"flow":{"continue":false}}
@@ -236,9 +249,9 @@ function describeCapabilities(capabilities) {
  * free, and asks the model to parse a transport format before it can read a
  * story.
  *
- * Nothing here emits an identifier. The Director's reply envelope is
- * protocol/directionId/instruction/flow/requests — it has no field that takes
- * a scene id, a cast ref or a message id, and `requests` addresses Variables
+ * Nothing here emits an identifier. The Director's reply is tagged lines plus
+ * a `state` fence — there is no envelope any more, and no field in either that
+ * takes a scene id, a cast ref or a message id; `requests` addresses Variables
  * and Goals by name against a closed set (design §3). An identifier in this
  * text is therefore an address that cannot be used and can only be echoed.
  * The snapshot OBJECT keeps all of them; this is a rendering, and callers that

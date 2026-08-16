@@ -69,6 +69,27 @@ test('the protocol teaches every tag the parser recognises, and only those', () 
     for (const type of ENTRY_TYPES) expect(directionProtocol).toContain(`[${type}]`);
 });
 
+// Review I4. This is ledger Finding 2's shape one level down: the tag NAMES
+// were pinned to ENTRY_TYPES above, but the SEMANTICS the protocol teaches
+// about them were free to drift, and they had. The protocol promised "A line
+// with no tag is read as a note"; `readEntries` appends an untagged line to
+// the PREVIOUS entry and only makes a note of untagged prose that leads the
+// reply. A Director following the old sentence would write colour under a
+// `[secret]` expecting it to reach the performer, and it was withheld.
+//
+// Both halves are executed against the real parser rather than merely asserted
+// about the prose, so this fails if EITHER side moves.
+test('the protocol describes the untagged-line rule the parser actually implements', () => {
+    const { directionProtocol } = buildDirectionSources(snapshot, { mechanicsEnabled: true });
+    // The wrong promise, verbatim as it shipped.
+    expect(directionProtocol).not.toMatch(/a line with no tag is read as a note/i);
+    expect(directionProtocol).toMatch(/continues the entry above it/i);
+    expect(parseDirectorReply('[secret] Hidden.\nStill hidden.').entries)
+        .toEqual([{ type: 'secret', text: 'Hidden.\nStill hidden.' }]);
+    expect(parseDirectorReply('Colour before any tag.\n[note] Tagged.').entries[0])
+        .toEqual({ type: 'note', text: 'Colour before any tag.' });
+});
+
 test('the protocol carries no pacing, autonomy or style policy', () => {
     const { directionProtocol } = buildDirectionSources(snapshot, { mechanicsEnabled: true });
     expect(directionProtocol).not.toMatch(/pacing|rhythm|opening|breath|length/i);

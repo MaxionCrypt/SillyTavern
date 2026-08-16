@@ -15,6 +15,35 @@ test('untagged leading prose becomes a note rather than being dropped', () => {
     expect(entries[1].type).toBe('result');
 });
 
+// Review I4: the PROTOCOL used to promise "A line with no tag is read as a
+// note", which is not what this parser does and not what design §3 specifies.
+// The contract was corrected rather than the parser, because continuation IS
+// the feature — without it a Director cannot write a ruling longer than one
+// line — and because a `[secret]` followed by untagged prose was silently
+// withholding colour the model had been told would reach the performer.
+//
+// These two tests are the parser half of that agreement. The contract half
+// lives in remodel-direction-sources.test.js.
+test('an untagged line continues the entry above it rather than starting a note', () => {
+    const { entries } = parseDirectorReply('[ruling] Teo talks once Eli sits.\nHe does not look up while he says it.');
+    expect(entries).toEqual([
+        { type: 'ruling', text: 'Teo talks once Eli sits.\nHe does not look up while he says it.' },
+    ]);
+});
+
+test('untagged prose after a [secret] stays inside the secret, which is why the contract had to say so', () => {
+    // The concrete loss the wrong sentence caused: under "a line with no tag
+    // is read as a note", a Director writing this expects the second line to
+    // reach the performer. It does not — it is part of the secret, and
+    // readNarratorEntries withholds the whole entry. Safe (nothing is promoted
+    // OUT of secret) but silent, on a branch whose stated risk is that
+    // anything the Director fails to record is invisible to the performer.
+    const { entries } = parseDirectorReply('[secret] The boy already knows.\nThe rain gets heavier, and Teo notices.');
+    expect(entries).toHaveLength(1);
+    expect(entries[0].type).toBe('secret');
+    expect(entries[0].text).toBe('The boy already knows.\nThe rain gets heavier, and Teo notices.');
+});
+
 test('an unknown tag stays literal text inside the current entry', () => {
     const { entries } = parseDirectorReply('[note] Teo stalls.\n[foreshadow] the closet\n[result] Eli sat.');
     expect(entries).toHaveLength(2);
