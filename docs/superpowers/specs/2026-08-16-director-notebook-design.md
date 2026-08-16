@@ -164,13 +164,24 @@ A new `directorNotes` source in the narrator recipe's source definitions, with a
 configurable look-back depth. This turn's entries are the direction; older
 entries are context.
 
-**Open for the plan to resolve:** recipe blocks carry a `sourceKey` but no
-per-block settings today, so there is no existing mechanism for "how far back".
-Either blocks gain a settings bag, or depth becomes a Mechanics-profile setting
-outside the recipe. The first is more discoverable and more work; the second is
-cheap and puts the control somewhere the user will not think to look. The plan
-should pick one and say why — this is the only piece of the design with no
-established precedent in the codebase.
+**Decided: blocks gain a settings bag.** A recipe block may carry a `settings`
+object alongside its `sourceKey`, and the `directorNotes` block uses
+`settings.depth`. The control belongs next to the thing it controls, where a
+user editing their Narrator recipe will actually find it — a Mechanics-profile
+setting would have been cheaper and effectively undiscoverable.
+
+Three consequences the implementation must handle, since this is the first
+per-block configuration in the format:
+
+- `normalizeRecipe` is the single funnel every recipe passes through, and is
+  therefore where a missing or malformed `settings` bag is defaulted. Existing
+  saved recipes have no `settings` at all and must keep working untouched.
+- The block editor needs to render a control for a block that declares
+  settings, and render nothing for the blocks that do not. The source
+  definitions are the natural place to declare what a block accepts.
+- `settings` must survive the compile path without reaching the model.
+  `compilePromptRecipe` resolves a block to text; the depth is an input to
+  resolving `directorNotes`, never part of what is sent.
 
 ### 6. The Narrator's history
 
