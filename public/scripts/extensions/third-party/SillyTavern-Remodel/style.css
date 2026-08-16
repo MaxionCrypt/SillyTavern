@@ -9863,6 +9863,48 @@ body.remodel-roleplay-workspace-active .remodel-rp-direction-stream-inner header
   font-size:.56rem !important;
 }
 
+/* The Director's OWN live shell (ensureDirectionStreamCard/
+   updateDirectionStreamCard, timeline-spine.js) — shown from the moment a
+   pass begins, replaced by the finished .remodel-rp-direction-stream-card
+   once persistDirectionRecord has a real record. Shares the container look
+   above via the same base classes; these rules cover only what the shell
+   adds: the pulsing "thinking" dots and the live text region. */
+body.remodel-roleplay-workspace-active .remodel-rp-direction-live-dots {
+  display:inline-flex !important;
+  align-items:center !important;
+  gap:4px !important;
+  margin-left:auto !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-direction-live-dots i {
+  width:5px !important;
+  height:5px !important;
+  border-radius:50% !important;
+  background:#ece32d !important;
+  opacity:.25 !important;
+  animation:remodel-storydoc-stream-pulse 1.1s infinite ease-in-out !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-direction-live-dots i:nth-child(2) { animation-delay:.16s !important; }
+body.remodel-roleplay-workspace-active .remodel-rp-direction-live-dots i:nth-child(3) { animation-delay:.32s !important; }
+@media (prefers-reduced-motion: reduce) {
+  body.remodel-roleplay-workspace-active .remodel-rp-direction-live-dots i { animation:none !important; opacity:.7 !important; }
+}
+body.remodel-roleplay-workspace-active .remodel-rp-direction-live-text {
+  margin:9px 0 6px !important;
+  color:rgba(250,246,232,.9) !important;
+  font:italic .82rem/1.48 var(--remodel-serif,Georgia,serif) !important;
+  white-space:pre-wrap !important;
+}
+/* Only the true unknown-duration gap: before the Director's first chunk
+   arrives, this element is empty and shows the placeholder; the moment real
+   text lands (once onDirectorChunk is wired through — see
+   updateDirectionStreamCard's doc comment), it stops being :empty and the
+   placeholder disappears on its own. Structural, not timed. */
+body.remodel-roleplay-workspace-active .remodel-rp-direction-live-text:empty::after {
+  content:'The Director is thinking…' !important;
+  color:rgba(238,235,245,.4) !important;
+  font-style:italic !important;
+}
+
 body.remodel-roleplay-workspace-active .remodel-rp-direction-stream-inner p {
   margin:9px 0 6px !important;
   color:rgba(250,246,232,.9) !important;
@@ -11115,6 +11157,24 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     border-radius: 6px;
 }
 
+/* A disabled control that used to do something, kept only so a saved value
+   isn't discarded. Dimmed rather than hidden: the setting still exists, it
+   just no longer governs anything — see the note paragraph below. */
+.remodel-debug-mechanics-grid label.is-inert {
+    opacity: .55;
+}
+
+.remodel-debug-mechanics-grid label.is-inert small {
+    display: block;
+    font-style: italic;
+    color: #8f8b83;
+}
+
+.remodel-debug-mechanics-grid input:disabled {
+    cursor: not-allowed;
+    opacity: .7;
+}
+
 .remodel-debug-mechanics-note {
     margin: 6px 0 2px;
     max-width: 92ch;
@@ -11902,4 +11962,391 @@ body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDraw
 body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-codex :is(.remodel-varstate-card button, .remodel-varedit-chip button):focus-visible {
     color: #e9df53 !important;
     background: rgba(255, 255, 255, .08) !important;
+}
+
+/* =====================================================================
+   DIRECTOR'S NOTEBOOK
+   The Timeline-focus surface onto director-notes-store.js's owner-facing
+   read (readAllEntriesForOwner): every entry the Director has written for a
+   Scene, across all four types, grouped by turn, filterable, editable (text
+   only — updateDirectorEntry never touches type) and individually
+   deletable. Lives in the same drawer as the Variables Codex and follows
+   its layout convention: the panel's own class spans the two-column
+   .remodel-route-layout grid it lands inside (see .remodel-codex above),
+   and every type-specific look below is driven off data-type attributes
+   set from ENTRY_TYPES, not off child position or count, so a fifth type
+   added later needs one more attribute selector here, never a rule that
+   counts siblings.
+   ===================================================================== */
+
+.remodel-notebook {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    padding: 16px 20px 32px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+.remodel-notebook-close {
+    align-self: flex-start;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 10px;
+    padding: 6px 12px;
+    color: rgba(235, 232, 244, .7);
+    font-size: 11px;
+    letter-spacing: .04em;
+    border: 1px solid rgba(255, 255, 255, .14);
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.remodel-notebook-close:hover {
+    color: #fff;
+    border-color: rgba(255, 255, 255, .3);
+}
+
+.remodel-notebook-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    margin-bottom: 4px;
+}
+
+.remodel-notebook-head > div {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.remodel-notebook-head > div > span {
+    color: rgba(242, 219, 66, .72);
+    font: 600 9px/1.3 system-ui, sans-serif;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+}
+
+.remodel-notebook-head strong {
+    color: #f2eff7;
+    font: 600 15px/1.3 var(--remodel-serif, Georgia, serif);
+}
+
+.remodel-notebook-head p {
+    flex: 1 1 260px;
+    margin: 4px 0 10px;
+    max-width: 70ch;
+    color: rgba(235, 232, 244, .55);
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.remodel-notebook-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 16px;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, .08);
+}
+
+.remodel-notebook-scene-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 200px;
+}
+
+.remodel-notebook-scene-picker span {
+    color: rgba(235, 232, 244, .5);
+    font-size: 9px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+}
+
+.remodel-notebook-scene-picker select {
+    padding: 6px 8px;
+    border-radius: 6px;
+}
+
+.remodel-notebook-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.remodel-notebook-filters button {
+    padding: 5px 11px;
+    color: rgba(235, 232, 244, .62);
+    font-size: 10.5px;
+    letter-spacing: .03em;
+    border: 1px solid rgba(255, 255, 255, .14);
+    border-radius: 999px;
+    cursor: pointer;
+}
+
+.remodel-notebook-filters button:hover {
+    color: #fff;
+    border-color: rgba(255, 255, 255, .3);
+}
+
+.remodel-notebook-filters button.is-active {
+    color: #09080d;
+    background: linear-gradient(180deg, #e9df53, #c9be00);
+    border-color: #e9df53;
+    font-weight: 700;
+}
+
+.remodel-notebook-turns {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.remodel-notebook-turn > header {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.remodel-notebook-turn > header > span {
+    color: rgba(242, 219, 66, .8);
+    font: 600 11px/1.3 var(--remodel-serif, Georgia, serif);
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+
+.remodel-notebook-turn-flag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: rgba(255, 154, 154, .78);
+    font-size: 10px;
+    letter-spacing: .02em;
+}
+
+.remodel-notebook-entries {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.remodel-notebook-entry {
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 255, 255, .1);
+    border-left: 3px solid rgba(255, 255, 255, .22);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, .02);
+}
+
+.remodel-notebook-entry[data-type="ruling"] { border-left-color: #d7c800; }
+.remodel-notebook-entry[data-type="result"] { border-left-color: #5fd98a; }
+.remodel-notebook-entry[data-type="secret"] { border-left-color: #ff6b6b; }
+
+.remodel-notebook-entry-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.remodel-notebook-type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    color: rgba(235, 232, 244, .78);
+    font-size: 9.5px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    border: 1px solid rgba(255, 255, 255, .16);
+    border-radius: 999px;
+}
+
+.remodel-notebook-type-badge[data-type="ruling"] { color: #f0e35c; border-color: rgba(215, 200, 0, .5); }
+.remodel-notebook-type-badge[data-type="result"] { color: #8be9a8; border-color: rgba(95, 217, 138, .5); }
+.remodel-notebook-type-badge[data-type="secret"] { color: #ff9b9e; border-color: rgba(255, 107, 107, .5); }
+
+/* The one marker this whole panel exists to make legible at a glance: can
+   the Narrator see this entry? Shared by `secret` (withheld by type) and an
+   abandoned take's entries (withheld because the take never happened) —
+   renderNotebookEntry names which reason applies. */
+.remodel-notebook-withheld {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: #ff9b9e;
+    font-size: 10px;
+    letter-spacing: .02em;
+}
+
+.remodel-notebook-flag {
+    color: rgba(235, 232, 244, .45);
+    font-size: 10px;
+    font-style: italic;
+}
+
+.remodel-notebook-entry-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+}
+
+.remodel-notebook-entry-actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    color: rgba(235, 232, 244, .55);
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.remodel-notebook-entry-actions button:hover {
+    color: #e9df53;
+    background: rgba(255, 255, 255, .08);
+}
+
+.remodel-notebook-entry-actions button.danger:hover {
+    color: #ff9b9e;
+    background: rgba(191, 42, 52, .16);
+}
+
+.remodel-notebook-entry-text {
+    margin: 8px 0 0;
+    color: rgba(250, 246, 232, .88);
+    font: italic 12.5px/1.55 var(--remodel-serif, Georgia, serif);
+    white-space: pre-wrap;
+}
+
+.remodel-notebook-entry-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.remodel-notebook-entry-edit textarea {
+    min-height: 64px;
+    padding: 8px;
+    border-radius: 6px;
+    font: 12.5px/1.5 var(--remodel-serif, Georgia, serif);
+    resize: vertical;
+}
+
+.remodel-notebook-entry-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.remodel-notebook-entry-edit-actions button {
+    padding: 5px 14px;
+    font-size: 11px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.remodel-notebook-entry-edit-actions button:first-child {
+    color: #09080d;
+    background: linear-gradient(180deg, #e9df53, #c9be00);
+    border: 1px solid #e9df53;
+    font-weight: 700;
+}
+
+.remodel-notebook-entry-edit-actions button:last-child {
+    color: rgba(235, 232, 244, .7);
+    background: rgba(255, 255, 255, .04);
+    border: 1px solid rgba(255, 255, 255, .16);
+}
+
+.remodel-notebook-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 40px 20px;
+    color: rgba(235, 232, 244, .4);
+    font-size: 12px;
+    text-align: center;
+}
+
+.remodel-notebook-empty i {
+    font-size: 22px;
+    opacity: .5;
+}
+
+@media (max-width: 720px) {
+    .remodel-notebook-controls { flex-direction: column; align-items: flex-start; }
+}
+
+/* Notebook vs. the Docked Menu Surface Reset — same problem, same fix, as
+   the Codex block above: this panel lives in the same native Tavern drawer,
+   so its own select/textarea/buttons need the id-specificity neutralizer
+   matched rather than merely out-!important'd (see the long comment above
+   the Codex's own copy of this fix for why class-only !important cannot win
+   that fight). Scoped to .remodel-notebook so it cannot bleed into the rest
+   of the drawer. */
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-notebook :is(select, textarea) {
+    background: rgba(7, 6, 12, .72) !important;
+    border: 1px solid rgba(255, 255, 255, .12) !important;
+    outline: 0 !important;
+    box-shadow: none !important;
+    border-radius: 6px !important;
+    color: #f2eff7 !important;
+    -webkit-text-fill-color: #f2eff7 !important;
+}
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-notebook :is(select, textarea):focus {
+    background: rgba(7, 6, 12, .88) !important;
+    box-shadow: 0 0 0 2px rgba(201, 190, 0, .3) !important;
+}
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-notebook :is(.remodel-notebook-close, .remodel-notebook-filters button, .remodel-notebook-entry-edit-actions button:last-child) {
+    background: rgba(255, 255, 255, .04) !important;
+    border: 1px solid rgba(255, 255, 255, .16) !important;
+    outline: 0 !important;
+    box-shadow: none !important;
+    filter: none !important;
+    text-shadow: none !important;
+    color: rgba(235, 232, 244, .7) !important;
+}
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-notebook :is(.remodel-notebook-filters button.is-active, .remodel-notebook-entry-edit-actions button:first-child) {
+    color: #09080d !important;
+    background: linear-gradient(180deg, #e9df53, #c9be00) !important;
+    border: 1px solid #e9df53 !important;
+    outline: 0 !important;
+    box-shadow: 0 2px 8px rgba(201, 190, 0, .28) !important;
+    filter: none !important;
+    text-shadow: none !important;
+    font-weight: 700 !important;
+}
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-notebook .remodel-notebook-entry-actions button {
+    background: none !important;
+    border: 0 !important;
+    outline: 0 !important;
+    box-shadow: none !important;
+    filter: none !important;
+    text-shadow: none !important;
+    color: rgba(235, 232, 244, .55) !important;
+    border-radius: 6px !important;
+}
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-notebook .remodel-notebook-entry-actions button:hover {
+    color: #e9df53 !important;
+    background: rgba(255, 255, 255, .08) !important;
+}
+body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-notebook .remodel-notebook-entry-actions button.danger:hover {
+    color: #ff9b9e !important;
+    background: rgba(191, 42, 52, .16) !important;
 }

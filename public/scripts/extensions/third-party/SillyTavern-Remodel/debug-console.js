@@ -541,8 +541,8 @@ function renderMechanicsProfile() {
                     Let the Director propose changes to Goals and Variables</label>
                 <label>Context budget
                     <input type="number" min="1000" max="32000" step="500" data-remodel-debug-mechanics="contextBudget" value="${profile.contextBudget}"></label>
-                <label>Director answer allowance
-                    <input type="number" min="1500" max="32000" step="500" data-remodel-debug-mechanics="directorResponseTokens" value="${profile.directorResponseTokens}"></label>
+                <label class="is-inert" title="Streaming removed the last caller that read this value. The Director's reply now runs through the same Chat Completion connection Story mode uses, which takes no response-length argument of its own — so this input is kept only so an existing saved value is not silently discarded, and no longer governs anything.">Director answer allowance <small>— no longer used; the connection's own response length applies instead</small>
+                    <input type="number" min="1500" max="32000" step="500" data-remodel-debug-mechanics="directorResponseTokens" value="${profile.directorResponseTokens}" disabled></label>
                 <label>Variables per pass
                     <input type="number" min="1" max="12" data-remodel-debug-mechanics="retrievalLimit" value="${profile.retrievalLimit}"></label>
                 <label>Recent messages scanned
@@ -560,9 +560,11 @@ function renderMechanicsProfile() {
                         ${option('retry-once', 'Retry once, then pause', profile.failureBehavior)}
                     </select></label>
             </div>
-            <p class="remodel-debug-mechanics-note">The budget sizes how much mechanical state enters the prompt. The allowance is
-                how much room the Director has to reply — its reasoning is paid out of the same allowance, so a Scene with no Goals
-                can still need a large one. Overrunning it truncates the envelope rather than shortening the answer.</p>
+            <p class="remodel-debug-mechanics-note">The budget sizes how much mechanical state enters the prompt. The Director
+                answer allowance above no longer governs anything: the Director streams its reply now, through the same Chat
+                Completion connection Story mode uses, and that transport takes no response-length argument of its own — raise or
+                lower the Director's reply room from your connection's own settings instead. Left in place, disabled, rather than
+                deleted, so a value you had already set is not silently discarded.</p>
         </details>`;
 }
 
