@@ -179,7 +179,18 @@ test('a native re-sync keeps the notes block that the loaded preset does not kno
     // Driven through the real exported entry point rather than through
     // withRemodelSources directly — the defect was that the call site did not
     // apply it, so a test of the helper alone would have stayed green.
+    //
+    // ORDER MATTERS, and getting it wrong is why the first version of this
+    // test passed against the unfixed code: captureNativeSettingsFor returns
+    // immediately when the native signature is unchanged. Studio has to be
+    // running FIRST, against the settings it was initialised with, and the
+    // preset has to arrive after — which is also the real sequence.
     globalThis.document.addEventListener ??= () => {};
+    initPromptStudio({ getRuntimeMode: () => 'roleplay' });
+    const before = getCurrentPromptStudioRecipe('roleplay', 'chat');
+    expect(before.blocks.some((block) => block.sourceKey === 'directorNotes')).toBe(true);
+
+    // The user loads a Chat Completion preset authored before Remodel existed.
     oai_settings.prompts = [
         { identifier: 'main', name: 'Main Prompt', content: 'You are a narrator.', system_prompt: true },
         { identifier: 'chatHistory', name: 'Chat History', marker: true },
@@ -188,10 +199,6 @@ test('a native re-sync keeps the notes block that the loaded preset does not kno
         character_id: 100001,
         order: [{ identifier: 'main', enabled: true }, { identifier: 'chatHistory', enabled: true }],
     }];
-
-    initPromptStudio({ getRuntimeMode: () => 'roleplay' });
-    const before = getCurrentPromptStudioRecipe('roleplay', 'chat');
-    expect(before.blocks.some((block) => block.sourceKey === 'directorNotes')).toBe(true);
 
     // A preset change fires this. It is the same call the SETTINGS_UPDATED /
     // OAI_PRESET_CHANGED_AFTER / PRESET_CHANGED listeners make.
