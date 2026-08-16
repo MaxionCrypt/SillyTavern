@@ -388,11 +388,13 @@ export async function stopLiveDirection() {
 }
 
 /**
- * `retry` (== the failed pass's `pendingFailure`) carries `messagePosted`
- * forward unchanged — beginDirection reads it back out to decide whether
- * `sendMessageAsUser` needs to run again. No branching needed HERE: whether
- * the text is already in the chat is beginDirection's question to answer,
- * not this function's to guess at.
+ * `retry` (== the failed pass's `pendingFailure`) carries `postedMessage`
+ * forward unchanged — the actual chat message object beginDirection posted,
+ * or `null` if it never got that far. beginDirection reads it back out to
+ * decide whether `sendMessageAsUser` needs to run again. No branching needed
+ * HERE: whether the text is already in the chat, and which entry it is, are
+ * beginDirection's (and buildDirectionSnapshot's) questions to answer, not
+ * this function's to guess at.
  */
 export async function retryLiveDirection() {
     if (directionInFlight) {
@@ -409,19 +411,19 @@ export async function retryLiveDirection() {
  * Bypasses Direction entirely and sends `retry.action` through core's own
  * send flow (`hooks.sendNormally`), which posts the text itself.
  *
- * Refused when `messagePosted` is true: the text is already the newest chat
- * entry (beginDirection posted it before this pass failed), and sendNormally
- * would post it a SECOND time — there is nothing left for this bypass to do.
- * Retry is the recovery action for that case, and it already knows not to
- * re-post either. canSendWithoutLiveDirection hides the button for the same
- * reason, so reaching here with `messagePosted: true` should not happen in
- * the UI — refused anyway, since a caller other than the button should not
- * have to re-derive this rule to stay safe.
+ * Refused when `postedMessage` is set: the text is already in the chat
+ * (beginDirection posted it before this pass failed), and sendNormally would
+ * post it a SECOND time — there is nothing left for this bypass to do. Retry
+ * is the recovery action for that case, and it already knows not to re-post
+ * either. canSendWithoutLiveDirection hides the button for the same reason,
+ * so reaching here with `postedMessage` set should not happen in the UI —
+ * refused anyway, since a caller other than the button should not have to
+ * re-derive this rule to stay safe.
  */
 export function sendWithoutLiveDirection() {
     const retry = pendingFailure;
     pendingFailure = null;
-    if (!retry?.insertUser || retry.messagePosted) return false;
+    if (!retry?.insertUser || retry.postedMessage) return false;
     hooks.sendNormally(retry.action);
     return true;
 }
@@ -432,11 +434,11 @@ export function sendWithoutLiveDirection() {
  * A failure on an autonomous continuation has none — there is no intervention
  * to re-send — so offering "Send Normally" there is a button that cannot do
  * anything when clicked. Same reasoning when the text is already posted
- * (`messagePosted`): the bypass would only duplicate it, so the button is
+ * (`postedMessage`): the bypass would only duplicate it, so the button is
  * withheld and Retry is left as the one recovery action for that case.
  */
 export function canSendWithoutLiveDirection() {
-    return Boolean(pendingFailure?.insertUser) && !pendingFailure?.messagePosted;
+    return Boolean(pendingFailure?.insertUser) && !pendingFailure?.postedMessage;
 }
 
 export async function regenerateLastDirectedResponse(scene = hooks.getActiveScene()) {
@@ -517,14 +519,14 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     return generateDirectedPerformer({ scene, envelope, performer, autonomousSequence: Number(saved.autonomousSequence) || 0 });
 }
 
-async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, messagePosted = false } = {}) {
+async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, postedMessage = null } = {}) {
     // Checked before the Director call, not after: the Director costs a real
     // request and ~17s, and there is no point spending either when the
     // performer that follows it cannot speak.
     const blocked = !scene ? 'No active Scene.' : describeNativeGenerationBlock();
     if (blocked) {
         journal('blocked', { reason: blocked }, { severity: 'warn' });
-        return directionFailure(new Error(blocked), { scene, action, insertUser, authorizedGoalIds, autonomousSequence, messagePosted });
+        return directionFailure(new Error(blocked), { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage });
     }
     // Last line of defence. Every caller checks the lock, but they are all async
     // and a caller that awaited something in between could still arrive here
@@ -546,8 +548,10 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         insertUser: Boolean(insertUser),
         // Distinct from `insertUser`: this says whether the text is already
         // sitting in context.chat from an earlier attempt at this same action
-        // (a retry), not whether this kind of pass posts text at all.
-        messagePosted: Boolean(messagePosted),
+        // (a retry), not whether this kind of pass posts text at all. A
+        // boolean here for the journal only — the record itself carries the
+        // actual message object, never logged whole (see the comment below).
+        alreadyPosted: Boolean(postedMessage),
         autonomousSequence,
         authorizedGoalIds,
         actionLength: String(action || '').length,
@@ -562,32 +566,45 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // after the round trip returns — a real request that has measured
         // 101-202s, during which the user's own words used to be nowhere on
         // screen. buildDirectionSnapshot is told to leave this same entry out
-        // of acceptedHistory below: it is still the newest thing in
-        // context.chat, but the Director must see it exactly once, under
-        // CURRENT ACTION (direction-sources.js's describeSnapshot), not once
-        // there and once more inside STORY SO FAR. `action` stays the single
-        // source handed to the World Info scan and buildMechanicalSnapshot
-        // just below, so neither scores it twice either.
+        // of acceptedHistory below — NOT necessarily "the newest thing in
+        // context.chat" (a retry after generation itself wrote a message and
+        // then still failed can leave that message sitting after this one) —
+        // so the Director sees it exactly once, under CURRENT ACTION
+        // (direction-sources.js's describeSnapshot), not once there and once
+        // more inside STORY SO FAR. `action` stays the single source handed to
+        // the World Info scan and buildMechanicalSnapshot just below, so
+        // neither scores it twice either.
         //
         // Once this runs there is no undoing it on a later failure in this
         // same pass: nothing downstream removes the message, so it stays in
         // the chat even if the Director call or the performer that follows it
-        // never succeeds. `messagePosted` is what stops a RETRY from posting
-        // it again: directionFailure carries whatever it is at the moment of
-        // failure forward on pendingFailure, retryLiveDirection hands that
-        // whole record back into this function, and a chain of retries after
-        // the text has landed skips this block and reads the message that is
-        // already there. Kept separate from `insertUser`, which still decides
-        // lock priority (userInitiated) and the journal's user/autonomous
-        // label — a fact about what KIND of pass this is, not about whether
-        // this particular attempt already posted.
-        if (insertUser && !messagePosted) {
-            await sendMessageAsUser(action);
+        // never succeeds. `postedMessage` — the actual message OBJECT
+        // sendMessageAsUser returns, not a boolean or an index — is what stops
+        // a RETRY from posting it again: directionFailure carries whatever it
+        // is at the moment of failure forward on pendingFailure,
+        // retryLiveDirection hands that whole record back into this function,
+        // and a chain of retries after the text has landed skips this block
+        // and reads the message that is already there.
+        //
+        // It has to be the object, not a boolean or a captured index. A
+        // boolean only says "posted at some point"; it does not say which
+        // entry, so a later exclusion-by-position can grab the wrong one — and
+        // an index goes stale the moment anything else changes context.chat's
+        // length before that exclusion runs, which generation doing exactly
+        // that (writing the performer's response) and then failing makes
+        // routine, not rare. The object survives both: it identifies the SAME
+        // entry wherever it ends up sitting.
+        //
+        // Kept separate from `insertUser`, which still decides lock priority
+        // (userInitiated) and the journal's user/autonomous label — a fact
+        // about what KIND of pass this is, not about whether this particular
+        // attempt already posted.
+        if (insertUser && !postedMessage) {
+            postedMessage = await sendMessageAsUser(action);
             hooks.clearComposer();
-            messagePosted = true;
         }
         if (token.aborted) return abandonPass(token, 'insert-user');
-        const snapshot = await buildDirectionSnapshot(scene, action, authorizedGoalIds, { excludeNewestFromHistory: messagePosted });
+        const snapshot = await buildDirectionSnapshot(scene, action, authorizedGoalIds, { excludeFromHistory: postedMessage });
         journal('snapshot', {
             passId: token.id,
             castCount: snapshot.cast.length,
@@ -721,7 +738,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         askedThePerformer = true;
         return await generateDirectedPerformer({ scene, envelope: normalized, performer, autonomousSequence, token });
     } catch (error) {
-        return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence, messagePosted });
+        return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage });
     } finally {
         // A take that never reached the performer produced nothing — no
         // message, no state change — so its entries must not bind the turn
@@ -758,21 +775,35 @@ function abandonPass(token, stage) {
     return false;
 }
 
-async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { preview = false, excludeNewestFromHistory = false } = {}) {
+async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { preview = false, excludeFromHistory = null } = {}) {
     const context = getContext();
     const cast = hooks.getCast() || [];
     const persona = hooks.getPersona() || null;
     // beginDirection now posts the user's message to context.chat BEFORE
     // calling this function, so on a real (non-preview) user-initiated pass
-    // it is already the newest entry here. `excludeNewestFromHistory` drops
-    // that one entry from the window this function slices — not from
-    // context.chat itself — so it is read back into the Director's prompt
+    // it is already sitting in there somewhere. `excludeFromHistory` — the
+    // exact message OBJECT beginDirection posted, not a position — is
+    // filtered out of the window this function slices, not out of
+    // context.chat itself, so it is read back into the Director's prompt
     // exactly once, as `action` (CURRENT ACTION), rather than a second time
-    // here (STORY SO FAR). Computing `id` against this trimmed length rather
-    // than against context.chat.length is what keeps every other message's
-    // id identical to what it would have been without the insertion.
+    // here (STORY SO FAR).
+    //
+    // Filtered by identity rather than "drop the last entry": on a retry
+    // after a failure that left an orphaned performer response in
+    // context.chat (generation wrote a message and then the pass still
+    // failed), the user's own message is no longer last — the orphaned
+    // response is. Dropping the tail there would strip the WRONG message: the
+    // action would stay in acceptedHistory (so the Director reads it twice —
+    // once here, once as CURRENT ACTION), the orphaned response would be
+    // hidden from the Director entirely, and resolveVariableContext below
+    // would score the action's text twice. Filtering by the object itself
+    // finds the right entry regardless of what else has been appended since.
+    //
+    // Computing `id` against this filtered length rather than against
+    // context.chat.length is what keeps every other message's id identical to
+    // what it would have been without the insertion.
     const rawChat = context.chat || [];
-    const effectiveChat = excludeNewestFromHistory ? rawChat.slice(0, -1) : rawChat;
+    const effectiveChat = excludeFromHistory ? rawChat.filter((message) => message !== excludeFromHistory) : rawChat;
     const history = effectiveChat.slice(-40).map((message, index) => ({
         id: effectiveChat.length - Math.min(40, effectiveChat.length) + index,
         role: message.is_user ? 'user' : 'assistant',

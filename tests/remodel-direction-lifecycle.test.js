@@ -384,10 +384,22 @@ async function capturedDirectorSourcesForAction(actionText) {
     return buildDirectionSources(capturedSnapshot, { mechanicsEnabled: true });
 }
 
-test("the user's action appears exactly once in the Director's prompt", async () => {
+test("the user's action appears exactly once in the Director's prompt, and prior history still reaches it", async () => {
+    // Seeded with a prior message on purpose. An empty chat cannot tell the
+    // difference between "the newest entry was correctly excluded" and "the
+    // whole history window was thrown away" — a fixture with nothing in it
+    // passes the occurrences-equal-1 assertion below either way, which is
+    // exactly the gap a reviewer found in an earlier version of this test.
+    __getChat().push({ name: 'Wren', is_user: false, mes: 'The corridor smells of rain.', extra: {} });
+
     const sources = await capturedDirectorSourcesForAction('I push the door open.');
+
     const occurrences = sources.directorSnapshot.split('I push the door open.').length - 1;
     expect(occurrences).toBe(1);
+    // The only way this passes is if acceptedHistory still carries the prior
+    // turn — proof the exclusion removed the ONE entry it was supposed to
+    // and nothing else.
+    expect(sources.directorSnapshot).toContain('The corridor smells of rain.');
 });
 
 test("the user's message is in the chat before the Director is called", async () => {
@@ -410,6 +422,29 @@ test("the user's message is in the chat before the Director is called", async ()
     expect(chatAtDirectorCall).toEqual([{ is_user: true, mes: 'I push the door open.' }]);
 });
 
+test("an autonomous pass still sees the previous performer response in its history", async () => {
+    // requestNextDirection never calls sendMessageAsUser (insertUser: false),
+    // so postedMessage stays null for the whole pass and buildDirectionSnapshot
+    // must exclude nothing from acceptedHistory. This is the risk the ordering
+    // change itself was reviewed against: an exclusion that runs unconditionally
+    // would silently hide the immediately-preceding performer response from
+    // every autonomous continuation, and nothing before this test could catch
+    // that — the two tests above only ever exercise a user-initiated pass.
+    await completeAndSettle();
+    expect(__getChat().map((message) => message.mes)).toContain(RESPONSE);
+
+    let capturedSnapshot = null;
+    setLiveDirectionTestAdapters({
+        requestDirection: async ({ snapshot }) => { capturedSnapshot = snapshot; return directorReply(); },
+        generatePerformer: speak,
+    });
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    const sources = buildDirectionSources(capturedSnapshot, { mechanicsEnabled: true });
+    expect(sources.directorSnapshot).toContain(RESPONSE);
+});
+
 // ------------------------------ retry and "Send Normally" after that point
 //
 // Posting the user's message before the Director round trip (above) means a
@@ -420,13 +455,13 @@ test("the user's message is in the chat before the Director is called", async ()
 // and neither used to know whether that text had already landed — so both
 // would post it a second time, producing a duplicate user bubble.
 //
-// The fix records that fact on the pending failure as `messagePosted`,
-// separate from `insertUser` (which still decides lock priority and the
-// journal's user/autonomous label — a fact about what KIND of pass this is,
-// not about whether THIS attempt already posted), and has beginDirection
-// consult it before deciding to call sendMessageAsUser again. Both cases
-// below are asserted on the chat's actual contents after a retry, not on the
-// flag itself.
+// The fix records that fact on the pending failure as `postedMessage` — the
+// actual chat message object, not a boolean or a captured index — separate
+// from `insertUser` (which still decides lock priority and the journal's
+// user/autonomous label — a fact about what KIND of pass this is, not about
+// whether THIS attempt already posted), and has beginDirection consult it
+// before deciding to call sendMessageAsUser again. Cases below are asserted
+// on the chat's actual contents after a retry, not on the field itself.
 
 function userMessages() {
     return __getChat().filter((message) => message.is_user).map((message) => message.mes);
@@ -454,6 +489,52 @@ test('a retry after the message already posted does not duplicate it', async () 
     // Still exactly one copy — the retry read the message that was already
     // there instead of posting it again.
     expect(userMessages()).toEqual(['I push the door open.']);
+});
+
+test('a retry after generation wrote an orphaned response excludes the right entry from history', async () => {
+    // The specific repro a reviewer found: generation itself writes a message
+    // and the pass STILL fails afterward (a downstream error after the native
+    // call already succeeded — generateDirectedPerformer propagates whatever
+    // its call throws, whether or not it already produced a message).
+    // context.chat's newest entry is now the PERFORMER's orphaned response,
+    // not the user's — so "exclude the last entry" would strip the wrong one:
+    // the user's action would stay in acceptedHistory (read twice by the
+    // Director) while the orphaned response vanished from it entirely.
+    setLiveDirectionTestAdapters({
+        requestDirection: async () => directorReply(),
+        generatePerformer: async () => {
+            __getChat().push({ name: 'Wren', is_user: false, mes: 'An orphaned response.', extra: {} });
+            throw new Error('generation failed after writing a message');
+        },
+    });
+    const consoleError = console.error;
+    console.error = () => {};
+    try {
+        await submitDirectedRoleplay({ scene, text: 'I push the door open.' });
+    } finally {
+        console.error = consoleError;
+    }
+    // Both entries are really there: the user's action, then the orphaned
+    // response generation left behind before the pass still failed.
+    expect(__getChat().map((message) => message.mes)).toEqual(['I push the door open.', 'An orphaned response.']);
+
+    let capturedSnapshot = null;
+    setLiveDirectionTestAdapters({
+        requestDirection: async ({ snapshot }) => { capturedSnapshot = snapshot; return directorReply(); },
+        generatePerformer: speak,
+    });
+    await retryLiveDirection();
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    const sources = buildDirectionSources(capturedSnapshot, { mechanicsEnabled: true });
+    // The action still appears exactly once — under CURRENT ACTION — which is
+    // only possible if the exclusion removed the USER's entry, not the
+    // orphaned response sitting after it.
+    const occurrences = sources.directorSnapshot.split('I push the door open.').length - 1;
+    expect(occurrences).toBe(1);
+    // And the orphaned response is a real prior turn — it must reach the
+    // Director via STORY SO FAR, not be silently dropped.
+    expect(sources.directorSnapshot).toContain('An orphaned response.');
 });
 
 test('a retry after an early refusal, before the message ever posted, still posts it', async () => {
