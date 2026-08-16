@@ -8391,6 +8391,39 @@ const ROLEPLAY_PREVIEW_ID = 'remodel-rp-preview-modal';
 const previewTab = (id, label, active) =>
     `<button type="button" data-remodel-rp-preview-tab="${id}" class="${active === id ? 'is-active' : ''}">${label}</button>`;
 
+// The hint under the title used to describe both prompts at once, which is
+// never what is on screen — only one tab is ever visible. One line per tab,
+// swapped by setRoleplayPreviewTab.
+const PREVIEW_TAB_HINTS = Object.freeze({
+    director: 'What the hidden Director will receive on the next turn — nothing is sent.',
+    narrator: 'What the Narrator will receive on the next turn — nothing is sent.',
+});
+
+// Both panels get the same BY SOURCE / RAW PROMPT toggle and the same pair of
+// containers, under the same attribute names. Every lookup below is scoped to
+// one panel rather than to the overlay, so the toggle is one component serving
+// two tabs instead of two near-identical ones drifting apart — this codebase
+// has a documented history of defects from handlers that enumerate cases
+// instead of generalising.
+const PREVIEW_VIEWS_MARKUP = `
+                <div class="remodel-rp-preview-views" data-remodel-rp-preview-views hidden>
+                    <button type="button" class="is-active" data-remodel-rp-preview-view="sources">By source</button>
+                    <button type="button" data-remodel-rp-preview-view="raw">Raw prompt</button>
+                </div>
+                <div class="remodel-rp-preview-sources" data-remodel-rp-preview-sources hidden></div>
+                <pre class="remodel-rp-preview-body" data-remodel-rp-preview-body>Assembling prompt…</pre>`;
+
+const previewPanel = (id, activeTab, lead = '') => `
+            <div class="remodel-rp-preview-panel" data-remodel-rp-preview-panel="${id}" ${activeTab === id ? '' : 'hidden'}>
+                <div class="remodel-rp-preview-warn" data-remodel-rp-preview-warn hidden></div>
+                ${lead}${PREVIEW_VIEWS_MARKUP}
+            </div>`;
+
+// Informational, not a fault: the compile path is exact and only the retrieval
+// scoring can move, so this gets the neutral callout. The red warn box in the
+// same panel stays reserved for usedFallback, which genuinely is a fault.
+const DIRECTOR_RETRIEVAL_NOTE = '<p class="remodel-rp-preview-note">Everything here compiles exactly like a real request, except Variables/Goals retrieval — it is scored against your current history and this composer draft, and can select differently once you actually send.</p>';
+
 async function openRoleplayPromptPreview() {
     // Build the modal shell immediately with a loading state so the click is
     // acknowledged, then fill it once the dry runs resolve.
@@ -8408,7 +8441,7 @@ async function openRoleplayPromptPreview() {
             <div class="remodel-rp-picker-head">
                 <div>
                     <div class="remodel-rp-picker-title">Prompt preview</div>
-                    <div class="remodel-rp-picker-hint">What each model will receive on the next turn — nothing is sent.</div>
+                    <div class="remodel-rp-picker-hint" data-remodel-rp-preview-hint>${escapeHtml(PREVIEW_TAB_HINTS[defaultTab])}</div>
                 </div>
                 <button type="button" class="remodel-rp-picker-x" data-remodel-rp-preview-close aria-label="Close">×</button>
             </div>
@@ -8416,26 +8449,18 @@ async function openRoleplayPromptPreview() {
                 ${previewTab('director', 'Director', defaultTab)}
                 ${previewTab('narrator', 'Narrator', defaultTab)}
             </div>
-            <div class="remodel-rp-preview-panel" data-remodel-rp-preview-panel="director" ${defaultTab === 'director' ? '' : 'hidden'}>
-                <div class="remodel-rp-preview-warn" data-remodel-rp-director-preview-warn hidden></div>
-                ${directed ? '<p class="remodel-rp-direction-note">Everything here compiles exactly like a real request, except Variables/Goals retrieval — it is scored against your current history and this composer draft, and can select differently once you actually send.</p>' : ''}
-                <pre class="remodel-rp-preview-body" data-remodel-rp-director-preview-body>Assembling prompt…</pre>
-            </div>
-            <div class="remodel-rp-preview-panel" data-remodel-rp-preview-panel="narrator" ${defaultTab === 'narrator' ? '' : 'hidden'}>
-                <div class="remodel-rp-preview-warn" data-remodel-rp-preview-warn hidden></div>
-                <div class="remodel-rp-preview-views" data-remodel-rp-preview-views hidden>
-                    <button type="button" class="is-active" data-remodel-rp-preview-view="sources">By source</button>
-                    <button type="button" data-remodel-rp-preview-view="raw">Raw prompt</button>
-                </div>
-                <div class="remodel-rp-preview-sources" data-remodel-rp-preview-sources hidden></div>
-                <pre class="remodel-rp-preview-body" data-remodel-rp-preview-body>Assembling prompt…</pre>
-            </div>
+            ${previewPanel('director', defaultTab, directed ? DIRECTOR_RETRIEVAL_NOTE : '')}
+            ${previewPanel('narrator', defaultTab)}
         </div>
     `;
     document.body.appendChild(overlay);
     requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
 
-    fillDirectorPreviewPanel(overlay, activeScene, directed);
+    // Both panels now use the same attribute names for their body, sources and
+    // view toggle, so every lookup has to be scoped to its own panel — an
+    // overlay-wide querySelector would find whichever panel comes first.
+    const narratorPanel = overlay.querySelector('[data-remodel-rp-preview-panel="narrator"]');
+    fillDirectorPreviewPanel(overlay.querySelector('[data-remodel-rp-preview-panel="director"]'), activeScene, directed);
 
     try {
         const { generateData, warnings } = await runPromptPreviewDryRun('normal');
@@ -8448,8 +8473,8 @@ async function openRoleplayPromptPreview() {
         // badge decides who speaks, pacing is derived from the finished prose,
         // and every mechanical request applies once the response is accepted.
         if (directed) warnings.push('The Director has not run: its instruction to the performer, and any Goal or Variable change it requests, are decided when you send and applied once the response is accepted. Preview never rolls or mutates.');
-        const bodyEl = overlay.querySelector('[data-remodel-rp-preview-body]');
-        const warnEl = overlay.querySelector('[data-remodel-rp-preview-warn]');
+        const bodyEl = narratorPanel?.querySelector('[data-remodel-rp-preview-body]');
+        const warnEl = narratorPanel?.querySelector('[data-remodel-rp-preview-warn]');
         if (bodyEl) {
             bodyEl.textContent = formatPromptPreview(generateData);
         }
@@ -8457,8 +8482,8 @@ async function openRoleplayPromptPreview() {
         // Completion scenes never populate the prompt manager, so those keep
         // the raw dump with no view switcher at all.
         const sections = collectPromptPreviewSections();
-        const sourcesEl = overlay.querySelector('[data-remodel-rp-preview-sources]');
-        const viewsEl = overlay.querySelector('[data-remodel-rp-preview-views]');
+        const sourcesEl = narratorPanel?.querySelector('[data-remodel-rp-preview-sources]');
+        const viewsEl = narratorPanel?.querySelector('[data-remodel-rp-preview-views]');
         if (sections && sourcesEl && viewsEl && bodyEl) {
             sourcesEl.innerHTML = renderPromptPreviewSections(sections);
             sourcesEl.hidden = false;
@@ -8470,7 +8495,7 @@ async function openRoleplayPromptPreview() {
             warnEl.hidden = false;
         }
     } catch (err) {
-        const bodyEl = overlay.querySelector('[data-remodel-rp-preview-body]');
+        const bodyEl = narratorPanel?.querySelector('[data-remodel-rp-preview-body]');
         if (bodyEl) {
             bodyEl.textContent = `Could not assemble a preview.\n\n${String(err)}`;
         }
@@ -8483,16 +8508,16 @@ async function openRoleplayPromptPreview() {
 // previewDirectorPrompt/compileDirectorPrompt in live-direction.js) — so the
 // two can never drift apart. Runs independently of the Narrator dry run above
 // so one tab's failure never blocks the other from filling in.
-async function fillDirectorPreviewPanel(overlay, scene, directed) {
-    const bodyEl = overlay.querySelector('[data-remodel-rp-director-preview-body]');
-    const warnEl = overlay.querySelector('[data-remodel-rp-director-preview-warn]');
+async function fillDirectorPreviewPanel(panel, scene, directed) {
+    const bodyEl = panel?.querySelector('[data-remodel-rp-preview-body]');
+    const warnEl = panel?.querySelector('[data-remodel-rp-preview-warn]');
     if (!bodyEl) return;
     if (!directed) {
         bodyEl.textContent = '(This Scene is on Free play — no Director request is made on its next turn. Turn Live Direction on to preview it.)';
         return;
     }
     try {
-        const { prompt, usedFallback } = await previewDirectorPrompt(scene);
+        const { prompt, usedFallback, trace } = await previewDirectorPrompt(scene);
         bodyEl.textContent = formatPromptStudioPreview({ apiType: 'chat', messages: prompt });
         // Keyed on usedFallback, not on "no recipe": compileDirectorPrompt also
         // falls back when a recipe exists but compiles to nothing or lost its
@@ -8502,9 +8527,133 @@ async function fillDirectorPreviewPanel(overlay, scene, directed) {
             warnEl.textContent = '⚠ No usable Director recipe — showing the built-in fallback prompt.';
             warnEl.hidden = false;
         }
+        // No trace on the fallback path: the cards would be captioning the
+        // user's recipe blocks over a prompt those blocks did not produce.
+        // That case keeps the raw dump and the red box that explains it.
+        const sourcesEl = panel.querySelector('[data-remodel-rp-preview-sources]');
+        const viewsEl = panel.querySelector('[data-remodel-rp-preview-views]');
+        if (Array.isArray(trace) && trace.length && sourcesEl && viewsEl) {
+            sourcesEl.innerHTML = await renderDirectorTraceSections(trace, prompt);
+            sourcesEl.hidden = false;
+            viewsEl.hidden = false;
+            bodyEl.hidden = true;
+        }
     } catch (err) {
         bodyEl.textContent = `Could not assemble a Director preview.\n\n${String(err)}`;
     }
+}
+
+/**
+ * Sizes a list of prompt texts, and says what unit it managed to size them in.
+ *
+ * The Narrator's per-source figures come from core's promptManager
+ * tokenHandler, keyed by native identifier — which does not apply here at all:
+ * the Director compiles its own message array and sends it through
+ * generateRawData, never touching the native prompt manager. The only counter
+ * reachable from this path is core's own tokenizer. Ask it; if it is missing
+ * or throws, fall back to character counts for the WHOLE set and say so in the
+ * label, rather than printing characters under a "tok" heading or mixing units
+ * card to card.
+ */
+async function measurePreviewTexts(texts) {
+    try {
+        const context = getContext();
+        if (typeof context?.getTokenCountAsync !== 'function') throw new Error('no tokenizer available');
+        const sizes = await Promise.all(texts.map(async (text) => {
+            const count = Number(await context.getTokenCountAsync(text));
+            if (!Number.isFinite(count)) throw new Error('tokenizer returned a non-number');
+            return count;
+        }));
+        return { unit: 'tok', unitLabel: 'tokens', sizes };
+    } catch {
+        return { unit: 'chars', unitLabel: 'characters', sizes: texts.map((text) => String(text || '').length) };
+    }
+}
+
+/**
+ * The Director's BY SOURCE view.
+ *
+ * Deliberately grouped by the message each block landed in rather than shown
+ * as a flat list: the whole reason this view beats the raw dump is that the
+ * raw dump cannot show a user that the five blocks they authored arrive as two
+ * messages. Blocks that resolved to nothing get a group of their own so they
+ * are visibly empty rather than simply absent, which is the same treatment
+ * renderPromptPreviewSections gives an empty Narrator source.
+ */
+async function renderDirectorTraceSections(trace, messages) {
+    // Measured per contribution rather than per block: a block that straddled
+    // two messages would otherwise have its whole size counted into both of
+    // the groups it appears in. No Director source can straddle — every one
+    // resolves to a single string — but a figure that is only accidentally
+    // right is not a figure worth printing.
+    const parts = trace.flatMap((entry) => entry.parts);
+    const { unit, unitLabel, sizes } = await measurePreviewTexts(parts.map((part) => part.content || ''));
+    const sizeOfPart = new Map(parts.map((part, index) => [part, sizes[index]]));
+    const sizeOf = (candidates) => candidates.reduce((sum, part) => sum + (sizeOfPart.get(part) || 0), 0);
+    const total = sizes.reduce((sum, size) => sum + size, 0);
+    const contributed = trace.filter((entry) => entry.messageIndex >= 0);
+
+    const groups = (messages || []).map((message, index) => ({
+        index,
+        role: message.role,
+        entries: trace.filter((entry) => entry.messageIndices.includes(index)),
+    })).filter((group) => group.entries.length);
+    const unsent = trace.filter((entry) => entry.messageIndex < 0);
+
+    const renderCard = (entry) => {
+        const empty = entry.messageIndex < 0;
+        const body = empty
+            ? '<p class="remodel-rp-preview-empty">This block resolved to nothing and was left out of the request.</p>'
+            : entry.parts.map((part) => `<div class="remodel-rp-preview-msg"><span class="remodel-rp-preview-msg-role">${escapeHtml(String(part.role || 'system').toUpperCase())}</span><pre>${escapeHtml(part.content || '')}</pre></div>`).join('');
+        return `
+            <article class="remodel-rp-preview-card${empty ? ' is-empty' : ''}" data-remodel-preview-card${empty ? '' : ' open'}>
+                <details${empty ? '' : ' open'}>
+                    <summary>
+                        <span class="remodel-rp-preview-card-role">${escapeHtml(String(entry.role || 'system').toUpperCase())}</span>
+                        <span class="remodel-rp-preview-card-title">${escapeHtml(entry.label || entry.sourceKey || 'Block')}</span>
+                        <span class="remodel-rp-preview-card-meta">${escapeHtml(entry.sourceKey || 'authored')}${empty ? ' · empty' : ` · ${sizeOf(entry.parts)} ${unit}`}</span>
+                    </summary>
+                    <div class="remodel-rp-preview-card-body">${body}</div>
+                </details>
+            </article>
+        `;
+    };
+
+    const renderGroup = (group) => {
+        const size = sizeOf(group.entries.flatMap((entry) => entry.parts).filter((part) => part.messageIndex === group.index));
+        const merged = group.entries.length > 1;
+        return `
+            <section class="remodel-rp-preview-merge">
+                <header class="remodel-rp-preview-merge-head">
+                    <span class="remodel-rp-preview-merge-index">Message ${group.index + 1}</span>
+                    <span class="remodel-rp-preview-merge-role">${escapeHtml(String(group.role || 'system').toUpperCase())}</span>
+                    <span class="remodel-rp-preview-merge-note">${merged ? `${group.entries.length} blocks merged into one message` : 'one block, sent on its own'} · ${size} ${unit}</span>
+                </header>
+                <div class="remodel-rp-preview-cards">${group.entries.map(renderCard).join('')}</div>
+            </section>
+        `;
+    };
+
+    const unsentGroup = unsent.length
+        ? `
+            <section class="remodel-rp-preview-merge is-unsent">
+                <header class="remodel-rp-preview-merge-head">
+                    <span class="remodel-rp-preview-merge-index">Not sent</span>
+                    <span class="remodel-rp-preview-merge-note">${unsent.length} block${unsent.length === 1 ? '' : 's'} resolved to nothing</span>
+                </header>
+                <div class="remodel-rp-preview-cards">${unsent.map(renderCard).join('')}</div>
+            </section>
+        `
+        : '';
+
+    return `
+        <div class="remodel-rp-preview-summary">
+            <span><strong>${contributed.length}</strong> of ${trace.length} blocks contributed</span>
+            <span><strong>${groups.length}</strong> message${groups.length === 1 ? '' : 's'} sent</span>
+            <span><strong>${total}</strong> ${unitLabel} total</span>
+        </div>
+        <div class="remodel-rp-preview-merges">${groups.map(renderGroup).join('')}${unsentGroup}</div>
+    `;
 }
 
 function setRoleplayPreviewTab(overlay, tab) {
@@ -8514,13 +8663,21 @@ function setRoleplayPreviewTab(overlay, tab) {
     for (const button of overlay.querySelectorAll('[data-remodel-rp-preview-tab]')) {
         button.classList.toggle('is-active', button.dataset.remodelRpPreviewTab === tab);
     }
+    // Only one tab is ever on screen, so the hint has to describe that one.
+    const hintEl = overlay.querySelector('[data-remodel-rp-preview-hint]');
+    if (hintEl && PREVIEW_TAB_HINTS[tab]) hintEl.textContent = PREVIEW_TAB_HINTS[tab];
 }
 
-function setRoleplayPreviewView(overlay, view) {
+// Takes the panel, not the overlay: both tabs carry this toggle now, and each
+// one switches only its own body and cards.
+function setRoleplayPreviewView(panel, view) {
+    if (!panel) return;
     const showRaw = view === 'raw';
-    overlay.querySelector('[data-remodel-rp-preview-sources]').hidden = showRaw;
-    overlay.querySelector('[data-remodel-rp-preview-body]').hidden = !showRaw;
-    for (const button of overlay.querySelectorAll('[data-remodel-rp-preview-view]')) {
+    const sourcesEl = panel.querySelector('[data-remodel-rp-preview-sources]');
+    const bodyEl = panel.querySelector('[data-remodel-rp-preview-body]');
+    if (sourcesEl) sourcesEl.hidden = showRaw;
+    if (bodyEl) bodyEl.hidden = !showRaw;
+    for (const button of panel.querySelectorAll('[data-remodel-rp-preview-view]')) {
         button.classList.toggle('is-active', button.dataset.remodelRpPreviewView === view);
     }
 }
@@ -8867,7 +9024,9 @@ function bindRoleplayComposerEvents() {
             const viewButton = target.closest('[data-remodel-rp-preview-view]');
             if (viewButton && previewOverlay.contains(viewButton)) {
                 event.preventDefault();
-                setRoleplayPreviewView(previewOverlay, viewButton.dataset.remodelRpPreviewView);
+                // Scoped to the panel the button lives in, so the Director and
+                // Narrator tabs keep their own view state.
+                setRoleplayPreviewView(viewButton.closest('[data-remodel-rp-preview-panel]'), viewButton.dataset.remodelRpPreviewView);
                 return;
             }
         }
