@@ -1,7 +1,8 @@
 import { sendOpenAIRequest } from '../../../openai.js';
 import { getContext } from '../../../st-context.js';
 
-// Streaming transport for Story generation.
+// Streaming transport for Remodel's own hidden Chat Completion calls — Story
+// prose and the Director's notebook both go out through here.
 //
 // WHY THIS BYPASSES generateRaw: SillyTavern decides streaming in
 // `createGenerationParameters` (openai.js) with
@@ -15,8 +16,8 @@ import { getContext } from '../../../st-context.js';
 // which is also the only way to show reasoning as it arrives.
 //
 // We ask for type 'continue': it streams (not 'quiet'), it is in core's
-// `noMultiSwipeTypes` so a settings.n > 1 user cannot get a swipe fan-out from a
-// story call, and "continue the manuscript" is what a Story request actually is.
+// `noMultiSwipeTypes` so a settings.n > 1 user cannot get a swipe fan-out from
+// one of these calls, and "continue what is here" is what both requests are.
 
 /** The type handed to core. See the note above for why it is not 'quiet'. */
 const STREAM_REQUEST_TYPE = 'continue';
@@ -38,7 +39,11 @@ export function canStreamStory() {
 }
 
 /**
- * Stream one Story generation.
+ * Stream one compiled chat prompt.
+ *
+ * Named for what it does rather than for who calls it: Story asks it for prose
+ * and Live Direction asks it for the Director's notebook, and neither shape is
+ * this function's business — it carries messages out and text back.
  *
  * @param {object[]} prompt   compiled chat-style messages
  * @param {(update: { text: string, reasoning: string }) => void} onChunk
@@ -50,7 +55,7 @@ export function canStreamStory() {
  *          `streamed: false` means the provider answered in one piece despite
  *          the request — the caller should treat the text as a final answer.
  */
-export async function streamStoryProse({ prompt, onChunk, signal } = {}) {
+export async function streamChatPrompt({ prompt, onChunk, signal } = {}) {
     const response = await sendOpenAIRequest(STREAM_REQUEST_TYPE, prompt, signal);
 
     // A provider that ignores `stream` (or a source core refuses to stream, such

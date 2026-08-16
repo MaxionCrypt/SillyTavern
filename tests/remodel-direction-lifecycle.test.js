@@ -22,7 +22,7 @@ import {
     getLiveDirectionRun,
     clearLiveDirectionFailure,
     regenerateLastDirectedResponse,
-    DIRECTION_PROTOCOL,
+    buildDirectorNotesSource,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import {
     createVariableValue,
@@ -31,8 +31,11 @@ import {
     listMechanicsTransactions,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
 import { createTimelineGoal, linkGoalToScene } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js';
+import { readAllEntriesForOwner } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-notes-store.js';
 import { __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
-import { __setOnlineStatus } from './util/script-stub.js';
+import { __setOnlineStatus, __getExtensionPrompt, __clearExtensionPromptCalls } from './util/script-stub.js';
+import { __setOpenAIRequestHandler } from './util/openai-stub.js';
+import { __getDebugEvents, __clearDebugEvents } from './util/debug-console-stub.js';
 
 // generateDirectedPerformer clears SillyTavern's native composer before it
 // hands generation to core, so it touches the DOM once. Jest's environment is
@@ -62,19 +65,30 @@ const RESPONSE = 'Wren steps between them. The blade catches her forearm.';
 
 let variableId = '';
 
-function directionEnvelope() {
-    return {
-        protocol: DIRECTION_PROTOCOL,
-        instruction: 'Wren takes the blow meant for the boy.',
-        flow: { continueAfter: false, hardPauseAfter: true },
-        requests: [{
+/**
+ * The Director's reply, in the free-form notebook shape the contract teaches
+ * (direction-sources.js's PROTOCOL) — tagged lines, then a fenced state block.
+ * Requests are addressed by NAME, which is the whole point of the rework, and
+ * carry the exact top-level shape validateMechanicsRequest checks: `id`,
+ * `capability`, `arguments` as a nested object, and a `reason`.
+ */
+function directorReply({ requests = null, flow = { continue: false } } = {}) {
+    const state = JSON.stringify({
+        requests: requests || [{
             id: 'req-1',
             capability: 'variable.adjust',
-            // Addressed by NAME, which is the whole point of the rework.
             arguments: { variableRef: "Wren's HP", delta: -4 },
             reason: 'She took the blade on her forearm.',
         }],
-    };
+        flow,
+    });
+    return [
+        '[ruling] Wren takes the blow meant for the boy.',
+        '[secret] The boy already knows she will.',
+        '```state',
+        state,
+        '```',
+    ].join('\n');
 }
 
 /**
@@ -106,8 +120,35 @@ function wire({ onSpeak = speak } = {}) {
         onFailure: () => {},
     });
     setLiveDirectionTestAdapters({
-        requestDirection: async () => directionEnvelope(),
+        requestDirection: async () => directorReply(),
         generatePerformer: onSpeak,
+    });
+}
+
+/**
+ * Install a Director that answers over the REAL transport — core's
+ * `sendOpenAIRequest` shape, through story-stream.js's streamChatPrompt and
+ * live-direction's own parse — rather than through the test adapter that
+ * short-circuits both. Everything about streaming (chunking, cumulative text,
+ * reasoning, and what an abort mid-reply leaves behind) is only reachable
+ * this way.
+ *
+ * @param {string[]} chunks   cumulative-text pieces, emitted in order
+ * @param {(context: {index: number}) => void} [onChunkEmitted]
+ *        runs after each chunk, so a test can interrupt part-way through
+ */
+function streamDirector(chunks, { reasoning = '', onChunkEmitted = null } = {}) {
+    setLiveDirectionTestAdapters({ generatePerformer: speak });
+    __setOpenAIRequestHandler(({ signal }) => async function* streamData() {
+        let text = '';
+        for (const [index, chunk] of chunks.entries()) {
+            if (signal?.aborted) return;
+            text += chunk;
+            // Core's generator yields CUMULATIVE text with reasoning carried
+            // on `state`, which is the shape streamChatPrompt reads.
+            yield { text, state: { reasoning } };
+            onChunkEmitted?.({ index, text });
+        }
     });
 }
 
@@ -129,6 +170,9 @@ function hp() {
 beforeEach(() => {
     __setExtensionSettings({});
     __setOnlineStatus('connected');
+    __clearExtensionPromptCalls();
+    __clearDebugEvents();
+    __setOpenAIRequestHandler(null);
     scene.liveDirection.pacing = 'instant';
     updateMechanicsProfile({ enabled: true });
     variableId = createVariableValue({
@@ -157,6 +201,7 @@ afterEach(async () => {
     await stopLiveDirection();
     clearLiveDirectionFailure();
     setLiveDirectionTestAdapters(null);
+    __setOpenAIRequestHandler(null);
 });
 
 test('a fully revealed response applies the direction\'s requests', async () => {
@@ -249,11 +294,10 @@ test('a tracked goal.reach still sees the retrieved Variable it never names', as
     linkGoalToScene(scene.id, goal.id, 'active', { timelineId: scene.timelineId });
 
     setLiveDirectionTestAdapters({
-        requestDirection: async () => ({
-            ...directionEnvelope(),
-            // The ONLY request. It names the Goal, never the Variable, so the
-            // address table ends the pass holding one goal entry and zero
-            // variable entries.
+        // The ONLY request. It names the Goal, never the Variable, so the
+        // address table ends the pass holding one goal entry and zero
+        // variable entries.
+        requestDirection: async () => directorReply({
             requests: [{
                 id: 'req-1', capability: 'goal.reach',
                 arguments: { goalRef: 'Bleed her out', impactMagnitude: 'meaningful' },
@@ -346,8 +390,7 @@ test('regenerate on the Scene that produced the direction does undo it', async (
 
 test('a request naming a Variable that was never advertised changes nothing and says why', async () => {
     setLiveDirectionTestAdapters({
-        requestDirection: async () => ({
-            ...directionEnvelope(),
+        requestDirection: async () => directorReply({
             requests: [{ id: 'req-1', capability: 'variable.adjust', arguments: { variableRef: 'v1', delta: -4 }, reason: 'A positional ref.' }],
         }),
         generatePerformer: speak,
@@ -361,4 +404,266 @@ test('a request naming a Variable that was never advertised changes nothing and 
     // the diagnostic simultaneously reported it as refused.
     expect(hp()).toBe(12);
     expect(getLiveDirectionRun()?.checkpointDiagnostics?.join(' ')).toMatch(/not advertised/i);
+});
+
+// ------------------------------------------------- the streamed Director
+//
+// Everything below drives the REAL transport — live-direction's own
+// requestDirection, story-stream.js's streamChatPrompt, and core's
+// `sendOpenAIRequest` generator shape — with only the network itself stubbed.
+// The `requestDirection` test adapter used above short-circuits all three, so
+// nothing it covers says anything about streaming, about what an abort
+// mid-reply leaves behind, or about the parse that sits between them.
+
+function notebook() {
+    return readAllEntriesForOwner(scene.timelineId, { sceneId: scene.id });
+}
+
+function journalEntries(type) {
+    return __getDebugEvents().filter((event) => event.category === 'direction' && event.type === type);
+}
+
+/** Everything the performer's prompt was given this turn, as one string. */
+function performerPrompt() {
+    return String(__getExtensionPrompt('remodel_director_notes') || '');
+}
+
+test('a streamed Director reply becomes notebook entries and applies its requests', async () => {
+    const chunks = [
+        '[ruling] Wren takes the blow',
+        ' meant for the boy.\n[secret] The boy already knows.\n',
+        '```state\n{"requests":[{"id":"req-1","capability":"variable.adjust",',
+        '"arguments":{"variableRef":"Wren\'s HP","delta":-4},"reason":"She took the blade."}],"flow":{"continue":false}}\n```',
+    ];
+    streamDirector(chunks, { reasoning: 'She has to be the one who moves.' });
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    // 1. The reply became typed entries, and the state fence is not one of them.
+    const entries = notebook();
+    expect(entries.map((entry) => entry.type)).toEqual(['ruling', 'secret']);
+    expect(entries[0].text).toBe('Wren takes the blow meant for the boy.');
+    expect(entries.map((entry) => entry.turn)).toEqual([1, 1]);
+    expect(JSON.stringify(entries)).not.toContain('```state');
+    expect(JSON.stringify(entries)).not.toContain('variable.adjust');
+
+    // 2. The request in the fence reached the real capability layer and moved
+    //    the named Variable — 12 - 4.
+    expect(hp()).toBe(8);
+    expect(listMechanicsTransactions({ timelineId: scene.timelineId })
+        .filter((transaction) => transaction.status === 'applied')).toHaveLength(1);
+
+    // 3. The raw reply never reaches the performer. The notes block delivers
+    //    the ruling; the secret, the fence and the tags stay out of it.
+    const prompt = performerPrompt();
+    expect(prompt).toContain('Wren takes the blow meant for the boy.');
+    expect(prompt).not.toContain('The boy already knows.');
+    expect(prompt).not.toContain('```state');
+    expect(prompt).not.toContain('[ruling]');
+    expect(prompt).not.toContain('req-1');
+
+    // 4. The streamed reasoning arrived with the text, so it is available
+    //    without a fetch patch to steal it back off the wire.
+    const [notebookEvent] = journalEntries('notebook');
+    expect(notebookEvent.detail.reasoningLength).toBe('She has to be the one who moves.'.length);
+    expect(notebookEvent.detail.streamed).toBe(true);
+    expect(notebookEvent.detail.entryCount).toBe(2);
+});
+
+test('an unparseable tail costs the turn its requests, not its prose', async () => {
+    streamDirector([
+        '[ruling] Wren takes the blow meant for the boy.\n',
+        '```state\n{"requests": [oh no\n```',
+    ]);
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    // The entries survive the broken tail…
+    expect(notebook().map((entry) => entry.text)).toEqual(['Wren takes the blow meant for the boy.']);
+    // …nothing mechanical happened…
+    expect(hp()).toBe(12);
+    expect(listMechanicsTransactions({ timelineId: scene.timelineId })).toHaveLength(0);
+    // …the failure is recorded rather than swallowed…
+    const [tailEvent] = journalEntries('tail.unparseable');
+    expect(tailEvent).toBeTruthy();
+    expect(tailEvent.detail.error).toBeTruthy();
+    // …and the Narrator still ran and its prose was accepted.
+    const chat = __getChat();
+    expect(chat).toHaveLength(1);
+    expect(chat[0].mes).toBe(RESPONSE);
+    expect(performerPrompt()).toContain('Wren takes the blow meant for the boy.');
+});
+
+test('a reply with no state fence at all is not an error, and the scene waits', async () => {
+    streamDirector(['[note] Nothing mechanical happened. The rain keeps on.']);
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    expect(notebook()).toHaveLength(1);
+    expect(hp()).toBe(12);
+    expect(journalEntries('tail.unparseable')).toHaveLength(0);
+    // Flow defaults to stopping (design §3), so the run holds for the user
+    // rather than chaining another autonomous pass.
+    expect(getLiveDirectionRun()?.waitingAtEnd).toBe(true);
+});
+
+test('an interrupted Director stores what arrived, marked incomplete, and applies nothing', async () => {
+    // Stop lands after the second chunk — mid-sentence, and before the fence
+    // that would have changed a Variable.
+    streamDirector([
+        '[ruling] Wren takes the blow meant for the boy.\n',
+        '[note] The blade is still',
+        ' rising.\n```state\n{"requests":[{"id":"req-1","capability":"variable.adjust","arguments":{"variableRef":"Wren\'s HP","delta":-4},"reason":"cut off"}],"flow":{"continue":true}}\n```',
+    ], {
+        onChunkEmitted: ({ index }) => {
+            if (index === 1) stopLiveDirection();
+        },
+    });
+
+    await requestNextDirection(scene);
+
+    const entries = notebook();
+    expect(entries.map((entry) => entry.text)).toEqual([
+        'Wren takes the blow meant for the boy.',
+        'The blade is still',
+    ]);
+    // Only the trailing entry is the severed one; the line before it was
+    // closed by a newline the Director did write.
+    expect(entries.map((entry) => entry.incomplete)).toEqual([false, true]);
+    // The third chunk never arrived, so nothing mechanical could apply — and
+    // the pass was abandoned before the performer was ever asked to speak.
+    expect(hp()).toBe(12);
+    expect(listMechanicsTransactions({ timelineId: scene.timelineId })).toHaveLength(0);
+    expect(__getChat()).toHaveLength(0);
+    expect(journalEntries('notebook')[0].detail.interrupted).toBe(true);
+});
+
+test('an interrupted Director is not read for state even when its fence did arrive', async () => {
+    // The severed reply happens to contain a complete, parseable state fence:
+    // the Director wrote it and was stopped while still writing after it. It
+    // must not be applied. "Interrupted" is a fact about the reply, not a
+    // guess about whether the fence looks finished — a Director cut off
+    // mid-thought had not finished deciding, whatever its tail parses to.
+    streamDirector([
+        '[ruling] Wren takes the blow meant for the boy.\n',
+        '```state\n{"requests":[{"id":"req-1","capability":"variable.adjust","arguments":{"variableRef":"Wren\'s HP","delta":-4},"reason":"cut off"}],"flow":{"continue":true}}\n```\n',
+        '[note] And then the room went quiet.',
+    ], {
+        onChunkEmitted: ({ index }) => {
+            if (index === 1) stopLiveDirection();
+        },
+    });
+
+    await requestNextDirection(scene);
+
+    // The fence parsed — and was ignored.
+    expect(hp()).toBe(12);
+    expect(listMechanicsTransactions({ timelineId: scene.timelineId })).toHaveLength(0);
+    // The entries still landed, and the fence is not one of them.
+    expect(notebook().map((entry) => entry.text)).toEqual(['Wren takes the blow meant for the boy.']);
+    const [notebookEvent] = journalEntries('notebook');
+    expect(notebookEvent.detail).toMatchObject({ interrupted: true, requestCount: 0, continueAfter: false });
+});
+
+test('an interrupted turn tells the performer the entry was cut off', () => {
+    // The flag has to reach the prompt, or a half-written ruling is delivered
+    // to the Narrator as a finished one.
+    expect(buildDirectorNotesSource([
+        { turn: 1, type: 'ruling', text: 'The blade is still', incomplete: true },
+    ])).toMatch(/cut off/i);
+    expect(buildDirectorNotesSource([
+        { turn: 1, type: 'ruling', text: 'The blade is still rising.' },
+    ])).not.toMatch(/cut off/i);
+});
+
+test('a request the mechanics layer cannot read does not void its valid siblings', async () => {
+    streamDirector([[
+        '[ruling] Two things happen.',
+        '```state',
+        '{"requests":[["not","an","object"],{"id":"req-1","capability":"variable.adjust","arguments":{"variableRef":"Wren\'s HP","delta":-4},"reason":"She took the blade."}],"flow":{"continue":false}}',
+        '```',
+    ].join('\n')]);
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    // parseDirectorReply keeps array-shaped entries (an array IS an object),
+    // and validateMechanicsRequest rejects the WHOLE batch over one of them.
+    // The readable sibling still applies.
+    expect(hp()).toBe(8);
+});
+
+// ------------------------------------------- regenerate and the notebook
+//
+// Ruled for this task: a regenerated turn replaces its predecessor's entries
+// rather than appending beside them. The notebook must never hold two takes'
+// rulings for one moment in the fiction, because the Narrator reads both.
+
+test('regenerate reuses the same notebook turn rather than writing a second one', async () => {
+    streamDirector(['[ruling] Wren takes the blow meant for the boy.']);
+    await completeAndSettle();
+    expect(notebook()).toHaveLength(1);
+    const before = notebook()[0];
+
+    await regenerateLastDirectedResponse(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    // Same turn, same entry — and no second Director call, which on the
+    // owner's own connection measured 101–202 seconds.
+    const after = notebook();
+    expect(after).toHaveLength(1);
+    expect(after[0].id).toBe(before.id);
+    expect(after[0].turn).toBe(1);
+});
+
+test('a regenerate that has to re-direct discards the superseded take rather than stacking on it', async () => {
+    streamDirector(['[ruling] The first take.']);
+    await completeAndSettle();
+    const [first] = notebook();
+    expect(first.text).toBe('The first take.');
+
+    // The Narrator card left the Scene between takes, so the saved direction
+    // cannot be replayed and regenerate has to re-direct. THIS is the path
+    // where a discarded take's notes would otherwise linger beside the new
+    // turn's — two takes' rulings for one moment in the fiction, and the
+    // Narrator reads both.
+    const performers = cast.splice(0, cast.length);
+    streamDirector(['[ruling] The second take.']);
+    const consoleError = console.error;
+    console.error = () => {};
+    try {
+        await regenerateLastDirectedResponse(scene);
+    } finally {
+        console.error = consoleError;
+        cast.push(...performers);
+    }
+
+    const after = notebook();
+    expect(after.map((entry) => entry.text)).toEqual(['The second take.']);
+    expect(after[0].id).not.toBe(first.id);
+    // And it took the discarded take's turn number back, so the Narrator's
+    // depth window still counts one turn for one moment.
+    expect(after[0].turn).toBe(1);
+    expect(journalEntries('notebook.discarded')[0].detail).toMatchObject({ turn: 1, entryCount: 1 });
+});
+
+test('a Director that returns nothing at all is reported rather than silently directing nothing', async () => {
+    const failures = [];
+    initLiveDirection({ onFailure: (error) => failures.push(error) });
+    streamDirector(['']);
+    const consoleError = console.error;
+    console.error = () => {};
+    try {
+        await requestNextDirection(scene);
+    } finally {
+        console.error = consoleError;
+    }
+
+    expect(failures).toHaveLength(1);
+    expect(String(failures[0].message)).toMatch(/returned nothing at all/i);
+    expect(notebook()).toHaveLength(0);
+    expect(__getChat()).toHaveLength(0);
 });

@@ -7,7 +7,24 @@
 // binding from it: the journal function every code path already wraps in a
 // try/catch, because "diagnostics must never be able to break a generation."
 //
-// Deliberately minimal: an inert value with no behaviour, following the same
-// pattern as script-stub.js.
+// Records rather than discards, because some behaviour this codebase promises
+// is ONLY observable as a journal entry: design §3 requires that an
+// unparseable state tail costs the turn its state changes and produces "a
+// journal entry" — with an inert stub, a test could only assert the absence of
+// a change, which an implementation that silently dropped the whole reply
+// would also satisfy.
 
-export function recordDebugEvent() {}
+let events = [];
+
+export function recordDebugEvent(category, type, detail = {}, options = {}) {
+    events.push({ category, type, detail, ...options });
+}
+
+/** Test-only: every journal entry recorded since the last clear. */
+export function __getDebugEvents() {
+    return [...events];
+}
+
+export function __clearDebugEvents() {
+    events = [];
+}

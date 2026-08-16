@@ -1,6 +1,6 @@
 import { getContext } from '../../../st-context.js';
 import { extractProse, hasPromptContent } from './story-prose-extract.js';
-import { canStreamStory, streamStoryProse } from './story-stream.js';
+import { canStreamStory, streamChatPrompt } from './story-stream.js';
 
 // Prose generation with a diagnosable failure surface.
 //
@@ -49,7 +49,7 @@ export async function generateProse({ prompt, responseLength = null, instructOve
     // unchanged, so Text Completion and non-streaming providers are untouched.
     if (typeof onStream === 'function' && canStreamStory() && !systemPrompt) {
         try {
-            const streamed = await streamStoryProse({ prompt, onChunk: onStream, signal });
+            const streamed = await streamChatPrompt({ prompt, onChunk: onStream, signal });
             if (streamed.text) {
                 return { text: streamed.text, raw: null, source: streamed.streamed ? 'stream' : 'stream-fallback', reasoning: streamed.reasoning };
             }

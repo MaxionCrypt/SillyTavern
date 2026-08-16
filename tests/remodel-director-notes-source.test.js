@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import {
-    DIRECTION_PROTOCOL,
     buildDirectorNotesSource,
     clearLiveDirectionFailure,
     formatDirectorNotesPrompt,
@@ -285,13 +284,17 @@ const lifecycleScene = {
 };
 const lifecycleCast = [{ ref: { kind: 'character', id: 'char-narrator', label: 'Wren' }, label: 'Wren', characterId: 0 }];
 
-function lifecycleDirectionEnvelope() {
-    return {
-        protocol: DIRECTION_PROTOCOL,
-        instruction: 'Wren answers Teo.',
-        flow: { continueAfter: false, hardPauseAfter: true },
-        requests: [],
-    };
+/**
+ * The Director's reply, in the free-form notebook shape it now streams back.
+ *
+ * Task 4 wrote these two tests against a stand-in: the adapter returned an
+ * envelope AND called appendDirectorEntries by hand, because Task 6's real
+ * parse-and-store wiring did not exist yet. It does now, so the stand-in is
+ * gone — the entry these tests look for is the one live-direction.js itself
+ * parsed out of this reply and stored.
+ */
+function lifecycleDirectorReply() {
+    return '[ruling] Teo finally answers Eli.';
 }
 
 async function speakInLifecycle() {
@@ -354,17 +357,10 @@ test('an entry appended during the Director call reaches the mirror the SAME tur
     });
     const capture = { value: undefined };
     setLiveDirectionTestAdapters({
-        // Stands in for Task 6's streamed reply -> parseDirectorReply ->
-        // appendDirectorEntries wiring: by the time this resolves, this
-        // turn's entries are in the store — exactly the moment Critical 1
-        // was about.
-        requestDirection: async () => {
-            appendDirectorEntries(lifecycleScene.timelineId, {
-                sceneId: lifecycleScene.id, turn: 1,
-                entries: [{ type: 'ruling', text: 'Teo finally answers Eli.' }],
-            });
-            return lifecycleDirectionEnvelope();
-        },
+        // live-direction.js parses this reply and appends its entries, so by
+        // the time the pass reaches generation this turn's ruling is in the
+        // store — exactly the moment Critical 1 was about.
+        requestDirection: async () => lifecycleDirectorReply(),
         generatePerformer: capturingPerformer(capture),
     });
 
@@ -407,7 +403,7 @@ test("the generation-seam mirror's filter refuses once the active Scene has chan
         onFailure: () => {},
     });
     setLiveDirectionTestAdapters({
-        requestDirection: async () => lifecycleDirectionEnvelope(),
+        requestDirection: async () => lifecycleDirectorReply(),
         generatePerformer: speakInLifecycle,
     });
 

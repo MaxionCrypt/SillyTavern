@@ -9,7 +9,7 @@
 // The real side is driven through requestNextDirection (a real, if minimal,
 // direction pass) with setLiveDirectionTestAdapters standing in for the
 // network call — the stub adapter receives the exact `prompt` array
-// requestDirectionEnvelope compiled and would have sent, with no network
+// requestDirection compiled and would have sent, with no network
 // call and no risk of a real generation. The preview side is
 // previewDirectorPrompt itself. Both read from the same fixture Scene, cast,
 // and composer draft, so any divergence between the two call sites — not
@@ -54,7 +54,7 @@ function wireHooks() {
     initLiveDirection({
         getActiveScene: () => scene,
         // An empty cast is deliberate: it makes resolvePerformer fail fast,
-        // right after requestDirectionEnvelope has already compiled the
+        // right after requestDirection has already compiled the
         // prompt and handed it to the stub adapter below — which is the only
         // part these tests need. No cast/persona content also keeps the
         // mechanics slice identical between the two paths without needing to
@@ -126,15 +126,20 @@ afterEach(() => {
 
 /**
  * Drives one real direction pass and returns the exact `prompt` array
- * requestDirectionEnvelope compiled and would have sent to the network —
- * captured via the test adapter seam, never an actual call.
+ * requestDirection compiled and would have sent to the network — captured via
+ * the test adapter seam, never an actual call.
+ *
+ * The adapter answers with a minimal well-formed Director reply rather than
+ * with nothing, so the pass still fails where these tests say it does (at
+ * performer resolution, with the empty cast above) instead of failing earlier
+ * on an empty reply.
  */
 async function captureRealCompiledPrompt() {
     let captured = null;
     setLiveDirectionTestAdapters({
         requestDirection: async ({ prompt }) => {
             captured = prompt;
-            return {};
+            return '[note] parity fixture.';
         },
     });
     await requestNextDirection(scene);
@@ -149,7 +154,7 @@ test('the default seeded Director recipe compiles identically for a real pass an
     expect(real.length).toBeGreaterThan(0);
     expect(preview.usedFallback).toBe(false);
     // Two genuinely independent call sites — beginDirection's real
-    // requestDirectionEnvelope and previewDirectorPrompt — each resolve their
+    // requestDirection and previewDirectorPrompt — each resolve their
     // own recipe, build sources from their own snapshot, and compile. If
     // compileDirectorPrompt's extraction ever let the two drift apart, this
     // is where it would show.

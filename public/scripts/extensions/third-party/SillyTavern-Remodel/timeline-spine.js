@@ -8505,7 +8505,7 @@ async function openRoleplayPromptPreview() {
 
 // Fills the Director tab by compiling the active Director recipe against a
 // snapshot built for the current Scene — the same compile path
-// requestDirectionEnvelope uses for a real direction pass (see
+// requestDirection uses for a real direction pass (see
 // previewDirectorPrompt/compileDirectorPrompt in live-direction.js) — so the
 // two can never drift apart. Runs independently of the Narrator dry run above
 // so one tab's failure never blocks the other from filling in.

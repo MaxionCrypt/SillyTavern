@@ -43,6 +43,12 @@ function saveDirectorNotesStore() {
  * is a sign the reply parser or a caller drifted, not a new kind of note.
  * Returns only the entries that were actually stored, each with its
  * assigned id.
+ *
+ * `incomplete` records that an entry is a severed one: the Director was
+ * streaming and the user stopped it mid-sentence. Stored rather than dropped,
+ * because what it managed to say is still part of this turn's record — and
+ * flagged rather than stored plain, because a truncated ruling read as a
+ * finished one is a ruling the Director never actually made.
  */
 export function appendDirectorEntries(timelineId, { sceneId, turn, entries } = {}) {
     const id = String(timelineId || '');
@@ -59,6 +65,7 @@ export function appendDirectorEntries(timelineId, { sceneId, turn, entries } = {
             at: timestamp,
             type: entry.type,
             text: String(entry.text || ''),
+            incomplete: entry.incomplete === true,
         }));
     if (!stored.length) return [];
     const bucket = getTimelineNotesState(id, { create: true });

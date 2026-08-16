@@ -6,14 +6,11 @@ import {
     sendMessageAsUser,
     setExtensionPrompt,
 } from '../../../../script.js';
-import { extractReasoningFromData } from '../../../reasoning.js';
 import { getContext } from '../../../st-context.js';
 import { generateGroupWrapper, is_group_generating } from '../../../group-chats.js';
 import {
     executeMechanicsRequest,
-    getMechanicsRequestSchema,
     MECHANICS_PROTOCOL,
-    toCoreJsonSchema,
     undoMechanicsTransaction,
 } from './mechanics-capabilities.js';
 import { buildMechanicalSnapshot, previewMechanicalContext } from './mechanics-runtime.js';
@@ -21,15 +18,21 @@ import { buildDirectionSources } from './direction-sources.js';
 import { resolveByName } from './direction-address.js';
 import { deriveBeats } from './direction-beats.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
-import { readNarratorEntries } from './director-notes-store.js';
+import { parseDirectorReply } from './director-reply.js';
+import {
+    appendDirectorEntries,
+    deleteDirectorEntry,
+    readAllEntriesForOwner,
+    readNarratorEntries,
+} from './director-notes-store.js';
 import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
 import { readDirectionUnit, sanitizeDirectionText } from './live-direction-markers.js';
-import { directorResponseTokens, interpretStructuredReply } from './structured-reply.js';
+import { StructuredReplyError } from './structured-reply.js';
+import { streamChatPrompt } from './story-stream.js';
 import { updateScene } from './timeline-state.js';
 import { recordDebugEvent } from './debug-console.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
-const DIRECTION_PROMPT_KEY = 'remodel_live_direction';
 const PACING = Object.freeze({
     slow: { cps: 28, wordMs: 35, min: 700, max: 2200, opening: 750 },
     natural: { cps: 45, wordMs: 25, min: 400, max: 1400, opening: 600 },
@@ -108,9 +111,29 @@ function acquireDirectionLock({ scene, insertUser, autonomousSequence }) {
         autonomousSequence: Number(autonomousSequence) || 0,
         startedAt: Date.now(),
         aborted: false,
+        // The Director now streams, so `aborted` is no longer only a flag the
+        // pass checks between stages: it has to reach the open request itself.
+        // Without this, pressing Stop during a two-minute Director call left
+        // the request running to completion and merely discarded its answer.
+        controller: new AbortController(),
     };
     directionInFlight = token;
     return token;
+}
+
+/**
+ * Cancel a pass: raise the flag every stage boundary checks AND abort the
+ * request that may be open right now. Both, always — a caller that raises only
+ * the flag leaves a stream running with nobody waiting for it.
+ */
+function abortDirectionPass(token) {
+    if (!token) return;
+    token.aborted = true;
+    try {
+        token.controller?.abort();
+    } catch {
+        // An already-aborted controller is the normal case for a second Stop.
+    }
 }
 
 /** Idempotent, and never releases a lock some later pass already took. */
@@ -269,7 +292,7 @@ export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = 
             return false;
         }
         journal('submit.supersedes-autonomous', { supersededPassId: directionInFlight.id });
-        directionInFlight.aborted = true;
+        abortDirectionPass(directionInFlight);
         directionInFlight = null;
     }
     pendingSubmission = submissionKey;
@@ -345,7 +368,7 @@ export async function stopLiveDirection() {
     // performer spoke anyway a few seconds later.
     if (directionInFlight) {
         journal('stopped.in-flight', { passId: directionInFlight.id });
-        directionInFlight.aborted = true;
+        abortDirectionPass(directionInFlight);
         directionInFlight = null;
         notifyState();
         hooks.onSettled();
@@ -418,17 +441,34 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     }
     await context.deleteMessage(messageId);
     const performer = resolvePerformer(saved.performerRef, scene);
-    // `movement.objective` covers a message saved by the previous schema, the
-    // same fallback normalizeEnvelope itself applies.
-    const hadInstruction = Boolean(saved.envelope?.instruction || saved.envelope?.movement?.objective);
-    if (!hadInstruction || !performer) return requestNextDirection(scene);
+    // Is the discarded take's direction still there to replay?
+    //
+    // The direction is now the notebook turn the saved envelope points at, so
+    // "replayable" is a question about the store, not about a string on the
+    // message. When the entries are still there, a regenerate is one native
+    // generation against the SAME turn — no second Director call, which on the
+    // owner's own connection measured 101–202 seconds. A message saved before
+    // this build carries no notebookTurn and is never replayable; it earns a
+    // fresh pass instead, which is also what a deleted turn earns.
+    const savedTurn = Number.isFinite(Number(saved.envelope?.notebookTurn)) ? Number(saved.envelope.notebookTurn) : null;
+    const replayable = savedTurn !== null && notebookTurnEntries(scene, savedTurn).length > 0;
+    if (!replayable || !performer) {
+        // A fresh Director pass is about to write a new turn. Whatever the
+        // discarded take left behind must go with the message it belonged to —
+        // otherwise the notebook accumulates rulings from takes the user never
+        // saw, and the Narrator reads a discarded attempt's judgment beside the
+        // one that replaced it. Scoped to that turn, and a no-op when the turn
+        // is already empty (which is why it can sit on this branch).
+        discardNotebookTurn(scene, savedTurn);
+        return requestNextDirection(scene);
+    }
     const envelope = normalizeEnvelope(saved.envelope, scene);
     // Every pending request that survived to this point (the undo loop above
     // reversed the ones this run actually applied) still needs the same
     // name-to-id resolution it had originally. Without these, regenerate
     // would resolve every name against empty Maps and reject them all as
     // "not advertised" — reverting a Variable or Goal change the user already
-    // read, silently, while the reused instruction still describes it.
+    // read, silently, while the notebook it was reasoned from still stands.
     envelope.variableRefs = new Map(Object.entries(saved.variableRefs || {}));
     envelope.goalRefs = new Map(Object.entries(saved.goalRefs || {}));
     envelope.addressBook = saved.addressBook || { entries: [], duplicates: [] };
@@ -486,26 +526,54 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         }, { correlationId: token.id });
         if (token.aborted) return abandonPass(token, 'snapshot');
         const startedAt = Date.now();
-        const envelope = await requestDirectionEnvelope(scene, snapshot);
-        journal('envelope', {
+        const reply = await requestDirection(scene, snapshot, {
+            signal: token.controller.signal,
+            onChunk: ({ text }) => {
+                if (token.firstChunkAt) return;
+                token.firstChunkAt = Date.now();
+                // Time-to-first-token is the number the whole "the wait is
+                // opaque" complaint is about, and it is invisible in a total
+                // duration. Recorded once, not per chunk.
+                journal('stream.first-chunk', { passId: token.id, afterMs: token.firstChunkAt - startedAt, chars: text.length }, { correlationId: token.id });
+            },
+        });
+        // The notebook is written whatever happens next, including for a
+        // Director the user interrupted: what it managed to say is a record of
+        // this turn, and discarding it silently would be the one failure this
+        // rework cannot afford. `interrupted` marks the trailing entry so no
+        // reader mistakes a severed line for a finished thought.
+        const turn = nextNotebookTurn(scene);
+        const stored = appendDirectorEntries(scene.timelineId, {
+            sceneId: scene.id,
+            turn,
+            entries: markLastIncomplete(reply.entries, reply.interrupted),
+        });
+        journal('notebook', {
             passId: token.id,
-            directionId: envelope.directionId,
+            turn,
             durationMs: Date.now() - startedAt,
-            instructionChars: String(envelope.instruction || '').length,
-            requestCount: envelope.requests.length,
-            continueAfter: envelope.flow.continueAfter,
-            hardPauseAfter: envelope.flow.hardPauseAfter,
-            reasoningLength: lastDirectorReasoning.length,
-            // Logged next to the reasoning it competes with, so headroom is
-            // readable straight off an export instead of inferred: reasoning
-            // and the envelope share this allowance, and overrunning it shows
-            // up as a truncated envelope rather than a shorter answer.
-            responseLimit: directorResponseTokens(getMechanicsProfile()),
+            firstChunkMs: token.firstChunkAt ? token.firstChunkAt - startedAt : null,
+            streamed: reply.streamed,
+            interrupted: reply.interrupted,
+            replyChars: reply.raw.length,
+            reasoningLength: reply.reasoning.length,
+            entryCount: stored.length,
+            entryTypes: stored.map((entry) => entry.type),
+            tailFound: reply.tailFound,
+            requestCount: reply.state.requests.length,
+            continueAfter: reply.state.flow.continue,
         }, { correlationId: token.id });
+        // Design §3: a missing or unparseable tail is never an error. The turn
+        // proceeds with no state changes — and this journal entry, which is the
+        // only way a user ever finds out their recipe lost the fence.
+        if (reply.tailError) {
+            journal('tail.unparseable', { passId: token.id, turn, error: reply.tailError }, { correlationId: token.id, severity: 'warn', summary: 'direction.tail: unparseable, no state changed' });
+        }
         // The Director round-trip is the long window. Anything that happened
         // during it — Stop, a user intervention outranking an autonomous pass —
         // lands here, before a single native token is spent.
-        if (token.aborted) return abandonPass(token, 'envelope');
+        if (token.aborted) return abandonPass(token, 'director');
+        const envelope = buildDirectionEnvelope(reply, turn);
         // Performer selection is no longer the Director's to make — whoever
         // holds the Scene's Narrator badge speaks. A manual "speak next"
         // override still outranks it when one is armed.
@@ -648,7 +716,7 @@ function scrubReceipt(receipt) {
 /**
  * Compiles the Director's prompt from a snapshot: resolve the active director
  * recipe, build its sources, compile it. The SAME steps a real request takes
- * (requestDirectionEnvelope below) and the ONLY place they run — the Prompt
+ * (requestDirection below) and the ONLY place they run — the Prompt
  * Studio preview calls this too (see previewDirectorPrompt), so the preview
  * can never drift from what actually gets sent. A recipe that compiles to
  * nothing (emptied, or missing its protocol block) falls back to a minimal
@@ -717,73 +785,173 @@ export async function previewDirectorPrompt(scene) {
     return { prompt, recipe, snapshot, usedFallback, trace };
 }
 
-async function requestDirectionEnvelope(scene, snapshot) {
+/**
+ * Ask the Director for this turn's notebook, streaming.
+ *
+ * WHY STREAMING, AND WHY NO SCHEMA: core decides streaming in one line
+ * (`openai.js`, `createGenerationParameters`) — `settings.stream_openai && type
+ * !== 'quiet'` — and generateRaw/generateRawData hard-code the type to 'quiet'.
+ * A schema-enforced call is therefore structurally unstreamable, and worse,
+ * generateRawData returns `extractJsonFromData(...)` when a jsonSchema is
+ * supplied and throws the provider's response object away — the only place
+ * reasoning lives. Dropping the schema is what buys both back at once: the
+ * Director's text arrives as it is written, and `state.reasoning` comes with
+ * it instead of having to be stolen off the wire.
+ *
+ * Measured, which is why this is not a preference: one recorded pass spent
+ * 101s producing 11,795 characters of reasoning and a 100-character
+ * instruction, because reasoning and the envelope shared one token allowance.
+ * The reply is free-form now; only the trailing state fence is machine-read.
+ *
+ * @returns {Promise<{entries: Array<{type: string, text: string}>,
+ *   state: {requests: object[], flow: {continue: boolean}}, reasoning: string,
+ *   raw: string, tailFound: boolean, tailError: string, interrupted: boolean,
+ *   streamed: boolean}>}
+ */
+async function requestDirection(scene, snapshot, { onChunk, signal } = {}) {
     const profile = getMechanicsProfile();
     const { recipe, prompt, usedFallback, compiledCount } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled });
     if (usedFallback) {
         journal('recipe.fallback', { hadRecipe: Boolean(recipe), messages: compiledCount }, { severity: 'warn' });
     }
-    const schema = toCoreJsonSchema(getDirectionEnvelopeSchema());
-    let raw;
+    // Held outside the try so an abort mid-reply keeps whatever arrived: the
+    // transport may either return early having seen the signal, or throw from
+    // the open fetch, and only one of those hands the text back.
+    let raw = '';
     let reasoning = '';
-    if (testAdapters?.requestDirection) {
-        raw = await testAdapters.requestDirection({ scene, snapshot, prompt, schema });
-    } else {
-        const capture = await withCapturedResponse(() => getContext().generateRawData({
-            api: 'openai', prompt,
-            // Its own setting, not a third of the mechanical context budget.
-            // Those were the same number, but they measure different things:
-            // contextBudget is how much mechanical state goes INTO the prompt,
-            // while this is how much room the Director has to think and answer.
-            // A Scene with no Goals at all still needs the second one.
-            responseLength: directorResponseTokens(profile),
-            instructOverride: false, jsonSchema: schema,
-        }));
-        raw = capture.result;
-        reasoning = readReasoning(capture.captured);
-    }
-    lastDirectorReasoning = reasoning;
-    // Separates an exhausted token budget from genuinely malformed output. The
-    // old message blamed the model's formatting for what is usually a reasoning
-    // model spending its whole allowance before writing a character.
-    let envelope = interpretStructuredReply(raw, 'Game Director');
-    if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) envelope = {};
-    // Protocol identity is transport metadata owned by Remodel. Providers
-    // vary in how faithfully they echo const-valued schema fields; accepting
-    // their prose decision must never let them rename the local protocol.
-    envelope.protocol = DIRECTION_PROTOCOL;
-    // The direction ID is transport identity owned by Remodel, for the same
-    // reason the protocol string above is.
-    //
-    // Observed live: a provider returned the literal `"dir-001"` for every
-    // single pass in a session. Because persistDirectionRecord keys the Scene's
-    // direction log by this id, each new record REPLACED the previous one — the
-    // log never held more than one card, and that card appeared to jump down
-    // the stream to whatever the newest pass's createdAt was. The same
-    // collision also let one run's setExtensionPrompt filter and completion
-    // guards match a different run's directionId.
-    //
-    // Never accept it from the model, even when it looks unique.
-    envelope.directionId = createId('direction');
-    // Some OpenAI-compatible providers advertise JSON Schema support but
-    // omit required fields. Repair only the transport skeleton here; retain
-    // every valid semantic value the Director did return. A useful fallback
-    // keeps the scene operable without inventing events. `movement.objective`
-    // covers a reply still in flight against the previous schema when this
-    // shipped.
-    const returnedInstruction = String(envelope.instruction || envelope.movement?.objective || '').trim();
-    envelope.instruction = returnedInstruction
-        || `Respond naturally to the current action while preserving accepted scene facts: ${String(snapshot.currentAction || '').trim()}`;
-    envelope.flow = {
-        continueAfter: Boolean(envelope.flow?.continueAfter),
-        hardPauseAfter: Boolean(envelope.flow?.hardPauseAfter),
+    let streamed = false;
+    const collect = (update) => {
+        raw = update.text;
+        reasoning = update.reasoning;
+        onChunk?.(update);
     };
-    envelope.requests = Array.isArray(envelope.requests) ? envelope.requests : [];
-    // Mechanics disabled for this account: never let a Director reply carry
-    // requests forward for code that will not offer Variables or Goals to
-    // resolve them against.
-    if (!profile.enabled) envelope.requests = [];
-    return envelope;
+    if (testAdapters?.requestDirection) {
+        const answer = await testAdapters.requestDirection({ scene, snapshot, prompt });
+        raw = String(typeof answer === 'string' ? answer : answer?.text || '');
+        reasoning = String(answer?.reasoning || '');
+    } else {
+        try {
+            const result = await streamChatPrompt({ prompt, onChunk: collect, signal });
+            raw = result.text;
+            reasoning = result.reasoning;
+            streamed = result.streamed;
+        } catch (error) {
+            // A cancelled request is not a failure to report — the user
+            // cancelled it. Anything else still is.
+            if (!signal?.aborted) throw error;
+        }
+    }
+    lastDirectorReasoning = String(reasoning || '').trim();
+    const interrupted = Boolean(signal?.aborted);
+    raw = String(raw || '').trim();
+    if (!raw && !interrupted) {
+        throw new StructuredReplyError(
+            'empty',
+            'The Game Director returned nothing at all. This is almost always the token budget: reasoning is paid for out of the same allowance as the reply, so a thinking model can exhaust it before writing a single character. Reduce the model\'s reasoning effort, or raise its response length on this connection.',
+        );
+    }
+    const reply = parseDirectorReply(raw);
+    return {
+        entries: reply.entries,
+        // An interrupted reply is never read for state. Its tail either never
+        // arrived or arrived half-written, and a fence that happens to parse
+        // out of a severed reply would apply changes the Director had not
+        // finished deciding.
+        state: interrupted ? { requests: [], flow: { continue: false } } : reply.state,
+        tailFound: interrupted ? false : reply.tailFound,
+        tailError: interrupted ? '' : reply.tailError,
+        reasoning: lastDirectorReasoning,
+        raw,
+        interrupted,
+        streamed,
+    };
+}
+
+/**
+ * The envelope the rest of the pass runs on, built by code from what the
+ * Director actually said.
+ *
+ * Everything here that is not the Director's judgment is Remodel's: the
+ * protocol string is a local constant, and the direction id is generated. Both
+ * used to be schema fields the model filled in, and both were observed being
+ * filled in wrongly — one provider returned the literal `"dir-001"` for every
+ * pass in a session, which made persistDirectionRecord's id-keyed log replace
+ * its single record over and over and let one run's completion guards match
+ * another run's id.
+ *
+ * `flow` is the one place the shapes differ. The reply carries a single
+ * `continue`; the pipeline downstream reads `continueAfter`/`hardPauseAfter`.
+ * Not continuing IS the scene waiting for the user, so the second field is
+ * derived rather than invented — and with no tail at all both land on "wait",
+ * which is the direction design §3 chose to fail in.
+ */
+function buildDirectionEnvelope(reply, turn) {
+    const requests = getMechanicsProfile().enabled ? usableRequests(reply.state.requests) : [];
+    return {
+        protocol: DIRECTION_PROTOCOL,
+        directionId: createId('direction'),
+        notebookTurn: turn,
+        flow: {
+            continueAfter: reply.state.flow.continue === true,
+            hardPauseAfter: reply.state.flow.continue !== true,
+        },
+        requests,
+    };
+}
+
+/**
+ * Requests the mechanics layer can at least read.
+ *
+ * `parseDirectorReply` keeps anything object-typed, which includes arrays —
+ * and `validateMechanicsRequest` rejects the WHOLE batch when one entry is not
+ * a plain object. Dropping the unreadable ones here is what stops a single
+ * malformed sibling from voiding four valid requests. It is not containment:
+ * every surviving request still has its names resolved against the set this
+ * pass advertised, and its shape still checked, by code this task did not touch.
+ */
+function usableRequests(requests) {
+    return (Array.isArray(requests) ? requests : []).filter((request) => request && typeof request === 'object' && !Array.isArray(request));
+}
+
+/** The next turn number for this Scene's notebook: one past the highest stored. */
+function nextNotebookTurn(scene) {
+    return readAllEntriesForOwner(scene.timelineId, { sceneId: scene.id })
+        .reduce((highest, entry) => Math.max(highest, Number(entry.turn) || 0), 0) + 1;
+}
+
+/**
+ * One turn's stored entries, secrets included.
+ *
+ * `readAllEntriesForOwner`, deliberately, not `readNarratorEntries`: these
+ * callers ask what the Director wrote, not what the performer may read, and a
+ * turn that consists only of secrets is still a turn that happened.
+ */
+function notebookTurnEntries(scene, turn) {
+    if (!scene?.timelineId || !Number.isFinite(Number(turn))) return [];
+    return readAllEntriesForOwner(scene.timelineId, { sceneId: scene.id })
+        .filter((entry) => Number(entry.turn) === Number(turn));
+}
+
+/** Erase one turn from the notebook. Used only when its take is discarded. */
+function discardNotebookTurn(scene, turn) {
+    const entries = notebookTurnEntries(scene, turn);
+    if (!entries.length) return 0;
+    for (const entry of entries) deleteDirectorEntry(scene.timelineId, entry.id);
+    journal('notebook.discarded', { turn: Number(turn), entryCount: entries.length }, { severity: 'warn', summary: `direction.notebook: turn ${turn} discarded with its take` });
+    return entries.length;
+}
+
+/**
+ * Mark the trailing entry of an interrupted reply as what it is.
+ *
+ * The LAST entry only: every earlier one was closed by a newline the Director
+ * did write, so it is whole. The cut landed inside the final entry — or, at
+ * best, exactly at its end, which is the direction worth erring in.
+ */
+function markLastIncomplete(entries, interrupted) {
+    const list = Array.isArray(entries) ? entries : [];
+    if (!interrupted || !list.length) return list;
+    return list.map((entry, index) => (index === list.length - 1 ? { ...entry, incomplete: true } : entry));
 }
 
 /**
@@ -800,7 +968,7 @@ async function requestDirectionEnvelope(scene, snapshot) {
  *
  * The Director is NOT re-run: the direction was valid, only its rendering
  * failed, and re-directing would cost a second long call and could change the
- * instruction the user is waiting on.
+ * direction the user is waiting on.
  */
 const EMPTY_RESPONSE_RETRIES = 2;
 const EMPTY_RESPONSE_RETRY_DELAY_MS = 400;
@@ -808,7 +976,6 @@ const EMPTY_RESPONSE_RETRY_DELAY_MS = 400;
 async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0 }) {
     const director = resolveDirector(scene);
     persistDirectionRecord(scene, envelope, performer, director);
-    const movementPrompt = formatMovementPrompt(envelope);
     activeRun = {
         directionId: envelope.directionId,
         sceneId: scene.id,
@@ -844,7 +1011,13 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     // be able to submit over a revealing response.
     releaseDirectionLock(token);
     notifyState();
-    setExtensionPrompt(DIRECTION_PROMPT_KEY, movementPrompt, extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM, () => activeRun?.directionId === envelope.directionId);
+    // NOTE: there is no depth-0 direction injection any more (design §7). It
+    // carried the Director's one-line `instruction`, and there is no longer an
+    // instruction to carry: this turn's notebook entries ARE the direction and
+    // they reach the performer through the Director's Notes block below. A
+    // second channel here would deliver the same entries twice, at two depths,
+    // inside one prompt.
+    //
     // Re-mirror the Director's Notes HERE, at the generation seam — not only
     // from renderRoleplayScene's idle-state mirror (which stays in place for
     // when no generation is in flight). renderRoleplayScene only runs on UI
@@ -920,14 +1093,6 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         }
     } finally {
         ownedGenerationDepth = Math.max(0, ownedGenerationDepth - 1);
-        // Only this run's own injection. Both runs of a concurrent pair shared
-        // this key, so the first to finish cleared the movement the second was
-        // still generating against — that performer received no direction at
-        // all and answered generically. The lock should now prevent the pair
-        // from forming; this keeps the damage impossible rather than unlikely.
-        if (activeRun == null || activeRun.directionId === envelope.directionId) {
-            setExtensionPrompt(DIRECTION_PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0);
-        }
         journal('generation.end', {
             directionId: envelope.directionId,
             durationMs: Date.now() - generationStartedAt,
@@ -1638,60 +1803,17 @@ function resolveDirector(scene) {
 /**
  * The Director's raw reasoning, from the most recent direction request.
  *
- * WHY THIS IS AWKWARD: core throws the reasoning away on any schema-constrained
- * call. `generateRawData` ends with `return extractJsonFromData(data)` whenever
- * a jsonSchema is supplied (script.js ~4043), so the provider's response object
- * — the only place `reasoning` / `reasoning_content` / `thinking` lives — never
- * escapes the function. There is no event and no accessor for it.
+ * It arrives on the stream now — `sendOpenAIRequest`'s generator accumulates
+ * `state.reasoning` alongside the text — so this is just the last value that
+ * came off it, held for `persistDirectionRecord` to put on the direction card.
  *
- * The alternatives were worse: patching core is off the table, and dropping the
- * schema to get a plain response would lose the enforcement that keeps the
- * envelope valid in the first place. So we read the response off the wire for
- * the duration of this one call instead.
+ * Getting hold of it used to require wrapping `globalThis.fetch` for the
+ * duration of the call and reading a clone of the response, because
+ * `generateRawData` returns `extractJsonFromData(data)` whenever a jsonSchema
+ * is supplied and the provider's response object — the only place reasoning
+ * lives — never escaped the function. Dropping the schema deleted that patch.
  */
 let lastDirectorReasoning = '';
-
-/**
- * Run `task` with fetch temporarily wrapped so the backend's JSON response can
- * be read alongside whatever core chooses to return.
- *
- * Deliberately narrow: it only ever reads a CLONE of the body (so core still
- * consumes the original untouched), only looks at SillyTavern's own backend
- * routes, and restores the original fetch in a finally — a throw inside the
- * task can never leave a wrapped fetch behind.
- */
-async function withCapturedResponse(task) {
-    const original = globalThis.fetch;
-    let captured = null;
-    globalThis.fetch = async (...args) => {
-        const response = await original(...args);
-        try {
-            const url = String(args[0]?.url || args[0] || '');
-            if (response.ok && /\/api\/backends\//.test(url)) {
-                captured = await response.clone().json();
-            }
-        } catch {
-            // A streamed or non-JSON body is simply not a source of reasoning.
-        }
-        return response;
-    };
-    try {
-        return { result: await task(), captured };
-    } finally {
-        globalThis.fetch = original;
-    }
-}
-
-function readReasoning(data) {
-    if (!data) return '';
-    try {
-        // ignoreShowThoughts: this card is our own surface, so it should not
-        // depend on SillyTavern's native "show thoughts" display toggle.
-        return String(extractReasoningFromData(data, { mainApi: 'openai', ignoreShowThoughts: true }) || '').trim();
-    } catch {
-        return '';
-    }
-}
 
 /** Compact, storable summary of what the Director asked the system to do. */
 function summarizeRequests(requests) {
@@ -1701,8 +1823,31 @@ function summarizeRequests(requests) {
     })).slice(0, 40);
 }
 
+/**
+ * The direction card's headline, drawn from the notebook turn this direction
+ * belongs to.
+ *
+ * Secrets are left out. The card renders inline in the Roleplay stream right
+ * beside the prose, and while a secret IS the owner's to see, "the owner
+ * happens to be looking at the story" is not the moment to put it on screen
+ * unlabelled. The owner-facing notebook surface is where secrets belong, and
+ * it can mark them as withheld.
+ */
+function describeDirectionForRecord(scene, turn) {
+    return notebookTurnEntries(scene, turn)
+        .filter((entry) => entry.type !== 'secret')
+        .map((entry) => String(entry.text || '').trim())
+        .filter(Boolean)
+        .join('\n');
+}
+
 function persistDirectionRecord(scene, envelope, performer, director) {
-    if (!scene || !envelope?.instruction) return;
+    if (!scene) return;
+    // normalizeDirectionRecord (timeline-state.js) drops a record with no
+    // objective, so a turn that produced nothing readable writes no card
+    // rather than an empty one.
+    const objective = describeDirectionForRecord(scene, envelope?.notebookTurn);
+    if (!objective) return;
     const existing = Array.isArray(scene.liveDirection?.directionLog) ? scene.liveDirection.directionLog : [];
     const record = {
         id: envelope.directionId,
@@ -1711,11 +1856,11 @@ function persistDirectionRecord(scene, envelope, performer, director) {
         directorLabel: director?.label || 'Game Director',
         performerRef: performer.ref,
         performerLabel: performer.label,
-        // Kept as `objective`, not renamed to `instruction`: this is the field
-        // timeline-state.js's normalizeDirectionRecord requires (and the
-        // roleplay stream's direction card already reads) to keep the record
-        // instead of silently dropping it.
-        objective: envelope.instruction,
+        // Still `objective`: this is the field timeline-state.js's
+        // normalizeDirectionRecord requires (and the roleplay stream's
+        // direction card already reads) to keep the record instead of silently
+        // dropping it. Its content is the turn's notebook now.
+        objective,
         operations: summarizeRequests(envelope.mechanics.pendingRequests),
         reasoning: lastDirectorReasoning,
         continueAfter: envelope.flow.continueAfter,
@@ -1732,38 +1877,32 @@ function normalizeRef(value) {
     return { kind: value.kind === 'narrator' ? 'narrator' : 'character', id, label: String(value.label || value.name || id) };
 }
 
+/**
+ * The envelope in the shape the run lifecycle stores and replays.
+ *
+ * No `instruction` any more: the direction IS this turn's notebook entries
+ * (design's decision table, "The direction — this turn's entries. No separate
+ * instruction field"), and they live in the store, addressed by
+ * `notebookTurn`. The envelope carries the pointer, not a second copy — a copy
+ * on every saved message would be the authoritative-looking inert duplicate
+ * this file has already been bitten by twice.
+ *
+ * `mechanics.pendingRequests` also accepts an envelope this function already
+ * produced, since its own output moves `requests` there — that is the
+ * regenerate path re-normalizing a saved envelope.
+ */
 function normalizeEnvelope(value, scene) {
     if (!value || value.protocol !== DIRECTION_PROTOCOL) throw new Error(`Direction protocol must be ${DIRECTION_PROTOCOL}.`);
     const directionId = String(value.directionId || createId('direction'));
-    // `movement.objective` is read as a fallback so a response requested
-    // under the previous schema — still in flight when this shipped — parses
-    // instead of throwing. `mechanics.pendingRequests` likewise covers
-    // re-normalizing an envelope this function already produced (regenerate),
-    // since its own output moves `requests` there.
-    const instruction = String(value.instruction || value.movement?.objective || '').trim();
-    if (!instruction) throw new Error('Direction requires an instruction for the performer.');
     const pendingRequests = Array.isArray(value.requests) ? value.requests : Array.isArray(value.mechanics?.pendingRequests) ? value.mechanics.pendingRequests : [];
     return {
         protocol: DIRECTION_PROTOCOL,
         directionId,
-        instruction,
+        notebookTurn: Number.isFinite(Number(value.notebookTurn)) ? Number(value.notebookTurn) : null,
         flow: { continueAfter: Boolean(value.flow?.continueAfter), hardPauseAfter: Boolean(value.flow?.hardPauseAfter) },
         mechanics: { pendingRequests },
         sceneId: scene.id,
     };
-}
-
-/**
- * What the performing character is told.
- *
- * Just the direction. It used to also carry an objective/constraint form, three
- * marker formats with ids to remember, and two prohibitions — clerical load at
- * the position closest to the next word, which is what flattened the prose.
- */
-export function formatMovementPrompt(envelope) {
-    const instruction = String(envelope?.instruction || '').trim();
-    if (!instruction) return '';
-    return `[Direction for this response only]\n${instruction}`;
 }
 
 /**
@@ -1815,10 +1954,17 @@ function describeNotebookTurn(turn, turnEntries) {
     return lines.length ? `Turn ${turn}\n${lines.join('\n')}` : '';
 }
 
+/**
+ * A severed entry says so. The Director was stopped mid-sentence, and a
+ * half-written ruling delivered as a whole one is a decision nobody made — the
+ * performer needs to know it is reading a fragment before it treats it as
+ * binding.
+ */
 function describeNotebookEntry(entry) {
     const text = String(entry?.text || '').trim();
     if (!text) return '';
-    return `- ${NOTEBOOK_ENTRY_LABELS[entry?.type] || ''}${text}`;
+    const cut = entry?.incomplete ? ' … (cut off — the director was interrupted here)' : '';
+    return `- ${NOTEBOOK_ENTRY_LABELS[entry?.type] || ''}${text}${cut}`;
 }
 
 /**
@@ -1845,45 +1991,6 @@ export function formatDirectorNotesPrompt(scene) {
     if (!block) return '';
     const entries = readNarratorEntries(scene.timelineId, { sceneId: scene.id, depth: block.settings?.depth });
     return buildDirectorNotesSource(entries);
-}
-
-/**
- * What the Director must reply with.
- *
- * Deliberately small: an instruction the performer will read as prose, a flow
- * decision, and mechanical requests addressed by name. No performer choice —
- * whoever holds the Scene's Narrator badge speaks — and no marker vocabulary
- * for the model to remember, since deriveBeats() reads pacing out of the
- * finished prose instead.
- */
-export function getDirectionEnvelopeSchema() {
-    const request = structuredClone(getMechanicsRequestSchema().schema.properties.requests.items);
-    return {
-        name: 'remodel_direction_envelope', strict: true,
-        schema: {
-            type: 'object', additionalProperties: false,
-            required: ['protocol', 'directionId', 'instruction', 'flow', 'requests'],
-            properties: {
-                protocol: { type: 'string', const: DIRECTION_PROTOCOL },
-                directionId: { type: 'string' },
-                instruction: {
-                    type: 'string',
-                    description: 'The direction, written as prose for the performer who writes the next response: what they are doing, and what matters about how. This is the only guidance they receive — never a summary of it, never a reference to a director or a protocol.',
-                },
-                flow: {
-                    type: 'object', additionalProperties: false, required: ['continueAfter', 'hardPauseAfter'],
-                    properties: {
-                        continueAfter: { type: 'boolean', description: 'True if the scene should keep moving on its own after this response, without waiting on the user.' },
-                        hardPauseAfter: { type: 'boolean', description: 'True if the fiction is now explicitly waiting on the user and must not continue on its own, regardless of continueAfter.' },
-                    },
-                },
-                requests: {
-                    type: 'array', items: request,
-                    description: 'Mechanical changes this direction causes, each addressing a Variable or Goal by the exact name advertised this turn. Applied once this response is accepted — never narrate, roll, or invent the outcome yourself. Return an empty array when nothing changes.',
-                },
-            },
-        },
-    };
 }
 
 function clearRevealTimer() {
