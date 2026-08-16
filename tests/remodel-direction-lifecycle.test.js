@@ -22,6 +22,9 @@ import {
     getLiveDirectionRun,
     clearLiveDirectionFailure,
     regenerateLastDirectedResponse,
+    retryLiveDirection,
+    sendWithoutLiveDirection,
+    canSendWithoutLiveDirection,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import {
     createVariableValue,
@@ -405,6 +408,98 @@ test("the user's message is in the chat before the Director is called", async ()
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
     expect(chatAtDirectorCall).toEqual([{ is_user: true, mes: 'I push the door open.' }]);
+});
+
+// ------------------------------ retry and "Send Normally" after that point
+//
+// Posting the user's message before the Director round trip (above) means a
+// failure can now land AFTER the message is already in the chat — something
+// that could not happen before this task, since the old call site ran only
+// once the whole pass had already succeeded. retryLiveDirection and
+// sendWithoutLiveDirection both re-run against the SAME pendingFailure.action,
+// and neither used to know whether that text had already landed — so both
+// would post it a second time, producing a duplicate user bubble.
+//
+// The fix records that fact on the pending failure as `messagePosted`,
+// separate from `insertUser` (which still decides lock priority and the
+// journal's user/autonomous label — a fact about what KIND of pass this is,
+// not about whether THIS attempt already posted), and has beginDirection
+// consult it before deciding to call sendMessageAsUser again. Both cases
+// below are asserted on the chat's actual contents after a retry, not on the
+// flag itself.
+
+function userMessages() {
+    return __getChat().filter((message) => message.is_user).map((message) => message.mes);
+}
+
+test('a retry after the message already posted does not duplicate it', async () => {
+    // The Director itself fails, but only AFTER beginDirection has already
+    // posted the user's text — the common case now that insertion runs first.
+    setLiveDirectionTestAdapters({
+        requestDirection: async () => { throw new Error('simulated Director failure'); },
+    });
+    const consoleError = console.error;
+    console.error = () => {};
+    try {
+        await submitDirectedRoleplay({ scene, text: 'I push the door open.' });
+    } finally {
+        console.error = consoleError;
+    }
+    expect(userMessages()).toEqual(['I push the door open.']);
+
+    setLiveDirectionTestAdapters({ requestDirection: async () => directorReply(), generatePerformer: speak });
+    await retryLiveDirection();
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    // Still exactly one copy — the retry read the message that was already
+    // there instead of posting it again.
+    expect(userMessages()).toEqual(['I push the door open.']);
+});
+
+test('a retry after an early refusal, before the message ever posted, still posts it', async () => {
+    // No connection at all: beginDirection's blocked-check fails before it
+    // ever reaches sendMessageAsUser, so nothing has landed in the chat yet.
+    __setOnlineStatus('no_connection');
+    const consoleError = console.error;
+    console.error = () => {};
+    try {
+        await submitDirectedRoleplay({ scene, text: 'I open the window.' });
+    } finally {
+        console.error = consoleError;
+    }
+    expect(userMessages()).toEqual([]);
+
+    __setOnlineStatus('connected');
+    await retryLiveDirection();
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    // The retry is the first and only chance to post it — losing this would
+    // silently drop the user's words rather than merely delaying them.
+    expect(userMessages()).toEqual(['I open the window.']);
+});
+
+test('"Send Normally" is withheld once the message is already posted, rather than duplicating it', async () => {
+    // sendWithoutLiveDirection has the identical duplication shape as retry —
+    // it bypasses Direction and re-sends pendingFailure.action through core's
+    // own send path, which would also post the text a second time.
+    const sentNormally = [];
+    initLiveDirection({ sendNormally: (text) => { sentNormally.push(text); } });
+    setLiveDirectionTestAdapters({
+        requestDirection: async () => { throw new Error('simulated Director failure'); },
+    });
+    const consoleError = console.error;
+    console.error = () => {};
+    try {
+        await submitDirectedRoleplay({ scene, text: 'I push the door open.' });
+    } finally {
+        console.error = consoleError;
+    }
+    expect(userMessages()).toEqual(['I push the door open.']);
+
+    expect(canSendWithoutLiveDirection()).toBe(false);
+    expect(sendWithoutLiveDirection()).toBe(false);
+    expect(sentNormally).toEqual([]);
+    expect(userMessages()).toEqual(['I push the door open.']);
 });
 
 // --------------------------------------------------------------- regenerate

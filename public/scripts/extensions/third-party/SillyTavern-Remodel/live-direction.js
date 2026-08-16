@@ -387,6 +387,13 @@ export async function stopLiveDirection() {
     return true;
 }
 
+/**
+ * `retry` (== the failed pass's `pendingFailure`) carries `messagePosted`
+ * forward unchanged — beginDirection reads it back out to decide whether
+ * `sendMessageAsUser` needs to run again. No branching needed HERE: whether
+ * the text is already in the chat is beginDirection's question to answer,
+ * not this function's to guess at.
+ */
 export async function retryLiveDirection() {
     if (directionInFlight) {
         journal('retry.rejected', { reason: 'a direction is already in flight' }, { severity: 'warn' });
@@ -398,10 +405,23 @@ export async function retryLiveDirection() {
     return beginDirection(retry);
 }
 
+/**
+ * Bypasses Direction entirely and sends `retry.action` through core's own
+ * send flow (`hooks.sendNormally`), which posts the text itself.
+ *
+ * Refused when `messagePosted` is true: the text is already the newest chat
+ * entry (beginDirection posted it before this pass failed), and sendNormally
+ * would post it a SECOND time — there is nothing left for this bypass to do.
+ * Retry is the recovery action for that case, and it already knows not to
+ * re-post either. canSendWithoutLiveDirection hides the button for the same
+ * reason, so reaching here with `messagePosted: true` should not happen in
+ * the UI — refused anyway, since a caller other than the button should not
+ * have to re-derive this rule to stay safe.
+ */
 export function sendWithoutLiveDirection() {
     const retry = pendingFailure;
     pendingFailure = null;
-    if (!retry?.insertUser) return false;
+    if (!retry?.insertUser || retry.messagePosted) return false;
     hooks.sendNormally(retry.action);
     return true;
 }
@@ -411,10 +431,12 @@ export function sendWithoutLiveDirection() {
  *
  * A failure on an autonomous continuation has none — there is no intervention
  * to re-send — so offering "Send Normally" there is a button that cannot do
- * anything when clicked.
+ * anything when clicked. Same reasoning when the text is already posted
+ * (`messagePosted`): the bypass would only duplicate it, so the button is
+ * withheld and Retry is left as the one recovery action for that case.
  */
 export function canSendWithoutLiveDirection() {
-    return Boolean(pendingFailure?.insertUser);
+    return Boolean(pendingFailure?.insertUser) && !pendingFailure?.messagePosted;
 }
 
 export async function regenerateLastDirectedResponse(scene = hooks.getActiveScene()) {
@@ -495,14 +517,14 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     return generateDirectedPerformer({ scene, envelope, performer, autonomousSequence: Number(saved.autonomousSequence) || 0 });
 }
 
-async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null } = {}) {
+async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, messagePosted = false } = {}) {
     // Checked before the Director call, not after: the Director costs a real
     // request and ~17s, and there is no point spending either when the
     // performer that follows it cannot speak.
     const blocked = !scene ? 'No active Scene.' : describeNativeGenerationBlock();
     if (blocked) {
         journal('blocked', { reason: blocked }, { severity: 'warn' });
-        return directionFailure(new Error(blocked), { scene, action, insertUser, authorizedGoalIds, autonomousSequence });
+        return directionFailure(new Error(blocked), { scene, action, insertUser, authorizedGoalIds, autonomousSequence, messagePosted });
     }
     // Last line of defence. Every caller checks the lock, but they are all async
     // and a caller that awaited something in between could still arrive here
@@ -522,6 +544,10 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         passId: token.id,
         sceneId: scene.id,
         insertUser: Boolean(insertUser),
+        // Distinct from `insertUser`: this says whether the text is already
+        // sitting in context.chat from an earlier attempt at this same action
+        // (a retry), not whether this kind of pass posts text at all.
+        messagePosted: Boolean(messagePosted),
         autonomousSequence,
         authorizedGoalIds,
         actionLength: String(action || '').length,
@@ -546,14 +572,22 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // Once this runs there is no undoing it on a later failure in this
         // same pass: nothing downstream removes the message, so it stays in
         // the chat even if the Director call or the performer that follows it
-        // never succeeds — including on a retry, which calls back in here
-        // with the same `insertUser: true` and would post it a second time.
-        if (insertUser) {
+        // never succeeds. `messagePosted` is what stops a RETRY from posting
+        // it again: directionFailure carries whatever it is at the moment of
+        // failure forward on pendingFailure, retryLiveDirection hands that
+        // whole record back into this function, and a chain of retries after
+        // the text has landed skips this block and reads the message that is
+        // already there. Kept separate from `insertUser`, which still decides
+        // lock priority (userInitiated) and the journal's user/autonomous
+        // label — a fact about what KIND of pass this is, not about whether
+        // this particular attempt already posted.
+        if (insertUser && !messagePosted) {
             await sendMessageAsUser(action);
             hooks.clearComposer();
+            messagePosted = true;
         }
         if (token.aborted) return abandonPass(token, 'insert-user');
-        const snapshot = await buildDirectionSnapshot(scene, action, authorizedGoalIds, { excludeNewestFromHistory: insertUser });
+        const snapshot = await buildDirectionSnapshot(scene, action, authorizedGoalIds, { excludeNewestFromHistory: messagePosted });
         journal('snapshot', {
             passId: token.id,
             castCount: snapshot.cast.length,
@@ -687,7 +721,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         askedThePerformer = true;
         return await generateDirectedPerformer({ scene, envelope: normalized, performer, autonomousSequence, token });
     } catch (error) {
-        return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence });
+        return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence, messagePosted });
     } finally {
         // A take that never reached the performer produced nothing — no
         // message, no state change — so its entries must not bind the turn
