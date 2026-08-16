@@ -129,6 +129,147 @@ test('the snapshot source carries the current action', () => {
     expect(sources.directorSnapshot).toContain('He swings.');
 });
 
+// The Scene snapshot, in the shape buildDirectionSnapshot (live-direction.js)
+// actually returns — not a shape convenient to assert against.
+//
+// Every identifier here is the real kind the running app produces: createId's
+// `<prefix>-<uuid>` for the Scene and Timeline, avatar filenames for cast and
+// persona refs, and the integer chat indices buildDirectionSnapshot stamps
+// onto each accepted message. `lore` carries core's real World Info shapes —
+// EMEntries as `{ position, content }` and WIDepthEntries as
+// `{ depth, entries[], role }` — not strings. `recentReceipts` carries what
+// scrubReceipt leaves behind, including the statuses.
+//
+// The ids matter: the no-identifier assertion below is only worth anything if
+// there are real ids in the input for it to fail on.
+const sceneSnapshot = {
+    scene: {
+        id: 'scene-4f2a1c9e-8b17-4d0a-9c33-6ee0a1b25d47',
+        timelineId: 'timeline-2c9d7ab4-51e6-4f8b-a0c1-9d3e5f7b8a20',
+        title: 'The Ninth Seal',
+    },
+    currentAction: 'He steps between her and the crate and puts one hand flat on the lid.',
+    cast: [
+        { ref: { kind: 'character', id: 'Aiden.png', label: 'Aiden' }, label: 'Aiden', description: 'A courier of the Marrow Street guild.', personality: 'Dry, watchful.', scenario: 'Waiting in a fog-bound loading bay.' },
+        { ref: { kind: 'character', id: 'Sera.png', label: 'Sera' }, label: 'Sera', description: 'A fixer who has outlived two employers.', personality: '', scenario: '' },
+    ],
+    director: snapshot.director,
+    narratorRef: { kind: 'narrator', id: 'Sera.png', label: 'Sera' },
+    persona: { kind: 'persona', id: 'user-default.png', label: 'Aiden' },
+    acceptedHistory: [
+        { id: 112, role: 'user', name: 'Aiden', content: 'He counts the seals again.\n\nNine, the way there were nine at the depot.' },
+        { id: 113, role: 'assistant', name: 'Sera', content: '"You counted them," she said.' },
+        { id: 114, role: 'assistant', name: '', content: 'The freight gate rolls back on its track.' },
+        { id: 115, role: 'user', name: '', content: 'He does not move.' },
+    ],
+    lore: {
+        before: 'MARROW STREET GUILD: couriers bonded to the seals they carry, not to a house.',
+        after: 'THE FOG: sound carries; sight does not.',
+        examples: [{ position: 0, content: '<START>\nAiden: "Nine seals."' }],
+        depth: [{ depth: 4, entries: ['The freight gate has been forced twice this season.'], role: 0 }],
+    },
+    mechanics: snapshot.mechanics,
+    recentReceipts: [
+        {
+            status: 'applied',
+            receipts: [{
+                requestId: 'req-a41f', capability: 'variable.adjust', status: 'applied', approvalStatus: 'authorized',
+                reason: 'The blow landed before he could turn.',
+                validatedInputs: { variableRef: 'v1', delta: -3 },
+                before: { name: "Aiden's HP", value: 15 }, after: { name: "Aiden's HP", value: 12 },
+            }],
+        },
+        {
+            status: 'rolled-back',
+            receipts: [{ status: 'rejected', rejectionReason: 'An applied operation depends on a proposal awaiting user review.' }],
+        },
+    ],
+};
+
+test('the snapshot source emits no identifier of any kind', () => {
+    const { directorSnapshot } = buildDirectionSources(sceneSnapshot, { mechanicsEnabled: true });
+    // The reply envelope has no field that takes one, and requests address
+    // Variables and Goals by name — so an id here is an address the Director
+    // cannot use and might echo. Asserted as shapes over the whole block, so
+    // reintroducing any of them anywhere fails this.
+    expect(directorSnapshot).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    expect(directorSnapshot).not.toMatch(/\b(scene|timeline|req|tx|direction|turn|checkpoint)-[0-9a-f]/i);
+    expect(directorSnapshot).not.toMatch(/\.(png|jpe?g|webp|gif)\b/i);
+    // Message ids are bare integers, so there is no shape to match — assert on
+    // the actual values the fixture carries.
+    for (const message of sceneSnapshot.acceptedHistory) {
+        expect(directorSnapshot).not.toMatch(new RegExp(`\\b${message.id}\\b`));
+    }
+});
+
+test('accepted history renders as dialogue, not as JSON records', () => {
+    const { directorSnapshot } = buildDirectionSources(sceneSnapshot, { mechanicsEnabled: true });
+    expect(directorSnapshot).toContain('Aiden: He counts the seals again.');
+    expect(directorSnapshot).toContain('Sera: "You counted them," she said.');
+    // One blank line between messages, so the second paragraph of a message is
+    // not read as a new speaker's turn.
+    expect(directorSnapshot).toContain('nine at the depot.\n\nSera: "You counted them,');
+    // A nameless message still needs a speaker; its role supplies one.
+    expect(directorSnapshot).toContain('Narrator: The freight gate rolls back on its track.');
+    expect(directorSnapshot).toContain('Aiden: He does not move.');
+    // Nothing transport-shaped survives: no field names, no braces around
+    // quoted keys, and no escaped newlines standing in for paragraph breaks.
+    expect(directorSnapshot).not.toContain('"role"');
+    expect(directorSnapshot).not.toContain('"content"');
+    expect(directorSnapshot).not.toContain('"name"');
+    expect(directorSnapshot).not.toMatch(/\{"|"\}/);
+    expect(directorSnapshot).not.toContain('\\n');
+});
+
+test('a section with nothing in it is omitted, not rendered as a bare heading', () => {
+    const bare = {
+        ...sceneSnapshot,
+        scene: { ...sceneSnapshot.scene, title: '' },
+        cast: [],
+        narratorRef: null,
+        persona: null,
+        acceptedHistory: [],
+        lore: { before: '', after: '', examples: [], depth: [] },
+        recentReceipts: [],
+    };
+    const { directorSnapshot } = buildDirectionSources(bare, { mechanicsEnabled: true });
+    for (const heading of ['SCENE', 'PERFORMER', 'CAST', 'PERSONA', 'LORE', 'RECENT CHANGES', 'STORY SO FAR']) {
+        expect(directorSnapshot).not.toContain(heading);
+    }
+    // Exactly the one section that still has something in it, and nothing else
+    // — no stray separators from the sections that dropped out.
+    expect(directorSnapshot).toBe(`CURRENT ACTION\n${bare.currentAction}`);
+});
+
+test('the snapshot names the performer and renders lore and applied changes as text', () => {
+    const { directorSnapshot } = buildDirectionSources(sceneSnapshot, { mechanicsEnabled: true });
+    // By name. The Scene's narratorRef.id is an avatar filename.
+    expect(directorSnapshot).toContain('PERFORMER\nSera writes the next response.');
+    expect(directorSnapshot).toContain('The user plays Aiden.');
+    expect(directorSnapshot).toContain('- Aiden\n  Description: A courier of the Marrow Street guild.');
+    // Sera has no personality or scenario text; neither gets an empty label.
+    expect(directorSnapshot).not.toContain('Personality: \n');
+    expect(directorSnapshot).not.toContain('Scenario: \n');
+    // All four lore shapes, including the two that are not strings.
+    expect(directorSnapshot).toContain('MARROW STREET GUILD');
+    expect(directorSnapshot).toContain('THE FOG');
+    expect(directorSnapshot).toContain('<START>\nAiden: "Nine seals."');
+    expect(directorSnapshot).toContain('The freight gate has been forced twice this season.');
+    // The same `- capability: reason` shape formatMechanicsReceipts uses.
+    expect(directorSnapshot).toContain('- variable.adjust: The blow landed before he could turn.');
+    // A rolled-back transaction changed nothing, so it is not a recent change.
+    expect(directorSnapshot).not.toContain('awaiting user review');
+});
+
+test('the current action is the last thing the Director reads', () => {
+    const { directorSnapshot } = buildDirectionSources(sceneSnapshot, { mechanicsEnabled: true });
+    // It is the newest information in the block and the only line not already
+    // somewhere in the history above it — the user's message is not written to
+    // the chat until after the direction pass returns.
+    expect(directorSnapshot.endsWith(`CURRENT ACTION\n${sceneSnapshot.currentAction}`)).toBe(true);
+    expect(directorSnapshot.indexOf('CURRENT ACTION')).toBeGreaterThan(directorSnapshot.indexOf('STORY SO FAR'));
+});
+
 test('a missing director card degrades to empty rather than throwing', () => {
     const sources = buildDirectionSources({ ...snapshot, director: null }, { mechanicsEnabled: false });
     expect(sources.directorCard).toBe('');

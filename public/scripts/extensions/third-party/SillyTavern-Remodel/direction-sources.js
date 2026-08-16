@@ -191,7 +191,128 @@ function describeCapabilities(capabilities) {
         .join('\n');
 }
 
+/**
+ * Everything the Director may read about the scene it is directing: where it
+ * is, who is in it, what has been said, and what has just happened.
+ *
+ * Rendered, not JSON-dumped, for the same reason every other block here is.
+ * A `{"id":137,"role":"assistant","name":"Sera","content":"…"}` record spends
+ * tokens on punctuation and field names to state what `Sera: …` states for
+ * free, and asks the model to parse a transport format before it can read a
+ * story.
+ *
+ * Nothing here emits an identifier. The Director's reply envelope is
+ * protocol/directionId/instruction/flow/requests — it has no field that takes
+ * a scene id, a cast ref or a message id, and `requests` addresses Variables
+ * and Goals by name against a closed set (design §3). An identifier in this
+ * text is therefore an address that cannot be used and can only be echoed.
+ * The snapshot OBJECT keeps all of them; this is a rendering, and callers that
+ * need `snapshot.scene.id` read the object.
+ *
+ * Fields are picked explicitly rather than spread, so a new snapshot field
+ * starts life unrendered rather than arriving in the prompt — ids included —
+ * because someone added it upstream.
+ */
 function describeSnapshot(snapshot) {
-    const { mechanics, director, ...rest } = snapshot || {};
-    return `SCENE\n${JSON.stringify(rest)}`;
+    const { scene, currentAction, cast, narratorRef, persona, acceptedHistory, lore, recentReceipts } = snapshot || {};
+    return [
+        section('SCENE', scene?.title),
+        section('PERFORMER', describePerformer(narratorRef)),
+        section('CAST', describeCast(cast)),
+        section('PERSONA', describePersona(persona)),
+        section('LORE', describeLore(lore)),
+        section('RECENT CHANGES', describeReceipts(recentReceipts)),
+        section('STORY SO FAR', describeHistory(acceptedHistory, persona)),
+        // Last, and alone under its own heading: this is the event the
+        // direction is about, it is the newest thing in the block, and it is
+        // the one line here that is not yet anywhere in STORY SO FAR — the
+        // user's message is not written to the chat until after this pass
+        // returns (see beginDirection's `insertUser`).
+        section('CURRENT ACTION', currentAction),
+    ].filter(Boolean).join('\n\n');
+}
+
+/** By name. `narratorRef.id` is an avatar filename, which addresses nothing here. */
+function describePerformer(narratorRef) {
+    const label = String(narratorRef?.label || '').trim();
+    return label ? `${label} writes the next response.` : '';
+}
+
+function describeCast(cast) {
+    return (Array.isArray(cast) ? cast : []).map((member) => {
+        const label = String(member?.label || '').trim();
+        if (!label) return '';
+        const detail = [
+            describeField('Description', member.description),
+            describeField('Personality', member.personality),
+            describeField('Scenario', member.scenario),
+        ].filter(Boolean);
+        return [`- ${label}`, ...detail].join('\n');
+    }).filter(Boolean).join('\n');
+}
+
+/** Card fields run to paragraphs; every line of one stays under its bullet. */
+function describeField(label, value) {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    return `${label}: ${text}`.split('\n').map((line) => (line.trim() ? `  ${line}` : '')).join('\n');
+}
+
+function describePersona(persona) {
+    const label = String(persona?.label || '').trim();
+    return label ? `The user plays ${label}.` : '';
+}
+
+/**
+ * Activated World Info as text.
+ *
+ * `before`/`after`, the example block's anchor and the depth entries' `depth`
+ * and `role` numbers are all instructions for where core would splice each
+ * entry into a native prompt. There is no native prompt here, so they describe
+ * nothing about the story and are dropped; the entry text is the content.
+ */
+function describeLore(lore) {
+    const examples = (Array.isArray(lore?.examples) ? lore.examples : [])
+        .map((entry) => String(entry?.content ?? entry ?? ''));
+    const depth = (Array.isArray(lore?.depth) ? lore.depth : [])
+        .flatMap((entry) => (Array.isArray(entry?.entries) ? entry.entries : [entry]))
+        .map((entry) => String(entry ?? ''));
+    return [lore?.before, ...examples, ...depth, lore?.after]
+        .map((part) => String(part || '').trim()).filter(Boolean).join('\n\n');
+}
+
+/**
+ * What actually changed, in the same `- capability: reason` shape the
+ * performer's own receipt injection uses (formatMechanicsReceipts).
+ *
+ * Applied receipts only. A pending one carries `rejectionReason` and no
+ * `reason` — it is a proposal awaiting the user, not a change — and a
+ * rolled-back transaction's receipts carry no capability at all. Listing
+ * either would tell the Director that something happened which did not.
+ */
+function describeReceipts(recentReceipts) {
+    return (Array.isArray(recentReceipts) ? recentReceipts : [])
+        .flatMap((transaction) => (Array.isArray(transaction?.receipts) ? transaction.receipts : []))
+        .filter((receipt) => receipt?.status === 'applied' && receipt.capability && receipt.reason)
+        .map((receipt) => `- ${receipt.capability}: ${receipt.reason}`)
+        .join('\n');
+}
+
+/** The accepted history as a transcript. The bulk of this block, by far. */
+function describeHistory(history, persona) {
+    return (Array.isArray(history) ? history : []).map((message) => {
+        const content = String(message?.content || '').trim();
+        return content ? `${speakerOf(message, persona)}: ${content}` : '';
+    }).filter(Boolean).join('\n\n');
+}
+
+/**
+ * Nameless messages are real — /sys output, imported logs — and a transcript
+ * line has to start with somebody. The role is all that is left to go on.
+ */
+function speakerOf(message, persona) {
+    const name = String(message?.name || '').trim();
+    if (name) return name;
+    if (message?.role !== 'user') return 'Narrator';
+    return String(persona?.label || '').trim() || 'User';
 }
