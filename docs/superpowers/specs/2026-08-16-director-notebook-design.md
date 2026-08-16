@@ -144,6 +144,10 @@ be asserted offline.
 - **A missing or unparseable tail is not an error.** The turn proceeds with no
   state changes and a journal entry. Prose always wins; a malformed tail can
   never break a scene.
+- **`flow` defaults to stopping.** With no tail, `continue` is false and the
+  scene waits for the user. The failure mode of guessing wrong in the other
+  direction is a scene that runs away on its own after a parse error, which is
+  both harder to notice and harder to undo than a scene that pauses.
 
 ### 4. The notebook — `director-notes-store.js`
 
@@ -159,6 +163,14 @@ future caller cannot forget.
 A new `directorNotes` source in the narrator recipe's source definitions, with a
 configurable look-back depth. This turn's entries are the direction; older
 entries are context.
+
+**Open for the plan to resolve:** recipe blocks carry a `sourceKey` but no
+per-block settings today, so there is no existing mechanism for "how far back".
+Either blocks gain a settings bag, or depth becomes a Mechanics-profile setting
+outside the recipe. The first is more discoverable and more work; the second is
+cheap and puts the control somewhere the user will not think to look. The plan
+should pick one and say why — this is the only piece of the design with no
+established precedent in the codebase.
 
 ### 6. The Narrator's history
 
