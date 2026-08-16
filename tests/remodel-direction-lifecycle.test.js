@@ -20,12 +20,14 @@ import {
     submitDirectedRoleplay,
     stopLiveDirection,
     getLiveDirectionRun,
+    getLiveDirectionUiState,
     clearLiveDirectionFailure,
     regenerateLastDirectedResponse,
     retryLiveDirection,
     sendWithoutLiveDirection,
     canSendWithoutLiveDirection,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
+import { resolveDirectionChromeMode } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/direction-chrome.js';
 import {
     createVariableValue,
     getVariableValue,
@@ -721,31 +723,47 @@ test('a streamed Director reply becomes notebook entries and applies its request
 });
 
 /**
- * Task 9 fix round 1: proves the one line that makes "the card fills live"
- * true rather than aspirational — beginDirection's onChunk closure forwards
- * EVERY chunk to hooks.onDirectorChunk, not just the first (which only ever
- * fed a debug journal timestamp). timeline-spine.js registers
- * updateDirectionStreamCard under that hook and applies it with two rules:
- * `body.textContent = update.text` and `panel.hidden = !thoughts`. Both are
- * replayed here against the REAL sequence of hook calls, so this is a proof
- * about what the card would show, not just about what the hook received.
+ * What this test proves, stated precisely, because its first version claimed
+ * more than it did (review I7.1).
  *
- * The property that matters is ORDERING, not terminal state: a regression
- * that only forwards the LAST chunk (or forwards nothing until the pass
- * settles and then backfills once) would still leave `seen` non-empty and
- * would still leave the final text correct — this suite has already shipped
- * one test whose named property survived exactly that kind of inversion
- * because it only inspected state after everything finished. Every
- * assertion below is about the relationship between consecutive captures,
- * which such a regression cannot satisfy.
+ * It proves TWO things, neither of which is "a DOM card filled":
+ *
+ *  1. beginDirection's onChunk closure forwards EVERY chunk to
+ *     hooks.onDirectorChunk — cumulative, strictly growing, each capture a
+ *     prefix of the next — rather than only the first (which used to feed a
+ *     debug journal timestamp and nothing else) or a single backfill at
+ *     settle time.
+ *  2. Throughout that stream the Roleplay chrome is in the state that puts a
+ *     Director card on screen for the hook to fill
+ *     (direction-chrome.js's `resolveDirectionChromeMode` -> 'directing').
+ *
+ * The second one is the half that was missing and it is why the original
+ * version was hollow: it replayed `updateDirectionStreamCard`'s rules INLINE
+ * (`hiddenSequence = seen.map(…)`), never called that function, never created
+ * a card — and drove `requestNextDirection`, which at the time was one of the
+ * paths where no card was ever created at all. It was green while the named
+ * behaviour was absent on the very path it used. The card's DOM writes cannot
+ * be exercised from Jest (timeline-spine.js touches the DOM at module scope
+ * through its imports), so the honest split is: the hook contract and the
+ * chrome state here, the card's own branch in remodel-direction-chrome.test.js.
  */
-test('the direction card fills as chunks arrive, and its reasoning disclosure un-hides only once reasoning appears', async () => {
+test("every chunk of the Director's reply reaches the card's hook while the chrome is showing a card to fill", async () => {
     const seen = [];
     // wire()'s hooks stay in place — initLiveDirection merges into the
     // existing hooks object rather than replacing it, so this only adds
     // onDirectorChunk.
     initLiveDirection({
-        onDirectorChunk: (update) => seen.push({ text: update.text, reasoning: update.reasoning }),
+        onDirectorChunk: (update) => seen.push({
+            text: update.text,
+            reasoning: update.reasoning,
+            // Resolved at the instant the chunk arrives — the moment
+            // timeline-spine.js's updateDirectionStreamCard would be looking
+            // for a card to write into.
+            chrome: resolveDirectionChromeMode({
+                run: getLiveDirectionRun(),
+                uiState: getLiveDirectionUiState(scene),
+            }),
+        }),
     });
     setLiveDirectionTestAdapters({ generatePerformer: speak });
 
@@ -777,14 +795,12 @@ test('the direction card fills as chunks arrive, and its reasoning disclosure un
     // All four chunks reached the hook — not zero, not one backfilled call.
     expect(seen).toHaveLength(textChunks.length);
 
-    // THE PROPERTY UNDER TEST: content changes BETWEEN chunks, growing every
-    // step and each capture a strict prefix of the next. A card that only
-    // fills once the run settles would fail every iteration of this loop
-    // except (trivially) none of them, because there would only be one
-    // capture to begin with — caught by the length assertion above — or, for
-    // a subtler regression that fires once per chunk but always forwards the
-    // CURRENT cumulative total captured at settle time, this loop is what
-    // catches it: text would be identical (or already-final) at every step.
+    // PROPERTY 1: content changes BETWEEN chunks, growing every step and each
+    // capture a strict prefix of the next. A hook that only fires once the run
+    // settles would fail the length assertion above; a subtler regression that
+    // fires once per chunk but always forwards the CURRENT cumulative total
+    // captured at settle time is what this loop catches — text would be
+    // identical (or already-final) at every step.
     for (let i = 1; i < seen.length; i++) {
         expect(seen[i].text).not.toBe(seen[i - 1].text);
         expect(seen[i].text.length).toBeGreaterThan(seen[i - 1].text.length);
@@ -793,13 +809,20 @@ test('the direction card fills as chunks arrive, and its reasoning disclosure un
     expect(seen[0].text).toBe(textChunks[0]);
     expect(seen[seen.length - 1].text).toContain('```state');
 
-    // The reasoning disclosure's own trigger, replayed with
-    // updateDirectionStreamCard's exact rule: `panel.hidden = !thoughts`
-    // where `thoughts = String(reasoning || '').trim()`. Hidden for the two
-    // chunks with no reasoning yet, un-hidden from the moment it arrives —
-    // and it stays un-hidden, it does not flicker back.
-    const hiddenSequence = seen.map((update) => !String(update.reasoning || '').trim());
-    expect(hiddenSequence).toEqual([true, true, false, false]);
+    // PROPERTY 2 (review I1): there is a card on screen to receive all of
+    // that. `requestNextDirection` is one of the four paths that used to open
+    // no card at all, so this assertion is the one the original version of
+    // this test was missing — it filled a card that, on this path, did not
+    // exist.
+    expect(seen.map((update) => update.chrome)).toEqual(new Array(textChunks.length).fill('directing'));
+
+    // The payload the card's reasoning disclosure keys off
+    // (`panel.hidden = !String(update.reasoning || '').trim()`): empty for the
+    // two chunks before the model reasons, non-empty from the third on, and it
+    // does not flicker back. Asserted on the values the hook RECEIVED — the
+    // rule itself is applied inside updateDirectionStreamCard, which is DOM
+    // code this harness cannot reach.
+    expect(seen.map((update) => String(update.reasoning || '').trim() === '')).toEqual([true, true, false, false]);
 });
 
 test('an unparseable tail costs the turn its requests, not its prose', async () => {

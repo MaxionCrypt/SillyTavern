@@ -114,6 +114,7 @@ import {
     submitDirectedRoleplay,
 } from './live-direction.js';
 import { sanitizeDirectionText } from './live-direction-markers.js';
+import { resolveDirectionChromeMode } from './direction-chrome.js';
 import {
     deleteDirectorEntry,
     readAllEntriesForOwner,
@@ -9184,11 +9185,16 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
     // ensureLiveDirectionCardInStream to insert — gets its own streaming
     // shell instead of the generic "Composing" bubble, so the wait reads as
     // the Director's own from the first moment rather than an unlabeled
-    // placeholder. Closed the instant that stops being true: either a real
-    // run now exists (the card above already replaced it) or the pass left
-    // Directing (settled, failed, or was stopped).
-    const directing = !run && getLiveDirectionUiState(getActiveScene()).state === 'Directing';
-    if (!directing) {
+    // placeholder.
+    //
+    // The three-way choice is resolved by direction-chrome.js's pure
+    // predicate, shared with renderRoleplayScene's tail below, because
+    // deciding it by hand here is what shipped the defect: `run` is TRUTHY on
+    // the two calls that mean "a pass just started" (notifyTransient and
+    // handleRoleplaySend both pass a placeholder), so a `!run` test closed
+    // the card on exactly the calls that should have opened it.
+    const mode = resolveDirectionChromeMode({ run, uiState: getLiveDirectionUiState(getActiveScene()) });
+    if (mode !== 'directing') {
         closeDirectionStreamCard(root);
     }
     // A recovered run at the end of its accepted response is deliberately
@@ -9196,15 +9202,20 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
     // direction. It is not generating and has no hidden suffix to reveal.
     // Treating the mere existence of that recovery object as an active
     // speaker resurrected a permanent "Narrator composing..." row every
-    // time a directed Scene was opened after a page reload.
-    if (run && !run.acceptedComplete && !root.querySelector('.remodel-rp-typing')) {
-        showRoleplayTypingIndicator(run.performer || null);
+    // time a directed Scene was opened after a page reload — which is why
+    // 'speaking' requires a real run, not merely a run-shaped object.
+    if (mode === 'speaking') {
+        if (!root.querySelector('.remodel-rp-typing')) showRoleplayTypingIndicator(run.performer || null);
         return;
     }
     // No run yet, but a Director pass is out. Survives re-render, unlike the
     // one-shot indicator handleRoleplaySend puts up at submit time — losing it
-    // was half of why a hidden pass looked like an idle Scene.
-    if (directing) {
+    // was half of why a hidden pass looked like an idle Scene. The generic
+    // bubble comes down with it: the two are alternatives, and leaving a
+    // stale one up beside the Director's shell is the unlabeled wait this
+    // card exists to replace.
+    if (mode === 'directing') {
+        removeRoleplayTypingIndicator();
         ensureDirectionStreamCard(root);
     }
 }
@@ -10483,12 +10494,17 @@ function renderRoleplayScene() {
     // A stream rebuild wipes the (non-.mes-backed) typing indicator, and the
     // Director's live shell with it (stream.textContent = '' above). Put
     // whichever one belongs back, so a full rebuild mid-wait (switching tabs
-    // away and back, say) doesn't drop back to the unlabeled bubble — same
-    // three-way branch refreshLiveDirectionChrome uses.
-    if (liveRun && !liveRun.acceptedComplete) {
+    // away and back, say) doesn't drop back to the unlabeled bubble — the
+    // SAME predicate refreshLiveDirectionChrome uses, shared rather than
+    // restated, so the two cannot disagree about what is on screen.
+    const chromeMode = resolveDirectionChromeMode({
+        run: liveRun,
+        uiState: getLiveDirectionUiState(activeRoleplayScene),
+    });
+    if (chromeMode === 'speaking') {
         showRoleplayTypingIndicator(liveRun.performer);
         updateRoleplayTypingText(liveRun.acceptedVisibleText || '');
-    } else if (!liveRun && getLiveDirectionUiState(activeRoleplayScene).state === 'Directing') {
+    } else if (chromeMode === 'directing') {
         ensureDirectionStreamCard(root);
     } else if (document.body.classList.contains('remodel-roleplay-generating')) {
         showRoleplayTypingIndicator();
