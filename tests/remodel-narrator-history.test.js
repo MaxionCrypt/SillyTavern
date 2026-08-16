@@ -69,9 +69,81 @@ test("the user's messages do not survive", () => {
     expect(filtered.some((m) => m.name === 'User')).toBe(false);
 });
 
-test("another cast member's messages do not survive", () => {
+// PRECONDITION, stated because the property is NOT unconditional: core only
+// attaches a `name` to a compiled history message under
+// `names_behavior: Completion` (openai.js's populateChatHistory). This fixture
+// carries names, so it is a Completion-mode fixture, and cast exclusion is a
+// Completion-mode-only guarantee. The default-mode fixture two tests below
+// pins what happens instead when the setting is left alone — the two together
+// are the honest statement of what this filter does.
+test("another cast member's messages do not survive (Completion mode, where core attaches a name at all)", () => {
     const filtered = filterNarratorHistory(chatFixture, { narratorName: 'The Narrator' });
     expect(filtered.some((m) => m.name === 'Other Character')).toBe(false);
+});
+
+// C1. The bug this pins is silent and total: core sanitizes the compiled name
+// (`[^a-zA-Z0-9_]` -> `_`, PromptManager.sanitizeName), the filter compared
+// against the RAW label, so a Narrator whose name contains a space, an
+// apostrophe or a period matched none of its own messages and generated with
+// zero history — in the exact configuration ("Names behavior: Completion")
+// that the cast-exclusion guarantee depends on.
+const SPACED_NARRATOR = "Dr. Aris O'Neill Thorne";
+const SANITIZED_NARRATOR = 'Dr__Aris_O_Neill_Thorne'; // what core actually sends
+
+test("a Narrator whose name core had to sanitize still keeps its own prose (space, apostrophe and period)", () => {
+    // Exactly what arrives at the seam under Completion: core has already
+    // rewritten the name, and the filter is handed the raw label to match it
+    // against.
+    const compiled = [
+        { role: 'user', name: 'User', content: 'I open the door.' },
+        { role: 'assistant', name: SANITIZED_NARRATOR, content: 'The door creaks open.' },
+        { role: 'assistant', name: 'Other_Character', content: 'Someone else speaks.' },
+        { role: 'assistant', name: SANITIZED_NARRATOR, content: 'The room is empty.' },
+    ];
+    const filtered = filterNarratorHistory(compiled, { narratorName: SPACED_NARRATOR });
+    // Not "every survivor is the Narrator" — that is true of [] as well, and
+    // [] is precisely what the bug produced. Assert the content.
+    expect(filtered).toEqual([
+        { role: 'assistant', name: SANITIZED_NARRATOR, content: 'The door creaks open.' },
+        { role: 'assistant', name: SANITIZED_NARRATOR, content: 'The room is empty.' },
+    ]);
+});
+
+test('sanitizing both sides still excludes another cast member, rather than keeping everything', () => {
+    // The companion the fix needs: a comparison that merely stopped rejecting
+    // would pass the test above and break the guarantee. This is the half a
+    // "return true" mutation cannot satisfy.
+    const compiled = [
+        { role: 'assistant', name: SANITIZED_NARRATOR, content: 'Mine.' },
+        { role: 'assistant', name: 'Someone_Else', content: 'Not mine.' },
+    ];
+    expect(filterNarratorHistory(compiled, { narratorName: SPACED_NARRATOR })).toEqual([
+        { role: 'assistant', name: SANITIZED_NARRATOR, content: 'Mine.' },
+    ]);
+});
+
+// I7.2: the limitation, pinned rather than contradicted. Under the SHIPPED
+// DEFAULT `names_behavior`, core embeds the speaker in `content` for a group
+// and omits the field entirely for a solo chat (openai.js:586-601, :948), so
+// no compiled assistant entry carries a `name`. Cast exclusion therefore does
+// nothing at all, and every assistant line — the Narrator's and anyone
+// else's — is kept. That is the deliberate keep-on-unknown ruling: the
+// alternative risks dropping the Narrator's own prose. The user exclusion is
+// unaffected, because it keys on `role`.
+test('under the default Names behavior no assistant entry carries a name, so they are all kept and only the user is dropped', () => {
+    const defaultModeChat = [
+        { role: 'system', content: 'Main prompt.' },
+        { role: 'user', content: 'I open the door.' },
+        { role: 'assistant', content: 'The door creaks open.' },
+        { role: 'assistant', content: 'Someone Else: a voice from the dark.' },
+    ];
+    expect(filterNarratorHistory(defaultModeChat, { narratorName: 'The Narrator' })).toEqual([
+        { role: 'system', content: 'Main prompt.' },
+        { role: 'assistant', content: 'The door creaks open.' },
+        // Kept, and this is the limitation: with no name there is nothing to
+        // identify it by, and guessing would risk the Narrator's own line.
+        { role: 'assistant', content: 'Someone Else: a voice from the dark.' },
+    ]);
 });
 
 test("the Director's notes injection — a role: 'system' entry, not chat history — is untouched", () => {
@@ -228,9 +300,14 @@ test("the Narrator's own native request keeps its own prior line and the Directo
     expect(capturedNotes).toContain('The room holds its breath.');
     expect(capturedChat).toBeTruthy();
 
-    // The user's line is gone...
+    // The user's line is gone — unconditionally, by role, under every
+    // "Names behavior" setting...
     expect(capturedChat.some((m) => m.role === 'user')).toBe(false);
-    // ...another cast member's line is gone...
+    // ...another cast member's line is gone. PRECONDITION: this fixture
+    // carries `name` fields, which core only produces under
+    // `names_behavior: Completion`; under the default those fields are absent
+    // and the entry would be kept (pinned by the default-mode test in Part 1).
+    // This assertion is about Completion mode, not about every configuration.
     expect(capturedChat.some((m) => m.name === 'Someone Else')).toBe(false);
     // ...the Narrator's OWN prior line survives...
     expect(capturedChat).toContainEqual({ role: 'assistant', name: 'The Narrator', content: 'The lantern is lit.' });

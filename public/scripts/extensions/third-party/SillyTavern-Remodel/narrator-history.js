@@ -12,24 +12,65 @@
 // PURE — no imports, so the exact filter can be asserted offline.
 
 /**
+ * Core's own name transform, reproduced exactly.
+ *
+ * THIS IS THE WHOLE POINT OF THIS HELPER, so it is worth stating: the `name`
+ * that reaches a compiled history message is NOT the character's label. Core
+ * attaches one only under `character_names_behavior.COMPLETION`, and when it
+ * does it runs the label through `PromptManager.sanitizeName` first —
+ * `name.replace(/[^a-zA-Z0-9_]/g, '_').substring(0, 64)` (openai.js's
+ * `populateChatHistory`, PromptManager.js's `isValidName`/`sanitizeName`). A
+ * Narrator called `Dr. Aris O'Neill` therefore arrives here as
+ * `Dr__Aris_O_Neill`, and comparing it against the raw label matched NOTHING —
+ * dropping every one of the Narrator's own messages, silently, for the whole
+ * session. Comparing the sanitized form of both sides is what makes the
+ * comparison meet core where core actually left the value.
+ *
+ * `isValidName` short-circuits the transform for a label that is already
+ * `[a-zA-Z0-9_]{1,64}`, but sanitizing such a label is a no-op anyway, so one
+ * unconditional pass reproduces both of core's branches.
+ *
+ * Two labels that differ only in punctuation (`The.Narrator` vs `The Narrator`)
+ * collapse to the same key and would be treated as the same speaker. That is
+ * the same failure DIRECTION this module already chooses everywhere else —
+ * keeping a line that might not be the Narrator's, rather than dropping one
+ * that is — and it is what core itself does to those two names on the wire.
+ */
+function sanitizedNameKey(value) {
+    return String(value).replace(/[^a-zA-Z0-9_]/g, '_').substring(0, 64);
+}
+
+/**
  * @param {object[]} messages  compiled chat-completion-style messages, in the
  *        order they will be sent — each shaped roughly like
  *        `{role: 'user'|'assistant'|'system'|..., content: string, name?: string}`.
- * @param {{narratorName?: string}} [options] the Narrator's own display name,
- *        matched against each history entry's `name` field.
+ * @param {{narratorName?: string}} [options] the Narrator's own display name.
+ *        Matched against each history entry's `name` field after BOTH sides are
+ *        put through core's own `sanitizeName` transform — see
+ *        `sanitizedNameKey` above for why a raw comparison is wrong.
  * @returns {object[]} a NEW array (the input is never mutated): every
  *        `role: 'user'` entry removed, every `role: 'assistant'` entry whose
  *        `name` is present and does not match `narratorName` removed, and
  *        everything else — system prompts, the Director's notes injection,
- *        tool messages, malformed or nameless entries — left exactly where
- *        it was. This function only ever removes an entry it can positively
- *        identify as chat history authored by someone other than the
- *        Narrator; it never guesses, because a wrong guess here is either a
- *        leak (the wrong exclusion) or a scene the Narrator can no longer
+ *        tool messages, nameless entries — left exactly where it was. Entries
+ *        that are not objects at all are dropped, since there is nothing in
+ *        them to identify and nothing core could have compiled them from.
+ *        Beyond that this function only ever removes an entry it can
+ *        positively identify as chat history authored by someone other than
+ *        the Narrator; it never guesses, because a wrong guess here is either
+ *        a leak (the wrong exclusion) or a scene the Narrator can no longer
  *        make sense of (over-exclusion) — and the notes injection in
  *        particular must survive, since with the Narrator already blind to
  *        the user's words, losing the notes too leaves it with no account of
  *        this turn at all.
+ *
+ * NOTE ON SCOPE, so the guarantee is not read as wider than it is: the
+ * cast-exclusion half of this filter only does anything under
+ * `names_behavior: Completion`. Under the shipped default core embeds the
+ * speaker inside `content` for a group and omits `name` entirely for a solo
+ * chat, so every assistant entry arrives nameless and is KEPT (see below).
+ * The user-message exclusion is unconditional — it keys on `role`, not on a
+ * name — so the design's primary promise holds under every setting.
  */
 export function filterNarratorHistory(messages, { narratorName } = {}) {
     if (!Array.isArray(messages)) return [];
@@ -58,8 +99,10 @@ export function filterNarratorHistory(messages, { narratorName } = {}) {
         // No author on an assistant line means it cannot be positively
         // identified as NOT the Narrator. Dropping it on a guess would be
         // the failure this filter exists to avoid, not to cause, so it is
-        // kept.
+        // kept. This is also the ONLY branch that runs under the default
+        // "Names behavior", where core attaches no `name` at all.
         if (!speaker) return true;
-        return speaker === name;
+        // Sanitized on both sides, never raw. See sanitizedNameKey.
+        return sanitizedNameKey(speaker) === sanitizedNameKey(name);
     });
 }
