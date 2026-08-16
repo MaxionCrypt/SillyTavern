@@ -6794,6 +6794,40 @@ body.remodel-storydoc-active .remodel-storydoc-check input {
   cursor:pointer;
 }
 .remodel-prompt-source-card button:hover { border-color:#d7c800; color:#fff36a; }
+/* Per-block settings strip: sits directly under the block it configures,
+   because that is the whole reason the design chose a per-block bag over a
+   profile-level setting. Outside the source card rather than inside it, so
+   the card's blanket `span` badge styling does not capture the field labels. */
+.remodel-prompt-block-settings {
+  display:flex;
+  flex-wrap:wrap;
+  gap:14px;
+  align-items:center;
+  padding:8px 13px;
+  border:1px solid rgba(215,200,0,.14);
+  border-top:0;
+  background:rgba(0,0,0,.16);
+}
+.remodel-prompt-block-setting {
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+.remodel-prompt-block-setting > span {
+  color:#8d8992;
+  font-size:9px;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+}
+.remodel-prompt-block-setting input {
+  width:72px;
+  padding:4px 7px;
+  border:1px solid rgba(255,255,255,.1);
+  background:rgba(0,0,0,.24);
+  color:#e8e3d7;
+  font:12px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;
+}
+.remodel-prompt-block-setting input:focus { border-color:#d7c800; outline:none; }
 .remodel-prompt-add-row {
   display:grid;
   grid-template-columns:minmax(110px,1fr) auto minmax(140px,1.2fr) auto;

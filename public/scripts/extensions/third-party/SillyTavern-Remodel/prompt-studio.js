@@ -504,9 +504,91 @@ function renderPromptBlock(recipe, block, index) {
                 ${block.kind === 'source'
                     ? `<div class="remodel-prompt-source-card"><strong>${escapeHtml(source?.label || block.sourceKey)}</strong><p>${escapeHtml(sourceDescription(recipe, block.sourceKey))}</p>${bindingNote ? `<span>${escapeHtml(bindingNote)}</span>` : ''}${canOpenSource(block.sourceKey) ? '<button type="button" data-remodel-prompt-source-open><i class="fa-solid fa-arrow-up-right-from-square"></i> Open source</button>' : ''}</div>`
                     : `<textarea data-remodel-prompt-block-content placeholder="Write the ${escapeAttribute(roleLabels[block.role].toLowerCase())} message…">${escapeHtml(block.content)}</textarea>`}
+                ${renderPromptBlockSettings(recipe, block)}
             </div>
         </article>
     `;
+}
+
+/**
+ * The editor for a block that carries settings — design §5's second
+ * consequence, which nothing implemented until now.
+ *
+ * WHY THIS EXISTS AT ALL, since the omission was invisible per-task: §5 chose
+ * a per-block setting over a Mechanics-profile setting on exactly one
+ * argument — "the control belongs next to the thing it controls, where a user
+ * editing their Narrator recipe will actually find it", against a profile
+ * setting that "would have been cheaper and effectively undiscoverable". With
+ * the bag built, the source declaring `label`/`min`/`max`, the normaliser
+ * clamping, and no control anywhere, what shipped was neither discoverable NOR
+ * editable: `directorNotes` had `depth` permanently 3 for every user forever,
+ * and the declared bounds were decoration. That is strictly worse than the
+ * alternative the design rejected, at higher cost.
+ *
+ * Rendered from the SOURCE DEFINITION, not from the block's saved bag, so a
+ * block whose source declares nothing renders nothing (the other half of §5's
+ * sentence) and a source that declares a setting cannot ship without a control
+ * by omission. Every declared spec produces a field: a number spec gets a
+ * number input carrying its own min/max, and anything else falls back to a
+ * text input rather than silently rendering nothing — which is the failure
+ * mode this function exists to end, and it should not be able to recur for
+ * the next setting type someone declares.
+ *
+ * Values are NOT trusted from this control. `applyPromptBlockSetting` puts
+ * every edit back through `normalizeRecipe`, so the min/max here are a hint to
+ * the browser and the clamp is still the store's.
+ */
+export function renderPromptBlockSettings(recipe, block) {
+    if (block?.kind !== 'source') return '';
+    const declared = getSourceDefinition(recipe, block.sourceKey)?.settings;
+    if (!declared || typeof declared !== 'object') return '';
+    const fields = Object.entries(declared)
+        .map(([key, spec]) => renderPromptBlockSettingField(block, key, spec))
+        .join('');
+    if (!fields) return '';
+    return `<div class="remodel-prompt-block-settings">${fields}</div>`;
+}
+
+function renderPromptBlockSettingField(block, key, spec) {
+    const saved = block.settings?.[key];
+    const value = saved === undefined ? spec?.default : saved;
+    const attributes = spec?.type === 'number'
+        ? `type="number" inputmode="numeric" step="1"${typeof spec.min === 'number' ? ` min="${escapeAttribute(String(spec.min))}"` : ''}${typeof spec.max === 'number' ? ` max="${escapeAttribute(String(spec.max))}"` : ''}`
+        : 'type="text"';
+    const range = spec?.type === 'number' && typeof spec.min === 'number' && typeof spec.max === 'number'
+        ? ` title="${escapeAttribute(`${spec.min}–${spec.max}`)}"`
+        : '';
+    return `<label class="remodel-prompt-block-setting">
+                    <span>${escapeHtml(spec?.label || key)}</span>
+                    <input ${attributes}${range} data-remodel-prompt-block-setting="${escapeAttribute(key)}" value="${escapeAttribute(String(value ?? ''))}">
+                </label>`;
+}
+
+/**
+ * Write one setting back, through the same funnel every other recipe edit
+ * takes.
+ *
+ * `updatePromptRecipe` re-runs `normalizeBlocks`, so the value the store keeps
+ * is the coerced, clamped, default-filled one — a user typing 99 into a
+ * `max: 20` field stores 20, and an emptied field stores the declared default
+ * rather than 0 (`coerceSettingValue`'s `hasUsableNumber` check). Returning
+ * the normalized block is what lets a caller show what was actually kept
+ * instead of what was typed.
+ *
+ * Refuses a key the source definition does not declare. Without that, a
+ * hand-crafted `data-remodel-prompt-block-setting` attribute would write a
+ * key that `normalizeBlockSettings` then drops on the next load — a setting
+ * that appears to save and silently does not.
+ */
+export function applyPromptBlockSetting(recipeId, blockId, key, rawValue) {
+    const recipe = getPromptRecipe(recipeId);
+    const block = (recipe?.blocks || []).find((entry) => entry.id === blockId);
+    if (!block || block.kind !== 'source') return null;
+    const declared = getSourceDefinition(recipe, block.sourceKey)?.settings;
+    if (!declared || !Object.prototype.hasOwnProperty.call(declared, key)) return null;
+    block.settings = { ...(block.settings || {}), [key]: rawValue };
+    const updated = updatePromptRecipe(recipe.id, { blocks: recipe.blocks });
+    return (updated?.blocks || []).find((entry) => entry.id === blockId) || null;
 }
 
 function renderTransportEditor(recipe) {
@@ -698,6 +780,15 @@ function bindPromptStudioEvents() {
             onRecipeChanged(recipe);
             return;
         }
+        if (block && target.matches('[data-remodel-prompt-block-setting]')) {
+            // Saved on every keystroke, like the message textarea beside it,
+            // and deliberately WITHOUT a re-render: re-rendering mid-edit
+            // would replace the field the caret is in. The committed value is
+            // reconciled by the `change` handler below, which fires on blur.
+            applyPromptBlockSetting(recipe.id, block.id, target.dataset.remodelPromptBlockSetting, target.value);
+            onRecipeChanged(recipe);
+            return;
+        }
         const transportField = target.closest('[data-remodel-prompt-transport]');
         if (transportField) {
             const value = transportField.type === 'checkbox' ? transportField.checked : transportField.value;
@@ -713,11 +804,24 @@ function bindPromptStudioEvents() {
         const target = event.target instanceof Element ? event.target : null;
         const card = target?.closest('[data-remodel-prompt-block]');
         const recipe = getPromptRecipe(state.selectedRecipeId);
-        if (!card || !recipe || !target.matches('[data-remodel-prompt-block-role]')) return;
+        if (!card || !recipe) return;
         const block = recipe.blocks.find((item) => item.id === card.dataset.remodelPromptBlock);
-        if (!block || !PROMPT_ROLES.includes(target.value)) return;
-        block.role = target.value;
-        patchRecipeBlocks(recipe, recipe.blocks);
+        if (!block) return;
+        if (target.matches('[data-remodel-prompt-block-role]')) {
+            if (!PROMPT_ROLES.includes(target.value)) return;
+            block.role = target.value;
+            patchRecipeBlocks(recipe, recipe.blocks);
+            return;
+        }
+        if (target.matches('[data-remodel-prompt-block-setting]')) {
+            // `change` fires on commit (blur or Enter), which is the one
+            // moment a re-render is welcome: it repaints the field with the
+            // value the store actually kept, so a user who typed 99 into a
+            // max-20 setting sees 20 rather than believing 99 was saved.
+            applyPromptBlockSetting(recipe.id, block.id, target.dataset.remodelPromptBlockSetting, target.value);
+            onRecipeChanged(recipe);
+            state.requestRender();
+        }
     }, true);
 
     document.addEventListener('dragstart', (event) => {
