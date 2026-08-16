@@ -4,12 +4,26 @@
 // PURE — no context, no network, no DOM — so the diagnosis logic can be tested
 // offline against real reply shapes.
 //
-// Both callers ask for a strict JSON envelope. Their old failure message was
+// Both callers asked for a strict JSON envelope. Their old failure message was
 // "returned invalid structured JSON", which blames the model's formatting for
 // what is usually a budget problem: a reasoning model spends its token
 // allowance thinking and the envelope is cut off mid-object, or never starts.
 // Truncated JSON and malformed JSON look identical to JSON.parse, but they have
 // completely different fixes, so we separate them here.
+//
+// AWAITING REMOVAL — read this before reaching for anything below. Neither
+// caller exists any more: the mechanical preflight was retired, and the
+// Director now streams a free-form reply with no schema and no response-length
+// argument (`sendOpenAIRequest` takes none). `StructuredReplyError` is the only
+// export with a live caller — live-direction.js throws it for a Director that
+// returns nothing at all, which is still a budget symptom and still deserves
+// this diagnosis.
+//
+// The consequence that matters: the Mechanics profile's `directorResponseTokens`
+// setting, and the Debug Console input bound to it, no longer govern anything.
+// Retiring the setting is a user-facing change and belongs with the Director's
+// UI work, not here — but nothing in this file should be read as evidence that
+// the setting still does something.
 
 /**
  * A reasoning model can burn well over a thousand tokens before emitting its
@@ -23,9 +37,8 @@ export const REASONING_SAFE_FLOOR = 1500;
  * Size a structured call from the Mechanics context budget.
  * The floor wins over the derived share; the ceiling still caps the top end.
  *
- * Still used by the standalone mechanical preflight, whose size genuinely does
- * track how much mechanical state it was handed. The Director no longer derives
- * its allowance this way — see directorResponseTokens.
+ * No caller: it sized the standalone mechanical preflight, which has been
+ * retired. See the AWAITING REMOVAL note at the top of this file.
  */
 export function structuredResponseLength(contextBudget, { divisor = 3, ceiling = 3000 } = {}) {
     const budget = Math.max(0, Number(contextBudget) || 0);
@@ -39,6 +52,10 @@ export function structuredResponseLength(contextBudget, { divisor = 3, ceiling =
  * Reads the explicit Mechanics-profile setting, falling back to the old derived
  * value only for a profile object that predates it — a caller holding a stale
  * profile should not silently get an unbounded request.
+ *
+ * No caller. The Director streams through `sendOpenAIRequest`, which accepts no
+ * response-length argument: its allowance is the connection's own max tokens.
+ * See the AWAITING REMOVAL note at the top of this file.
  *
  * @param {{ directorResponseTokens?: number, contextBudget?: number }} profile
  */
@@ -62,6 +79,9 @@ export class StructuredReplyError extends Error {
 
 /**
  * Turn a raw structured reply into an envelope, or throw something actionable.
+ *
+ * No caller: nothing asks a model for a JSON envelope any more. See the
+ * AWAITING REMOVAL note at the top of this file.
  *
  * Note an EMPTY OBJECT is a legitimate answer, not a failure: the mechanical
  * handbook explicitly instructs the model to return no requests when nothing is
