@@ -784,6 +784,16 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         //
         // In a `finally`, so an exit added later is covered by construction
         // rather than by remembering to mark it.
+        //
+        // This covers the takes that never reached the performer. The other
+        // side of that line — the performer WAS asked, and the user then
+        // stopped the reveal before its first visible character — is covered
+        // by `abandonCancelledTurn`, called from finalizeRunMessage's
+        // nothing-accepted exits. Deliberately not merged into one check:
+        // this one keys on "was the performer asked", which must stay true
+        // for a generation failure so failEmptyVisibleRun can re-run the same
+        // turn against the same notes, and that one keys on the user having
+        // cancelled, which failEmptyVisibleRun never claims.
         if (storedTurn !== null && !askedThePerformer) {
             const marked = abandonDirectorTurn(scene.timelineId, { sceneId: scene.id, turn: storedTurn });
             if (marked) {
@@ -1718,6 +1728,7 @@ async function finalizeRunMessage(run, { state }) {
             chatLength: context.chat?.length ?? null,
             reason: message ? 'the resolved message is the user line' : 'no message at the resolved id',
         }, { correlationId: run.directionId, severity: 'warn' });
+        abandonCancelledTurn(run);
         return;
     }
     const accepted = sanitizeDirectionText(run.acceptedVisibleText);
@@ -1734,6 +1745,7 @@ async function finalizeRunMessage(run, { state }) {
         }, { correlationId: run.directionId, severity: 'warn', summary: 'direction.finalize: deleted an empty interrupted message' });
         await context.deleteMessage(run.messageId);
         run.messageId = null;
+        abandonCancelledTurn(run);
         return;
     }
     // State changes land here, not at a marker in the prose the model wrote:
@@ -1758,6 +1770,49 @@ async function finalizeRunMessage(run, { state }) {
     message.extra.remodelDirection = serializeRun(run, state);
     if (run.performer.ref.kind === 'narrator') message.extra.type = 'narrator';
     await context.saveChat();
+}
+
+/**
+ * A take the USER cancelled that accepted nothing did not happen, so withhold
+ * its notebook turn from the next one.
+ *
+ * beginDirection's `finally` already covers every take that never reached the
+ * performer. This is the gap on the other side of that line: the Director
+ * returns, its entries are stored, `askedThePerformer` is set, generation
+ * begins — and the user presses Stop before the reveal emits a single
+ * character. `finalizeRunMessage` then DELETES the message and returns before
+ * `applyPendingRequests`, so no message and no state change survive. Without
+ * this call, that turn's `[ruling]` and `[result]` entries were still
+ * delivered to the Narrator on the next turn under "treat as settled fact",
+ * with "Ruling — binding: " in front of them, describing prose that does not
+ * exist in the chat. The withholding ruling's own words for that situation
+ * are "a cancelled take produced no message and changed no state"; the branch
+ * implemented it for a Stop during the Director stream and the opposite for a
+ * Stop two seconds later, with nothing on screen distinguishing the two.
+ *
+ * Keyed on `run.interrupted`, which is what makes it disjoint from
+ * `failEmptyVisibleRun`: that path deliberately does NOT set the flag (the
+ * user did nothing, so recording an interruption would misreport the
+ * failure), and it re-runs this SAME turn against these SAME notes. Withholding
+ * there would make the retry generate with no direction at all.
+ *
+ * Called from both of `finalizeRunMessage`'s nothing-accepted exits rather
+ * than only the delete-empty one, so a run whose message went missing
+ * entirely is covered by construction instead of by remembering — the same
+ * reasoning that moved the beginDirection check into a `finally`.
+ */
+function abandonCancelledTurn(run) {
+    if (!run?.interrupted || !run.timelineId) return;
+    const turn = toTurnNumber(run.envelope?.notebookTurn);
+    if (turn === null) return;
+    const marked = abandonDirectorTurn(run.timelineId, { sceneId: run.sceneId, turn });
+    if (!marked) return;
+    journal('notebook.abandoned', {
+        directionId: run.directionId,
+        turn,
+        entryCount: marked,
+        reason: 'the user stopped this take before it produced a single visible character',
+    }, { correlationId: run.directionId, severity: 'warn', summary: `direction.notebook: turn ${turn} was cancelled and is withheld` });
 }
 
 /**

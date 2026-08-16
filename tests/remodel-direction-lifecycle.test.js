@@ -989,6 +989,53 @@ test('a take that stored entries and then failed does not bind the turn that fol
     expect(prompt).not.toContain('A ruling from a pass that produced nothing.');
 });
 
+test('a Stop after the Director returned but before the first visible character withholds that turn too', async () => {
+    // Review I3, and the case the withholding ruling's own case enumeration
+    // missed. The ruling said the two candidate keys ("the performer was
+    // asked" vs "a message survived") differ only when generation FAILS after
+    // the turn went live. They also differ here: the Director returns, the
+    // entries are stored, the performer is asked — and the user presses Stop
+    // before the reveal emits a character. finalizeRunMessage deletes the
+    // message and returns before applyPendingRequests, so no message and no
+    // state change survive, which is verbatim the ruling's own disqualifying
+    // condition. The rulings were binding the next turn anyway.
+    //
+    // Distinct from 'a cancelled take never binds the turn that replaces it'
+    // above: that one stops DURING the Director stream, which beginDirection's
+    // `finally` already covered. This one stops after it, in the window where
+    // nothing did.
+    streamDirector(['[ruling] Wren loses the arm in a take nobody read.']);
+    await requestNextDirection(scene);
+    // Genuinely character zero: the buffer is filled and the reveal timer is
+    // armed but has not fired.
+    expect(getLiveDirectionRun()?.acceptedVisibleText).toBe('');
+    expect(notebook()).toHaveLength(1);
+
+    await stopLiveDirection();
+
+    // The message is gone and nothing mechanical applied — the pre-existing
+    // guarantee, restated so a regression in either shows up here too.
+    expect(__getChat()).toHaveLength(0);
+    expect(hp()).toBe(12);
+    // ...and the turn is withheld, which is the part that was missing.
+    expect(notebook().map((entry) => entry.abandoned)).toEqual([true]);
+
+    // The proof that matters is not the flag but what the next turn reads.
+    clearLiveDirectionFailure();
+    streamDirector(['[ruling] The turn that actually happened.']);
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    const prompt = performerPrompt();
+    expect(prompt).toContain('The turn that actually happened.');
+    expect(prompt).not.toContain('Wren loses the arm in a take nobody read.');
+    // Withheld, not erased: the owner's notebook keeps the whole record.
+    expect(notebook().map((entry) => entry.text)).toEqual([
+        'Wren loses the arm in a take nobody read.',
+        'The turn that actually happened.',
+    ]);
+});
+
 test('a take whose generation failed keeps its notes, because the performer was already asked', async () => {
     // The boundary is "the performer was asked", not "a message survived", and
     // this is the case that decides between them: generation itself fails
@@ -1019,6 +1066,73 @@ test('a take whose generation failed keeps its notes, because the performer was 
     expect(__getChat()).toHaveLength(0);
     expect(notebook().map((entry) => entry.abandoned)).toEqual([false]);
     expect(journalEntries('notebook.abandoned')).toHaveLength(0);
+});
+
+test('a Stop that lands before core wrote any message at all withholds the turn as well', async () => {
+    // finalizeRunMessage has TWO nothing-accepted exits, and the second one —
+    // "no message at the resolved id" — is reachable in production: press Stop
+    // in the window after generateDirectedPerformer has taken ownership and
+    // before core has written a row. The withholding call sits on both rather
+    // than only on the delete-empty branch the review named, so an exit added
+    // later is covered by construction; a mutation showed that without this
+    // test the second call site had no coverage at all.
+    //
+    // Stop is issued from inside the performer stand-in, which writes nothing.
+    // interruptLiveDirection then waits out its generation-settled window
+    // (the real generation is still on the stack), which is why this test is
+    // the slowest in the file.
+    streamDirector(['[ruling] A take stopped before core wrote a row.']);
+    setLiveDirectionTestAdapters({ generatePerformer: async () => { await stopLiveDirection(); } });
+
+    await requestNextDirection(scene);
+
+    expect(__getChat()).toHaveLength(0);
+    expect(notebook().map((entry) => entry.text)).toEqual(['A take stopped before core wrote a row.']);
+    expect(notebook().map((entry) => entry.abandoned)).toEqual([true]);
+    expect(journalEntries('notebook.abandoned')[0].detail).toMatchObject({ entryCount: 1 });
+}, 15000);
+
+test("an empty-response retry still reads this turn's notes, because the user cancelled nothing", async () => {
+    // The other half of I3's fix, and the half a mutation caught as having no
+    // coverage at all: `abandonCancelledTurn` keys on `run.interrupted`, and
+    // dropping that condition — abandoning on ANY nothing-accepted exit — left
+    // the whole suite green.
+    //
+    // This is the path that condition protects. The provider returns empty
+    // content (measured repeatedly in one recorded session: over a hundred
+    // empty STREAM_TOKEN_RECEIVED events, the whole reply spent on the
+    // reasoning channel). finalizeRunMessage takes the SAME delete-empty
+    // branch as a Stop, and `failEmptyVisibleRun` deliberately does not set
+    // `interrupted` because the user did nothing. It then re-runs THIS turn
+    // against THESE notes. Withhold them here and the retry generates with no
+    // direction at all, silently — the exact failure this rework exists to
+    // end, on a case that recurs.
+    let attempt = 0;
+    setLiveDirectionTestAdapters({
+        generatePerformer: async () => {
+            attempt++;
+            const chat = __getChat();
+            // First attempt: core writes a message with no visible text.
+            chat.push({ name: 'Wren', is_user: false, mes: attempt === 1 ? '' : RESPONSE, extra: {} });
+            await __emit('MESSAGE_RECEIVED', chat.length - 1);
+        },
+    });
+    __setOpenAIRequestHandler(() => async function* streamData() {
+        yield { text: '[ruling] The direction the retry must still be able to read.', state: { reasoning: '' } };
+    });
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you', 5000)).toBe(true);
+
+    // The retry genuinely ran, and it is the same turn — one notebook entry,
+    // not two Director calls.
+    expect(attempt).toBe(2);
+    expect(notebook()).toHaveLength(1);
+    expect(notebook().map((entry) => entry.abandoned)).toEqual([false]);
+    // What the retry's own generation was handed. Empty here means the retry
+    // wrote prose against nothing.
+    expect(performerPrompt()).toContain('The direction the retry must still be able to read.');
+    expect(__getChat().map((message) => message.mes)).toEqual([RESPONSE]);
 });
 
 test('a cancelled take does not consume a slot in the Narrator depth window', () => {
