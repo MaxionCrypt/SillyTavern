@@ -30,6 +30,10 @@ export const PROMPT_SOURCE_DEFINITIONS = Object.freeze({
         { key: 'worldInfoAfter', label: 'World Info (after)', role: 'system', nativeIdentifier: 'worldInfoAfter' },
         { key: 'dialogueExamples', label: 'Dialogue Examples', role: 'user', nativeIdentifier: 'dialogueExamples' },
         { key: 'storyGoals', label: 'Story Goals', role: 'system', nativeIdentifier: 'remodel_story_goals' },
+        // Declaration only: this task builds the settings mechanism, not the
+        // source. Task 4 gives directorNotes its resolution; the depth shape
+        // here is exactly what that task specifies.
+        { key: 'directorNotes', label: 'Director’s Notes', role: 'system', settings: { depth: { type: 'number', label: 'Turns to include', min: 1, max: 20, default: 3 } } },
         { key: 'chatHistory', label: 'Chat History', role: 'user', nativeIdentifier: 'chatHistory' },
         // Native Chat Completion keeps the latest input inside chatHistory;
         // exposing it as an alias preserves that real marker boundary.
@@ -174,7 +178,7 @@ export function isPromptRecipeActive(recipeId) {
     return isRecipeActive(recipeId, getPromptStudioStore());
 }
 
-export function createPromptBlock({ kind = 'message', role = 'instruction', content = '', sourceKey = '', enabled = true, locked = false, nativeIdentifier = '' } = {}) {
+export function createPromptBlock({ kind = 'message', role = 'instruction', content = '', sourceKey = '', enabled = true, locked = false, nativeIdentifier = '', settings = undefined, mode = null } = {}) {
     return normalizeBlock({
         id: createId('block'),
         kind,
@@ -184,7 +188,8 @@ export function createPromptBlock({ kind = 'message', role = 'instruction', cont
         enabled,
         locked,
         nativeIdentifier,
-    });
+        settings,
+    }, mode);
 }
 
 export function captureTextTransport(powerUser = {}) {
@@ -507,7 +512,7 @@ function createPromptRecipeWithoutSave(store, input) {
     return recipe;
 }
 
-function normalizeRecipe(value) {
+export function normalizeRecipe(value) {
     if (!value || typeof value !== 'object' || !value.id) return null;
     const mode = PROMPT_MODES.includes(value.mode) ? value.mode : 'story';
     // Belt-and-suspenders alongside createPromptRecipe's own forcing and the
@@ -531,32 +536,65 @@ function normalizeRecipe(value) {
 }
 
 function normalizeBlocks(value, mode, apiType) {
-    let blocks = Array.isArray(value) ? value.map(normalizeBlock).filter(Boolean) : [];
+    let blocks = Array.isArray(value) ? value.map((block) => normalizeBlock(block, mode)).filter(Boolean) : [];
     if (mode === 'roleplay') {
         blocks = blocks.map((block) => block.kind === 'source' && block.sourceKey === 'quietPrompt'
             ? { ...block, sourceKey: 'generationNudge', nativeIdentifier: 'quietPrompt' }
             : block);
     }
     if (mode === 'roleplay' && apiType === 'text' && !blocks.some((block) => block.kind === 'source' && block.sourceKey === 'nativeContext')) {
-        blocks.push(createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'nativeContext', enabled: true, locked: true }));
+        blocks.push(createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'nativeContext', enabled: true, locked: true, mode }));
     }
     return blocks;
 }
 
-function normalizeBlock(value) {
+function normalizeBlock(value, mode) {
     if (!value || typeof value !== 'object') return null;
     const kind = value.kind === 'source' ? 'source' : 'message';
     const role = PROMPT_ROLES.includes(value.role) ? value.role : 'instruction';
+    const sourceKey = kind === 'source' ? String(value.sourceKey || '') : '';
     return {
         id: String(value.id || createId('block')),
         kind,
         role,
         content: kind === 'message' ? String(value.content || '') : '',
-        sourceKey: kind === 'source' ? String(value.sourceKey || '') : '',
+        sourceKey,
         enabled: value.enabled !== false,
         locked: Boolean(value.locked || value.sourceKey === 'nativeContext'),
         nativeIdentifier: String(value.nativeIdentifier || ''),
+        settings: normalizeBlockSettings(value.settings, mode, sourceKey),
     };
+}
+
+/**
+ * Fills a block's settings from its source definition, dropping anything the
+ * definition doesn't declare. A block whose source declares no settings (or
+ * a message block, whose sourceKey is always '') always gets `{}` — never
+ * `undefined` — so old recipes saved before this mechanism existed, which
+ * have no `settings` key at all, normalize identically to a block that
+ * explicitly saved `settings: {}`.
+ */
+function normalizeBlockSettings(rawSettings, mode, sourceKey) {
+    const declared = PROMPT_SOURCE_DEFINITIONS[mode]?.find((source) => source.key === sourceKey)?.settings;
+    if (!declared || typeof declared !== 'object') return {};
+    const saved = rawSettings && typeof rawSettings === 'object' ? rawSettings : {};
+    const result = {};
+    for (const [key, spec] of Object.entries(declared)) {
+        result[key] = coerceSettingValue(saved[key], spec);
+    }
+    return result;
+}
+
+/** Only `type: 'number'` is declared by any source today; coerce, clamp, default. */
+function coerceSettingValue(rawValue, spec) {
+    if (spec.type === 'number') {
+        let num = Number(rawValue);
+        if (!Number.isFinite(num)) num = Number(spec.default);
+        if (typeof spec.min === 'number') num = Math.max(spec.min, num);
+        if (typeof spec.max === 'number') num = Math.min(spec.max, num);
+        return num;
+    }
+    return rawValue !== undefined ? rawValue : spec.default;
 }
 
 function sourceRole(mode, sourceKey) {
