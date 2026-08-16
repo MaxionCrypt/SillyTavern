@@ -979,6 +979,13 @@ function getSourceLabel(recipe, key) {
 function sourceDescription(recipe, key) {
     const mode = recipe?.mode;
     if (key === 'nativeContext') return 'SillyTavern’s complete token-budgeted Roleplay prompt, including character, World Info, examples, history, and current turn.';
+    // A source definition may declare its own description; that always wins
+    // over the per-mode fallback maps below. Without this, a new source key
+    // silently inherits whatever the current mode's default text claims —
+    // which is how the director-mode fix below (and directorNotes, which
+    // declares one) each had to happen in the first place.
+    const declaredDescription = getSourceDefinition(recipe, key)?.description;
+    if (declaredDescription) return declaredDescription;
     // A Director recipe never touches the native prompt manager — it is
     // compiled to an explicit message array and sent on its own. Falling
     // through to the roleplay default below told the user the exact opposite.

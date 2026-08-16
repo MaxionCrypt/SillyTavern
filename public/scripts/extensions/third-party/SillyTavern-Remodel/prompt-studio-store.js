@@ -32,8 +32,12 @@ export const PROMPT_SOURCE_DEFINITIONS = Object.freeze({
         { key: 'storyGoals', label: 'Story Goals', role: 'system', nativeIdentifier: 'remodel_story_goals' },
         // Declaration only: this task builds the settings mechanism, not the
         // source. Task 4 gives directorNotes its resolution; the depth shape
-        // here is exactly what that task specifies.
-        { key: 'directorNotes', label: 'Director’s Notes', role: 'system', settings: { depth: { type: 'number', label: 'Turns to include', min: 1, max: 20, default: 3 } } },
+        // here is exactly what that task specifies. `description` is set
+        // explicitly because prompt-studio.js's sourceDescription() falls
+        // through to a roleplay default claiming native-prompt-manager
+        // resolution — false for this source, and the same false-fallback
+        // bug already fixed once for director-mode sources (see that file).
+        { key: 'directorNotes', label: 'Director’s Notes', role: 'system', description: 'The Director’s recent notes for this Scene, assembled by Remodel — not resolved by SillyTavern’s native prompt manager.', settings: { depth: { type: 'number', label: 'Turns to include', min: 1, max: 20, default: 3 } } },
         { key: 'chatHistory', label: 'Chat History', role: 'user', nativeIdentifier: 'chatHistory' },
         // Native Chat Completion keeps the latest input inside chatHistory;
         // exposing it as an alias preserves that real marker boundary.
@@ -416,8 +420,14 @@ function normalizeStore(store, seed) {
             continue;
         }
         store.recipes[id] = recipe;
-        if (previousVersion < 2 && recipe.mode === 'story') {
-            changed = migrateStoryWorldInfoSources(recipe) || changed;
+        // migrateStoryWorldInfoSources splices new blocks straight into this
+        // already-normalized recipe's blocks array, with no normalizeBlocks
+        // pass of its own — so a settings-bearing source it ever migrates in
+        // would land with settings: {} instead of its declared defaults.
+        // Re-normalize afterward to close that gap, same as below.
+        if (previousVersion < 2 && recipe.mode === 'story' && migrateStoryWorldInfoSources(recipe)) {
+            recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
+            changed = true;
         }
     }
     store.active ??= {};
@@ -455,8 +465,12 @@ function normalizeStore(store, seed) {
     }
     if (previousVersion < 3) {
         for (const recipe of Object.values(store.recipes)) {
-            if (recipe?.mode === 'roleplay' && recipe.apiType === 'chat') {
-                changed = ensureStoryGoalsSource(recipe.blocks) || changed;
+            // Same gap as migrateStoryWorldInfoSources above: this splices
+            // into an already-normalized recipe.blocks with no re-derivation
+            // of settings for the spliced-in block.
+            if (recipe?.mode === 'roleplay' && recipe.apiType === 'chat' && ensureStoryGoalsSource(recipe.blocks)) {
+                recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
+                changed = true;
             }
         }
     }
@@ -588,13 +602,26 @@ function normalizeBlockSettings(rawSettings, mode, sourceKey) {
 /** Only `type: 'number'` is declared by any source today; coerce, clamp, default. */
 function coerceSettingValue(rawValue, spec) {
     if (spec.type === 'number') {
-        let num = Number(rawValue);
-        if (!Number.isFinite(num)) num = Number(spec.default);
+        // Decide whether there IS a usable value before coercing, rather than
+        // coercing first and checking whether the result happens to be
+        // finite: Number(null), Number('') and Number([]) are all 0, a
+        // finite number, so a finite-only check reads "nothing was saved" as
+        // "the value zero" and clamps it up to `min` instead of falling back
+        // to `default`. This exact bug already bit `clampNumber` in
+        // variables-store.js; fixed there the same way — test presence, then
+        // coerce.
+        let num = hasUsableNumber(rawValue) ? Number(rawValue) : Number(spec.default);
         if (typeof spec.min === 'number') num = Math.max(spec.min, num);
         if (typeof spec.max === 'number') num = Math.min(spec.max, num);
         return num;
     }
     return rawValue !== undefined ? rawValue : spec.default;
+}
+
+/** A saved value only counts as present if it coerces to an actual, finite number. */
+function hasUsableNumber(value) {
+    if (value === null || value === undefined || value === '' || Array.isArray(value)) return false;
+    return Number.isFinite(Number(value));
 }
 
 function sourceRole(mode, sourceKey) {

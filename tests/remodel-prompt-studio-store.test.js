@@ -25,3 +25,18 @@ test('a setting outside its declared range is clamped, not rejected', () => {
     const recipe = normalizeRecipe({ id: 'r4', mode: 'roleplay', apiType: 'chat', blocks: [{ kind: 'source', sourceKey: 'directorNotes', role: 'system', enabled: true, settings: { depth: 9999 } }] });
     expect(recipe.blocks[0].settings.depth).toBe(20);
 });
+
+// Number(null), Number('') and Number([]) are all 0 — a finite number — so a
+// coercion path that only checks isFinite() reads "no value was ever saved"
+// as "the value zero" and clamps it up to min (1) instead of falling back to
+// default (3). This is the same trap that once bit clampNumber in
+// variables-store.js. Each of these must land on the declared default, not
+// on min.
+test.each([
+    ['a null', null],
+    ['an empty-string', ''],
+    ['an empty-array', []],
+])('%s setting value falls back to default, not min', (_label, value) => {
+    const recipe = normalizeRecipe({ id: 'r5', mode: 'roleplay', apiType: 'chat', blocks: [{ kind: 'source', sourceKey: 'directorNotes', role: 'system', enabled: true, settings: { depth: value } }] });
+    expect(recipe.blocks[0].settings.depth).toBe(3);
+});
