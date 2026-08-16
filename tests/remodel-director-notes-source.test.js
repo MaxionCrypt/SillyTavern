@@ -213,6 +213,27 @@ test('a native re-sync keeps the notes block that the loaded preset does not kno
     expect(after.blocks.some((entry) => entry.sourceKey === 'chatHistory')).toBe(true);
 });
 
+test('the same re-sync also keeps Story Goals, the other Remodel-owned source', () => {
+    // withRemodelSources restores both, because the re-sync stripped both for
+    // the same reason — a pre-Remodel preset's prompt order names neither
+    // identifier. Closing only the directorNotes half would have left the
+    // identical defect open next to the fix for it, so the story-goals half is
+    // deliberate and gets its own assertion.
+    globalThis.document.addEventListener ??= () => {};
+    initPromptStudio({ getRuntimeMode: () => 'roleplay' });
+    expect(getCurrentPromptStudioRecipe('roleplay', 'chat').blocks.some((block) => block.sourceKey === 'storyGoals')).toBe(true);
+
+    // A different preset again, so the native signature genuinely changes and
+    // captureNativeSettingsFor does not return early (see the note above).
+    oai_settings.prompts = [{ identifier: 'main', name: 'Main Prompt', content: 'A different preset.', system_prompt: true }];
+    oai_settings.prompt_order = [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }] }];
+    capturePromptStudioRuntimeSettings();
+
+    const after = getCurrentPromptStudioRecipe('roleplay', 'chat');
+    expect(after.blocks.some((block) => block.sourceKey === 'storyGoals')).toBe(true);
+    expect(after.blocks.some((block) => block.sourceKey === 'directorNotes')).toBe(true);
+});
+
 // --- formatDirectorNotesPrompt: the glue timeline-spine.js calls -----------
 
 test('formatDirectorNotesPrompt reads depth off the active recipe and renders the real notebook', () => {

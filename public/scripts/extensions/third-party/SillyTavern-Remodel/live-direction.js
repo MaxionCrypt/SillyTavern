@@ -20,6 +20,7 @@ import { deriveBeats } from './direction-beats.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
 import { parseDirectorReply } from './director-reply.js';
 import {
+    abandonDirectorTurn,
     appendDirectorEntries,
     deleteDirectorEntry,
     readAllEntriesForOwner,
@@ -511,6 +512,12 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         return false;
     }
     const token = acquireDirectionLock({ scene, insertUser, autonomousSequence });
+    // The two facts the `finally` below needs to decide whether this take
+    // produced anything. See the comment there — this is the N1 fix, and the
+    // reason it is scoped here rather than inside the try is that a throw must
+    // not be able to skip it.
+    let storedTurn = null;
+    let askedThePerformer = false;
     journal('begin', {
         passId: token.id,
         sceneId: scene.id,
@@ -568,18 +575,25 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         const stored = appendDirectorEntries(scene.timelineId, {
             sceneId: scene.id,
             turn,
-            entries: markCancelledTake(reply.entries, reply.interrupted),
+            entries: markSeveredEntry(reply.entries, reply.interrupted),
         });
+        if (stored.length) storedTurn = turn;
         // The one place that knows both facts: this pass stored entries, and
         // nothing is configured to carry them. Since the depth-0 injection was
         // removed, that combination is a scene about to generate with no
         // direction at all — and every other symptom looks healthy.
-        if (stored.length && !findDirectorNotesBlock()) {
+        //
+        // Only when the block is MISSING. A user who switched it off with the
+        // per-block eye toggle chose this, and a warning repeated every turn
+        // for a choice they just made is noise that teaches them to skip the
+        // one case this exists for.
+        const routing = describeDirectorNotesRouting();
+        if (stored.length && !routing.block && !routing.present) {
             journal('notes.unrouted', {
                 passId: token.id,
                 turn,
                 entryCount: stored.length,
-                remedy: 'The active Roleplay · Chat recipe has no enabled "Director\'s Notes" block, so this turn\'s direction reaches no one. Add it in Prompt Studio (Add context → Director\'s Notes), or re-enable it if its eye toggle is off.',
+                remedy: 'The active Roleplay · Chat recipe has no "Director\'s Notes" block, so this turn\'s direction reaches no one. Add it in Prompt Studio (Add context → Director\'s Notes).',
             }, { correlationId: token.id, severity: 'warn', summary: 'direction.notes: stored, but no block carries them to the Narrator' });
         }
         const envelope = buildDirectionEnvelope(reply, turn);
@@ -649,10 +663,35 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             await sendMessageAsUser(action);
             hooks.clearComposer();
         }
+        // Set BEFORE the call, not after: from here the performer has been
+        // asked, so the turn is live even if generation then fails. The
+        // empty-response retry path (failEmptyVisibleRun) re-runs this same
+        // turn and must be able to read its own notes.
+        askedThePerformer = true;
         return await generateDirectedPerformer({ scene, envelope: normalized, performer, autonomousSequence, token });
     } catch (error) {
         return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence });
     } finally {
+        // A take that never reached the performer produced nothing — no
+        // message, no state change — so its entries must not bind the turn
+        // that follows. Keyed on THAT, not on how the pass ended: pressing
+        // Stop is only one of the ways a take produces nothing, and a pass
+        // that stored entries and then threw (the Scene's Narrator is no
+        // longer in the cast, say) took the other one. That path left its
+        // rulings live, and the next turn read them as settled fact.
+        //
+        // In a `finally`, so an exit added later is covered by construction
+        // rather than by remembering to mark it.
+        if (storedTurn !== null && !askedThePerformer) {
+            const marked = abandonDirectorTurn(scene.timelineId, { sceneId: scene.id, turn: storedTurn });
+            if (marked) {
+                journal('notebook.abandoned', {
+                    passId: token.id,
+                    turn: storedTurn,
+                    entryCount: marked,
+                }, { correlationId: token.id, severity: 'warn', summary: `direction.notebook: turn ${storedTurn} produced nothing and is withheld` });
+            }
+        }
         // Normally already released the moment activeRun was assigned; this
         // covers every early return and throw.
         releaseDirectionLock(token);
@@ -998,26 +1037,21 @@ function discardNotebookTurn(scene, turn) {
 }
 
 /**
- * Stamp an interrupted reply with the two facts a later reader needs.
+ * Mark where an interrupted reply was cut: the LAST entry, and only that one.
+ * Every earlier entry was closed by a newline the Director did write.
  *
- * `abandoned` on EVERY entry — the take as a whole was cancelled. It produced
- * no message, changed no state, and the user is the one who stopped it, so
- * none of it may bind a later turn. `readNarratorEntries` withholds these the
- * way it withholds a secret; the owner still sees them.
- *
- * `incomplete` on the LAST entry only — that is where the cut landed. Every
- * earlier entry was closed by a newline the Director did write. This one is
- * the owner's record of what was severed, not a signal to the Narrator, who
- * never receives a cancelled take at all.
+ * This is the owner's record of what was severed, and nothing else. Whether
+ * the TAKE counts — whether the Narrator ever sees any of it — is a separate
+ * question with a separate answer, decided by beginDirection's `finally` on
+ * what the pass actually produced rather than on how it ended. An interrupted
+ * pass is one way to produce nothing; a pass that stored entries and then
+ * threw is another, and keying the withholding here would only have caught
+ * the first.
  */
-function markCancelledTake(entries, interrupted) {
+function markSeveredEntry(entries, interrupted) {
     const list = Array.isArray(entries) ? entries : [];
     if (!interrupted || !list.length) return list;
-    return list.map((entry, index) => ({
-        ...entry,
-        abandoned: true,
-        ...(index === list.length - 1 ? { incomplete: true } : {}),
-    }));
+    return list.map((entry, index) => (index === list.length - 1 ? { ...entry, incomplete: true } : entry));
 }
 
 /**
@@ -2060,16 +2094,25 @@ function describeNotebookEntry(entry) {
  */
 export function formatDirectorNotesPrompt(scene) {
     if (!scene?.timelineId) return '';
-    const block = findDirectorNotesBlock();
+    const { block } = describeDirectorNotesRouting();
     if (!block) return '';
     const entries = readNarratorEntries(scene.timelineId, { sceneId: scene.id, depth: block.settings?.depth });
     return buildDirectorNotesSource(entries);
 }
 
-/** The active Roleplay/Chat recipe's enabled Director's Notes block, or null. */
-function findDirectorNotesBlock() {
+/**
+ * How the active Roleplay/Chat recipe is set up to carry the Director's notes.
+ *
+ * `block` is the enabled one, if any. `present` says whether the recipe has a
+ * Director's Notes block AT ALL — which is the difference between a user who
+ * switched it off and a user who never had it. Both deliver nothing; only one
+ * of them is a surprise, and warning about the other one every single turn
+ * trains the user to ignore the warning, costing it the case it exists for.
+ */
+function describeDirectorNotesRouting() {
     const recipe = getCurrentPromptStudioRecipe('roleplay', 'chat');
-    return (recipe?.blocks || []).find((entry) => entry.kind === 'source' && entry.sourceKey === 'directorNotes' && entry.enabled !== false) || null;
+    const blocks = (recipe?.blocks || []).filter((entry) => entry.kind === 'source' && entry.sourceKey === 'directorNotes');
+    return { block: blocks.find((entry) => entry.enabled !== false) || null, present: blocks.length > 0 };
 }
 
 function clearRevealTimer() {

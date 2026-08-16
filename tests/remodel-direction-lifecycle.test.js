@@ -470,6 +470,13 @@ test('a streamed Director reply becomes notebook entries and applies its request
     expect(notebookEvent.detail.reasoningLength).toBe('She has to be the one who moves.'.length);
     expect(notebookEvent.detail.streamed).toBe(true);
     expect(notebookEvent.detail.entryCount).toBe(2);
+
+    // 5. The record joins to the generation it directed. correlationId groups
+    //    by pass; generation.start/end are keyed by directionId, so an export
+    //    can only follow one turn through both records if this carries it.
+    const [generationEvent] = journalEntries('generation.start');
+    expect(notebookEvent.detail.directionId).toBeTruthy();
+    expect(notebookEvent.detail.directionId).toBe(generationEvent.detail.directionId);
 });
 
 test('an unparseable tail costs the turn its requests, not its prose', async () => {
@@ -603,6 +610,50 @@ test('a cancelled take never binds the turn that replaces it', async () => {
         'The real ruling for this turn.',
     ]);
     expect(notebook().map((entry) => entry.abandoned)).toEqual([true, true, false]);
+});
+
+test('a take that stored entries and then failed does not bind the turn that follows', async () => {
+    // The same defect as the interrupt case, by a route keyed on the wrong
+    // thing. Pressing Stop is only ONE way a take produces nothing: here the
+    // Director answers in full, its entries are stored, and the pass then
+    // throws because the Scene's Narrator is no longer in the cast. No
+    // message, no state change — and, before this, rulings that were live.
+    streamDirector(['[ruling] A ruling from a pass that produced nothing.']);
+    const performers = cast.splice(0, cast.length);
+    const consoleError = console.error;
+    console.error = () => {};
+    try {
+        await requestNextDirection(scene);
+    } finally {
+        console.error = consoleError;
+        cast.push(...performers);
+    }
+    expect(__getChat()).toHaveLength(0);
+    expect(notebook().map((entry) => entry.abandoned)).toEqual([true]);
+    expect(journalEntries('notebook.abandoned')[0].detail).toMatchObject({ entryCount: 1 });
+
+    // The next turn runs normally and must not read the failed take.
+    clearLiveDirectionFailure();
+    streamDirector(['[ruling] The turn that actually happened.']);
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    const prompt = performerPrompt();
+    expect(prompt).toContain('The turn that actually happened.');
+    expect(prompt).not.toContain('A ruling from a pass that produced nothing.');
+});
+
+test('a take that reached the performer keeps its notes, so a retry can still read them', async () => {
+    // The boundary is "the performer was asked", not "a message survived".
+    // failEmptyVisibleRun re-runs this same turn against the same notes, so a
+    // generation that produced nothing must NOT withhold them.
+    streamDirector(['[ruling] Asked, and answered.']);
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    expect(notebook().map((entry) => entry.abandoned)).toEqual([false]);
+    expect(journalEntries('notebook.abandoned')).toHaveLength(0);
+    expect(performerPrompt()).toContain('Asked, and answered.');
 });
 
 test('a cancelled take does not consume a slot in the Narrator depth window', () => {
@@ -802,6 +853,26 @@ test('the warning stays quiet when a block is there to carry the notes', async (
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
     expect(performerPrompt()).toContain('Someone will read this.');
+    expect(journalEntries('notes.unrouted')).toHaveLength(0);
+});
+
+test('switching the notes block off is a choice, not a warning repeated every turn', async () => {
+    // The eye toggle is a visible control the user just used. Warning them
+    // once per pass for a decision they made teaches them to skip the warning,
+    // which costs it the missing-block case it exists for.
+    const recipe = createPromptRecipe({
+        name: 'RP notes disabled', mode: 'roleplay', apiType: 'chat',
+        blocks: [{ kind: 'source', sourceKey: 'directorNotes', role: 'system', enabled: false, settings: { depth: 3 } }],
+    });
+    setActivePromptRecipe('roleplay', 'chat', recipe.id);
+
+    streamDirector(['[ruling] Deliberately unread.']);
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    // Delivered to no one, exactly as the user asked…
+    expect(performerPrompt()).toBe('');
+    // …and silently, because they asked.
     expect(journalEntries('notes.unrouted')).toHaveLength(0);
 });
 

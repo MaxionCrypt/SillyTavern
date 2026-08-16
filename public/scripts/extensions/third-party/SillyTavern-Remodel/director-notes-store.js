@@ -122,6 +122,39 @@ export function readAllEntriesForOwner(timelineId, { sceneId } = {}) {
 }
 
 /**
+ * Mark one turn's entries as a take that produced nothing, so the Narrator
+ * stops being shown them. Returns how many entries were marked.
+ *
+ * ONE WAY on purpose. There is no un-abandon, and `updateDirectorEntry` cannot
+ * reach this flag any more than it can reach `type`: a take that produced no
+ * message and changed no state did not happen, and the value of that statement
+ * is that nothing later can quietly reverse it.
+ *
+ * Separate from `appendDirectorEntries` because the outcome is not known when
+ * the entries are written. The Director's reply has to be in the store before
+ * the Narrator generates from it, which is several steps before anyone can say
+ * whether this pass produced anything — so the entries go in first and the
+ * turn is marked afterwards, by whichever exit the pass actually takes.
+ */
+export function abandonDirectorTurn(timelineId, { sceneId, turn } = {}) {
+    const bucket = getTimelineNotesState(String(timelineId || ''), { create: false });
+    if (!bucket) return 0;
+    const scene = String(sceneId || '');
+    const turnNumber = Math.floor(Number(turn));
+    if (!Number.isFinite(turnNumber)) return 0;
+    let marked = 0;
+    for (const entry of Object.values(bucket.entries)) {
+        if (!entry || entry.sceneId !== scene || entry.turn !== turnNumber || entry.abandoned) continue;
+        entry.abandoned = true;
+        marked++;
+    }
+    if (!marked) return 0;
+    bucket.updatedAt = now();
+    saveDirectorNotesStore();
+    return marked;
+}
+
+/**
  * Edit an entry's text in place. The patch only reads `text` — `type` is
  * deliberately never consulted, even if present on the patch object — because
  * a `secret` silently becoming a `note` (or any other retype) would move it
