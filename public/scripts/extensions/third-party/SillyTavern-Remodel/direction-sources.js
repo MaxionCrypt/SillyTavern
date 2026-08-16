@@ -29,19 +29,23 @@ export function buildDirectionSources(snapshot, { mechanicsEnabled = false } = {
 // mutated tag or a moved fence surfaces there too.
 //
 // The example request below deliberately does NOT match the design spec's
-// own wording. The spec's §2 example wrote `name`/`amount`, but the
-// capability layer that actually reads these requests
-// (mechanics-capabilities.js:130-135, live-direction.js's
-// addressRequestsByName) reads `variableRef`/`delta` — and the capability
-// dictionary rendered into this same prompt (describeCapabilities, fed by
-// mechanics-capabilities.js's own field descriptions) already teaches THOSE
-// names. Documenting `name`/`amount` here would hand the Director two
-// contradictory vocabularies for the same field inside one prompt, which is
-// worse than either name being wrong on its own — so this block corrects
-// the spec rather than reproducing it. `variableRef` reads oddly now that
-// its value is a name rather than a ref; that is the established
-// post-rework convention (the field kept its name when its value changed),
-// not a mistake to fix here.
+// own wording. The spec's §2 example wrote a flat
+// `{capability, name, amount}`, but the code that actually consumes a
+// request reads a different shape entirely — validateMechanicsRequest
+// (mechanics-capabilities.js:155-171) requires four TOP-LEVEL fields (`id`,
+// unique within the batch; `capability`, a key of CAPABILITIES; `arguments`,
+// a nested object — not flattened onto the request; `reason`, non-empty),
+// and only inside `arguments` does addressRequestsByName
+// (live-direction.js) read `variableRef`/`delta` for variable.adjust. The
+// capability dictionary rendered into this same prompt (describeCapabilities,
+// fed by mechanics-capabilities.js's own field descriptions) already teaches
+// the nested shape and those field names, so documenting anything else here
+// would hand the Director two contradictory vocabularies for the same
+// request inside one prompt — worse than either being wrong alone. This
+// block corrects the spec's shape rather than reproducing it. `variableRef`
+// reads oddly now that its value is a name rather than a ref; that is the
+// established post-rework convention (the field kept its name when its
+// value changed), not a mistake to fix here.
 const PROTOCOL = `You are the hidden director of this scene. You never speak in the story and are never quoted.
 Keep a notebook instead of a script. Write your entries one per line, each starting with one of these tags — your only instructions to the performer, nothing else survives outside them:
 [note]   observation, colour, what is in the air
@@ -51,7 +55,7 @@ Keep a notebook instead of a script. Write your entries one per line, each start
 A line with no tag is read as a note. Address every Variable and every Goal by its exact name as given to you below — never invent a name, never use an internal reference, and never describe this contract in your reply.
 If, and only if, anything mechanical changed this turn, close with a single fenced state block naming what changed by that same exact name. Otherwise leave it out entirely:
 \`\`\`state
-{"requests":[{"capability":"variable.adjust","variableRef":"Morale","delta":-1}],"flow":{"continue":false}}
+{"requests":[{"id":"r1","capability":"variable.adjust","arguments":{"variableRef":"Morale","delta":-1},"reason":"the in-fiction reason this happened, one sentence"}],"flow":{"continue":false}}
 \`\`\``;
 
 function describeCard(director) {

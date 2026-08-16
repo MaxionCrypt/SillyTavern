@@ -1,6 +1,11 @@
 import { buildDirectionSources } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/direction-sources.js';
 import { assignVariableRefs, serializeRetrievedVariables } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-relevance.js';
 import { ENTRY_TYPES, parseDirectorReply } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-reply.js';
+import { addressRequestsByName } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
+import { buildAddressBook } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/direction-address.js';
+import { MECHANICS_PROTOCOL, validateMechanicsRequest, executeMechanicsRequest } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/mechanics-capabilities.js';
+import { createVariableValue, getVariableValue } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
+import { __setExtensionSettings } from './util/st-context-stub.js';
 
 // The Variable lines are built by the REAL producers, not hand-written.
 //
@@ -71,27 +76,31 @@ test('the protocol carries no pacing, autonomy or style policy', () => {
 
 /**
  * The property that matters most here: text the protocol tells the Director
- * to write is text the REAL parser reads back the way the protocol claims.
- * A contract that teaches a format its own parser rejects is exactly the
- * failure this task exists to prevent, and only running the documented
- * example through `parseDirectorReply` — not just grepping for tag
- * substrings — can catch that.
+ * to write is text the REAL capability layer accepts and applies — not just
+ * text the parser reads back into a `requests` array. A contract that
+ * documents a shape `parseDirectorReply` happily returns but
+ * `validateMechanicsRequest`/`executeMechanicsRequest` reject is exactly the
+ * failure this task exists to prevent (it happened twice on this exact
+ * example: first with `name`/`amount` instead of `variableRef`/`delta`, then
+ * with those fields flattened onto the request instead of nested under
+ * `arguments` alongside the missing `id`/`reason`), so this test carries the
+ * documented example through the whole pipeline the Director's real reply
+ * goes through: parse -> validate -> resolve names -> execute -> real store
+ * mutation.
  *
  * The example is sliced out of the live `directionProtocol` string (from its
  * first tag to the end), not retyped, so a change to the protocol's own tag
  * block or fence is what this test exercises — never a hand-maintained copy
  * that could drift from it.
- *
- * The request's field names matter as much as its shape: the capability
- * layer that actually applies a request (mechanics-capabilities.js,
- * addressRequestsByName in live-direction.js) reads `variableRef`/`delta`
- * for variable.adjust, not `name`/`amount` — the design spec's own §2
- * example used the wrong names. This test asserts on the field names
- * themselves, not just that a `requests` array exists, so if the protocol's
- * example ever regresses to the field names the capability layer does not
- * read, this is the test that has to notice.
  */
-test("the protocol's own documented example round-trips through the real parser", () => {
+test("the protocol's own documented example round-trips through the real parser and the real capability layer", () => {
+    __setExtensionSettings({});
+    const timelineId = 'timeline-protocol-example';
+    const moraleId = createVariableValue({
+        timelineId, name: 'Morale', valueType: 'number', value: 5,
+        description: 'group spirits', authority: 'world', retrieval: { mode: 'always' },
+    }).id;
+
     const { directionProtocol } = buildDirectionSources(snapshot, { mechanicsEnabled: true });
     const example = directionProtocol.slice(directionProtocol.indexOf('[note]'));
     const { entries, state, tailFound, tailError } = parseDirectorReply(example);
@@ -108,13 +117,38 @@ test("the protocol's own documented example round-trips through the real parser"
     // block" parses as the state tail it claims, with no error.
     expect(tailFound).toBe(true);
     expect(tailError).toBe('');
-    // Field names, not just shape: the capability layer reads variableRef
-    // and delta off a variable.adjust request (mechanics-capabilities.js,
-    // addressRequestsByName) — name/amount would resolve nothing.
-    expect(state.requests).toEqual([{ capability: 'variable.adjust', variableRef: 'Morale', delta: -1 }]);
-    expect(state.requests[0]).toHaveProperty('variableRef', 'Morale');
-    expect(state.requests[0]).toHaveProperty('delta', -1);
+    // Shape, not just field names: id/capability/arguments/reason are all
+    // top-level, and variableRef/delta live nested inside `arguments` —
+    // exactly what validateMechanicsRequest (mechanics-capabilities.js)
+    // requires and addressRequestsByName (live-direction.js) reads. The
+    // model never emits `protocol`; that is a constant the caller supplies.
+    expect(state.requests).toEqual([{
+        id: 'r1', capability: 'variable.adjust',
+        arguments: { variableRef: 'Morale', delta: -1 },
+        reason: 'the in-fiction reason this happened, one sentence',
+    }]);
     expect(state.flow.continue).toBe(false);
+
+    // Structurally valid by the same rules real execution enforces — not an
+    // assumption, a call to the real validator.
+    const validation = validateMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests: state.requests });
+    expect(validation.errors).toEqual([]);
+    expect(validation.valid).toBe(true);
+
+    // And it actually runs: name resolves against a real address book, and
+    // execution actually moves the real Variable it names.
+    const book = buildAddressBook([{ id: moraleId, name: 'Morale' }]);
+    const { variableRefs, unresolvedReasons } = addressRequestsByName(state.requests, book, new Map(), new Map());
+    expect(unresolvedReasons).toEqual([]);
+    expect(variableRefs.get('Morale')).toBe(moraleId);
+
+    const result = executeMechanicsRequest(
+        { protocol: MECHANICS_PROTOCOL, requests: state.requests },
+        { timelineId, sceneId: 'scene-protocol-example', variableRefs, goalRefs: new Map() },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.receipts[0].status).toBe('applied');
+    expect(getVariableValue(moraleId, timelineId).value).toBe(4);
 });
 
 test('the card source carries the Director card material', () => {
