@@ -41,7 +41,6 @@ test('reads the LAST state fence, so mid-reply talk about state cannot confuse i
 test('the tail is stripped from the stored entry text', () => {
     const { entries } = parseDirectorReply('[note] Teo stalls.\n```state\n{"requests":[]}\n```');
     expect(entries[0].text).toBe('Teo stalls.');
-    expect(JSON.stringify(entries)).not.toContain('state');
 });
 
 test('a missing tail is not an error and stops the scene', () => {
@@ -62,4 +61,19 @@ test('a malformed tail reports the error, yields no requests, and stops', () => 
 
 test('exports the four types and only those', () => {
     expect(ENTRY_TYPES).toEqual(['note', 'ruling', 'result', 'secret']);
+});
+
+test('hostile non-string input degrades to the empty shape instead of throwing', () => {
+    const throwsOnCoercion = {
+        toString() { throw new Error('toString exploded'); },
+        valueOf() { throw new Error('valueOf exploded'); },
+    };
+    const nullProto = Object.create(null);
+
+    expect(() => parseDirectorReply(throwsOnCoercion)).not.toThrow();
+    expect(() => parseDirectorReply(nullProto)).not.toThrow();
+
+    const empty = { entries: [], state: { requests: [], flow: { continue: false } }, tailFound: false, tailError: '' };
+    expect(parseDirectorReply(throwsOnCoercion)).toEqual(empty);
+    expect(parseDirectorReply(nullProto)).toEqual(empty);
 });

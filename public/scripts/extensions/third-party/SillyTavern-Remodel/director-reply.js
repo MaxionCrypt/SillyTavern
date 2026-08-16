@@ -12,7 +12,7 @@ const TAG = /^\[([a-z]+)\]\s?/i;
 const STATE_FENCE = /```state\s*\n([\s\S]*?)\n?```/gi;
 
 export function parseDirectorReply(text) {
-    const raw = String(text || '');
+    const raw = typeof text === 'string' ? text : '';
     const { body, tail, tailFound } = splitTail(raw);
     const { state, tailError } = readState(tail, tailFound);
     return { entries: readEntries(body), state, tailFound, tailError };
