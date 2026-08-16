@@ -1,4 +1,5 @@
-import { appendDirectorEntries, readNarratorEntries, readAllEntries, deleteDirectorEntry } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-notes-store.js';
+import { appendDirectorEntries, readNarratorEntries, readAllEntriesForOwner, deleteDirectorEntry, updateDirectorEntry } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-notes-store.js';
+import { __getExtensionSettings } from './util/st-context-stub.js';
 
 const TL = 'tl-test';
 
@@ -10,7 +11,7 @@ test('secrets are withheld from the Narrator read but kept for the owner', () =>
     const narrator = readNarratorEntries(TL, { sceneId: 's1', depth: 10 });
     expect(narrator.map((e) => e.type)).toEqual(['note']);
     expect(JSON.stringify(narrator)).not.toContain('janitor');
-    expect(readAllEntries(TL, { sceneId: 's1' }).map((e) => e.type)).toEqual(['note', 'secret']);
+    expect(readAllEntriesForOwner(TL, { sceneId: 's1' }).map((e) => e.type)).toEqual(['note', 'secret']);
 });
 
 test('depth counts turns, not entries, so one turn is never half-delivered', () => {
@@ -26,10 +27,30 @@ test('entries carry ids and are individually deletable', () => {
     const [entry] = appendDirectorEntries(TL, { sceneId: 's3', turn: 1, entries: [{ type: 'ruling', text: 'gone soon' }] });
     expect(entry.id).toBeTruthy();
     deleteDirectorEntry(TL, entry.id);
-    expect(readAllEntries(TL, { sceneId: 's3' })).toEqual([]);
+    expect(readAllEntriesForOwner(TL, { sceneId: 's3' })).toEqual([]);
 });
 
 test('an unknown type is rejected rather than stored', () => {
     const stored = appendDirectorEntries(TL, { sceneId: 's4', turn: 1, entries: [{ type: 'foreshadow', text: 'nope' }] });
     expect(stored).toEqual([]);
+});
+
+// Reads already filter dangling ids out (`.filter(Boolean)`), so a test that
+// only checks the read API would still pass even if delete stopped pruning
+// `entryIds` — the id would just leak in the persisted settings blob forever.
+// This inspects the raw persisted bucket to make sure delete actually prunes it.
+test('deleting an entry removes its id from the persisted store, not just from reads', () => {
+    const [entry] = appendDirectorEntries(TL, { sceneId: 's5', turn: 1, entries: [{ type: 'note', text: 'temp' }] });
+    deleteDirectorEntry(TL, entry.id);
+    const bucket = __getExtensionSettings().remodel.directorNotesV1.timelines[TL];
+    expect(bucket.entryIds).not.toContain(entry.id);
+    expect(bucket.entries[entry.id]).toBeUndefined();
+});
+
+test('updateDirectorEntry edits text but cannot retype an entry', () => {
+    const [entry] = appendDirectorEntries(TL, { sceneId: 's6', turn: 1, entries: [{ type: 'note', text: 'first draft' }] });
+    const updated = updateDirectorEntry(TL, entry.id, { text: 'revised draft', type: 'secret' });
+    expect(updated.text).toBe('revised draft');
+    expect(updated.type).toBe('note');
+    expect(readAllEntriesForOwner(TL, { sceneId: 's6' })[0]).toMatchObject({ text: 'revised draft', type: 'note' });
 });

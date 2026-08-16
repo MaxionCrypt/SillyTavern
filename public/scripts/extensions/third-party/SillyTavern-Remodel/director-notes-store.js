@@ -84,9 +84,34 @@ export function readNarratorEntries(timelineId, { sceneId, depth } = {}) {
         .map(copy);
 }
 
-/** The owner-facing read: every entry, including secrets. No depth limit. */
-export function readAllEntries(timelineId, { sceneId } = {}) {
+/**
+ * The owner-facing read: every entry, including secrets. No depth limit.
+ * Named `...ForOwner`, not `readAllEntries`, on purpose: it must not sit one
+ * plausible-sounding function name away from `readNarratorEntries` — the
+ * entire value of the `secret` type is that it never reaches the Narrator,
+ * and a name a future contributor could reach for by mistake while wiring a
+ * Narrator-facing feature is not a safe neighbor for that guarantee.
+ */
+export function readAllEntriesForOwner(timelineId, { sceneId } = {}) {
     return entriesForScene(timelineId, sceneId).map(copy);
+}
+
+/**
+ * Edit an entry's text in place. The patch only reads `text` — `type` is
+ * deliberately never consulted, even if present on the patch object — because
+ * a `secret` silently becoming a `note` (or any other retype) would move it
+ * across the one boundary this store exists to enforce. Returns the updated
+ * entry, or null if it doesn't exist.
+ */
+export function updateDirectorEntry(timelineId, entryId, { text } = {}) {
+    const bucket = getTimelineNotesState(String(timelineId || ''), { create: false });
+    const id = String(entryId || '');
+    const entry = bucket?.entries?.[id];
+    if (!entry) return null;
+    if (text !== undefined) entry.text = String(text);
+    bucket.updatedAt = now();
+    saveDirectorNotesStore();
+    return copy(entry);
 }
 
 export function deleteDirectorEntry(timelineId, entryId) {
