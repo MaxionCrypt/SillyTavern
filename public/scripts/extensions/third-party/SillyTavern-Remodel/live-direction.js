@@ -53,6 +53,11 @@ const hooks = {
     onStateChange: () => {},
     onSettled: () => {},
     onFailure: () => {},
+    // Fires on every chunk of the Director's own streamed reply — cumulative
+    // { text, reasoning }, same shape story-stream.js's onChunk already
+    // hands callers. No-op by default so a caller that never registers one
+    // costs nothing; timeline-spine.js registers updateDirectionStreamCard.
+    onDirectorChunk: () => {},
 };
 
 let initialized = false;
@@ -646,13 +651,18 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         const startedAt = Date.now();
         const reply = await requestDirection(scene, snapshot, {
             signal: token.controller.signal,
-            onChunk: ({ text }) => {
+            onChunk: (update) => {
+                // Forwarded on EVERY chunk, unconditionally — this is the one
+                // line that makes the direction card fill live rather than
+                // only appear at the start. The journal entry below stays
+                // once-per-pass; the UI hook does not.
+                hooks.onDirectorChunk(update);
                 if (token.firstChunkAt) return;
                 token.firstChunkAt = Date.now();
                 // Time-to-first-token is the number the whole "the wait is
                 // opaque" complaint is about, and it is invisible in a total
                 // duration. Recorded once, not per chunk.
-                journal('stream.first-chunk', { passId: token.id, afterMs: token.firstChunkAt - startedAt, chars: text.length }, { correlationId: token.id });
+                journal('stream.first-chunk', { passId: token.id, afterMs: token.firstChunkAt - startedAt, chars: update.text.length }, { correlationId: token.id });
             },
         });
         // The notebook is written whatever happens next, including for a

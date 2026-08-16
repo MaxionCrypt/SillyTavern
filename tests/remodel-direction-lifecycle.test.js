@@ -720,6 +720,88 @@ test('a streamed Director reply becomes notebook entries and applies its request
     expect(notebookEvent.detail.directionId).toBe(generationEvent.detail.directionId);
 });
 
+/**
+ * Task 9 fix round 1: proves the one line that makes "the card fills live"
+ * true rather than aspirational — beginDirection's onChunk closure forwards
+ * EVERY chunk to hooks.onDirectorChunk, not just the first (which only ever
+ * fed a debug journal timestamp). timeline-spine.js registers
+ * updateDirectionStreamCard under that hook and applies it with two rules:
+ * `body.textContent = update.text` and `panel.hidden = !thoughts`. Both are
+ * replayed here against the REAL sequence of hook calls, so this is a proof
+ * about what the card would show, not just about what the hook received.
+ *
+ * The property that matters is ORDERING, not terminal state: a regression
+ * that only forwards the LAST chunk (or forwards nothing until the pass
+ * settles and then backfills once) would still leave `seen` non-empty and
+ * would still leave the final text correct — this suite has already shipped
+ * one test whose named property survived exactly that kind of inversion
+ * because it only inspected state after everything finished. Every
+ * assertion below is about the relationship between consecutive captures,
+ * which such a regression cannot satisfy.
+ */
+test('the direction card fills as chunks arrive, and its reasoning disclosure un-hides only once reasoning appears', async () => {
+    const seen = [];
+    // wire()'s hooks stay in place — initLiveDirection merges into the
+    // existing hooks object rather than replacing it, so this only adds
+    // onDirectorChunk.
+    initLiveDirection({
+        onDirectorChunk: (update) => seen.push({ text: update.text, reasoning: update.reasoning }),
+    });
+    setLiveDirectionTestAdapters({ generatePerformer: speak });
+
+    // Four cumulative chunks over the real transport (streamChatPrompt →
+    // sendOpenAIRequest, stubbed at the network boundary only). Reasoning is
+    // empty on the first two and arrives from the third chunk on — the real
+    // shape a thinking model produces (it reasons for a while before writing
+    // anything conclusive), and the one shape that actually exercises
+    // "hidden while empty, un-hides the moment it isn't".
+    const textChunks = [
+        '[ruling] Wren takes the blow',
+        ' meant for the boy.\n[secret] The boy already knows.\n',
+        '```state\n{"requests":[],',
+        '"flow":{"continue":false}}\n```',
+    ];
+    const reasoningByChunk = ['', '', 'She has to be the one who moves.', 'She has to be the one who moves, fully.'];
+    __setOpenAIRequestHandler(() => async function* streamData() {
+        let text = '';
+        for (let i = 0; i < textChunks.length; i++) {
+            text += textChunks[i];
+            // eslint-disable-next-line no-await-in-loop
+            yield { text, state: { reasoning: reasoningByChunk[i] } };
+        }
+    });
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    // All four chunks reached the hook — not zero, not one backfilled call.
+    expect(seen).toHaveLength(textChunks.length);
+
+    // THE PROPERTY UNDER TEST: content changes BETWEEN chunks, growing every
+    // step and each capture a strict prefix of the next. A card that only
+    // fills once the run settles would fail every iteration of this loop
+    // except (trivially) none of them, because there would only be one
+    // capture to begin with — caught by the length assertion above — or, for
+    // a subtler regression that fires once per chunk but always forwards the
+    // CURRENT cumulative total captured at settle time, this loop is what
+    // catches it: text would be identical (or already-final) at every step.
+    for (let i = 1; i < seen.length; i++) {
+        expect(seen[i].text).not.toBe(seen[i - 1].text);
+        expect(seen[i].text.length).toBeGreaterThan(seen[i - 1].text.length);
+        expect(seen[i].text.startsWith(seen[i - 1].text)).toBe(true);
+    }
+    expect(seen[0].text).toBe(textChunks[0]);
+    expect(seen[seen.length - 1].text).toContain('```state');
+
+    // The reasoning disclosure's own trigger, replayed with
+    // updateDirectionStreamCard's exact rule: `panel.hidden = !thoughts`
+    // where `thoughts = String(reasoning || '').trim()`. Hidden for the two
+    // chunks with no reasoning yet, un-hidden from the moment it arrives —
+    // and it stays un-hidden, it does not flicker back.
+    const hiddenSequence = seen.map((update) => !String(update.reasoning || '').trim());
+    expect(hiddenSequence).toEqual([true, true, false, false]);
+});
+
 test('an unparseable tail costs the turn its requests, not its prose', async () => {
     streamDirector([
         '[ruling] Wren takes the blow meant for the boy.\n',
