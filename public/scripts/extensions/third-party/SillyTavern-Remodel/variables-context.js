@@ -1,6 +1,6 @@
 import { listLoreEntries, entryKey } from './variables-lore.js';
 import { assignVariableRefs, retrieveRelevantVariables, serializeRetrievedVariables } from './variables-relevance.js';
-import { listVariableEvents, listVariableValues, getMechanicsProfile } from './variables-store.js';
+import { listVariableEvents, listVariableValues, getMechanicsProfile, onVariablesChanged } from './variables-store.js';
 import { queryVariableVectors } from './variables-vector.js';
 import { recordDebugEvent } from './debug-console.js';
 
@@ -32,7 +32,31 @@ function journal(type, detail = {}, { severity = 'info', correlationId = null, s
  */
 const lastByTimeline = new Map();
 
-/** The last retrieval for a Timeline, or null if none has run this session. */
+/**
+ * A retrieval snapshot is only true until the Variables under it move.
+ *
+ * It holds whole Variable records — `listed[].variable`, with its value, its
+ * bounds and its modifiers — so it goes stale on a value edit as surely as on a
+ * delete. Nothing used to drop it: the owner deleted a Variable, the store
+ * updated, and the State drawer kept rendering a pass from twenty-seven minutes
+ * earlier that still listed the deleted record. Refusing to answer is the only
+ * honest response to "what did the Director last see" once that is no longer
+ * knowable; a fresh pass, or the drawer's own Preview button, records a new one.
+ *
+ * Registered at module scope because the cache is module scope: there is one
+ * cache for the session and it wants exactly one subscription, not one per
+ * retrieval. Deliberately does no work beyond dropping the entry — the notice
+ * can arrive mid-mutation (see onVariablesChanged).
+ */
+onVariablesChanged((timelineId) => {
+    if (timelineId) lastByTimeline.delete(timelineId);
+    else lastByTimeline.clear();
+});
+
+/**
+ * The last retrieval for a Timeline, or null when none has run since that
+ * Timeline's Variables last changed.
+ */
 export function getLastVariableContext(timelineId) {
     return lastByTimeline.get(String(timelineId || '')) || null;
 }

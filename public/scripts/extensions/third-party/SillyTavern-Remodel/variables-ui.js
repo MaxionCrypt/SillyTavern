@@ -138,7 +138,10 @@ function renderRelevantPane(timelineId) {
     const preview = `<button type="button" class="remodel-varstate-action" data-remodel-varstate-action="preview" ${state.busy === 'preview' ? 'disabled' : ''}>
         ${state.busy === 'preview' ? 'Retrieving…' : 'Preview retrieval now'}</button>`;
     if (!last) {
-        return `<p class="remodel-varstate-empty">No retrieval has run for this Timeline yet. A directed pass records one, or preview it here.</p>${preview}`;
+        // True of both empty cases, and there are two: no pass has ever run, or
+        // the Variables changed and the snapshot was dropped as stale. Saying
+        // "yet" alone would read as a bug the moment a Variable is edited.
+        return `<p class="remodel-varstate-empty">No retrieval has run for this Timeline since its Variables last changed. A directed pass records one, or preview it here.</p>${preview}`;
     }
     const rows = last.listed.map(({ ref, variable, reasons }) => `
         <article class="remodel-varstate-row">
@@ -218,7 +221,7 @@ function renderRetrievalPane(timelineId) {
             <button type="button" class="remodel-varstate-action" data-remodel-varstate-action="reindex" ${state.busy === 'reindex' ? 'disabled' : ''}>
                 ${state.busy === 'reindex' ? 'Reindexing…' : 'Reindex now'}</button>
         </div>`;
-    if (!last) return `${status}<p class="remodel-varstate-empty">No retrieval has run for this Timeline yet.</p>`;
+    if (!last) return `${status}<p class="remodel-varstate-empty">No retrieval has run for this Timeline since its Variables last changed.</p>`;
     const rows = last.diagnostics.map((item) => `
         <article class="remodel-varstate-diag ${item.included ? 'is-in' : 'is-out'}">
             <div><strong>${escapeHtml(item.variableName)}</strong>

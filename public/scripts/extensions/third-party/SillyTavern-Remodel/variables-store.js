@@ -263,6 +263,9 @@ export function restoreVariableStore(snapshot, { save = true } = {}) {
     context.extensionSettings[SETTINGS_NAMESPACE] ??= {};
     context.extensionSettings[SETTINGS_NAMESPACE][SETTINGS_KEY] = clone(snapshot);
     normalizeStore(context.extensionSettings[SETTINGS_NAMESPACE][SETTINGS_KEY]);
+    // A rolled-back mechanical transaction and an undo both land here, and both
+    // move Variables across every Timeline the snapshot covers at once.
+    notifyVariablesChanged('', 'restored');
     if (save) saveVariableStore();
     return context.extensionSettings[SETTINGS_NAMESPACE][SETTINGS_KEY];
 }
@@ -303,6 +306,9 @@ export function deleteVariablesForTimeline(timelineId) {
     const removedTransactions = pruneByTimeline(store.transactionIds, store.transactions, key);
     if (!hadBucket && !removedEvents && !removedTransactions) return false;
     store.vectorIndexState[key] = { collectionId: vectorCollectionId(key), dirty: true, deleted: true, updatedAt: now() };
+    // Removes the bucket wholesale rather than one Variable at a time, so it
+    // never reaches appendEvent and has to raise the notice itself.
+    notifyVariablesChanged(key, 'timeline-deleted');
     saveVariableStore();
     return true;
 }
@@ -382,6 +388,48 @@ export function markLoreLinkedTimelinesDirty(reason = 'lore-changed') {
     }
     if (marked) saveVariableStore();
     return marked;
+}
+
+const variableChangeListeners = new Set();
+
+/**
+ * Tell in-memory consumers that a Timeline's Variables moved under them.
+ *
+ * `markLoreLinkedTimelinesDirty` above is the same idea aimed at the vector
+ * index, which has a persisted `dirty` flag to raise. Caches that live only for
+ * the session have no such flag, so the store has to say so out loud — and
+ * until this existed, nothing did. `variables-context.js` kept the last
+ * retrieval per Timeline in a Map that nothing ever invalidated: deleting a
+ * Variable updated the store and left the State drawer rendering a snapshot
+ * from half an hour earlier, still listing the record that no longer exists.
+ *
+ * The notice carries WHICH Timeline changed and a reason, never what changed
+ * to. An empty id means "every Timeline" — migration and rollback replace
+ * whole buckets at once and cannot name one.
+ *
+ * Listeners must treat it as *drop what you derived and re-derive lazily*.
+ * It can fire mid-mutation — `deleteVariableValue` records its event before it
+ * removes the record — so reading the store from inside a listener is not
+ * guaranteed to see a settled state. A throwing listener is swallowed: a stale
+ * cache is not permitted to fail somebody else's write.
+ *
+ * @param {(timelineId: string, reason: string) => void} listener
+ * @returns {() => void} unsubscribe
+ */
+export function onVariablesChanged(listener) {
+    if (typeof listener !== 'function') return () => {};
+    variableChangeListeners.add(listener);
+    return () => variableChangeListeners.delete(listener);
+}
+
+function notifyVariablesChanged(timelineId, reason = '') {
+    for (const listener of [...variableChangeListeners]) {
+        try {
+            listener(String(timelineId || ''), String(reason || ''));
+        } catch {
+            // A subscriber's bookkeeping must never be able to break a write.
+        }
+    }
 }
 
 export function normalizeOwnerRef(value = {}, fallbackKind = 'custom') {
@@ -553,6 +601,10 @@ function migrateLegacyStores(namespace, store) {
     migrateV1(v1, store);
     migrateLegacyEvents(v1, v2, store);
     remapGoalResolutions(namespace, store);
+    // Migration imports Variables through importVariable, which deliberately
+    // writes no event — the legacy ledger is carried across separately — so it
+    // bypasses appendEvent's notice. It can land in any Timeline at once.
+    notifyVariablesChanged('', 'migrated');
 }
 
 /**
@@ -661,10 +713,22 @@ function eventInput(variable, type, before, after, context) {
     return { timelineId: variable.timelineId, variableId: variable.id, type, before, after, actor: context.actor, reason: context.reason, transactionId: context.transactionId };
 }
 
+/**
+ * The one place every Variable create, edit and delete passes through.
+ *
+ * `createVariableValue`, `updateVariableValue` and `deleteVariableValue` all
+ * append here, and every other mutating export — setVariableField,
+ * adjustVariableValue, transitionVariableValue, attachEntry, detachEntry,
+ * addVariableModifier, removeVariableModifier — routes through one of those
+ * three. So this is the single point that can honestly say "this Timeline's
+ * Variables just changed", which is why the change notice is raised from here
+ * rather than repeated at each mutation.
+ */
 function appendEvent(store, input) {
     const id = createId('evt');
     store.events[id] = { id, at: now(), timelineId: String(input.timelineId || ''), variableId: String(input.variableId || ''), type: String(input.type || 'variable.updated'), actor: String(input.actor || 'system'), reason: String(input.reason || ''), transactionId: String(input.transactionId || ''), before: input.before ? clone(input.before) : null, after: input.after ? clone(input.after) : null };
     store.eventIds.push(id); trimMap(store.eventIds, store.events, MAX_EVENTS);
+    notifyVariablesChanged(input.timelineId, input.type);
 }
 
 function invalidateVectorRecord(store, variable, reason) {
