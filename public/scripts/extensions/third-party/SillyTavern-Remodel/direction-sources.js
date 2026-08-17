@@ -211,7 +211,7 @@ function describeMechanics(mechanics, { mechanicsEnabled = false } = {}) {
     const titleByRef = new Map(goals.filter((goal) => goal.ref && goal.title).map((goal) => [goal.ref, goal.title]));
     const sections = [
         mechanicsEnabled ? section('CAPABILITIES', describeCapabilities(mechanics?.capabilities)) : '',
-        section('VARIABLES', mechanics?.serializedVariables || '(none retrieved this turn)', describeRetrieval(mechanics?.retrieval)),
+        section('VARIABLES', mechanics?.serializedVariables || describeNoVariables(mechanics?.retrieval, mechanicsEnabled), describeRetrieval(mechanics?.retrieval)),
         section('GOALS', goals.map(describeGoal).join('\n') || '(none active)'),
         mechanicsEnabled && goals.length ? section('RATING A GOAL', rateGuidance()) : '',
         section('RELATIONSHIPS', describeRelationships(mechanics?.relationships, titleByRef)),
@@ -263,6 +263,29 @@ function section(title, body, note = '') {
  * They are reference points now. The Director reads them and states a number,
  * which is the whole difference between a rulebook and guidance.
  */
+/**
+ * What an empty VARIABLES list means, which is not one thing.
+ *
+ * It used to read "No relevant Variables were retrieved." in every case. On a
+ * Timeline holding none at all that sentence is actively misleading — it says
+ * some exist and none matched — and paired with the protocol's "if, and only
+ * if, anything mechanical changed... otherwise leave it out entirely", a
+ * Director reading carefully concludes there is nothing to do and emits no
+ * state block. Observed exactly that: a session of `tailFound: false` on a
+ * Timeline with zero Variables and `variable.create` sitting unused sixth in a
+ * list of twelve capabilities.
+ *
+ * The invitation appears only when mechanics are enabled. With them off the
+ * Director must return no requests at all, so inviting one would be a trap.
+ */
+function describeNoVariables(retrieval, mechanicsEnabled) {
+    if (retrieval?.emptyCode !== 'none-authored') return 'None of this Timeline\'s Variables were relevant this turn.';
+    if (!mechanicsEnabled) return 'This Timeline has no Variables yet.';
+    return `This Timeline has no Variables yet — nothing here is being tracked as a number, a state, or a flag.
+If something in this scene should be, create it with variable.create: how badly someone is hurt, how far a faction's patience has run, whether a door is barred, how close a pursuit has come. Give it a name you would recognise later and a one-line meaning written for your future self. It becomes addressable from the next turn onward.
+Create one only when the fiction has actually raised it. An invented number nobody is playing with is noise you will be shown every turn afterwards.`;
+}
+
 function rateGuidance() {
     return `A Success Rate is the chance a decisive attempt lands from the position the fiction has reached. These are reference points, not a list to choose from — state the number that fits:
   5 nearly impossible · 15 extreme · 30 difficult · 50 uncertain · 70 favourable · 85 strongly favoured · 95 nearly assured

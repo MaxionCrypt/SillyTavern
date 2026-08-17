@@ -72,9 +72,9 @@ export async function resolveVariableContext({
     timelineId, action = '', history = [], cast = [], activatedEntries = [], goals = [], limit = 0, correlationId = null,
 } = {}) {
     const id = String(timelineId || '');
-    if (!id) return emptyContext('No Timeline is active.', correlationId);
+    if (!id) return emptyContext('No Timeline is active.', correlationId, 'no-timeline');
     const variables = listVariableValues({ timelineId: id });
-    if (!variables.length) return emptyContext('This Timeline has no Variables.', correlationId);
+    if (!variables.length) return emptyContext('This Timeline has no Variables.', correlationId, 'none-authored');
 
     const profile = getMechanicsProfile();
     const windowSize = profile.retrievalWindow || 12;
@@ -159,7 +159,7 @@ export function buildVariableQuery({ action = '', historyText = [], subjects = [
     ].filter(Boolean).join('\n\n');
 }
 
-function emptyContext(reason, correlationId = null) {
+function emptyContext(reason, correlationId = null, emptyCode = 'none-matched') {
     journal('retrieval.skipped', { reason }, { correlationId, summary: reason });
-    return { listed: [], refToId: new Map(), serialized: 'No relevant Variables were retrieved.', diagnostics: [], degraded: false, vectorError: '', query: '', reason };
+    return { listed: [], refToId: new Map(), serialized: '', diagnostics: [], degraded: false, vectorError: '', query: '', reason, emptyCode };
 }

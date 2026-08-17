@@ -108,7 +108,13 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
         // Only the shape of retrieval, never its rejects: naming the Variables
         // that deliberately did not surface would hand the model the context
         // retrieval just decided to withhold. Full diagnostics go to the journal.
-        retrieval: { degraded: resolved.degraded, warning: resolved.vectorError, selected: resolved.listed.length },
+        retrieval: {
+            degraded: resolved.degraded, warning: resolved.vectorError, selected: resolved.listed.length,
+            // Why the list is empty, not merely that it is. A Timeline holding no
+            // Variables at all is an invitation to create one; a Timeline whose
+            // Variables simply did not match this turn is not.
+            emptyCode: resolved.listed.length ? '' : (resolved.emptyCode || 'none-matched'),
+        },
     };
 }
 

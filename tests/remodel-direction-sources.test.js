@@ -513,8 +513,39 @@ test('a missing director card degrades to empty rather than throwing', () => {
 
 test('a snapshot with no mechanics at all still renders', () => {
     const sources = buildDirectionSources({ currentAction: 'He waits.' }, { mechanicsEnabled: true });
-    expect(sources.mechanicsSkill).toContain('(none retrieved this turn)');
+    expect(sources.mechanicsSkill).toMatch(/VARIABLES/);
     expect(sources.mechanicsSkill).toContain('(none active)');
+});
+
+test('a Timeline holding no Variables is told so, and invited to make one', () => {
+    // "No relevant Variables were retrieved" says some exist and none matched.
+    // On a Timeline with zero it is untrue, and paired with the protocol's
+    // "if, and only if, anything mechanical changed" it reads as licence to do
+    // nothing — which is what the owner observed: a whole session of
+    // tailFound: false with variable.create never used.
+    const empty = { ...snapshot, mechanics: { ...snapshot.mechanics, serializedVariables: '', retrieval: { emptyCode: 'none-authored' } } };
+    const { mechanicsSkill } = buildDirectionSources(empty, { mechanicsEnabled: true });
+
+    expect(mechanicsSkill).toMatch(/no Variables yet/i);
+    expect(mechanicsSkill).toContain('variable.create');
+});
+
+test('a Timeline whose Variables simply did not match is not invited to invent one', () => {
+    const empty = { ...snapshot, mechanics: { ...snapshot.mechanics, serializedVariables: '', retrieval: { emptyCode: 'none-matched' } } };
+    const { mechanicsSkill } = buildDirectionSources(empty, { mechanicsEnabled: true });
+
+    expect(mechanicsSkill).toMatch(/were relevant this turn/i);
+    expect(mechanicsSkill).not.toMatch(/create it with variable\.create/i);
+});
+
+test('with mechanics off the empty Timeline gets no invitation it could not act on', () => {
+    // Mechanics disabled means the Director must return no requests at all, so
+    // inviting one would be a trap.
+    const empty = { ...snapshot, mechanics: { ...snapshot.mechanics, serializedVariables: '', retrieval: { emptyCode: 'none-authored' } } };
+    const { mechanicsSkill } = buildDirectionSources(empty, { mechanicsEnabled: false });
+
+    expect(mechanicsSkill).toMatch(/no Variables yet/i);
+    expect(mechanicsSkill).not.toMatch(/variable\.create/i);
 });
 
 // --- the interruption -------------------------------------------------------
