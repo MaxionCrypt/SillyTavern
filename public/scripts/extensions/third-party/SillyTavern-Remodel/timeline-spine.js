@@ -130,6 +130,7 @@ import {
     handleDebugConsoleClick,
     handleDebugConsoleInput,
     initDebugConsole,
+    recordDebugEvent,
     renderDebugConsoleWorkspace,
 } from './debug-console.js';
 import {
@@ -173,6 +174,11 @@ import {
     setTavernPanelObserver,
 } from './session-state.js';
 
+import { resolveChatLorebook } from './chat-lorebook.js';
+// world-info.js's METADATA_KEY. Named locally rather than imported so this
+// module keeps its single core-import surface, and stated as a constant rather
+// than a literal because getChatLore reads this exact key and nothing else.
+const WORLD_INFO_METADATA_KEY = 'world_info';
 const DRAWER_ID = 'remodel-timeline-drawer';
 const PANEL_ID = 'remodel-timeline-panel';
 const CONTENT_ID = 'remodel-timeline-content';
@@ -5785,6 +5791,7 @@ function writeSceneMetadata(scene) {
     }
 
     const context = getContext();
+    const previous = context.chatMetadata[CHAT_METADATA_KEY] || {};
     context.chatMetadata[CHAT_METADATA_KEY] = {
         timelineId: scene.timelineId,
         arcId: scene.arcId,
@@ -5792,9 +5799,49 @@ function writeSceneMetadata(scene) {
         mode: scene.mode,
         title: scene.title,
         linkedChat: scene.linkedChat,
+        // What we last bound as this chat's lorebook. Carried forward so the
+        // next pass can tell a book that is ours to move from one the user
+        // chose by hand — see applyTimelineChatLorebook.
+        managedLorebook: applyTimelineChatLorebook(scene, previous.managedLorebook || null),
         updatedAt: new Date().toISOString(),
     };
     context.saveMetadataDebounced();
+}
+
+/**
+ * Make the Timeline's lorebook this chat's lorebook.
+ *
+ * `timeline.lorebookName` used to have exactly one consumer — story-world-info.js
+ * — so a Timeline book did nothing whatsoever in Roleplay while the UI showed
+ * it as bound. Chat lore is the only one of core's four bindings that resolves
+ * without a selected character, which is what the Director's out-of-band scan
+ * needs; the module header on chat-lorebook.js has the full reasoning.
+ *
+ * @returns {string|null} the book now under our management, for the metadata.
+ */
+function applyTimelineChatLorebook(scene, managedLorebook) {
+    const context = getContext();
+    const timeline = getTimelineStore().timelines[scene.timelineId];
+    const result = resolveChatLorebook({
+        timelineLorebook: timeline?.lorebookName || null,
+        chatLorebook: context.chatMetadata[WORLD_INFO_METADATA_KEY] || null,
+        managedLorebook,
+        mode: scene.mode,
+    });
+    if (result.action === 'bind' || result.action === 'release') {
+        // Written straight to the metadata key core reads (world-info.js's
+        // METADATA_KEY), not through a setter: there is no exported one, and
+        // getChatLore consults this key and nothing else.
+        context.chatMetadata[WORLD_INFO_METADATA_KEY] = result.value;
+    }
+    if (result.action !== 'keep') {
+        recordDebugEvent('direction', 'lorebook.chat', {
+            sceneId: scene.id, action: result.action, reason: result.reason,
+        }, { severity: result.action === 'refuse' ? 'warn' : 'info', summary: result.reason });
+    }
+    // Only a bind leaves something of ours behind. A refusal manages nothing,
+    // and a release just gave up what it managed.
+    return result.action === 'bind' ? result.value : (result.action === 'release' ? null : managedLorebook);
 }
 
 // A (re)loaded chat is always a clean starting point — nothing this

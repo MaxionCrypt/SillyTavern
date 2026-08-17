@@ -1516,6 +1516,15 @@ function markSeveredEntry(entries, interrupted) {
  */
 const EMPTY_RESPONSE_RETRIES = 2;
 const EMPTY_RESPONSE_RETRY_DELAY_MS = 400;
+// How long the empty-response path waits for the native generation it is
+// replacing to actually finish.
+//
+// Much longer than the interrupt path's 2200ms, and for a different reason:
+// that one has just called stopGeneration() and is bounding how long an ABORT
+// takes, while this one is waiting for a call to end on its own. A provider
+// that is slow is not a provider that is stuck, and cutting the wait short
+// here is what produced overlapping generations in the first place.
+const EMPTY_SETTLE_TIMEOUT_MS = 15000;
 
 async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0 }) {
     const director = resolveDirector(scene);
@@ -1925,6 +1934,31 @@ async function failEmptyVisibleRun(run) {
         performerLabel: run.performer?.label || '',
     }, { correlationId: run.directionId, severity: 'warn', summary: `direction.complete: no visible text (attempt ${attempt})` });
 
+    // WAIT FOR THE CALL THIS IS REPLACING TO ACTUALLY END.
+    //
+    // completeVisibleRun decides "nothing was revealed" from the reveal
+    // pipeline, which can settle while `generateGroupWrapper` is still
+    // pending. Without this wait the retry below fired a SECOND native
+    // generation into a generator that was still running the first: the
+    // owner's log shows three overlapping generations from one failure
+    // (17:39:01-11 containing 17:39:04-09), "The native group generator is
+    // still busy" thrown from inside the retry, unhandled rejections escaping
+    // this function, and empty results from the collision itself — which then
+    // looked like the provider refusing the prompt and consumed the retry
+    // budget chasing its own tail.
+    //
+    // Same guard the interrupt path already used (interruptLiveDirection), for
+    // the same reason. This path is the one that never learned it.
+    if (!run.generationSettled && ownsLiveDirectionGeneration()) {
+        await waitFor(() => run.generationSettled, EMPTY_SETTLE_TIMEOUT_MS);
+        if (!run.generationSettled) {
+            journal('empty.settle-timeout', {
+                directionId: run.directionId,
+                waitedMs: EMPTY_SETTLE_TIMEOUT_MS,
+            }, { correlationId: run.directionId, severity: 'warn', summary: 'direction.empty: the native generation never reported settling' });
+        }
+    }
+
     // finalizeRunMessage removes a message with no accepted text, so the blank
     // row never reaches the chat. Deliberately NOT marked interrupted: the user
     // did nothing here, and recording it as an interruption would misreport the
@@ -1966,6 +2000,19 @@ async function failEmptyVisibleRun(run) {
                 autonomousSequence: run.autonomousSequence,
                 token: retryToken,
                 emptyRetries: run.emptyRetries + 1,
+            });
+        } catch (error) {
+            // Nothing awaits this function. completeVisibleRun is driven by the
+            // reveal loop, so a throw from here escaped as an unhandled
+            // rejection and the user got a console error with no matching
+            // state change — three of them in the owner's log. Routed through
+            // directionFailure instead, which is the one exit that leaves the
+            // chrome, the pending-retry record and the journal agreeing.
+            directionFailure(error, {
+                scene: hooks.getActiveScene() || scene,
+                action: '[Continue the scene from accepted history.]',
+                insertUser: false,
+                autonomousSequence: run.autonomousSequence,
             });
         } finally {
             releaseDirectionLock(retryToken);
