@@ -24,6 +24,36 @@
 .remodel-goal-create-form > span { color: #eee9f2; font: 400 24px Georgia,serif; }
 .remodel-goal-create-form input, .remodel-goal-create-form textarea, .remodel-goal-create-form select { width: 100%; padding: 10px; color: #eeeaf4; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.14); }
 .remodel-goal-create-form > button:first-child { position: absolute; right: 10px; top: 8px; font-size: 21px; }
+
+/* Owner authoring on the Goals deck: edit, delete, unlink, link, relate.
+   Every list here lays out from however many children it is given -- no rule
+   counts them and none names an id, because the element a counting rule does
+   not know about is always the one that breaks it. */
+.remodel-goal-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
+.remodel-goal-detail-actions button { padding: 7px 13px; color: #dfd936; background: rgba(8,7,13,.72); border: 1px solid rgba(218,207,0,.45); border-radius: 999px; font-size: 12px; cursor: pointer; }
+.remodel-goal-detail-actions button:hover { border-color: rgba(235,219,35,.85); background: rgba(215,200,0,.12); }
+.remodel-goal-detail-actions button.is-danger { color: #e2867f; border-color: rgba(191,97,106,.5); }
+.remodel-goal-detail-actions button.is-danger:hover { border-color: rgba(191,97,106,.9); background: rgba(191,97,106,.16); }
+.remodel-goal-detail-actions button.is-danger[data-confirming] { color: #ffd7d2; background: rgba(191,97,106,.28); }
+
+.remodel-goal-edit-form { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.remodel-goal-edit-form label { display: flex; flex-direction: column; gap: 4px; color: rgba(238,235,245,.55); font: 400 10px/1.2 Georgia,serif; letter-spacing: .14em; text-transform: uppercase; }
+.remodel-goal-edit-form input, .remodel-goal-edit-form textarea, .remodel-goal-edit-form select { width: 100%; padding: 9px; color: #eeeaf4; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.14); font-size: 13px; text-transform: none; letter-spacing: 0; }
+.remodel-goal-edit-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.remodel-goal-edit-actions button { padding: 8px 16px; color: #dfd936; background: rgba(8,7,13,.72); border: 1px solid rgba(218,207,0,.45); border-radius: 999px; cursor: pointer; }
+
+.remodel-goal-relations { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 2px; }
+.remodel-goal-relation { padding: 4px 10px; border-radius: 999px; font-size: 11px; border: 1px solid rgba(255,255,255,.16); color: rgba(238,235,245,.72); }
+.remodel-goal-relation.is-antagonistic { border-color: rgba(191,97,106,.45); }
+.remodel-goal-relation.is-sympathetic { border-color: rgba(140,190,140,.45); }
+.remodel-goal-relate-form { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+.remodel-goal-relate-form select, .remodel-goal-relate-form input { flex: 1 1 120px; min-width: 0; padding: 6px; color: #eeeaf4; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.14); font-size: 12px; }
+.remodel-goal-relate-form button { padding: 6px 14px; color: #dfd936; background: rgba(8,7,13,.72); border: 1px solid rgba(218,207,0,.45); border-radius: 999px; cursor: pointer; }
+
+.remodel-goal-unlinked { position: absolute; left: 50%; bottom: 82px; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: min(560px,calc(100% - 40px)); }
+.remodel-goal-unlinked > span { flex-basis: 100%; text-align: center; color: rgba(238,235,245,.42); font: 400 10px/1.4 Georgia,serif; letter-spacing: .16em; text-transform: uppercase; }
+.remodel-goal-unlinked button { padding: 5px 12px; color: rgba(238,235,245,.78); background: rgba(8,7,13,.62); border: 1px dashed rgba(218,207,0,.35); border-radius: 999px; font-size: 12px; cursor: pointer; }
+.remodel-goal-unlinked button:hover { border-style: solid; border-color: rgba(235,219,35,.7); color: #dfd936; }
 .remodel-goal-create-form > button[type="submit"] { padding: 10px; color: #09080d; background: #c9be00; }
 
 .remodel-mechanics-failure { position: absolute; z-index: 30; left: 50%; bottom: 92px; transform: translateX(-50%); width: min(760px,calc(100% - 40px)); display: flex; align-items: center; gap: 10px; padding: 12px 15px; color: #ede8f4; background: rgba(17,12,24,.97); border: 1px solid rgba(218,207,0,.65); box-shadow: 0 16px 50px rgba(0,0,0,.45); }.remodel-mechanics-failure span { flex: 1; }.remodel-mechanics-failure button { padding: 8px 11px; border: 1px solid rgba(218,207,0,.4); color: #e8e239; }

@@ -1,7 +1,19 @@
 import {
     formatHolders,
 } from './story-goals-model.js';
-import { getSceneGoalState, getSceneGoals, updateSceneGoalState } from './story-goals-store.js';
+import {
+    createTimelineGoalRelation,
+    deleteStoryGoal,
+    getSceneGoalRelations,
+    getSceneGoalState,
+    getSceneGoals,
+    getTimelineGoals,
+    linkGoalToScene,
+    unlinkGoalFromScene,
+    updateSceneGoalState,
+    updateStoryGoal,
+} from './story-goals-store.js';
+import { escapeAttribute, escapeHtml, renderGoalEditFormMarkup, renderGoalRelationsMarkup } from './story-goals-markup.js';
 import { registerStoryStatMacros } from './story-stats-macros.js';
 
 // Story Goals — the roleplay-facing surface.
@@ -27,6 +39,8 @@ const uiState = {
     // Which goal's detail is open (a goalId) vs the deck (absent), per scene.
     viewGoalByScene: new Map(),
     composerIntents: new Map(),
+    // Which goal's detail is showing its edit form, per scene.
+    editingGoal: new Map(),
 };
 
 /** timeline-spine checks this to avoid tearing down the turn UI between legs. */
@@ -101,6 +115,15 @@ function setViewGoalId(sceneId, goalId) {
     else uiState.viewGoalByScene.delete(String(sceneId));
 }
 
+function getEditingGoalId(sceneId) {
+    return uiState.editingGoal.get(String(sceneId)) || null;
+}
+
+function setEditingGoalId(sceneId, goalId) {
+    if (goalId) uiState.editingGoal.set(String(sceneId), String(goalId));
+    else uiState.editingGoal.delete(String(sceneId));
+}
+
 function isStoryGoalViewportOpen(sceneId) {
     return Boolean(getSceneGoalState(sceneId, { create: false })?.boardOpen);
 }
@@ -131,10 +154,12 @@ function renderStoryGoalViewport(root, scene) {
     viewport.classList.toggle('is-detail', Boolean(viewGoal));
     viewport.innerHTML = `
         <button type="button" class="remodel-goal-viewport-close" data-remodel-goal-viewport-close aria-label="Close Story Goals"><i class="fa-solid fa-xmark"></i></button>
-        ${viewGoal ? renderGoalDetailMarkup(viewGoal, goals) : renderGoalDeckMarkup(goals)}`;
+        ${viewGoal
+        ? renderGoalDetailMarkup(viewGoal, goals, { editing: getEditingGoalId(scene.id) === viewGoal.id, relations: getSceneGoalRelations(scene.id) })
+        : renderGoalDeckMarkup(goals, getTimelineGoals(scene.timelineId).filter((item) => !goals.some((linked) => linked.id === item.id)))}`;
 }
 
-function renderGoalDeckMarkup(goals) {
+function renderGoalDeckMarkup(goals, unlinked = []) {
     return `
         <div class="remodel-goal-deck-view">
             <div class="remodel-goal-tarot-deck">
@@ -142,9 +167,14 @@ function renderGoalDeckMarkup(goals) {
                     <div class="remodel-goal-empty">
                         <span>Story Goals</span>
                         <strong>No goals have been brought into this scene.</strong>
-                        <p>The prototype cards have been removed. Goal creation will return after the timeline-owned system is designed.</p>
+                        <p>Make one below, or bring in a Goal this Timeline already holds.</p>
                     </div>`}
             </div>
+            ${unlinked.length ? `
+                <div class="remodel-goal-unlinked">
+                    <span>Elsewhere in this Timeline</span>
+                    ${unlinked.map((goal) => `<button type="button" data-remodel-goal-link="${escapeAttribute(goal.id)}">${escapeHtml(goal.title)}</button>`).join('')}
+                </div>` : ''}
             <button type="button" class="remodel-goal-create-button" data-remodel-goal-create><i class="fa-solid fa-plus"></i> New Story Goal</button>
             <div class="remodel-goal-hover-name" data-remodel-goal-hover-name aria-live="polite"></div>
         </div>`;
@@ -178,7 +208,7 @@ function renderGoalTarotCard(goal, index) {
 // Goal detail — the codex/archive layout (mirrors the timeline archive view):
 // the goal's card rendered large at the left, an editorial column at the right
 // with the display title and numbered record rows.
-function renderGoalDetailMarkup(goal, goals) {
+function renderGoalDetailMarkup(goal, goals, { editing = false, relations = [] } = {}) {
     const index = Math.max(0, goals.indexOf(goal));
     const rows = [];
     rows.push({ label: 'Success rate', value: `${goal.successRate}%`, sub: 'The chance a determined reach lands.' });
@@ -201,6 +231,13 @@ function renderGoalDetailMarkup(goal, goals) {
                     </div>
                     <h2 class="remodel-goal-detail-name">${escapeHtml(goal.title)}</h2>
                     ${goal.description ? `<p class="remodel-goal-detail-summary">${escapeHtml(goal.description)}</p>` : ''}
+                    ${editing ? renderGoalEditFormMarkup(goal) : `
+                    <div class="remodel-goal-detail-actions">
+                        <button type="button" data-remodel-goal-edit="${escapeAttribute(goal.id)}"><i class="fa-solid fa-pen"></i> Edit</button>
+                        <button type="button" data-remodel-goal-unlink="${escapeAttribute(goal.id)}"><i class="fa-solid fa-link-slash"></i> Remove from scene</button>
+                        <button type="button" class="is-danger" data-remodel-goal-delete="${escapeAttribute(goal.id)}"><i class="fa-solid fa-trash"></i> Delete</button>
+                    </div>
+                    ${renderGoalRelationsMarkup(goal, goals, relations)}
                     <div class="remodel-goal-detail-records">
                         ${rows.map((row, i) => `
                             <div class="remodel-goal-detail-row">
@@ -209,7 +246,7 @@ function renderGoalDetailMarkup(goal, goals) {
                                 <span class="remodel-goal-detail-value">${escapeHtml(row.value)}</span>
                                 ${row.sub ? `<span class="remodel-goal-detail-sub">${escapeHtml(row.sub)}</span>` : ''}
                             </div>`).join('')}
-                    </div>
+                    </div>`}
                 </div>
             </div>
         </div>`;
@@ -294,10 +331,90 @@ function bindStoryGoalEvents() {
             hooks.requestRender();
             return;
         }
+        // Owner authoring. These write to the store directly rather than
+        // through the capability layer: that layer exists to constrain a model,
+        // not its owner. They pass actor 'user' so the event ledger can still
+        // tell an owner edit from a Director change.
+        const editButton = target.closest('[data-remodel-goal-edit]');
+        if (editButton) {
+            setEditingGoalId(scene.id, editButton.dataset.remodelGoalEdit);
+            hooks.requestRender();
+            return;
+        }
+        if (target.closest('[data-remodel-goal-edit-cancel]')) {
+            setEditingGoalId(scene.id, null);
+            hooks.requestRender();
+            return;
+        }
+        const unlinkButton = target.closest('[data-remodel-goal-unlink]');
+        if (unlinkButton) {
+            unlinkGoalFromScene(scene.id, unlinkButton.dataset.remodelGoalUnlink);
+            setViewGoalId(scene.id, null);
+            hooks.requestRender();
+            return;
+        }
+        const linkButton = target.closest('[data-remodel-goal-link]');
+        if (linkButton) {
+            linkGoalToScene(scene.id, linkButton.dataset.remodelGoalLink, 'active', { timelineId: scene.timelineId });
+            hooks.requestRender();
+            return;
+        }
+        const deleteButton = target.closest('[data-remodel-goal-delete]');
+        if (deleteButton) {
+            // Two clicks rather than a native dialog: deleting a Goal removes a
+            // record the fiction may have been built on, and a stray click on a
+            // touch surface should not be enough.
+            if (deleteButton.dataset.confirming === undefined) {
+                deleteButton.dataset.confirming = '';
+                deleteButton.textContent = 'Delete for good?';
+                return;
+            }
+            deleteStoryGoal(deleteButton.dataset.remodelGoalDelete, { sceneId: scene.id, actor: 'user', reason: 'Deleted from the Story Goals board.' });
+            setViewGoalId(scene.id, null);
+            setEditingGoalId(scene.id, null);
+            hooks.requestRender();
+            return;
+        }
+
         // Click a deck card: open that goal's detail.
         const card = target.closest('[data-remodel-goal-card]');
         if (card) {
             setViewGoalId(scene.id, card.dataset.remodelGoalCard);
+            hooks.requestRender();
+        }
+    }, true);
+
+    document.addEventListener('submit', (event) => {
+        const form = event.target instanceof Element ? event.target : null;
+        const scene = hooks.getActiveScene();
+        if (!form || !scene || scene.mode !== 'roleplay') return;
+
+        const editing = form.closest('[data-remodel-goal-edit-form]');
+        if (editing) {
+            event.preventDefault();
+            const data = new FormData(form);
+            const holder = String(data.get('holder') || '').trim();
+            updateStoryGoal(editing.dataset.remodelGoalEditForm, {
+                title: data.get('title'),
+                description: data.get('description'),
+                successRate: data.get('successRate'),
+                status: data.get('status'),
+                visibility: data.get('visibility'),
+                ...(holder ? { holders: [holder] } : {}),
+            }, { sceneId: scene.id, actor: 'user', reason: 'Edited on the Story Goals board.' });
+            setEditingGoalId(scene.id, null);
+            hooks.requestRender();
+            return;
+        }
+
+        const relating = form.closest('[data-remodel-goal-relate-form]');
+        if (relating) {
+            event.preventDefault();
+            const data = new FormData(form);
+            createTimelineGoalRelation(
+                scene.timelineId, relating.dataset.remodelGoalRelateForm, data.get('toGoalId'),
+                data.get('type'), String(data.get('reason') || ''), { sceneId: scene.id, actor: 'user' },
+            );
             hooks.requestRender();
         }
     }, true);
@@ -342,12 +459,4 @@ function openManualGoalCreator(root, scene) {
         hooks.requestRender();
     });
     root.querySelector('[data-remodel-goals-viewport]')?.append(form);
-}
-
-function escapeHtml(value) {
-    return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
-}
-
-function escapeAttribute(value) {
-    return escapeHtml(value).replaceAll('`', '&#096;');
 }
