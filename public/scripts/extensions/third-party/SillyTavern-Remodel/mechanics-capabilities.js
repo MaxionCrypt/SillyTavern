@@ -1,8 +1,11 @@
 import {
+    VARIABLE_KINDS,
     addVariableModifier,
     adjustVariableValue,
     computeVariable,
+    createVariableValue,
     getVariableValue,
+    listVariableValues,
     normalizeOwnerRef,
     recordMechanicsTransaction,
     removeVariableModifier,
@@ -28,7 +31,7 @@ export const MECHANICS_PROTOCOL = 'remodel-mechanics/1';
 
 const CAPABILITY_NAMES = Object.freeze([
     'goal.create', 'goal.shift', 'goal.reach', 'goal.relate', 'goal.close',
-    'variable.set', 'variable.adjust', 'variable.transition', 'variable.subvalue.set',
+    'variable.create', 'variable.set', 'variable.adjust', 'variable.transition', 'variable.subvalue.set',
     'modifier.add', 'modifier.remove',
 ]);
 
@@ -38,6 +41,7 @@ const CAPABILITIES = Object.freeze({
     'goal.reach': capability('Declare one decisive attempt against a Goal. Code freezes inputs and rolls d100.', ['goal'], 'hybrid'),
     'goal.relate': capability('Create or update a directional sympathetic or antagonistic Goal relationship.', ['goal'], 'hybrid'),
     'goal.close': capability('Mark a Goal achieved, abandoned, or impossible.', ['goal'], 'hybrid'),
+    'variable.create': capability('Bring into being a Variable this Timeline does not have yet, when a mechanical fact matters and none of the Variables above covers it. Give it a name no existing Variable already uses; you may address it from the NEXT turn onward, never the turn you create it. Changes you later request to it are held for the user to review.', ['number', 'enum', 'text', 'boolean'], 'review'),
     'variable.set': capability('Set the primary scalar value of an advertised Variable.', ['number', 'enum', 'text', 'boolean'], 'hybrid'),
     'variable.adjust': capability('Adjust an advertised numeric Variable or numeric subvalue.', ['number'], 'hybrid'),
     'variable.transition': capability('Move an advertised enum Variable or enum subvalue to an allowed state.', ['enum'], 'hybrid'),
@@ -105,7 +109,7 @@ export function getMechanicsRequestSchema() {
                                     fromGoalRef: { type: 'string', description: 'goal.relate only: the Goal the relationship starts from, addressed the same way as goalRef.' },
                                     toGoalRef: { type: 'string', description: 'goal.relate only: the Goal the relationship points to, addressed the same way as goalRef.' },
                                     title: { type: 'string', description: 'goal.create only: the new Goal\'s title.' },
-                                    description: { type: 'string', description: 'goal.create only: what this Goal is, for the Goal record itself.' },
+                                    description: { type: 'string', description: 'goal.create: what this Goal is, for the Goal record itself. variable.create: what this new Variable means in the fiction, in one line — you are shown it again every time the Variable is retrieved, so write it for your future self.' },
                                     visibility: { type: 'string', enum: ['public', 'secret'], description: 'goal.create only: whether the user can see this Goal exists. Use secret for a twist or a threat the user has not discovered.' },
                                     holderRefs: { type: 'array', items: ownerRefSchema(), description: 'goal.create only: who holds this Goal — at least one typed owner is required.' },
                                     targetRefs: { type: 'array', items: ownerRefSchema(), description: 'goal.create only: who or what the Goal is directed at, if it has a target. Optional.' },
@@ -127,11 +131,16 @@ export function getMechanicsRequestSchema() {
                                     impactMagnitude: { type: 'string', enum: ['minor', 'meaningful', 'major', 'decisive'], description: 'goal.reach only, for a tracked Goal: how large the tracked Variable moves when this reach hits.' },
                                     type: { type: 'string', enum: ['antagonistic', 'sympathetic'], description: 'goal.relate only: whether progress on fromGoalRef helps (sympathetic) or hurts (antagonistic) toGoalRef.' },
                                     status: { type: 'string', enum: ['achieved', 'abandoned', 'impossible'], description: 'goal.close only: the terminal state to close the Goal at.' },
-                                    variableRef: { type: 'string', description: 'The exact advertised name of the Variable this request addresses. Required by every variable.* and modifier.* capability except where modifierVariableRef applies instead.' },
+                                    name: { type: 'string', description: 'variable.create only: the new Variable\'s name. It must not match any Variable this Timeline already has (compared ignoring case and surrounding spaces) and it is the exact name you will address it by from the next turn on, so name it the way you would want to read it back: "Aiden\'s Corruption", not "corruption2".' },
+                                    valueType: { type: 'string', enum: ['number', 'enum', 'text', 'boolean'], description: 'variable.create only: what the new Variable holds. number for a quantity that rises and falls, enum for one of a fixed set of named states, boolean for a fact that is simply true or false, text for a short phrase.' },
+                                    enumValues: { type: 'array', items: { type: 'string' }, description: 'variable.create only, and only when valueType is enum: every state this Variable may ever occupy, at least two of them. variable.transition can later move it to one of these and to nothing else, so list them all now.' },
+                                    minimum: { type: 'number', description: 'variable.create only, and only when valueType is number: the lowest this value may fall to. Omit it for no floor.' },
+                                    maximum: { type: 'number', description: 'variable.create only, and only when valueType is number: the highest this value may rise to — the "20" in "12 / 20". Omit it for no ceiling.' },
+                                    variableRef: { type: 'string', description: 'The exact advertised name of the Variable this request addresses. Required by every variable.* and modifier.* capability except variable.create (which names a Variable that does not exist yet — see name) and except where modifierVariableRef applies instead.' },
                                     modifierVariableRef: { type: 'string', description: 'modifier.add / modifier.remove only: the exact advertised name of the Variable the modifier is attached to or removed from.' },
                                     modifierId: { type: 'string', description: 'modifier.remove only: the id of the existing modifier to remove, as it appears on the Variable\'s record.' },
                                     field: { type: 'string', description: 'variable.subvalue.set: which advertised subvalue to set. variable.adjust / variable.transition: which field to change; omit for the Variable\'s primary value.' },
-                                    value: { type: ['number', 'string', 'boolean'], description: 'variable.set / variable.subvalue.set only: the exact value to write, matching the field\'s type.' },
+                                    value: { type: ['number', 'string', 'boolean'], description: 'variable.set / variable.subvalue.set: the exact value to write, matching the field\'s type. variable.create: the value the new Variable starts at, matching its valueType — one of the enumValues for an enum, and within minimum/maximum for a number.' },
                                     delta: { type: 'number', description: 'variable.adjust only: the numeric amount to add (negative to subtract). modifier.add only: the modifier\'s amount.' },
                                     nextState: { type: ['string', 'boolean'], description: 'variable.transition only: the state to move the enum (or boolean) Variable to. Must be a state the Variable\'s definition allows.' },
                                     label: { type: 'string', description: 'modifier.add only: a short label identifying this modifier, e.g. "Wounded" or "Blessed".' },
@@ -281,6 +290,7 @@ export function undoMechanicsTransaction(transaction) {
 function applyRequest(request, runtime) {
     const args = request.arguments;
     switch (request.capability) {
+        case 'variable.create': return createVariable(request, args, runtime);
         case 'variable.set': return setVariable(request, args, runtime);
         case 'variable.subvalue.set': return setVariable(request, args, runtime, true);
         case 'variable.adjust': return adjustVariable(request, args, runtime);
@@ -294,6 +304,138 @@ function applyRequest(request, runtime) {
         case 'goal.reach': return reachGoal(request, args, runtime);
         default: throw new MechanicsError(`Unsupported capability ${request.capability}.`);
     }
+}
+
+/**
+ * Let the Director author a Variable the owner never wrote.
+ *
+ * WHY: with nothing authored, the mechanics layer has nothing to advertise and
+ * can never do anything — every pass journalled `retrieval.skipped :: "This
+ * Timeline has no Variables."` and there was no verb that could change that.
+ *
+ * Three decisions make this safe rather than a mess.
+ *
+ * **Uniqueness.** Every address in this system is a name (design §3), and
+ * `buildAddressBook` refuses a name held by two records rather than guessing —
+ * so creating a second "Morale" does not create an ambiguity, it silently makes
+ * BOTH Variables unaddressable forever. Refused here on the address book's own
+ * comparison: trimmed and case-insensitive, so "Morale" and "morale " collide.
+ *
+ * **Retrieval mode `always`.** A Variable surfaces through its lore links plus
+ * semantic evidence, and a Variable the Director invented has no lorebook entry
+ * to hang off — it is not describing prose the owner wrote. Under the default
+ * `corroborated` mode it could never be corroborated, so it would be created
+ * and then never retrieved again: write-only. `always` is the one mode in
+ * RETRIEVAL_MODES that surfaces without linked evidence, and the store agrees —
+ * `createVariableValue` rejects an unlinked Variable in any other mode outright.
+ *
+ * **Authority `review`.** The store defaults an authority-less Variable to
+ * `world` on the stated grounds that it "is attached to a lorebook entry about
+ * the fiction, not to the user" — grounds that do not hold here, because this
+ * one is attached to nothing. Nothing in the request types the subject either:
+ * the model supplies a bare name, so the capability layer cannot tell "Keep's
+ * Repair" from "Aiden's Corruption" where Aiden is the user's own persona.
+ * `review` is the only value that is conservative for every subject, and it is
+ * one dropdown away from `world` in the Codex once the owner accepts the
+ * invention. Creation itself still applies — it is additive, and the
+ * transaction snapshot undoes it — but every later write to the invented fact
+ * defers.
+ */
+function createVariable(request, args, runtime) {
+    const name = String(args.name ?? '').trim();
+    const valueType = String(args.valueType ?? '').trim();
+    if (!VARIABLE_KINDS.includes(valueType)) throw new MechanicsError(`${request.id}: valueType must be one of ${VARIABLE_KINDS.join(', ')}.`);
+    // Read live rather than from a snapshot: an earlier request in this same
+    // batch may already have created the name being asked for.
+    const clash = listVariableValues({ timelineId: runtime.timelineId }).find((item) => sameVariableName(item.name, name));
+    if (clash) throw new MechanicsError(`${request.id}: this Timeline already has a Variable named “${clash.name}”. Address that one by name instead of creating a second — a duplicated name makes both unaddressable.`);
+    const states = createStates(request, args, valueType);
+    const subvalues = createBounds(request, args, valueType);
+    const value = openingValue(request, args, valueType, states, subvalues);
+    const created = createVariableValue({
+        timelineId: runtime.timelineId, name, description: String(args.description ?? '').trim(),
+        valueType, value, enumValues: states, subvalues, loreLinks: [],
+        retrieval: { mode: 'always', semanticThreshold: 0.7, continuity: true },
+        authority: 'review',
+    }, txContext(runtime, request));
+    if (!created) throw new MechanicsError(`${request.id}: Variable could not be created.`);
+    receipt(runtime, request, null, created);
+}
+
+/** The address book's own comparison — direction-address.js `normalize`. */
+function sameVariableName(left, right) {
+    return String(left ?? '').trim().toLowerCase() === String(right ?? '').trim().toLowerCase();
+}
+
+function createStates(request, args, valueType) {
+    const states = [...new Set((Array.isArray(args.enumValues) ? args.enumValues : [])
+        .map((item) => String(item ?? '').trim()).filter(Boolean))];
+    if (valueType !== 'enum') {
+        if (states.length) throw new MechanicsError(`${request.id}: enumValues only applies to an enum Variable.`);
+        return [];
+    }
+    // One state is not a state machine: variable.transition would have nowhere
+    // to move it, so the Variable could never do the one thing enum is for.
+    if (states.length < 2) throw new MechanicsError(`${request.id}: an enum Variable needs at least two distinct states in enumValues.`);
+    return states;
+}
+
+/**
+ * Bounds in the exact shape the Codex editor writes (variables-ui.js
+ * `saveFromForm`), so a Director-created Variable and an owner-created one are
+ * one record type rather than two that merely look alike.
+ */
+function createBounds(request, args, valueType) {
+    const minimum = optionalBound(request, args.minimum, 'minimum');
+    const maximum = optionalBound(request, args.maximum, 'maximum');
+    if ((minimum !== null || maximum !== null) && valueType !== 'number') {
+        throw new MechanicsError(`${request.id}: only a number Variable takes a minimum or a maximum.`);
+    }
+    if (minimum !== null && maximum !== null && minimum > maximum) {
+        throw new MechanicsError(`${request.id}: minimum ${minimum} is above maximum ${maximum}.`);
+    }
+    const subvalues = [];
+    if (minimum !== null) subvalues.push({ key: 'minimum', label: 'Minimum', type: 'number', value: minimum, role: 'minimum' });
+    if (maximum !== null) subvalues.push({ key: 'maximum', label: 'Maximum', type: 'number', value: maximum, role: 'maximum' });
+    return subvalues;
+}
+
+/**
+ * An absent bound is null/undefined/'' — NOT merely something that coerces
+ * badly. `Number(null)` is 0 and passes Number.isFinite, so testing presence by
+ * coercion reads "no floor" as "floor of 0"; `hasBound` in variables-store.js
+ * exists for the same reason.
+ */
+function optionalBound(request, value, label) {
+    if (value === null || value === undefined || value === '') return null;
+    const number = Number(value);
+    if (!Number.isFinite(number)) throw new MechanicsError(`${request.id}: ${label} must be a finite number when it is given.`);
+    return number;
+}
+
+/**
+ * The starting value, validated rather than coerced.
+ *
+ * `normalizeScalar` in the store is deliberately lenient so a malformed *stored*
+ * record still loads — an unknown enum state becomes `enumValues[0]`, an
+ * out-of-range number is clamped. Neither is acceptable for a create request:
+ * both would report success while quietly storing something else.
+ */
+function openingValue(request, args, valueType, states, subvalues) {
+    if (valueType === 'enum') {
+        const state = String(args.value ?? '').trim();
+        if (!states.includes(state)) throw new MechanicsError(`${request.id}: value must be one of the states listed in enumValues.`);
+        return state;
+    }
+    if (valueType !== 'number') return args.value;
+    const number = Number(args.value);
+    if (!Number.isFinite(number)) throw new MechanicsError(`${request.id}: value must be a finite number.`);
+    const minimum = subvalues.find((item) => item.role === 'minimum')?.value ?? null;
+    const maximum = subvalues.find((item) => item.role === 'maximum')?.value ?? null;
+    if (minimum !== null && number < minimum || maximum !== null && number > maximum) {
+        throw new MechanicsError(`${request.id}: value ${number} falls outside the bounds ${minimum ?? '−∞'} to ${maximum ?? '∞'}.`);
+    }
+    return number;
 }
 
 function setVariable(request, args, runtime, subvalue = false) {
@@ -457,6 +599,7 @@ function validateArguments(request) {
         case 'goal.reach': require('goalRef', 'impactMagnitude'); break;
         case 'goal.relate': require('fromGoalRef', 'toGoalRef', 'type'); break;
         case 'goal.close': require('goalRef', 'status'); break;
+        case 'variable.create': require('name', 'valueType', 'value', 'description'); break;
         case 'variable.set': require('variableRef', 'value'); break;
         case 'variable.subvalue.set': require('variableRef', 'field', 'value'); break;
         case 'variable.adjust': require('variableRef', 'delta'); break;
