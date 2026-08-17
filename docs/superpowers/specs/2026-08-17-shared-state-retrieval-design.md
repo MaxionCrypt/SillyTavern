@@ -32,7 +32,7 @@ Settled with the project owner before design:
 | Decision | Choice |
 |---|---|
 | Ranking | **One scorer, one shared budget.** Goals and Variables compete in a single ranked set. |
-| Cross-linkage | Falls out of shared ranking rather than needing its own pass. |
+| Cross-linkage | One-directional: a scoring Goal contributes its description as a query source for Variables. Variables do not pull Goals. |
 | Recall weight | A **windowed count** — how many of the last N turns an item was retrieved in — not a running total. |
 | Weight storage | Computed fresh each turn. Only the recall window is persisted. |
 | Notebook evidence | Includes `secret` entries. |
@@ -71,13 +71,23 @@ new ones, applying to both kinds:
   Weighted above passive evidence and below the action naming it directly: the
   Director writing "Morale is fraying" is a deliberate statement that Morale
   matters, but the user acting on it now matters more.
-- **Co-occurrence.** The item shares a notebook entry with something already
-  scoring. This is what makes a Goal pull its Variables and a Variable pull its
-  Goal, and it is the only cross-linkage available — the explicit Goal-to-
-  Variable binding was deliberately deleted, so relatedness is now inferred from
-  the Director's own prose rather than read from a field. Applied as a single
-  pass over already-scored items, not recursively; a chain of three hops is not
-  evidence of anything.
+- **Goal text pulls Variables.** Directional, and deliberately not symmetric: a
+  Goal that scored contributes its **description** as a query source for
+  Variable retrieval. Two strengths, because the evidence genuinely differs:
+  - the description **names a Variable outright** — a direct, near-certain
+    signal, weighted like the action naming it;
+  - the description merely reads as semantically close to a Variable's linked
+    lore — a weak signal, weighted like any other vector match.
+
+  This replaces the symmetric notebook co-occurrence an earlier draft proposed.
+  It is better because it reads a field the Goal already has rather than
+  inferring relatedness from prose, it is one-directional so there is no chain
+  to bound, and "Wren is looking for her sister at the frat party" is exactly
+  the kind of text that should surface a Variable about Wren.
+
+  Variables do not pull Goals in return. A Variable is a bare name and a number;
+  it carries no text that could describe a Goal, so the reverse direction would
+  be inventing a signal rather than reading one.
 - **Windowed recall.** The item was retrieved in some of the last N turns.
   Deliberately the weakest channel and deliberately windowed: an all-time
   counter would make whatever surfaced first keep surfacing, and the set would
@@ -136,8 +146,10 @@ that was never eligible.
 
 - **Sharing a budget can starve either kind.** Mitigated by the notebook
   channel and by the budget rising from 6 to 8, not eliminated.
-- **Co-occurrence is inference, not lookup.** A Goal and a Variable named in one
-  entry may be unrelated. One hop bounds the damage; the weight is modest.
+- **A Goal description can pull the wrong Variables.** Long, discursive
+  descriptions will match loosely. Bounded by being one-directional and by the
+  semantic half carrying only a vector match's weight, but a Goal whose
+  description is a paragraph of scene-setting will be a noisy query source.
 - **Recall could still ossify a small Timeline.** With three Variables and two
   Goals everything fits under the budget anyway, so the channel does nothing
   until there is enough state for it to matter — which is the correct failure
@@ -154,6 +166,7 @@ that was never eligible.
   regardless of how well it scores, and that a Goal needs no gate.
 - Unit-test that recall is windowed: an item retrieved twenty turns ago and not
   since carries no weight.
-- Unit-test that co-occurrence does not chain — A pulling B must not pull C.
+- Unit-test that Goal-to-Variable pull is one-directional, and that a Variable
+  named outright in a description outranks one merely semantically near it.
 - Confirm from a debug export on the owner's Timeline that a Goal the Director
   wrote about is selected and one it has ignored is not.
