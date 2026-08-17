@@ -1,0 +1,146 @@
+import {
+    MECHANICS_PROTOCOL,
+    executeMechanicsRequest,
+    getCapabilityDictionary,
+} from '../public/scripts/extensions/third-party/SillyTavern-Remodel/mechanics-capabilities.js';
+import { createTimelineGoal, getStoryGoal, getTimelineGoals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js';
+import { __setExtensionSettings } from './util/st-context-stub.js';
+
+// The Goal verbs, end to end through the real capability layer and the real
+// store. goal.shift and goal.close are gone: a shift and an opening rate are
+// the same kind of value once the band vocabulary lives in the Director's
+// prompt, and a status is just an attribute. Both collapse into goal.edit.
+
+const TIMELINE = 'timeline-goals-1';
+const SCENE = 'scene-goals-1';
+
+beforeEach(() => {
+    __setExtensionSettings({ remodel: {} });
+});
+
+function seedGoal(overrides = {}) {
+    return createTimelineGoal(TIMELINE, {
+        title: 'Hold the gate',
+        description: 'Until the column arrives',
+        successRate: 40,
+        visibility: 'public',
+        // World-held, so nothing defers to review.
+        holderRefs: [{ kind: 'character', id: 'char-wren', label: 'Wren' }],
+        ...overrides,
+    }, { sceneId: SCENE });
+}
+
+/** One transaction, addressed the way production addresses one: the table is
+ *  built before the batch runs, so nothing a request creates appears in it. */
+function run(requests, goalRefs = new Map()) {
+    return executeMechanicsRequest(
+        { protocol: MECHANICS_PROTOCOL, requests },
+        { timelineId: TIMELINE, sceneId: SCENE, variableRefs: new Map(), goalRefs },
+    );
+}
+
+function editRequest(args, id = 'r1') {
+    return { id, capability: 'goal.edit', arguments: args, reason: 'The column is a day out.' };
+}
+
+test('the dictionary names exactly the five Goal verbs', () => {
+    const verbs = getCapabilityDictionary().map((entry) => entry.name).filter((name) => name.startsWith('goal.')).sort();
+    expect(verbs).toEqual(['goal.create', 'goal.delete', 'goal.edit', 'goal.reach', 'goal.relate']);
+});
+
+test('goal.edit sets a rate the Director chose', () => {
+    const goal = seedGoal();
+    const result = run([editRequest({ goalRef: 'Hold the gate', successRate: 62 })], new Map([['Hold the gate', goal.id]]));
+
+    expect(result.ok).toBe(true);
+    expect(getStoryGoal(goal.id).successRate).toBe(62);
+});
+
+test('a rate outside 5-95 is clamped rather than refused', () => {
+    // The clamp is code's; the judgement is the Director's. Refusing the whole
+    // request would lose the reason and the edit along with the overshoot.
+    const goal = seedGoal();
+    run([editRequest({ goalRef: 'Hold the gate', successRate: 130 })], new Map([['Hold the gate', goal.id]]));
+
+    expect(getStoryGoal(goal.id).successRate).toBe(95);
+});
+
+test('goal.edit changes status, so there is nothing left for goal.close to do', () => {
+    const goal = seedGoal();
+    const result = run([editRequest({ goalRef: 'Hold the gate', status: 'achieved' })], new Map([['Hold the gate', goal.id]]));
+
+    expect(result.ok).toBe(true);
+    expect(getStoryGoal(goal.id).status).toBe('achieved');
+});
+
+test('goal.edit changes the prose attributes too', () => {
+    const goal = seedGoal();
+    run([editRequest({ goalRef: 'Hold the gate', title: 'Hold the gate until dusk', description: 'The column is late', visibility: 'secret' })], new Map([['Hold the gate', goal.id]]));
+
+    expect(getStoryGoal(goal.id)).toMatchObject({
+        title: 'Hold the gate until dusk', description: 'The column is late', visibility: 'secret',
+    });
+});
+
+test('an edit that changes nothing is refused rather than recorded as a change', () => {
+    const goal = seedGoal();
+    const result = run([editRequest({ goalRef: 'Hold the gate' })], new Map([['Hold the gate', goal.id]]));
+
+    expect(result.ok).toBe(false);
+    expect(getStoryGoal(goal.id).successRate).toBe(40);
+});
+
+test('an invalid status is refused rather than written', () => {
+    const goal = seedGoal();
+    const result = run([editRequest({ goalRef: 'Hold the gate', status: 'triumphant' })], new Map([['Hold the gate', goal.id]]));
+
+    expect(result.ok).toBe(false);
+    expect(getStoryGoal(goal.id).status).toBe('active');
+});
+
+test('goal.delete removes the Goal', () => {
+    const goal = seedGoal();
+    const result = run(
+        [{ id: 'r1', capability: 'goal.delete', arguments: { goalRef: 'Hold the gate' }, reason: 'It was overtaken by the retreat.' }],
+        new Map([['Hold the gate', goal.id]]),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(getTimelineGoals(TIMELINE).some((item) => item.id === goal.id)).toBe(false);
+});
+
+test('a Goal name that was not advertised this turn resolves to nothing', () => {
+    // The containment property: a request may only address the closed set the
+    // Director was shown. An empty address table is the strongest form of that.
+    const goal = seedGoal();
+    const result = run([editRequest({ goalRef: 'Hold the gate', successRate: 90 })], new Map());
+
+    expect(result.ok).toBe(false);
+    expect(getStoryGoal(goal.id).successRate).toBe(40);
+});
+
+test('a real Goal id is refused when the Goal was not advertised', () => {
+    // The test above cannot actually prove containment: an unadvertised NAME
+    // fails at the id lookup regardless, so it stays green even if the resolver
+    // falls through to the raw string. A real id is the case that separates
+    // them — falling through would find this Goal and change it.
+    const goal = seedGoal();
+    const result = run([editRequest({ goalRef: goal.id, successRate: 90 })], new Map());
+
+    expect(result.ok).toBe(false);
+    expect(getStoryGoal(goal.id).successRate).toBe(40);
+});
+
+test('a Goal that already ended can still be edited and reopened', () => {
+    // goal.edit advertises `active` as a way to reopen an ended Goal, so it has
+    // to be able to reach one. Only a reach needs the Goal to be live.
+    const goal = seedGoal();
+    const refs = new Map([['Hold the gate', goal.id]]);
+    run([editRequest({ goalRef: 'Hold the gate', status: 'abandoned' })], refs);
+    expect(getStoryGoal(goal.id).status).toBe('abandoned');
+
+    const result = run([editRequest({ goalRef: 'Hold the gate', status: 'active' }, 'r2')], refs);
+
+    expect(result.ok).toBe(true);
+    expect(getStoryGoal(goal.id).status).toBe('active');
+});

@@ -23,24 +23,26 @@ import {
     restoreStoryGoalsStore,
     snapshotStoryGoalsStore,
     updateStoryGoal,
+    deleteStoryGoal,
     takePendingOp,
 } from './story-goals-store.js';
 import { clampRate, resolveReach } from './story-goals-math.js';
+import { STORY_GOAL_STATUSES, STORY_GOAL_VISIBILITIES } from './story-goals-model.js';
 
 export const MECHANICS_PROTOCOL = 'remodel-mechanics/1';
 
 const CAPABILITY_NAMES = Object.freeze([
-    'goal.create', 'goal.shift', 'goal.reach', 'goal.relate', 'goal.close',
+    'goal.create', 'goal.edit', 'goal.delete', 'goal.reach', 'goal.relate',
     'variable.create', 'variable.set', 'variable.adjust', 'variable.transition', 'variable.subvalue.set',
     'modifier.add', 'modifier.remove',
 ]);
 
 const CAPABILITIES = Object.freeze({
     'goal.create': capability('Create a meaningful unresolved Story Goal using typed holders and targets.', ['timeline'], 'hybrid'),
-    'goal.shift': capability('Move a Goal Success Rate by a number of points you choose, with `direction` saying which way. A separate fictional reason is required.', ['goal'], 'hybrid'),
+    'goal.edit': capability('Change anything about an existing Goal: its Success Rate, status, title, description, or visibility. Supply only the fields you are changing. A separate fictional reason is always required.', ['goal'], 'hybrid'),
+    'goal.delete': capability('Remove a Goal that should no longer exist at all. Prefer goal.edit with a terminal status when the Goal simply ended — a Goal that was achieved or abandoned is part of the record.', ['goal'], 'hybrid'),
     'goal.reach': capability('Declare one decisive attempt against a Goal. Code freezes inputs and rolls d100.', ['goal'], 'hybrid'),
     'goal.relate': capability('Create or update a directional sympathetic or antagonistic Goal relationship.', ['goal'], 'hybrid'),
-    'goal.close': capability('Mark a Goal achieved, abandoned, or impossible.', ['goal'], 'hybrid'),
     'variable.create': capability('Bring into being a Variable this Timeline does not have yet, when a mechanical fact matters and none of the Variables above covers it. Give it a name no existing Variable already uses; you may address it from the NEXT turn onward, never the turn you create it. Changes you later request to it are held for the user to review.', ['number', 'enum', 'text', 'boolean'], 'review'),
     'variable.set': capability('Set the primary scalar value of an advertised Variable.', ['number', 'enum', 'text', 'boolean'], 'hybrid'),
     'variable.adjust': capability('Adjust an advertised numeric Variable or numeric subvalue.', ['number'], 'hybrid'),
@@ -108,17 +110,15 @@ export function getMechanicsRequestSchema() {
                                     goalRef: { type: 'string', description: 'The Goal this request addresses: its exact advertised name, or an earlier request\'s $alias.' },
                                     fromGoalRef: { type: 'string', description: 'goal.relate only: the Goal the relationship starts from, addressed the same way as goalRef.' },
                                     toGoalRef: { type: 'string', description: 'goal.relate only: the Goal the relationship points to, addressed the same way as goalRef.' },
-                                    title: { type: 'string', description: 'goal.create only: the new Goal\'s title.' },
+                                    title: { type: 'string', description: 'goal.create and goal.edit: the Goal\'s title.' },
                                     description: { type: 'string', description: 'goal.create: what this Goal is, for the Goal record itself. variable.create: what this new Variable means in the fiction, in one line — you are shown it again every time the Variable is retrieved, so write it for your future self.' },
-                                    visibility: { type: 'string', enum: ['public', 'secret'], description: 'goal.create only: whether the user can see this Goal exists. Use secret for a twist or a threat the user has not discovered.' },
+                                    visibility: { type: 'string', enum: ['public', 'secret'], description: 'goal.create and goal.edit: whether the user can see this Goal exists. Use secret for a twist or a threat the user has not discovered.' },
                                     holderRefs: { type: 'array', items: ownerRefSchema(), description: 'goal.create only: who holds this Goal — at least one typed owner is required.' },
                                     targetRefs: { type: 'array', items: ownerRefSchema(), description: 'goal.create only: who or what the Goal is directed at, if it has a target. Optional.' },
-                                    successRate: { type: 'number', description: 'goal.create only: the new Goal\'s starting Success Rate as a number. It is clamped to 5-95, because a Goal that is already certain or already impossible is a status rather than a roll. Your guidance gives reference points for what a given chance is worth; choose the number that fits this Goal.' },
-                                    direction: { type: 'string', enum: ['up', 'down'], description: 'goal.shift only: which way to move the Goal\'s Success Rate.' },
-                                    amount: { type: 'number', description: 'goal.shift only: how many percentage points the Success Rate moves, as a positive number, with `direction` saying which way. Judge the size yourself from what happened in the fiction.' },
+                                    successRate: { type: 'number', description: 'goal.create and goal.edit: the Goal\'s Success Rate as a number. It is clamped to 5-95, because a Goal that is already certain or already impossible is a status rather than a roll. Your guidance gives reference points for what a given chance is worth; choose the number that fits this Goal.' },
                                     impact: { type: 'number', description: 'goal.reach only, for a tracked Goal: how far the tracked Variable moves when this reach hits, in that Variable\'s own units.' },
                                     type: { type: 'string', enum: ['antagonistic', 'sympathetic'], description: 'goal.relate only: whether progress on fromGoalRef helps (sympathetic) or hurts (antagonistic) toGoalRef.' },
-                                    status: { type: 'string', enum: ['achieved', 'abandoned', 'impossible'], description: 'goal.close only: the terminal state to close the Goal at.' },
+                                    status: { type: 'string', enum: ['active', 'achieved', 'abandoned', 'impossible'], description: 'goal.edit only: the Goal\'s state. Use achieved, abandoned or impossible to end it; active to reopen one that ended.' },
                                     name: { type: 'string', description: 'variable.create only: the new Variable\'s name. It must not match any Variable this Timeline already has (compared ignoring case and surrounding spaces) and it is the exact name you will address it by from the next turn on, so name it the way you would want to read it back: "Aiden\'s Corruption", not "corruption2".' },
                                     valueType: { type: 'string', enum: ['number', 'enum', 'text', 'boolean'], description: 'variable.create only: what the new Variable holds. number for a quantity that rises and falls, enum for one of a fixed set of named states, boolean for a fact that is simply true or false, text for a short phrase.' },
                                     enumValues: { type: 'array', items: { type: 'string' }, description: 'variable.create only, and only when valueType is enum: every state this Variable may ever occupy, at least two of them. variable.transition can later move it to one of these and to nothing else, so list them all now.' },
@@ -286,9 +286,9 @@ function applyRequest(request, runtime) {
         case 'modifier.add': return addModifier(request, args, runtime);
         case 'modifier.remove': return removeModifier(request, args, runtime);
         case 'goal.create': return createGoal(request, args, runtime);
-        case 'goal.shift': return shiftGoal(request, args, runtime);
+        case 'goal.edit': return editGoal(request, args, runtime);
+        case 'goal.delete': return deleteGoal(request, args, runtime);
         case 'goal.relate': return relateGoals(request, args, runtime);
-        case 'goal.close': return closeGoal(request, args, runtime);
         case 'goal.reach': return reachGoal(request, args, runtime);
         default: throw new MechanicsError(`Unsupported capability ${request.capability}.`);
     }
@@ -490,19 +490,43 @@ function createGoal(request, args, runtime) {
     receipt(runtime, request, null, goal);
 }
 
-function shiftGoal(request, args, runtime) {
-    const goal = requireGoal(resolveReference(args.goalRef ?? args.goalId, runtime, 'goal'), runtime);
-    if (!isAuthorizedGoal(goal, runtime)) return deferGoal(request, runtime, { [String(args.goalRef ?? args.goalId)]: goal.id }, `Changing the user-owned Goal “${goal.title}” requires review.`);
-    // A number the Director chose, not a word from a fixed vocabulary. The four
-    // magnitudes used to be welded to 3/7/12/20 here and the schema told the
-    // model "never state a percentage yourself" — so it could not say how far a
-    // Goal had actually moved. The reference points now live in its prompt.
-    const amount = Math.round(Number(args.amount));
-    if (!Number.isFinite(amount) || amount === 0) throw new MechanicsError(`${request.id}: a shift needs a non-zero amount.`);
+function editGoal(request, args, runtime) {
+    const goal = requireGoal(resolveReference(args.goalRef ?? args.goalId, runtime, 'goal'), runtime, { mustBeActive: false });
+    if (!isAuthorizedGoal(goal, runtime)) return deferGoal(request, runtime, { [String(args.goalRef ?? args.goalId)]: goal.id }, `Changing the user-owned Goal \u201c${goal.title}\u201d requires review.`);
+    const patch = {};
+    if (args.successRate !== undefined) {
+        // A number the Director chose. The four magnitudes used to be welded to
+        // 3/7/12/20 here and the schema told the model "never state a percentage
+        // yourself", so it could not say how far a Goal had actually moved. The
+        // reference points now live in its prompt; the clamp stays code's.
+        const rate = clampRate(args.successRate);
+        if (rate === null) throw new MechanicsError(`${request.id}: successRate must be a number.`);
+        patch.successRate = rate;
+    }
+    if (args.status !== undefined) {
+        if (!STORY_GOAL_STATUSES.includes(args.status)) throw new MechanicsError(`${request.id}: unknown Goal status.`);
+        patch.status = args.status;
+    }
+    if (args.visibility !== undefined) {
+        if (!STORY_GOAL_VISIBILITIES.includes(args.visibility)) throw new MechanicsError(`${request.id}: unknown Goal visibility.`);
+        patch.visibility = args.visibility;
+    }
+    if (args.title !== undefined) patch.title = String(args.title);
+    if (args.description !== undefined) patch.description = String(args.description);
+    // An edit that changes nothing still costs a receipt and reads as a change
+    // in the ledger, so say so rather than recording a no-op.
+    if (!Object.keys(patch).length) throw new MechanicsError(`${request.id}: an edit must change at least one field.`);
     const before = copy(goal);
-    const direction = args.direction === 'down' ? -1 : 1;
-    const after = updateStoryGoal(goal.id, { successRate: clampRate(goal.successRate + direction * amount) }, { ...txContext(runtime, request), type: 'goal.shifted' });
-    receipt(runtime, request, before, after, { shift: direction * amount });
+    const after = updateStoryGoal(goal.id, patch, { ...txContext(runtime, request), type: 'goal.edited' });
+    receipt(runtime, request, before, after, { patch });
+}
+
+function deleteGoal(request, args, runtime) {
+    const goal = requireGoal(resolveReference(args.goalRef ?? args.goalId, runtime, 'goal'), runtime, { mustBeActive: false });
+    if (!isAuthorizedGoal(goal, runtime)) return deferGoal(request, runtime, { [String(args.goalRef ?? args.goalId)]: goal.id }, `Deleting the user-owned Goal \u201c${goal.title}\u201d requires review.`);
+    const before = copy(goal);
+    deleteStoryGoal(goal.id, { ...txContext(runtime, request), type: 'goal.deleted' });
+    receipt(runtime, request, before, null);
 }
 
 function relateGoals(request, args, runtime) {
@@ -512,15 +536,6 @@ function relateGoals(request, args, runtime) {
     const relation = createTimelineGoalRelation(runtime.timelineId, from.id, to.id, args.type, request.reason, txContext(runtime, request));
     if (!relation) throw new MechanicsError(`${request.id}: invalid Goal relationship.`);
     receipt(runtime, request, null, relation);
-}
-
-function closeGoal(request, args, runtime) {
-    const goal = requireGoal(resolveReference(args.goalRef ?? args.goalId, runtime, 'goal'), runtime);
-    if (!isAuthorizedGoal(goal, runtime)) return deferGoal(request, runtime, { [String(args.goalRef ?? args.goalId)]: goal.id }, `Closing the user-owned Goal “${goal.title}” requires review.`);
-    if (!['achieved', 'abandoned', 'impossible'].includes(args.status)) throw new MechanicsError(`${request.id}: invalid terminal Goal status.`);
-    const before = copy(goal);
-    const after = updateStoryGoal(goal.id, { status: args.status }, { ...txContext(runtime, request), type: 'goal.closed' });
-    receipt(runtime, request, before, after);
 }
 
 function reachGoal(request, args, runtime) {
@@ -557,10 +572,10 @@ function validateArguments(request) {
     const require = (...keys) => { for (const key of keys) if (missing(key)) throw new MechanicsError(`${request.id}: ${key} is required.`); };
     switch (request.capability) {
         case 'goal.create': require('title', 'holderRefs'); break;
-        case 'goal.shift': require('goalRef', 'direction', 'amount'); break;
+        case 'goal.edit': require('goalRef'); break;
+        case 'goal.delete': require('goalRef'); break;
         case 'goal.reach': require('goalRef'); break;
         case 'goal.relate': require('fromGoalRef', 'toGoalRef', 'type'); break;
-        case 'goal.close': require('goalRef', 'status'); break;
         case 'variable.create': require('name', 'valueType', 'value', 'description'); break;
         case 'variable.set': require('variableRef', 'value'); break;
         case 'variable.subvalue.set': require('variableRef', 'field', 'value'); break;
@@ -655,9 +670,18 @@ function requireVariable(id, runtime = null) {
     return instance;
 }
 
-function requireGoal(id, runtime) {
+/**
+ * Fetch an advertised Goal, by default only a live one.
+ *
+ * `mustBeActive` is false for edit and delete: a Goal that ended is still a
+ * record the Director may correct, retitle, or reopen — `goal.edit` offers
+ * `active` precisely so an ended Goal can come back. Only a reach needs the
+ * Goal to be live, because reaching a settled Goal is meaningless.
+ */
+function requireGoal(id, runtime, { mustBeActive = true } = {}) {
     const goal = getStoryGoal(id);
-    if (!goal || goal.timelineId !== runtime.timelineId || goal.status !== 'active') throw new MechanicsError(`Goal ${id || '(missing)'} is unavailable or inactive.`);
+    if (!goal || goal.timelineId !== runtime.timelineId) throw new MechanicsError(`Goal ${id || '(missing)'} is unavailable.`);
+    if (mustBeActive && goal.status !== 'active') throw new MechanicsError(`Goal ${id || '(missing)'} is not active.`);
     return goal;
 }
 
