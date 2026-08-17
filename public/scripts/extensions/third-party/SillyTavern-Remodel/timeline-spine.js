@@ -329,6 +329,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
         sendNormally: sendRoleplayNormally,
         onStateChange: refreshLiveDirectionChrome,
         onSettled: () => { setRoleplayGenerating(false); renderRoleplayScene(); },
+        onRecovered: () => { document.getElementById('remodel-direction-failure')?.remove(); },
         onFailure: showLiveDirectionFailure,
         // Called on EVERY chunk of the Director's streamed reply —
         // beginDirection's onChunk closure forwards each one unconditionally
@@ -9271,8 +9272,39 @@ function showLiveDirectionFailure(error, { heading = 'Direction paused.', recove
     const actions = recoverable
         ? `<button type="button" data-remodel-direction-retry>Retry Direction</button>${canSendWithoutLiveDirection() ? '<button type="button" data-remodel-direction-bypass>Send Normally</button>' : ''}`
         : '';
-    panel.innerHTML = `<span><strong>${escapeHtml(heading)}</strong> ${escapeHtml(error?.message || String(error))}</span>${actions}`;
+    panel.innerHTML = `<span><strong>${escapeHtml(heading)}</strong> ${escapeHtml(error?.message || String(error))}</span>${actions}<button type="button" class="remodel-direction-failure-x" data-remodel-direction-dismiss aria-label="Dismiss">×</button>`;
     getRealRoleplayRoot()?.append(panel);
+    dismissDirectionFailureOnOutsideClick(panel);
+}
+
+/**
+ * Let a click anywhere else take the notice down.
+ *
+ * It sits over the composer with no way out but Retry, so a user who wants
+ * neither — because the scene recovered on its own, or because they would
+ * rather just type — had a permanent obstruction. Dismissing is only ever
+ * removing a message: `pendingFailure` stays, so Retry Direction remains
+ * available from the command dock afterward and nothing about the failed pass
+ * is forgotten by hiding the notice about it.
+ *
+ * Listener attached on the NEXT frame, not immediately: the click that caused
+ * the failure may still be propagating, and a listener added during it would
+ * see that same click and dismiss the notice before it was ever visible.
+ */
+function dismissDirectionFailureOnOutsideClick(panel) {
+    requestAnimationFrame(() => {
+        if (!panel.isConnected) return;
+        const onPointerDown = (event) => {
+            // Inside the notice is a click on its own controls, which own
+            // themselves — Retry and Send Normally remove it their own way.
+            if (panel.contains(event.target)) return;
+            panel.remove();
+            document.removeEventListener('pointerdown', onPointerDown, true);
+        };
+        // Capture phase, so a handler that stops propagation on the way up
+        // cannot leave the notice stranded.
+        document.addEventListener('pointerdown', onPointerDown, true);
+    });
 }
 
 function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
@@ -9725,6 +9757,14 @@ function bindRoleplayComposerEvents() {
             return;
         }
 
+        if (target.closest('[data-remodel-direction-dismiss]')) {
+            event.preventDefault();
+            // Removes the notice and nothing else. `pendingFailure` survives,
+            // so Retry Direction is still available afterward — dismissing is
+            // "I have read this", never "forget the failed pass".
+            document.getElementById('remodel-direction-failure')?.remove();
+            return;
+        }
         if (target.closest('[data-remodel-direction-retry]')) {
             event.preventDefault();
             document.getElementById('remodel-direction-failure')?.remove();

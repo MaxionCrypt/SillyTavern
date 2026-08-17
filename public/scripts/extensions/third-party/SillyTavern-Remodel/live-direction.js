@@ -55,6 +55,8 @@ const hooks = {
     sendNormally: () => {},
     onStateChange: () => {},
     onSettled: () => {},
+    // A response landed after a failure was reported. The notice is stale.
+    onRecovered: () => {},
     onFailure: () => {},
     // Fires on every chunk of the Director's own streamed reply — cumulative
     // { text, reasoning }, same shape story-stream.js's onChunk already
@@ -945,6 +947,18 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             scene, turn: storedTurn, envelope: standingEnvelope,
             performer: standingPerformer, autonomousSequence, asked: askedThePerformer,
         });
+        // The empty-response retry chain already owns this turn's outcome, and
+        // this throw is the same generation reported a second time. Declaring
+        // the pass failed here would put "Direction paused" over a scene that
+        // is mid-retry and about to succeed.
+        if (ownedByEmptyRetry(standingEnvelope?.directionId)) {
+            journal('failed.superseded', {
+                passId: token.id,
+                directionId: standingEnvelope.directionId,
+                message: String(error?.message || error),
+            }, { correlationId: token.id, severity: 'warn', summary: 'direction.failed: suppressed, the empty-response retry owns this turn' });
+            return false;
+        }
         return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage });
     } finally {
         // A take that never reached the performer produced nothing — no
@@ -1526,6 +1540,22 @@ const EMPTY_RESPONSE_RETRY_DELAY_MS = 400;
 // here is what produced overlapping generations in the first place.
 const EMPTY_SETTLE_TIMEOUT_MS = 15000;
 
+// Direction ids whose empty-response retry chain is still running.
+//
+// A generation that produces no message reports itself TWICE: the reveal
+// pipeline notices nothing was revealed and calls failEmptyVisibleRun, and
+// generateDirectedPerformer throws "the group generator returned without
+// producing a message" for the same generation. Those are one event. The retry
+// chain owns the outcome for that turn, so while it is running the throw must
+// not also declare the pass dead — the owner's log shows two "Direction
+// paused" notices posted while attempt 3 was still in flight and about to
+// succeed, leaving a permanent error over a scene that had recovered.
+const retryingEmpty = new Set();
+
+function ownedByEmptyRetry(directionId) {
+    return Boolean(directionId) && retryingEmpty.has(directionId);
+}
+
 async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0 }) {
     const director = resolveDirector(scene);
     persistDirectionRecord(scene, envelope, performer, director);
@@ -1843,6 +1873,12 @@ async function completeVisibleRun(run) {
     await finalizeRunMessage(run, { state: 'complete' });
     run.acceptedComplete = true;
     run.autonomousSequence += 1;
+    // A response landed, so any failure notice still on screen is describing a
+    // turn that has since recovered. The empty-response retries are the case
+    // that produces one: attempts 1 and 2 report, attempt 3 succeeds, and
+    // nothing used to take the notice down again.
+    pendingFailure = null;
+    hooks.onRecovered();
     const scene = hooks.getActiveScene();
     const draft = String(hooks.getComposerDraft() || '').trim();
     const limit = scene?.liveDirection?.autonomousResponseLimit || 3;
@@ -1981,6 +2017,11 @@ async function failEmptyVisibleRun(run) {
         const retryToken = acquireDirectionLock({ scene, insertUser: false, autonomousSequence: run.autonomousSequence });
         activeRun = null;
         notifyState();
+        // Claimed BEFORE the pause below, not after: the throw from the
+        // generation this retry replaces is already on its way up to
+        // beginDirection's catch, and the claim has to be visible when it
+        // arrives or the redundant failure is posted anyway.
+        retryingEmpty.add(run.directionId);
         try {
             await new Promise((resolve) => setTimeout(resolve, EMPTY_RESPONSE_RETRY_DELAY_MS));
             const current = hooks.getActiveScene();
@@ -2015,6 +2056,7 @@ async function failEmptyVisibleRun(run) {
                 autonomousSequence: run.autonomousSequence,
             });
         } finally {
+            retryingEmpty.delete(run.directionId);
             releaseDirectionLock(retryToken);
         }
         return;

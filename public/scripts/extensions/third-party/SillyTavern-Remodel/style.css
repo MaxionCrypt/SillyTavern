@@ -1744,6 +1744,25 @@ body.remodel-roleplay-workspace-active .remodel-direction-failure {
   transform:translateX(-50%) !important;
 }
 
+/* The dismiss affordance. The notice sits over the composer, so "I have read
+   this and want my scene back" needs a control of its own — clicking outside
+   does the same thing, but only a visible × says that it can be closed. */
+.remodel-direction-failure .remodel-direction-failure-x {
+  align-self:flex-start;
+  margin-left:6px;
+  padding:0 6px;
+  border:0;
+  background:transparent;
+  color:rgba(255,214,214,.6);
+  font-size:16px;
+  line-height:1.2;
+  cursor:pointer;
+}
+
+.remodel-direction-failure .remodel-direction-failure-x:hover {
+  color:rgba(255,235,235,.95);
+}
+
 @media (max-width:620px) {
   body.remodel-roleplay-workspace-active .remodel-live-flow { flex-wrap:wrap !important; margin-inline:0 !important; }
   body.remodel-roleplay-workspace-active .remodel-live-flow em { order:4; flex-basis:100% !important; }
