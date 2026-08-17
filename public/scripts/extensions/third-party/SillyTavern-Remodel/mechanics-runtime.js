@@ -3,6 +3,7 @@ import { getCapabilityDictionary } from './mechanics-capabilities.js';
 import { getSceneGoals, getSceneGoalRelations } from './story-goals-store.js';
 import { getMechanicsProfile } from './variables-store.js';
 import { resolveVariableContext } from './variables-context.js';
+import { readRetrievalNotes } from './director-notes-store.js';
 import { buildAddressBook } from './direction-address.js';
 
 // Retired with the director rework: `runMechanicalPreflight` (a second hidden
@@ -43,22 +44,41 @@ export async function previewMechanicalContext(scene, { cast = [], persona = nul
     // real pass would surface needs to hand those through rather than
     // substitute a placeholder and empty evidence — a caller with nothing
     // real to offer can still omit them and get the old inert behavior.
+    //
+    // `recordRecall: false` because a preview is the owner looking, not a turn
+    // happening. Recall weights how often an item was retrieved on recent
+    // TURNS; letting a preview write one would mean opening the drawer twice
+    // reweighted the next real pass.
     return buildMechanicalSnapshot(
         scene,
         action || '[preview only: retrieve state; do not mutate or roll]',
-        cast, persona, [], evidence,
+        cast, persona, [], evidence, { recordRecall: false },
     );
 }
 
-export async function buildMechanicalSnapshot(scene, action, cast = [], persona = null, authorizedGoalIds = [], evidence = {}) {
-    const goals = getSceneGoals(scene.id, { includeResolved: false, states: ['active', 'background'] });
+export async function buildMechanicalSnapshot(scene, action, cast = [], persona = null, authorizedGoalIds = [], evidence = {}, { recordRecall = true } = {}) {
+    const candidateGoals = getSceneGoals(scene.id, { includeResolved: false, states: ['active', 'background'] });
     const subjects = [persona, ...cast].filter(Boolean);
     const resolved = await resolveVariableContext({
         timelineId: scene.timelineId, action,
         history: evidence.history || [], cast: subjects,
-        activatedEntries: evidence.activatedEntries || [], goals,
+        activatedEntries: evidence.activatedEntries || [], goals: candidateGoals,
+        // Secrets included — see readRetrievalNotes. This feeds the Director's
+        // own prompt, and the Director owns its own secrets.
+        notebookText: readRetrievalNotes(scene.timelineId, { sceneId: scene.id }),
+        // A Goal the user is attempting this turn cannot be the one retrieval
+        // drops: the prompt names it under ATTEMPTED THIS TURN and the
+        // capability layer will accept a roll against it.
+        pinnedGoalIds: authorizedGoalIds,
         correlationId: evidence.correlationId || null,
+        recordRecall,
     });
+
+    // Which Goals travel is retrieval's call now, not "every open Goal on the
+    // Scene". Twenty Goals used to mean twenty Goals in the prompt on the
+    // slowest call in the loop, every turn; they are ranked against Variables
+    // under one shared budget instead.
+    const goals = resolved.goals;
 
     // Goals get temporary refs for the same reason Variables do: a persistent
     // UUID in the prompt is one the model can echo back for a Goal that was
@@ -114,17 +134,28 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
             // Variables at all is an invitation to create one; a Timeline whose
             // Variables simply did not match this turn is not.
             emptyCode: resolved.listed.length ? '' : (resolved.emptyCode || 'none-matched'),
+            goalsSelected: goals.length,
+            goalsConsidered: candidateGoals.length,
+            goalsEmptyCode: goals.length ? '' : (resolved.goalsEmptyCode || 'none-matched'),
         },
     };
 }
 
+/**
+ * Relations between the Goals that actually travelled.
+ *
+ * Both ends must resolve to a ref. Retrieval can select one end of a relation
+ * and drop the other, and a relation pointing at a Goal the Director was never
+ * shown is worse than no relation at all — it names something the model cannot
+ * address and cannot be told anything more about.
+ */
 function describeRelations(relations, refByGoalId) {
     return (relations || []).map((relation) => ({
         ...relation,
         fromRef: refByGoalId.get(String(relation.fromGoalId ?? relation.goalId ?? '')) || '',
         toRef: refByGoalId.get(String(relation.toGoalId ?? relation.relatedGoalId ?? '')) || '',
         fromGoalId: undefined, toGoalId: undefined, goalId: undefined, relatedGoalId: undefined,
-    }));
+    })).filter((relation) => relation.fromRef && relation.toRef);
 }
 
 export function formatMechanicsReceipts(receipts) {

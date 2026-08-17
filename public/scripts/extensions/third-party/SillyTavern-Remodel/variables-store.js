@@ -278,7 +278,7 @@ export function updateMechanicsProfile(patch = {}) {
     if (typeof patch.handbookAdditions === 'string') profile.handbookAdditions = patch.handbookAdditions;
     if (patch.contextBudget !== undefined) profile.contextBudget = clampInt(patch.contextBudget, 1000, 32000, 6000);
     if (patch.directorResponseTokens !== undefined) profile.directorResponseTokens = clampInt(patch.directorResponseTokens, 1500, 32000, 4000);
-    if (patch.retrievalLimit !== undefined || patch.sweepLimit !== undefined) profile.retrievalLimit = clampInt(patch.retrievalLimit ?? patch.sweepLimit, 1, 12, 6);
+    if (patch.retrievalLimit !== undefined || patch.sweepLimit !== undefined) profile.retrievalLimit = clampInt(patch.retrievalLimit ?? patch.sweepLimit, 1, 16, 8);
     if (patch.retrievalWindow !== undefined || patch.sweepWindow !== undefined) profile.retrievalWindow = clampInt(patch.retrievalWindow ?? patch.sweepWindow, 1, 60, 12);
     if (['hybrid', 'review-all', 'automatic'].includes(patch.automationPolicy)) profile.automationPolicy = patch.automationPolicy;
     if (['pause', 'bypass', 'retry-once'].includes(patch.failureBehavior)) profile.failureBehavior = patch.failureBehavior;
@@ -448,7 +448,7 @@ function emptyStore() {
         version: STORE_VERSION, timelines: {}, eventIds: [], events: {}, transactionIds: [], transactions: {}, vectorIndexState: {},
         mechanicsProfile: {
             enabled: false, handbookAdditions: '', contextBudget: 6000, directorResponseTokens: 4000,
-            retrievalWindow: 12, retrievalLimit: 6, automationPolicy: 'hybrid', failureBehavior: 'pause', updatedAt: now(),
+            retrievalWindow: 12, retrievalLimit: 8, automationPolicy: 'hybrid', failureBehavior: 'pause', updatedAt: now(),
         },
         migrationBackup: { migratedAt: '', sources: {}, unresolved: [], idMap: {} },
     };
@@ -486,7 +486,7 @@ function normalizeStore(store) {
     store.transactionIds = Array.isArray(store.transactionIds) ? store.transactionIds.filter((id) => store.transactions[id]) : [];
     store.mechanicsProfile = { ...emptyStore().mechanicsProfile, ...(store.mechanicsProfile || {}) };
     store.mechanicsProfile.retrievalWindow = clampInt(store.mechanicsProfile.retrievalWindow ?? store.mechanicsProfile.sweepWindow, 1, 60, 12);
-    store.mechanicsProfile.retrievalLimit = clampInt(store.mechanicsProfile.retrievalLimit ?? store.mechanicsProfile.sweepLimit, 1, 12, 6);
+    store.mechanicsProfile.retrievalLimit = clampInt(store.mechanicsProfile.retrievalLimit ?? store.mechanicsProfile.sweepLimit, 1, 16, 8);
     store.migrationBackup = { ...emptyStore().migrationBackup, ...(store.migrationBackup || {}) };
     for (const [timelineId, rawBucket] of Object.entries(store.timelines)) {
         const bucket = rawBucket && typeof rawBucket === 'object' ? rawBucket : timelineBucket(timelineId);

@@ -122,6 +122,28 @@ export function readAllEntriesForOwner(timelineId, { sceneId } = {}) {
 }
 
 /**
+ * The retrieval-facing read: the last `turns` turns of this Scene, as one blob
+ * of text for name matching. Secrets INCLUDED, deliberately.
+ *
+ * This feeds the Director's own prompt, and the Director owns its own secrets:
+ * a `[secret]` noting that Faction Heat is about to matter should pull Faction
+ * Heat. That is safe here and nowhere else, because the Narrator never receives
+ * Variables or Goals at all — it receives notes, through `readNarratorEntries`,
+ * which withholds secrets itself. This is the one place a secret legitimately
+ * shapes selection, which is why it is a separate function with the reason
+ * written on it rather than a flag on an existing one.
+ *
+ * Abandoned turns are excluded on the same grounds as everywhere else: a take
+ * the user cancelled produced nothing and should not steer what the take that
+ * replaces it gets to see.
+ */
+export function readRetrievalNotes(timelineId, { sceneId, turns = 3 } = {}) {
+    const entries = entriesForScene(timelineId, sceneId).filter((entry) => !entry.abandoned);
+    const allowedTurns = turnsForDepth(entries, turns);
+    return entries.filter((entry) => allowedTurns.has(entry.turn)).map((entry) => entry.text).filter(Boolean).join('\n');
+}
+
+/**
  * Mark one turn's entries as a take that produced nothing, so the Narrator
  * stops being shown them. Returns how many entries were marked.
  *

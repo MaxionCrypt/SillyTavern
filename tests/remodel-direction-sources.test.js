@@ -514,7 +514,36 @@ test('a missing director card degrades to empty rather than throwing', () => {
 test('a snapshot with no mechanics at all still renders', () => {
     const sources = buildDirectionSources({ currentAction: 'He waits.' }, { mechanicsEnabled: true });
     expect(sources.mechanicsSkill).toMatch(/VARIABLES/);
-    expect(sources.mechanicsSkill).toContain('(none active)');
+    expect(sources.mechanicsSkill).toMatch(/GOALS/);
+    // No `retrieval` block at all, so nothing says this Scene has never had a
+    // Goal. Falling through to the invitation would be a claim the snapshot
+    // does not support; "none were relevant" is the honest reading.
+    expect(sources.mechanicsSkill).toMatch(/were relevant this turn/i);
+    expect(sources.mechanicsSkill).not.toContain('goal.create');
+});
+
+test('a Scene holding no Goals is told so, and invited to write one', () => {
+    const empty = { ...snapshot, mechanics: { ...snapshot.mechanics, goals: [], retrieval: { goalsEmptyCode: 'none-authored' } } };
+    const { mechanicsSkill } = buildDirectionSources(empty, { mechanicsEnabled: true });
+
+    expect(mechanicsSkill).toMatch(/No Goals are open in this Scene/i);
+    expect(mechanicsSkill).toContain('goal.create');
+});
+
+test('a Scene whose Goals simply did not surface is not invited to invent one', () => {
+    const empty = { ...snapshot, mechanics: { ...snapshot.mechanics, goals: [], retrieval: { goalsEmptyCode: 'none-matched' } } };
+    const { mechanicsSkill } = buildDirectionSources(empty, { mechanicsEnabled: true });
+
+    expect(mechanicsSkill).toMatch(/None of this Scene's Goals were relevant/i);
+    expect(mechanicsSkill).not.toContain('goal.create');
+});
+
+test('the Goal invitation is withheld when mechanics are off, because no request would be legal', () => {
+    const empty = { ...snapshot, mechanics: { ...snapshot.mechanics, goals: [], retrieval: { goalsEmptyCode: 'none-authored' } } };
+    const { mechanicsSkill } = buildDirectionSources(empty, { mechanicsEnabled: false });
+
+    expect(mechanicsSkill).toMatch(/No Goals are open in this Scene/i);
+    expect(mechanicsSkill).not.toContain('goal.create');
 });
 
 test('a Timeline holding no Variables is told so, and invited to make one', () => {

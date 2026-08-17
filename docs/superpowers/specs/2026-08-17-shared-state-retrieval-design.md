@@ -158,6 +158,39 @@ that was never eligible.
   It already is for Variables; this extends that to Goals. A scoring bug now
   silently hides a Goal rather than an item of numeric state.
 
+## As built
+
+Five places where the implementation decided something this design left open
+or got wrong. Recorded here because the spec is the durable record.
+
+- **The new channels are evidence, not just weight.** "Out of scope: changing
+  any Variable's `retrieval.mode` semantics" was ambiguous about whether a
+  notebook mention could satisfy `any` or corroborate. It can, and so can a
+  Goal description naming the Variable — each is an independent authored
+  statement about that Variable, which is what those modes mean by evidence.
+  **Recall cannot**, and is the sole member of `SCORE_ONLY_CHANNELS`, because
+  it is circular: an item is recalled because it was retrieved, so letting it
+  satisfy a gate would let one lucky turn keep re-qualifying a Variable
+  forever. Without that exclusion, recall plus a single activated link reaches
+  two distinct links and corroborates.
+- **A Goal being attempted this turn bypasses the budget.** Not in the design,
+  and necessary: the prompt names it under ATTEMPTED THIS TURN and the
+  capability layer will accept a roll against it, so retrieval dropping it
+  would advertise a Goal the Director cannot address.
+- **`always` Variables carry a floor above evidence-free Goals.** `always` is a
+  promise that the Variable is sent every turn. A shared budget with a wall of
+  zero-scoring Goals could otherwise break it on an alphabetical tie.
+- **Token matching floors at three characters, not four.** Four deletes short
+  proper nouns — Rae, Kai, Ana — which are exactly the words that identify a
+  Goal. The stopword list carries the cost.
+- **Goals reuse `retrievalWindow` as the recall window** rather than adding a
+  setting, and the buffer stores 30 turns while reading a slice, so lowering
+  the window is a view change and not a deletion.
+- **An empty Goal list gets the same treatment the empty Variable list got.**
+  `(none active)` claimed "none are relevant" while meaning either that or
+  "this Scene has never had one". A Scene with no Goals at all now carries an
+  invitation to `goal.create`, suppressed when mechanics are off.
+
 ## Verification
 
 - Unit-test each new channel in isolation, and mutation-check that removing it

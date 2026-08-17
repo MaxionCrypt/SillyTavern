@@ -1,7 +1,8 @@
 import { listLoreEntries, entryKey } from './variables-lore.js';
-import { assignVariableRefs, retrieveRelevantVariables, serializeRetrievedVariables } from './variables-relevance.js';
+import { assignVariableRefs, retrieveRelevantState, scoreGoalRelevance, serializeRetrievedVariables } from './variables-relevance.js';
 import { listVariableEvents, listVariableValues, getMechanicsProfile, onVariablesChanged } from './variables-store.js';
 import { queryVariableVectors } from './variables-vector.js';
+import { readRecallCounts, recordRetrievalRecall } from './retrieval-recall.js';
 import { recordDebugEvent } from './debug-console.js';
 
 /**
@@ -69,80 +70,124 @@ export function getLastVariableContext(timelineId) {
  *   asked for them, so one response reads as a single thread in the journal.
  */
 export async function resolveVariableContext({
-    timelineId, action = '', history = [], cast = [], activatedEntries = [], goals = [], limit = 0, correlationId = null,
+    timelineId, action = '', history = [], cast = [], activatedEntries = [], goals = [],
+    notebookText = '', pinnedGoalIds = [], limit = 0, correlationId = null, recordRecall = true,
 } = {}) {
     const id = String(timelineId || '');
-    if (!id) return emptyContext('No Timeline is active.', correlationId, 'no-timeline');
-    const variables = listVariableValues({ timelineId: id });
-    if (!variables.length) return emptyContext('This Timeline has no Variables.', correlationId, 'none-authored');
+    // Deliberately no early return, for either a missing Timeline or a Timeline
+    // with no Variables. Goals come through this same pass now, and a Timeline
+    // can easily have Goals and no Variables — a bail that used to cost nothing
+    // would now silently drop every Goal the Director has. Everything below
+    // degrades to empty on its own when there is nothing to read.
+    const variables = id ? listVariableValues({ timelineId: id }) : [];
 
     const profile = getMechanicsProfile();
     const windowSize = profile.retrievalWindow || 12;
+    const budget = limit || profile.retrievalLimit || 8;
     const lore = await listLoreEntries();
     const entries = new Map(lore.map((entry) => [entryKey(entry), entry]));
     const activatedKeys = new Set([...activatedEntries].map(entryKey).filter(Boolean));
     const historyText = history.map((item) => String(item?.content ?? item?.mes ?? item ?? '')).filter(Boolean);
     const subjects = cast.flatMap((item) => [item?.label, item?.name, item?.ref?.label]).filter(Boolean);
-    const recentVariableIds = listVariableEvents({ timelineId: id }).slice(-30).map((event) => event.variableId).filter(Boolean);
-    const query = buildVariableQuery({ action, historyText, subjects, activatedKeys, entries, goals, windowSize });
+    const recentVariableIds = id ? listVariableEvents({ timelineId: id }).slice(-30).map((event) => event.variableId).filter(Boolean) : [];
+    const messages = historyText.slice(-windowSize);
+    const recallCounts = readRecallCounts(id, windowSize);
+
+    // Goals are scored first because their scores are an input to everything
+    // after: the query is seeded from the Goals that scored, and their
+    // descriptions are a query source for the Variables themselves.
+    const scoredGoals = scoreGoalRelevance({
+        goals, explicitText: action, messages, notebookText,
+        recallCounts, recallWindow: windowSize, pinnedGoalIds,
+    });
+    const queryGoals = scoredGoals.filter((item) => item.score > 0).map((item) => item.goal);
+    const query = buildVariableQuery({ action, historyText, subjects, activatedKeys, entries, goals: queryGoals, windowSize });
 
     journal('retrieval.begin', {
-        timelineId: id, variableCount: variables.length, queryChars: query.length, windowSize,
+        timelineId: id, variableCount: variables.length, queryChars: query.length, windowSize, budget,
         castCount: subjects.length, activatedCount: activatedKeys.size, goalCount: goals.length,
-        recentCount: recentVariableIds.length,
-    }, { correlationId, summary: `Retrieving from ${variables.length} Variables` });
+        scoringGoalCount: queryGoals.length, notebookChars: notebookText.length,
+        recentCount: recentVariableIds.length, recallCount: recallCounts.size,
+    }, { correlationId, summary: `Retrieving from ${variables.length} Variables and ${goals.length} Goals` });
 
-    // One query per distinct threshold in play — see queryVariableVectors.
+    // One query per distinct threshold in play — see queryVariableVectors. With
+    // no Variables there is nothing to match, so the embedding call is skipped
+    // rather than issued against an empty index.
     const thresholds = [...new Set(variables.map((variable) => variable.retrieval.semanticThreshold))];
-    const vectors = query.trim()
+    const vectors = query.trim() && thresholds.length
         ? await queryVariableVectors(id, query, { thresholds, topK: 20 })
-        : { ok: false, degraded: true, error: 'No semantic query to embed.', matches: [] };
-    const ranked = retrieveRelevantVariables({
+        : { ok: !thresholds.length, degraded: Boolean(thresholds.length), error: thresholds.length ? 'No semantic query to embed.' : '', matches: [] };
+    const ranked = retrieveRelevantState({
         variables,
         entries,
-        messages: historyText.slice(-windowSize),
+        messages,
         vectorMatches: vectors.matches,
         activatedKeys,
         presentSubjects: subjects,
         explicitText: action,
         recentVariableIds,
-        limit: limit || profile.retrievalLimit || 6,
+        notebookText,
+        scoredGoals,
+        recallCounts,
+        recallWindow: windowSize,
+        limit: budget,
     });
-    const { listed, refToId } = assignVariableRefs(ranked.selected);
+    const { listed, refToId } = assignVariableRefs(ranked.selected.filter((item) => item.kind === 'variable'));
+    const selectedGoals = ranked.selected.filter((item) => item.kind === 'goal').map((item) => item.goal);
     const serialized = serializeRetrievedVariables(listed);
     const refByName = new Map(listed.map((item) => [item.variable.name, item.ref]));
 
-    // Every candidate, included or not. The excluded ones carry why, because
-    // "it did not surface" is the question this journal exists to answer.
+    // Every candidate of both kinds, included or not. The excluded ones carry
+    // why, because "it did not surface" is the question this journal exists to
+    // answer — and without it the owner cannot tell a Goal that scored badly
+    // from one that was never eligible.
     const diagnostics = ranked.diagnostics.map((item) => ({
-        ref: refByName.get(item.variable.name) || '',
-        variableName: item.variable.name,
-        included: item.included,
+        kind: item.kind,
+        ref: item.kind === 'variable' ? refByName.get(item.variable.name) || '' : '',
+        name: item.name,
+        included: item.included && !item.exclusionReason,
         score: item.score,
-        semantic: item.semantic,
-        semanticThreshold: item.semanticThreshold,
+        semantic: Boolean(item.semantic),
+        semanticThreshold: item.semanticThreshold || 0,
         channels: item.channels,
         evidence: item.evidence,
         why: item.reasons.join(' '),
         excluded: item.exclusionReason,
     }));
 
+    // Recorded before the journal write and after the cut, and only for a pass
+    // that will actually reach a Director. A preview retrieves for the owner to
+    // look at; letting it write recall would let opening the drawer twice
+    // reweight the next real turn.
+    if (recordRecall) {
+        recordRetrievalRecall(id, [
+            ...listed.map((item) => item.variable.id),
+            ...selectedGoals.map((goal) => goal.id),
+        ]);
+    }
+
     journal('retrieval.resolved', {
         timelineId: id, candidateCount: diagnostics.length, selectedCount: listed.length,
+        goalCandidateCount: scoredGoals.length, goalSelectedCount: selectedGoals.length,
         serializedChars: serialized.length, degraded: !vectors.ok, degradeCause: vectors.error || '',
         vectorMatchCount: vectors.matches.length, candidates: diagnostics,
     }, {
         severity: vectors.ok ? 'info' : 'warn',
         correlationId,
-        summary: `${listed.length}/${diagnostics.length} Variables retrieved${vectors.ok ? '' : ' (deterministic fallback)'}`,
+        summary: `${listed.length}/${diagnostics.length} Variables and ${selectedGoals.length}/${scoredGoals.length} Goals retrieved${vectors.ok ? '' : ' (deterministic fallback)'}`,
     });
 
     const result = {
-        listed, refToId, serialized, diagnostics,
+        listed, refToId, serialized, diagnostics, goals: selectedGoals,
+        // Why a list is empty, not merely that it is. "This Timeline has none
+        // yet" and "none of them matched this turn" are different things to
+        // tell a Director, and only this function knows which one is true.
+        emptyCode: !id ? 'no-timeline' : (variables.length ? 'none-matched' : 'none-authored'),
+        goalsEmptyCode: !id ? 'no-timeline' : (goals.length ? 'none-matched' : 'none-authored'),
         degraded: !vectors.ok, vectorError: vectors.error || '', query,
         at: new Date().toISOString(), action: String(action || ''),
     };
-    lastByTimeline.set(id, result);
+    if (id) lastByTimeline.set(id, result);
     return result;
 }
 
@@ -157,9 +202,4 @@ export function buildVariableQuery({ action = '', historyText = [], subjects = [
         activeLore ? `ACTIVATED LORE\n${activeLore}` : '',
         activeGoals ? `ACTIVE GOALS\n${activeGoals}` : '',
     ].filter(Boolean).join('\n\n');
-}
-
-function emptyContext(reason, correlationId = null, emptyCode = 'none-matched') {
-    journal('retrieval.skipped', { reason }, { correlationId, summary: reason });
-    return { listed: [], refToId: new Map(), serialized: '', diagnostics: [], degraded: false, vectorError: '', query: '', reason, emptyCode };
 }

@@ -222,9 +222,14 @@ function renderRetrievalPane(timelineId) {
                 ${state.busy === 'reindex' ? 'Reindexing…' : 'Reindex now'}</button>
         </div>`;
     if (!last) return `${status}<p class="remodel-varstate-empty">No retrieval has run for this Timeline since its Variables last changed.</p>`;
+    // Goals rank against Variables under one shared budget, so this view has to
+    // show both kinds or it explains half a decision. The kind badge is what
+    // separates a Goal that scored badly from one that was never eligible —
+    // Goals have no retrieval.mode, so only the budget can keep them out.
     const rows = last.diagnostics.map((item) => `
         <article class="remodel-varstate-diag ${item.included ? 'is-in' : 'is-out'}">
-            <div><strong>${escapeHtml(item.variableName)}</strong>
+            <div><strong>${escapeHtml(item.name)}</strong>
+                <em class="remodel-varstate-kind">${item.kind === 'goal' ? 'Goal' : 'Variable'}</em>
                 <small>${escapeHtml((item.channels || []).join(', ') || 'no evidence')}</small></div>
             <p>${escapeHtml(item.included ? item.why : item.excluded)}</p>
         </article>`).join('');

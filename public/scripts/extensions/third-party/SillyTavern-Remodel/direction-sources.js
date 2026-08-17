@@ -212,7 +212,7 @@ function describeMechanics(mechanics, { mechanicsEnabled = false } = {}) {
     const sections = [
         mechanicsEnabled ? section('CAPABILITIES', describeCapabilities(mechanics?.capabilities)) : '',
         section('VARIABLES', mechanics?.serializedVariables || describeNoVariables(mechanics?.retrieval, mechanicsEnabled), describeRetrieval(mechanics?.retrieval)),
-        section('GOALS', goals.map(describeGoal).join('\n') || '(none active)'),
+        section('GOALS', goals.map(describeGoal).join('\n') || describeNoGoals(mechanics?.retrieval, mechanicsEnabled)),
         mechanicsEnabled && goals.length ? section('RATING A GOAL', rateGuidance()) : '',
         section('RELATIONSHIPS', describeRelationships(mechanics?.relationships, titleByRef)),
         section('ATTEMPTED THIS TURN', describeAttempts(mechanics?.authorizedGoalRefs, titleByRef)),
@@ -284,6 +284,21 @@ function describeNoVariables(retrieval, mechanicsEnabled) {
     return `This Timeline has no Variables yet — nothing here is being tracked as a number, a state, or a flag.
 If something in this scene should be, create it with variable.create: how badly someone is hurt, how far a faction's patience has run, whether a door is barred, how close a pursuit has come. Give it a name you would recognise later and a one-line meaning written for your future self. It becomes addressable from the next turn onward.
 Create one only when the fiction has actually raised it. An invented number nobody is playing with is noise you will be shown every turn afterwards.`;
+}
+
+/**
+ * The same distinction the Variables block draws, for the same reason: a Scene
+ * with no Goals at all is an invitation, and a Scene whose Goals simply did not
+ * surface this turn is not. `(none active)` said the first thing while meaning
+ * either, and a Director shown it on an empty Scene had nothing telling it that
+ * writing one down was even available.
+ */
+function describeNoGoals(retrieval, mechanicsEnabled) {
+    if (retrieval?.goalsEmptyCode !== 'none-authored') return 'None of this Scene\'s Goals were relevant this turn.';
+    if (!mechanicsEnabled) return 'No Goals are open in this Scene.';
+    return `No Goals are open in this Scene — nothing here is being played toward an outcome that could fail.
+When someone in the scene is actually reaching for something that could go either way, write it down with goal.create: what they are trying to do, and the chance it lands from the position the fiction has reached. A Goal is what the story is currently gambling on, not a task list.
+Create one only when the fiction has raised the stakes itself. A Goal nobody is pushing on is noise you will be shown every turn afterwards.`;
 }
 
 function rateGuidance() {

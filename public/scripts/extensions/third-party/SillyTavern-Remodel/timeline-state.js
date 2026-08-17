@@ -1,6 +1,7 @@
 import { getContext } from '../../../st-context.js';
 import { detachStoryGoalsFromScene, deleteStoryGoalsForTimeline } from './story-goals-store.js';
 import { deleteVariablesForTimeline } from './variables-store.js';
+import { clearRetrievalRecall } from './retrieval-recall.js';
 
 export const CHAT_METADATA_KEY = 'remodelScene';
 
@@ -123,6 +124,7 @@ export function deleteTimeline(timelineId) {
     delete store.timelines[timelineId];
     deleteStoryGoalsForTimeline(timelineId);
     deleteVariablesForTimeline(timelineId);
+    clearRetrievalRecall(timelineId);
     store.timelineIds = store.timelineIds.filter((id) => id !== timelineId);
     store.activeTimelineId = store.activeTimelineId === timelineId ? store.timelineIds[0] || null : store.activeTimelineId;
     saveTimelineStore();

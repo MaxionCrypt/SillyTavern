@@ -543,8 +543,8 @@ function renderMechanicsProfile() {
                     <input type="number" min="1000" max="32000" step="500" data-remodel-debug-mechanics="contextBudget" value="${profile.contextBudget}"></label>
                 <label class="is-inert" title="Streaming removed the last caller that read this value. The Director's reply now runs through the same Chat Completion connection Story mode uses, which takes no response-length argument of its own — so this input is kept only so an existing saved value is not silently discarded, and no longer governs anything.">Director answer allowance <small>— no longer used; the connection's own response length applies instead</small>
                     <input type="number" min="1500" max="32000" step="500" data-remodel-debug-mechanics="directorResponseTokens" value="${profile.directorResponseTokens}" disabled></label>
-                <label>Variables per pass
-                    <input type="number" min="1" max="12" data-remodel-debug-mechanics="retrievalLimit" value="${profile.retrievalLimit}"></label>
+                <label title="One budget covering both kinds. Goals and Variables are scored in a single ranking and the top of it travels, so a Goal-poor turn spends the budget on Variables and the reverse.">Goals and Variables per pass
+                    <input type="number" min="1" max="16" data-remodel-debug-mechanics="retrievalLimit" value="${profile.retrievalLimit}"></label>
                 <label>Recent messages scanned
                     <input type="number" min="1" max="60" data-remodel-debug-mechanics="retrievalWindow" value="${profile.retrievalWindow}"></label>
                 <label>Authority
