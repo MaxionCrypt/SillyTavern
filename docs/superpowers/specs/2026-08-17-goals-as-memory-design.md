@@ -129,6 +129,12 @@ and Scenes hold links; the deck's own empty state distinguishes them
 Owner edits go through the store directly. They are not capability requests —
 the capability layer exists to constrain a model, not its owner.
 
+**Owner edits are logged to the Goal event ledger**, separately from AI
+changes and distinguishable from them. `addStoryGoalEvent`, `getGoalEvents`
+and `getTimelineGoalEvents` already exist and have no callers; this is what
+they were for. Without it the ledger records only what the Director did, and a
+Goal's history reads as though the owner never touched it.
+
 ### 5. Migration
 
 Existing Goals carry `resolution`. Dropping the field must not throw, and a
@@ -161,9 +167,9 @@ No Goal is deleted, retitled, or has its rate changed by this migration.
   unlink, relate, and per-attribute editing is more UI than the deck has ever
   had, and it is the surface the owner uses most.
 - **Owner writes bypass the capability layer**, so they produce no receipts.
-  That is correct — the owner is not a model being constrained — but it means
-  the Goal event ledger records only AI changes unless owner edits are logged
-  separately.
+  That is correct — the owner is not a model being constrained — and the event
+  ledger covers the gap, but an owner edit and an AI change are recorded by
+  different machinery and could drift apart in what they capture.
 
 ## Verification
 
