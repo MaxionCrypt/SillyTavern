@@ -31,7 +31,7 @@ import {
     readNarratorEntries,
 } from './director-notes-store.js';
 import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
-import { readDirectionUnit, sanitizeDirectionText } from './live-direction-markers.js';
+import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
 import { StructuredReplyError } from './structured-reply.js';
 import { streamChatPrompt } from './story-stream.js';
 import { updateScene } from './timeline-state.js';
@@ -1692,6 +1692,25 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     return true;
 }
 
+/**
+ * The run's accepted prose, as it should be stored and read back.
+ *
+ * Markers out, then the scaffolding a performer echoed instead of speaking —
+ * `[IMPORTANT: …]The Narrator II:` and friends. Core strips the name half in
+ * cleanUpMessage; Live Direction owns its own buffer and writes the accepted
+ * text itself, so it never passed through that.
+ *
+ * Applied HERE, at the points that finalize or read a run, and deliberately
+ * not in acceptNativeBuffer where it would be caught a token earlier: the
+ * reveal walks `rawBufferedText` by `rawOffset`, so shortening that buffer
+ * mid-stream would leave the offset pointing past the text it names. The cost
+ * is that an echoed prefix is visible while the reply streams and gone once it
+ * lands; the alternative risks desyncing the reveal against the user's prose.
+ */
+function acceptedProse(run) {
+    return stripEchoedScaffolding(sanitizeDirectionText(run?.acceptedVisibleText), run?.performer?.label || '');
+}
+
 function acceptNativeBuffer(text) {
     if (!activeRun) return;
     activeRun.rawBufferedText = String(text ?? '');
@@ -1866,7 +1885,7 @@ async function completeVisibleRun(run) {
     // Treating it as complete wrote a blank Narrator row into the chat AND
     // chained autoplay off it, so one silent provider reply became a run of
     // empty rows that each fed the next Director pass as accepted history.
-    if (!sanitizeDirectionText(run.acceptedVisibleText)) {
+    if (!acceptedProse(run)) {
         await failEmptyVisibleRun(run);
         return;
     }
@@ -2091,7 +2110,7 @@ async function interruptLiveDirection({ preserveForIntervention }) {
         generationSettled: run.generationSettled,
         // An interruption before the first visible character deletes the
         // message outright — the "it produced no bubble at all" case.
-        willDeleteMessage: !sanitizeDirectionText(run.acceptedVisibleText),
+        willDeleteMessage: !acceptedProse(run),
     }, { correlationId: run.directionId, severity: 'warn' });
     run.interrupted = true;
     run.holdReason = 'interrupt';
@@ -2129,7 +2148,7 @@ async function finalizeRunMessage(run, { state }) {
         abandonCancelledTurn(run);
         return;
     }
-    const accepted = sanitizeDirectionText(run.acceptedVisibleText);
+    const accepted = acceptedProse(run);
     if (!accepted) {
         // Nothing was ever accepted, so there is nothing to keep — whether the
         // user interrupted before the first character or the performer returned
@@ -2412,7 +2431,7 @@ function serializeRun(run, state) {
         directionId: run.directionId,
         sceneId: run.sceneId,
         state,
-        acceptedText: sanitizeDirectionText(run.acceptedVisibleText),
+        acceptedText: acceptedProse(run),
         revealOffset: run.rawOffset,
         performerRef: run.performer.ref,
         ...stored,
@@ -2464,7 +2483,7 @@ function serializeRun(run, state) {
  */
 function describeRunInterruption(run) {
     if (!run?.interrupted || run.acceptedComplete) return null;
-    const accepted = sanitizeDirectionText(run.acceptedVisibleText);
+    const accepted = acceptedProse(run);
     if (!accepted) return null;
     return {
         acceptedLength: accepted.length,
