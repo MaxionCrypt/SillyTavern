@@ -330,7 +330,7 @@ test('a tracked goal.reach still sees the retrieved Variable it never names', as
         requestDirection: async () => directorReply({
             requests: [{
                 id: 'req-1', capability: 'goal.reach',
-                arguments: { goalRef: 'Bleed her out', impactMagnitude: 'meaningful' },
+                arguments: { goalRef: 'Bleed her out', impact: 7 },
                 reason: 'She is between the blade and the boy.',
             }],
         }),

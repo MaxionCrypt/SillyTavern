@@ -1,69 +1,24 @@
-// Story Goals — the resolution maths.
+// Story Goals — the oracle.
 //
-// This module is the SINGLE source of truth for every number the system
-// produces: the die, the margin, and the miss bands.
-// rate clamping. Nothing else in the extension may roll a die or do goal
-// arithmetic.
+// This module owns the die and the arithmetic, and nothing else. The Director
+// calls it and cannot fudge the answer: the roll, the margin, and whether a
+// reach hit are decided here.
 //
-// That rule is what makes "the extension enforces the mechanics, the AI only
-// judges" enforceable rather than aspirational. The Mechanical AI proposes
-// judgments (which Variable applies, why a rate moved, what a miss costs in the
-// fiction); it never produces a value that matters mechanically.
+// What it deliberately does NOT own is vocabulary. How favourable a chance is,
+// how far a meaningful shift moves — those are judgements, and they live in the
+// Director's editable prompt where the owner can change them. This module used
+// to hold seven named rate bands and four shift magnitudes as lookup tables,
+// and `goal.shift` accepted only those four words; the Director could not
+// express how far a Goal had actually moved. Deleting the tables is what lets
+// it state a number.
 //
-// Pure functions only — no I/O, no storage, no DOM. Everything here is
-// directly testable with the worked examples from Roleplay_System.md.
+// Pure functions only — no I/O, no storage, no DOM.
 
-// --- tunable constants -----------------------------------------------------
-//
-// The spec deliberately leaves the bands open ("to be calibrated in code once
-// real pool sizes are settled"). They live here, named, so tuning is a one-file
-// edit rather than a hunt.
-
-/** A rate can never reach certainty in either direction (spec §3). */
+/** A rollable rate never reaches certainty in either direction. `status:
+ *  achieved` and `status: impossible` express the absolutes better than a 0%
+ *  or 100% roll does. */
 export const RATE_FLOOR = 5;
 export const RATE_CEIL = 95;
-
-export const OPENING_RATE_BANDS = Object.freeze({
-    nearly_impossible: 5,
-    extreme: 15,
-    difficult: 30,
-    uncertain: 50,
-    favorable: 70,
-    strongly_favored: 85,
-    nearly_assured: 95,
-});
-
-export const RATE_SHIFT_BANDS = Object.freeze({
-    minor: 3,
-    meaningful: 7,
-    major: 12,
-    decisive: 20,
-});
-
-/**
- * Miss severity bands, keyed by how far the modified margin fell below zero.
- * `upTo` is inclusive; the last band catches everything worse.
- * `cost` is the permanent rate penalty the miss inflicts.
- */
-export const MISS_BANDS = Object.freeze([
-    { id: 'minor', label: 'Minor', upTo: 10, cost: 2 },
-    { id: 'serious', label: 'Serious', upTo: 25, cost: 5 },
-    { id: 'severe', label: 'Severe', upTo: 50, cost: 10 },
-    { id: 'catastrophic', label: 'Catastrophic', upTo: Infinity, cost: 18 },
-]);
-
-/**
- * How much a landed hit removes from a Constitution pool, banded by the rate
- * the reach was made at (spec §6). A lucky hit at a low rate barely dents a
- * formidable target; a hit earned by building the rate up bites deep. This is
- * what stops a 5% fluke from ending a fight on the first swing.
- */
-export const BITE_BANDS = Object.freeze([
-    { upTo: 25, bite: 10 },
-    { upTo: 50, bite: 20 },
-    { upTo: 75, bite: 35 },
-    { upTo: Infinity, bite: 50 },
-]);
 
 // --- the die ---------------------------------------------------------------
 
@@ -84,25 +39,41 @@ export function rollD100() {
 
 // --- rates -----------------------------------------------------------------
 
-/** Clamp a Success Rate into the legal 5–95 band. */
+/**
+ * Clamp a usable Success Rate into 5–95, or return null when there is no
+ * usable value to clamp.
+ *
+ * The null matters. `Number(null)`, `Number('')` and `Number([])` are all `0`,
+ * which is finite — so a guard placed on the *coerced* value never fires, and
+ * the clamp then lifts that phantom zero to the floor. A Goal created without a
+ * stated rate would silently become nearly impossible instead of taking its
+ * default. This repo has shipped that exact trap three times (`clampNumber` in
+ * variables-store.js, `coerceSettingValue` in prompt-studio-store.js, and turn
+ * numbering in live-direction.js), so the usability question is answered here,
+ * before any coercion, and callers supply their own default with `??`.
+ */
 export function clampRate(value) {
-    const rate = Math.round(Number(value) || 0);
-    return Math.max(RATE_FLOOR, Math.min(RATE_CEIL, rate));
+    // Accept only what is genuinely a rate: a finite number, or a string that
+    // spells one. Listing the unusable inputs instead does not work — the first
+    // draft of this function rejected null, undefined and '' and still let `[]`
+    // through, because `Number([])` is 0 and finite too. Whitelisting the two
+    // usable shapes has no such tail.
+    const number = typeof value === 'number' ? value
+        : (typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN);
+    if (!Number.isFinite(number)) return null;
+    return Math.max(RATE_FLOOR, Math.min(RATE_CEIL, Math.round(number)));
 }
 
 // --- the reach -------------------------------------------------------------
 
 /**
- * The margin of a reach: rate minus roll, then the relevant stat modifier
- * added (spec §5 — modifiers attach to the MARGIN, never to the raw die, since
- * a reach is judged by rolling *under* the rate).
+ * The margin of a reach: rate minus roll, then the modifier added. Modifiers
+ * attach to the MARGIN rather than to the raw die, since a reach is judged by
+ * rolling *under* the rate.
  *
- * A margin >= 0 is a hit; a negative margin is a miss, and its magnitude
- * measures how badly.
- *
- * Worked examples from the spec:
- *   margin(5, 35, 14)  === -16  (still a miss, but a far gentler one)
- *   margin(20, 25, 20) === +15  (the modifier rescues a near-miss into a hit)
+ * A margin >= 0 is a hit; a negative margin is a miss, and its magnitude says
+ * how badly — which is the Director's to interpret in the fiction, not this
+ * module's to charge a penalty for.
  */
 export function margin(rate, roll, modifier = 0) {
     return (Number(rate) || 0) - (Number(roll) || 0) + (Number(modifier) || 0);
@@ -114,87 +85,24 @@ export function isHit(marginValue) {
 }
 
 /**
- * The miss band for a modified margin, or null if the reach actually hit.
- * Because the modifier is applied before the band is read, a good enough
- * modifier can pull a miss down into a gentler band (spec §7).
- */
-export function missBand(marginValue) {
-    const value = Number(marginValue) || 0;
-    if (value >= 0) {
-        return null;
-    }
-    const depth = Math.abs(value);
-    return MISS_BANDS.find((band) => depth <= band.upTo) || MISS_BANDS[MISS_BANDS.length - 1];
-}
-
-// --- Constitution ----------------------------------------------------------
-
-/**
- * How much a landed hit takes out of a Constitution pool, from the rate the
- * reach was made at. Note this reads the RATE, not the die: how powerful an
- * outcome is tracks the quality of the position, not the luck of the roll
- * (spec §6). Once a reach has hit, the size of the positive margin is
- * irrelevant — a hit is a hit.
- */
-export function constitutionBite(rate) {
-    const value = clampRate(rate);
-    return (BITE_BANDS.find((band) => value <= band.upTo) || BITE_BANDS[BITE_BANDS.length - 1]).bite;
-}
-
-/**
- * Apply a bite to a pool, respecting its win direction. Returns the new
- * current value, clamped to 0..max.
- */
-export function applyBite(pool, bite) {
-    const max = Math.max(1, Math.round(Number(pool?.max) || 1));
-    const current = Math.round(Number(pool?.current) || 0);
-    const amount = Math.max(0, Math.round(Number(bite) || 0));
-    const next = pool?.winDirection === 'fill' ? current + amount : current - amount;
-    return Math.max(0, Math.min(max, next));
-}
-
-/** Whether a pool has reached its win condition. */
-export function isPoolResolved(pool) {
-    if (!pool) {
-        return false;
-    }
-    const max = Math.max(1, Math.round(Number(pool.max) || 1));
-    const current = Math.round(Number(pool.current) || 0);
-    return pool.winDirection === 'fill' ? current >= max : current <= 0;
-}
-
-// --- resolving a whole reach ----------------------------------------------
-
-/**
- * Resolve one reach end to end. The caller supplies the rate and the stat
- * modifier the Director named; everything numeric is decided here.
+ * Resolve one reach end to end and report the frozen inputs beside the outcome,
+ * so a receipt can show exactly what was rolled against what.
  *
- * Returns the roll, the modified margin, whether it hit, the miss band and its
- * rate cost when it didn't, and the Constitution bite when it did.
+ * The caller supplies a usable rate — a Goal always has one. An unusable rate
+ * is a programming error rather than something to paper over with a default,
+ * because silently substituting one is how a reach ends up resolved against a
+ * number nobody chose.
  */
 export function resolveReach({ rate, modifier = 0, roll = null } = {}) {
     const baseRate = clampRate(rate);
+    if (baseRate === null) throw new TypeError('resolveReach needs a usable rate.');
     const die = roll == null ? rollD100() : Math.max(1, Math.min(100, Math.round(Number(roll) || 1)));
     const marginValue = margin(baseRate, die, modifier);
-    const hit = isHit(marginValue);
-    const band = missBand(marginValue);
     return {
         roll: die,
         rate: baseRate,
         modifier: Number(modifier) || 0,
         margin: marginValue,
-        hit,
-        band: band?.id ?? null,
-        bandLabel: band?.label ?? null,
-        rateCost: band?.cost ?? 0,
-        bite: hit ? constitutionBite(baseRate) : 0,
+        hit: isHit(marginValue),
     };
-}
-
-export function openingRateForBand(band) {
-    return OPENING_RATE_BANDS[String(band || '').toLowerCase()] ?? OPENING_RATE_BANDS.uncertain;
-}
-
-export function shiftForMagnitude(magnitude) {
-    return RATE_SHIFT_BANDS[String(magnitude || '').toLowerCase()] ?? 0;
 }

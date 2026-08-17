@@ -25,7 +25,7 @@ import {
     updateStoryGoal,
     takePendingOp,
 } from './story-goals-store.js';
-import { clampRate, openingRateForBand, resolveReach, shiftForMagnitude } from './story-goals-math.js';
+import { clampRate, resolveReach } from './story-goals-math.js';
 
 export const MECHANICS_PROTOCOL = 'remodel-mechanics/1';
 
@@ -37,7 +37,7 @@ const CAPABILITY_NAMES = Object.freeze([
 
 const CAPABILITIES = Object.freeze({
     'goal.create': capability('Create a meaningful unresolved Story Goal using typed holders and targets.', ['timeline'], 'hybrid'),
-    'goal.shift': capability('Move a Goal Success Rate by one named movement band. A separate fictional reason is required.', ['goal'], 'hybrid'),
+    'goal.shift': capability('Move a Goal Success Rate by a number of points you choose, with `direction` saying which way. A separate fictional reason is required.', ['goal'], 'hybrid'),
     'goal.reach': capability('Declare one decisive attempt against a Goal. Code freezes inputs and rolls d100.', ['goal'], 'hybrid'),
     'goal.relate': capability('Create or update a directional sympathetic or antagonistic Goal relationship.', ['goal'], 'hybrid'),
     'goal.close': capability('Mark a Goal achieved, abandoned, or impossible.', ['goal'], 'hybrid'),
@@ -113,8 +113,7 @@ export function getMechanicsRequestSchema() {
                                     visibility: { type: 'string', enum: ['public', 'secret'], description: 'goal.create only: whether the user can see this Goal exists. Use secret for a twist or a threat the user has not discovered.' },
                                     holderRefs: { type: 'array', items: ownerRefSchema(), description: 'goal.create only: who holds this Goal — at least one typed owner is required.' },
                                     targetRefs: { type: 'array', items: ownerRefSchema(), description: 'goal.create only: who or what the Goal is directed at, if it has a target. Optional.' },
-                                    openingBand: { type: 'string', enum: ['nearly_impossible', 'extreme', 'difficult', 'uncertain', 'favorable', 'strongly_favored', 'nearly_assured'], description: 'goal.create only: the new Goal\'s starting difficulty, named rather than numeric. Use this or successRate, not both.' },
-                                    successRate: { type: 'number', description: 'goal.create only: the new Goal\'s exact starting Success Rate (0-100). Use this or openingBand, not both.' },
+                                    successRate: { type: 'number', description: 'goal.create only: the new Goal\'s starting Success Rate as a number. It is clamped to 5-95, because a Goal that is already certain or already impossible is a status rather than a roll. Your guidance gives reference points for what a given chance is worth; choose the number that fits this Goal.' },
                                     resolution: {
                                         type: 'object', additionalProperties: false,
                                         description: 'goal.create only: how this Goal resolves when reached. Omit, or set kind to instant, for a Goal that just succeeds or fails outright. Set kind to tracked to bind it to a Variable that must cross a threshold.',
@@ -127,8 +126,8 @@ export function getMechanicsRequestSchema() {
                                         },
                                     },
                                     direction: { type: 'string', enum: ['up', 'down'], description: 'goal.shift only: which way to move the Goal\'s Success Rate.' },
-                                    magnitude: { type: 'string', enum: ['minor', 'meaningful', 'major', 'decisive'], description: 'goal.shift only: how large a Success Rate move this is. Code converts it to a number; never state a percentage yourself.' },
-                                    impactMagnitude: { type: 'string', enum: ['minor', 'meaningful', 'major', 'decisive'], description: 'goal.reach only, for a tracked Goal: how large the tracked Variable moves when this reach hits.' },
+                                    amount: { type: 'number', description: 'goal.shift only: how many percentage points the Success Rate moves, as a positive number, with `direction` saying which way. Judge the size yourself from what happened in the fiction.' },
+                                    impact: { type: 'number', description: 'goal.reach only, for a tracked Goal: how far the tracked Variable moves when this reach hits, in that Variable\'s own units.' },
                                     type: { type: 'string', enum: ['antagonistic', 'sympathetic'], description: 'goal.relate only: whether progress on fromGoalRef helps (sympathetic) or hurts (antagonistic) toGoalRef.' },
                                     status: { type: 'string', enum: ['achieved', 'abandoned', 'impossible'], description: 'goal.close only: the terminal state to close the Goal at.' },
                                     name: { type: 'string', description: 'variable.create only: the new Variable\'s name. It must not match any Variable this Timeline already has (compared ignoring case and surrounding spaces) and it is the exact name you will address it by from the next turn on, so name it the way you would want to read it back: "Aiden\'s Corruption", not "corruption2".' },
@@ -492,7 +491,11 @@ function createGoal(request, args, runtime) {
     const targetRefs = requireOwners(args.targetRefs || [], true);
     if (holderRefs.some((owner) => !isAuthorizedOwner(owner, runtime)) && !runtime.allowUserGoalCreate) return defer(request, runtime, 'A user-owned Goal proposal requires review.');
     const resolution = normalizeResolutionArgs(args.resolution, runtime);
-    const rate = args.openingBand ? openingRateForBand(args.openingBand) : clampRate(args.successRate);
+    // The Director states a number, informed by the rate guidance in its
+    // prompt. `?? 30` is the record's own default for a Goal created without a
+    // stated rate — clampRate returns null rather than reading an absent value
+    // as zero, which would have made such a Goal nearly impossible.
+    const rate = clampRate(args.successRate) ?? 30;
     const goal = createTimelineGoal(runtime.timelineId, { title: args.title, description: args.description, holderRefs, targetRefs, successRate: rate, visibility: args.visibility, resolution }, { sceneId: runtime.sceneId, actor: 'mechanics', reason: request.reason });
     if (!goal) throw new MechanicsError(`${request.id}: Goal could not be created.`);
     setAlias(runtime, args.alias, goal.id, 'goal');
@@ -502,8 +505,12 @@ function createGoal(request, args, runtime) {
 function shiftGoal(request, args, runtime) {
     const goal = requireGoal(resolveReference(args.goalRef ?? args.goalId, runtime, 'goal'), runtime);
     if (!isAuthorizedGoal(goal, runtime)) return deferGoal(request, runtime, { [String(args.goalRef ?? args.goalId)]: goal.id }, `Changing the user-owned Goal “${goal.title}” requires review.`);
-    const amount = shiftForMagnitude(args.magnitude);
-    if (!amount) throw new MechanicsError(`${request.id}: invalid shift magnitude.`);
+    // A number the Director chose, not a word from a fixed vocabulary. The four
+    // magnitudes used to be welded to 3/7/12/20 here and the schema told the
+    // model "never state a percentage yourself" — so it could not say how far a
+    // Goal had actually moved. The reference points now live in its prompt.
+    const amount = Math.round(Number(args.amount));
+    if (!Number.isFinite(amount) || amount === 0) throw new MechanicsError(`${request.id}: a shift needs a non-zero amount.`);
     const before = copy(goal);
     const direction = args.direction === 'down' ? -1 : 1;
     const after = updateStoryGoal(goal.id, { successRate: clampRate(goal.successRate + direction * amount) }, { ...txContext(runtime, request), type: 'goal.shifted' });
@@ -562,18 +569,22 @@ function reachGoal(request, args, runtime) {
         modifierVariableId: modifierInstance?.id || '', modifier,
         variableId: trackedInstance?.id || '', field: goal.resolution?.field || 'value', direction: goal.resolution?.direction || '',
         completionThreshold: goal.resolution?.completionThreshold ?? null,
-        impactMagnitude: String(args.impactMagnitude || 'meaningful'),
+        impact: args.impact,
     };
     const result = resolveReach({ rate: frozen.successRate, modifier });
     let variableAfter = null;
     let goalAfter = goal;
     if (!result.hit) {
-        goalAfter = updateStoryGoal(goal.id, { successRate: clampRate(goal.successRate - result.rateCost) }, { ...txContext(runtime, request), type: 'goal.reach.missed' });
+        // A miss no longer charges an automatic rate penalty. How badly a miss
+        // went is the Director's to judge in the fiction and to request as its
+        // own change with its own reason — code silently docking 2/5/10/18
+        // points by depth band was arithmetic nobody asked for.
+        goalAfter = goal;
     } else if (goal.resolution.kind === 'instant') {
         goalAfter = updateStoryGoal(goal.id, { status: 'achieved' }, { ...txContext(runtime, request), type: 'goal.reach.hit' });
     } else {
-        const impact = shiftForMagnitude(frozen.impactMagnitude);
-        if (!impact) throw new MechanicsError(`${request.id}: tracked Goal requires a numeric Variable and a valid impact magnitude.`);
+        const impact = Math.round(Number(frozen.impact));
+        if (!Number.isFinite(impact) || impact === 0) throw new MechanicsError(`${request.id}: a tracked reach needs a numeric Variable and a non-zero impact.`);
         const delta = goal.resolution.direction === 'increase' ? impact : -impact;
         variableAfter = adjustVariableValue(trackedInstance.id, delta, { ...txContext(runtime, request), field: frozen.field, type: 'goal.impact' });
         if (!variableAfter) throw new MechanicsError(`${request.id}: tracked Goal field is not numeric.`);
@@ -595,8 +606,8 @@ function validateArguments(request) {
     const require = (...keys) => { for (const key of keys) if (missing(key)) throw new MechanicsError(`${request.id}: ${key} is required.`); };
     switch (request.capability) {
         case 'goal.create': require('title', 'holderRefs', 'resolution'); break;
-        case 'goal.shift': require('goalRef', 'direction', 'magnitude'); break;
-        case 'goal.reach': require('goalRef', 'impactMagnitude'); break;
+        case 'goal.shift': require('goalRef', 'direction', 'amount'); break;
+        case 'goal.reach': require('goalRef'); break;
         case 'goal.relate': require('fromGoalRef', 'toGoalRef', 'type'); break;
         case 'goal.close': require('goalRef', 'status'); break;
         case 'variable.create': require('name', 'valueType', 'value', 'description'); break;
