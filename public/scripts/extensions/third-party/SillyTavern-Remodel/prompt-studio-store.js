@@ -76,7 +76,20 @@ export const PROMPT_SOURCE_DEFINITIONS = Object.freeze({
             description: 'The Director\'s own entries from earlier turns of this Scene, secrets included — the memory a hidden twist has to survive in. Never reaches the performer.',
             settings: { depth: { type: 'number', label: 'Turns to include', min: 1, max: 20, default: 3 } },
         },
-        { key: 'directorSnapshot', label: 'Scene Snapshot', role: 'user' },
+        // `history` governs how many of the most recent chat messages
+        // buildDirectionSnapshot (live-direction.js) slices into this
+        // block's STORY SO FAR section. Defaulted lower than the old
+        // hardcoded 40: the notebook above is now the Director's own
+        // running record of what happened (`[result]` entries), so 40
+        // messages of raw prose on top of it was mostly redundant — 40
+        // messages, not turns, is why this range and the notebook's above
+        // don't share a unit. `min: 0` is a real, supported value (zero
+        // messages, not "unset" — see live-direction.js's
+        // resolveDirectorSnapshotHistoryDepth and toTurnNumber's docstring
+        // for the `Number(null) === 0` coercion trap this codebase keeps
+        // re-discovering), which is why it is declared explicitly rather
+        // than left to default to 1 like every other numeric setting here.
+        { key: 'directorSnapshot', label: 'Scene Snapshot', role: 'user', settings: { history: { type: 'number', label: 'Recent messages', min: 0, max: 40, default: 12 } } },
     ]),
 });
 

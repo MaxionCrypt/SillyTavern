@@ -849,8 +849,24 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     // what it would have been without the insertion.
     const rawChat = context.chat || [];
     const effectiveChat = excludeFromHistory ? rawChat.filter((message) => message !== excludeFromHistory) : rawChat;
-    const history = effectiveChat.slice(-40).map((message, index) => ({
-        id: effectiveChat.length - Math.min(40, effectiveChat.length) + index,
+    // How many of the most recent messages ride along as raw prose, on top of
+    // the Director's own notebook (which now carries continuity via
+    // `[result]` entries) — user-settable, resolved from the active director
+    // recipe's `directorSnapshot` block rather than the old hardcoded 40. See
+    // resolveDirectorSnapshotHistoryDepth for the fallback rules.
+    //
+    // `effectiveChat.slice(-historyDepth)` is NOT safe at a depth of 0:
+    // `-0 === 0` in JS, and `Array.prototype.slice(0)` returns the WHOLE
+    // array, not an empty one — the exact opposite of what a depth of 0 must
+    // mean. `sliceCount` is clamped into `[0, effectiveChat.length]` first and
+    // only sliced when it is actually positive, which is what keeps a depth
+    // of 0 meaning zero messages rather than silently reverting to
+    // "everything".
+    const historyDepth = resolveDirectorSnapshotHistoryDepth();
+    const sliceCount = Math.min(Math.max(historyDepth, 0), effectiveChat.length);
+    const recentChat = sliceCount > 0 ? effectiveChat.slice(-sliceCount) : [];
+    const history = recentChat.map((message, index) => ({
+        id: effectiveChat.length - sliceCount + index,
         role: message.is_user ? 'user' : 'assistant',
         name: message.name || '',
         content: sanitizeDirectionText(message.extra?.remodelDirection?.acceptedText ?? message.mes ?? ''),
@@ -1000,6 +1016,54 @@ function compileDirectorPrompt(snapshot, { mechanicsEnabled = false, trace = fal
 function declaredDirectorNotebookDepth() {
     return PROMPT_SOURCE_DEFINITIONS.director
         .find((source) => source.key === 'directorNotebook')?.settings?.depth?.default;
+}
+
+/**
+ * How many of the most recent chat messages `buildDirectionSnapshot` slices
+ * into the Director's own snapshot — the resolved `history` setting on the
+ * active director recipe's `directorSnapshot` block.
+ *
+ * Resolved HERE, not read out of a compiled recipe: buildDirectionSnapshot
+ * runs BEFORE compileDirectorPrompt/compilePromptRecipe — the snapshot this
+ * function feeds is the very input buildDirectionSources renders into
+ * `sources`, which is what the compile then reads — so by the time a recipe's
+ * blocks are normally consulted for a per-block setting, the slice this one
+ * governs has already happened. This is the one place in the pass that CAN
+ * read it.
+ *
+ * No active director recipe, no `directorSnapshot` block on it, and a block
+ * switched off are all the same case for this function: the setting is not in
+ * effect for this pass. All three fall back to the source definition's own
+ * declared default — never to the old hardcoded 40 — and the whole function is
+ * wrapped so a lookup failure (a corrupt or mid-migration recipe store) can
+ * never throw out of a direction pass; it degrades to the same default.
+ *
+ * `normalizeBlock` (prompt-studio-store.js) has already coerced, clamped and
+ * defaulted this value into `block.settings.history` by the time any recipe
+ * reaches here — see `coerceSettingValue`'s own comment on the
+ * `Number(null) === 0` trap it exists to close — so this is a lookup, not a
+ * second coercion site. Checked with `Number.isFinite`, not truthiness: a
+ * user-set depth of 0 is a real value this must hand back as 0, not treat as
+ * absent and fall through to the default because 0 is falsy.
+ *
+ * `recipe` defaults to the live lookup so the real call site
+ * (buildDirectionSnapshot) never has to pass it — but it is still a real
+ * parameter, not a hardcoded read, so a test can hand this an explicit `null`
+ * or a hand-built recipe shape to exercise every fallback branch (no recipe,
+ * no block, a disabled block) directly, without needing to contort the actual
+ * prompt-studio store into an unreachable state to prove they hold.
+ */
+export function resolveDirectorSnapshotHistoryDepth(recipe = resolveDirectorRecipe()) {
+    const declaredDefault = PROMPT_SOURCE_DEFINITIONS.director
+        .find((source) => source.key === 'directorSnapshot')?.settings?.history?.default ?? 12;
+    try {
+        const block = recipe?.blocks?.find((entry) => entry.kind === 'source' && entry.sourceKey === 'directorSnapshot');
+        if (!block || block.enabled === false) return declaredDefault;
+        const value = block.settings?.history;
+        return Number.isFinite(value) ? value : declaredDefault;
+    } catch {
+        return declaredDefault;
+    }
 }
 
 /**
