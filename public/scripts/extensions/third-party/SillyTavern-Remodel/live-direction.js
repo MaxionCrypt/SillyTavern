@@ -1842,6 +1842,10 @@ async function interruptLiveDirection({ preserveForIntervention }) {
 }
 
 async function finalizeRunMessage(run, { state }) {
+    // Before the first await, and here rather than at each caller: this is the
+    // one funnel every run passes through, so a path added later is covered by
+    // construction instead of by remembering. See clearPersistTimer.
+    clearPersistTimer();
     const context = getContext();
     if (!Number.isInteger(run.messageId)) {
         const last = context.chat.length - 1;
@@ -2500,6 +2504,21 @@ function describeDirectorNotesRouting() {
 function clearRevealTimer() {
     clearTimeout(revealTimer);
     revealTimer = null;
+}
+
+/**
+ * Cancel a debounced metadata write that has not fired yet.
+ *
+ * `persistRun(run, false)` schedules a commit 350ms out, and that commit reads
+ * `run.state` when it *fires*, not when it was scheduled. Finalizing awaits
+ * `stopGeneration` and `saveChat`, so a commit scheduled just before an
+ * interruption lands inside that window and writes the pre-finalize state —
+ * `speaking` — back over the finished record. `recoverLiveDirectionMessages`
+ * then reads that on the next load and treats a settled message as unfinished.
+ */
+function clearPersistTimer() {
+    clearTimeout(persistTimer);
+    persistTimer = null;
 }
 
 function waitFor(predicate, timeoutMs) {

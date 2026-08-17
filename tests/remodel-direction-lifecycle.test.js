@@ -269,6 +269,29 @@ test('an interruption part-way through the prose applies the requests once', asy
     expect(chat[0].mes.length).toBeLessThan(RESPONSE.length);
 });
 
+test('a debounced metadata write cannot resurrect a finished run as unfinished', async () => {
+    // revealStep arms a 350ms `persistRun(run, false)` on every step, and that
+    // commit reads run.state when it FIRES. Interrupting awaits stopGeneration
+    // and saveChat, so an armed commit lands inside that window and writes
+    // `speaking` back over the finalized record — after which
+    // recoverLiveDirectionMessages treats a settled message as unfinished on
+    // the next load. `slow` guarantees a real partial reveal, hence a real
+    // armed timer at the moment of the stop.
+    scene.liveDirection.pacing = 'slow';
+
+    await requestNextDirection(scene);
+    expect(await until(() => (getLiveDirectionRun()?.acceptedVisibleText.length || 0) > 0)).toBe(true);
+
+    await stopLiveDirection();
+    const settled = __getChat()[0].extra.remodelDirection.state;
+    expect(settled).not.toBe('speaking');
+
+    // Well past the debounce window: anything still armed has fired by now.
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
+
+    expect(__getChat()[0].extra.remodelDirection.state).toBe(settled);
+});
+
 test('acceptance is exactly once even when finalize is re-entered', async () => {
     await requestNextDirection(scene);
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
