@@ -1461,3 +1461,173 @@ test('a secret never reaches the direction card the user reads beside the prose'
     expect(readAllEntriesForOwner(timeline.id, { sceneId: realScene.id }).map((entry) => entry.type))
         .toEqual(['ruling', 'secret']);
 });
+
+// ------------------------------------ interruption as an event, not an error
+//
+// The owner's report: "sometimes when the director processes my stuff, the
+// narrator may start from the beginning in its next turn." The cause is visible
+// from the Director's side of the prompt. Interrupting froze the reveal, kept
+// what was on screen, and threw the rest away — and recorded nothing anywhere
+// saying a user had cut in. The next pass therefore read a response that simply
+// stopped mid-clause, with no way to tell a cut performance from a performer
+// that ran out of things to say, and re-issued the beat.
+//
+// Two things are asserted below, end to end through the real run lifecycle and
+// the real, pure buildDirectionSources — so these are assertions about the text
+// a Director actually receives, not about a field on a run object:
+//
+//  1. The turn records that it was cut off, and how far it got.
+//  2. The unread remainder is KEPT and handed over, labelled as an intention
+//     that never reached the user. Destroying it is what made an interruption
+//     an error rather than an event: a Director cannot rule on whether the drag
+//     still happens after "someone grabs you" if the drag no longer exists
+//     anywhere.
+//
+// The third test is the one that keeps the feature from being worse than the
+// bug: `run.interrupted` is set on every run stopLiveDirection closes,
+// including runs the user read to the very end, so keying on it alone would put
+// a cut-short notice on the Director's desk for ordinary completed turns.
+
+/** Long enough to cut mid-clause, with the cut landing between two events. */
+const CUT_RESPONSE = 'Someone grabs you by the collar and drags you toward the door before you can plant your feet.';
+
+/** A performer stand-in that speaks one specific line. */
+function speaksLine(text) {
+    return async () => {
+        const chat = __getChat();
+        chat.push({ name: 'Wren', is_user: false, mes: text, extra: {} });
+        await __emit('MESSAGE_RECEIVED', chat.length - 1);
+    };
+}
+
+/** The Director's reply with no state requests — this test is about prose. */
+function performs(line) {
+    setLiveDirectionTestAdapters({
+        requestDirection: async () => directorReply({ requests: [] }),
+        generatePerformer: speaksLine(line),
+    });
+}
+
+/** THE INTERRUPTION as compiled, or '' when the Director was told of none. */
+function interruptionSection(directorSnapshot) {
+    const start = directorSnapshot.indexOf('THE INTERRUPTION');
+    if (start < 0) return '';
+    return directorSnapshot.slice(start, directorSnapshot.indexOf('CURRENT ACTION'));
+}
+
+const CUT_MARKER = '[The user cut in here. Nothing past this point was ever shown to them.]';
+
+test('the Director is told the performer was cut off, and is handed what it was about to say', async () => {
+    scene.liveDirection.pacing = 'slow';
+    performs(CUT_RESPONSE);
+
+    await requestNextDirection(scene);
+    // Genuinely mid-delivery: past the first character, well short of the last.
+    expect(await until(() => (getLiveDirectionRun()?.acceptedVisibleText.length || 0) >= 20)).toBe(true);
+    // Only THIS run had to be slow enough to catch part-way through.
+    scene.liveDirection.pacing = 'instant';
+
+    // The user cuts in. This interrupts the run AND runs the pass that has to
+    // direct around it, capturing the snapshot that pass hands the Director.
+    const sources = await capturedDirectorSourcesForAction('"Hey -"');
+
+    const read = __getChat()[0].mes;
+    expect(read.trim().length).toBeGreaterThan(0);
+    expect(read.length).toBeLessThan(CUT_RESPONSE.length);
+
+    const section = interruptionSection(sources.directorSnapshot);
+    expect(section).toContain('Wren was still delivering the last response in STORY SO FAR when the user cut in.');
+    // How far it got, as the run itself measured it.
+    expect(section).toContain(String(read.length) + ' in');
+
+    // THE PROPERTY THAT MATTERS: nothing was destroyed. What the user read plus
+    // what the Director is now holding is the whole of what the performer had
+    // written — so the grab that landed and the drag that did not are both
+    // still on the table for a ruling.
+    const quoted = section.match(/^"([\s\S]*)"$/m);
+    expect(quoted).toBeTruthy();
+    const remainder = quoted[1];
+    expect(CUT_RESPONSE.endsWith(remainder)).toBe(true);
+    expect(CUT_RESPONSE.slice(0, CUT_RESPONSE.length - remainder.length).trim()).toBe(read.trim());
+
+    // Handed over as an intention, never as an event.
+    expect(section).toContain('Treat that as an unspoken intention, not as an event.');
+    expect(section).toContain('None of it has happened, none of it is established, and nobody in the scene has seen or heard it.');
+    // And the sentence the reported restart turns on.
+    expect(section).toMatch(/already been delivered, so do not direct it to be given again from the beginning/);
+    // The transcript says where the line was cut, so a truncated turn is never
+    // read as a turn that merely ended early.
+    expect(sources.directorSnapshot).toContain('Wren: ' + read.trim() + '\n' + CUT_MARKER);
+});
+
+test('an interruption before the first character tells the Director nothing was cut short', async () => {
+    // The design already treats this as applying nothing: at zero the user read
+    // nothing, so nothing became fiction and the empty row is deleted outright.
+    // What must follow from that is silence toward the Director — there is no
+    // half-delivered beat to direct around, and naming one would have it write
+    // around something the user never saw a word of.
+    performs(CUT_RESPONSE);
+    await requestNextDirection(scene);
+    expect(getLiveDirectionRun()?.acceptedVisibleText).toBe('');
+
+    await stopLiveDirection();
+    expect(__getChat()).toHaveLength(0);
+
+    const sources = await capturedDirectorSourcesForAction('"Hey -"');
+    expect(interruptionSection(sources.directorSnapshot)).toBe('');
+    expect(sources.directorSnapshot).not.toContain('cut in');
+    // The remainder goes with it: the whole response was unread, so offering
+    // any of it as "what the performer was about to say" would present a beat
+    // nobody saw as one that had partly landed.
+    expect(sources.directorSnapshot).not.toContain('drags you toward the door');
+});
+
+test('a response the user read to the end is never reported to the Director as cut short', async () => {
+    // stopLiveDirection sets `run.interrupted` on ANY run it closes, including
+    // one that already finished revealing — every completed turn in this suite
+    // goes through it. Keying the record on that flag alone would therefore put
+    // a cut-short notice, and an empty remainder, on the Director's desk for
+    // ordinary turns: louder and more often wrong than the bug it replaces.
+    // `acceptedComplete` is the fact that separates them.
+    performs(CUT_RESPONSE);
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    expect(__getChat()[0].mes).toBe(CUT_RESPONSE);
+
+    await stopLiveDirection();
+    // The flag a naive implementation would have keyed on really is set here.
+    expect(__getChat()[0].extra.remodelDirection.interrupted).toBe(true);
+
+    const sources = await capturedDirectorSourcesForAction('"Hey -"');
+    // The turn is there in full...
+    expect(sources.directorSnapshot).toContain(CUT_RESPONSE);
+    // ...and not one word says it was cut.
+    expect(interruptionSection(sources.directorSnapshot)).toBe('');
+    expect(sources.directorSnapshot).not.toContain('cut in');
+});
+
+test('an interruption two turns back is history, not a remainder still waiting to be ruled on', async () => {
+    // The unsaid remainder is offered exactly once, on the pass that has to
+    // decide what survives the cut. A later pass has a completed response
+    // between it and the cut, so the question was answered; re-offering the
+    // remainder there would invite the same beat to arrive turns after the
+    // moment it belonged to — the restart this feature exists to end, delayed
+    // rather than fixed.
+    scene.liveDirection.pacing = 'slow';
+    performs(CUT_RESPONSE);
+    await requestNextDirection(scene);
+    expect(await until(() => (getLiveDirectionRun()?.acceptedVisibleText.length || 0) >= 20)).toBe(true);
+    scene.liveDirection.pacing = 'instant';
+
+    // Turn two: the pass that is told about the cut.
+    const cutTurn = await capturedDirectorSourcesForAction('"Hey -"');
+    expect(interruptionSection(cutTurn.directorSnapshot)).not.toBe('');
+
+    // Turn three: a completed response now sits between the cut and this pass.
+    const laterTurn = await capturedDirectorSourcesForAction('I follow him out.');
+    expect(interruptionSection(laterTurn.directorSnapshot)).toBe('');
+    expect(laterTurn.directorSnapshot).not.toContain('drags you toward the door');
+    // The cut line itself is still in the transcript, still marked — the record
+    // of what happened does not expire, only the open question does.
+    expect(laterTurn.directorSnapshot).toContain(CUT_MARKER);
+});

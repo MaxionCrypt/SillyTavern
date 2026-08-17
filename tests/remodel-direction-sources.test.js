@@ -489,3 +489,121 @@ test('a snapshot with no mechanics at all still renders', () => {
     expect(sources.mechanicsSkill).toContain('(none retrieved this turn)');
     expect(sources.mechanicsSkill).toContain('(none active)');
 });
+
+// --- the interruption -------------------------------------------------------
+//
+// The user cuts into a performance mid-sentence. Two facts have to reach the
+// Director and they pull in opposite directions: the part that was READ is
+// fiction and stands (so the beat must not be re-issued from the beginning),
+// and the part that was NOT read is nothing at all (so it must never be
+// referred to as having happened). Getting the second one wrong is the worse
+// failure and the invisible one — the scene starts calling back to events the
+// user never saw a word of, and there is nothing on screen to tell them why.
+//
+// These are assertions on the exact prose, because the prose is the whole
+// feature. live-direction.js decides WHEN an interruption exists; this module
+// decides what it SAYS, and the two are tested apart on purpose.
+
+/** A cut mid-clause: the grab reached the user, the drag did not. */
+const interruptedSnapshot = {
+    ...sceneSnapshot,
+    acceptedHistory: [
+        { id: 112, role: 'user', name: 'Aiden', content: 'He steps into the bay.' },
+        { id: 113, role: 'assistant', name: 'Sera', content: 'Someone takes him by the collar', interrupted: true },
+    ],
+    interruption: {
+        performer: 'Sera',
+        acceptedLength: 31,
+        unspokenRemainder: 'and drags him toward the freight gate before he can plant his feet.',
+    },
+    currentAction: '"Hey —"',
+};
+
+test('an interrupted turn tells the Director where the reading stopped and not to start the beat over', () => {
+    const { directorSnapshot } = buildDirectionSources(interruptedSnapshot, { mechanicsEnabled: true });
+    const section = directorSnapshot.slice(directorSnapshot.indexOf('THE INTERRUPTION'), directorSnapshot.indexOf('CURRENT ACTION'));
+
+    expect(section).toContain('Sera was still delivering the last response in STORY SO FAR when the user cut in.');
+    // How far it got, in the one unit that is unambiguous. Without this the
+    // Director can see that a line ended early but not whether it ended after
+    // a clause or after a syllable.
+    expect(section).toContain('31 in');
+    // The read half IS fiction and stands…
+    expect(section).toMatch(/read, so it is fiction and it stands/);
+    // …and this is the sentence that actually stops the restart the owner
+    // reported. "You were interrupted" alone leaves "so give that beat again"
+    // as a perfectly reasonable reading of it.
+    expect(section).toMatch(/already been delivered, so do not direct it to be given again from the beginning/);
+});
+
+test('the unspoken remainder is handed over as an intention and never as an event', () => {
+    const { directorSnapshot } = buildDirectionSources(interruptedSnapshot, { mechanicsEnabled: true });
+    const section = directorSnapshot.slice(directorSnapshot.indexOf('THE INTERRUPTION'), directorSnapshot.indexOf('CURRENT ACTION'));
+
+    // Preserved in full, and quoted rather than narrated: a quotation is
+    // plainly something said-or-not, where a paraphrase blends into the record
+    // around it.
+    expect(section).toContain('"and drags him toward the freight gate before he can plant his feet."');
+    expect(section).toContain('which never reached the user');
+    // The three denials that keep it out of the fiction, each of them load
+    // bearing: not an event, nothing established, nobody in the scene knows.
+    expect(section).toContain('Treat that as an unspoken intention, not as an event.');
+    expect(section).toContain('None of it has happened, none of it is established, and nobody in the scene has seen or heard it.');
+    expect(section).toMatch(/Never refer to it.*as something that occurred/);
+    // And the decision is explicitly the Director's, with all three outcomes
+    // named — otherwise "do not treat it as fact" reads as "discard it".
+    expect(section).toMatch(/all of it, some of it later, or none of it/);
+});
+
+test('the interrupted line is marked where it was cut, inside the transcript itself', () => {
+    const { directorSnapshot } = buildDirectionSources(interruptedSnapshot, { mechanicsEnabled: true });
+    // A transcript line that simply stops mid-clause is indistinguishable from
+    // a performer that had little to say. The note sits under the line it is
+    // about, not beside the speaker.
+    expect(directorSnapshot).toContain('Sera: Someone takes him by the collar\n[The user cut in here. Nothing past this point was ever shown to them.]');
+    // Only the turn that was cut. The user's own line above it is untouched.
+    expect(directorSnapshot).toContain('Aiden: He steps into the bay.\n\nSera:');
+    expect(directorSnapshot.split('The user cut in here').length - 1).toBe(1);
+});
+
+test('an interruption at character zero is not reported as a beat cut short', () => {
+    // The distinction the design turns on. At zero nothing was read, so nothing
+    // became fiction and there is no half-delivered beat to direct around;
+    // telling the Director one was cut short invites it to write around
+    // something the user never saw. Mid-sentence is the opposite case, and the
+    // two must not arrive as one undifferentiated flag.
+    const { directorSnapshot } = buildDirectionSources({
+        ...interruptedSnapshot,
+        acceptedHistory: [{ id: 112, role: 'user', name: 'Aiden', content: 'He steps into the bay.' }],
+        interruption: { performer: 'Sera', acceptedLength: 0, unspokenRemainder: 'and drags him toward the freight gate.' },
+    }, { mechanicsEnabled: true });
+
+    expect(directorSnapshot).not.toContain('THE INTERRUPTION');
+    // The remainder goes with it. A remainder with no read half in front of it
+    // is a whole beat nobody saw, offered to the Director as though a slice of
+    // it had landed.
+    expect(directorSnapshot).not.toContain('drags him toward the freight gate');
+    expect(directorSnapshot).not.toContain('cut in');
+});
+
+test('a turn cut with nothing left in the buffer says so rather than quoting an empty remainder', () => {
+    const { directorSnapshot } = buildDirectionSources({
+        ...interruptedSnapshot,
+        interruption: { performer: 'Sera', acceptedLength: 31, unspokenRemainder: '' },
+    }, { mechanicsEnabled: true });
+    const section = directorSnapshot.slice(directorSnapshot.indexOf('THE INTERRUPTION'), directorSnapshot.indexOf('CURRENT ACTION'));
+
+    expect(section).toContain('Nothing further had been written when the cut landed');
+    // No empty quotation, and no invitation to rule on a remainder there is
+    // none of.
+    expect(section).not.toContain('""');
+    expect(section).not.toContain('Ruling on it is yours');
+});
+
+test('an ordinary turn carries no interruption section at all', () => {
+    // sceneSnapshot has no `interruption` field and no interrupted history
+    // entry, which is every turn nobody cut into.
+    const { directorSnapshot } = buildDirectionSources(sceneSnapshot, { mechanicsEnabled: true });
+    expect(directorSnapshot).not.toContain('THE INTERRUPTION');
+    expect(directorSnapshot).not.toContain('cut in');
+});

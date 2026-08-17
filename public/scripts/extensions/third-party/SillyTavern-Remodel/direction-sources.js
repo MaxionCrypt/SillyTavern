@@ -367,7 +367,7 @@ function describeCapabilities(capabilities) {
  * because someone added it upstream.
  */
 function describeSnapshot(snapshot) {
-    const { scene, currentAction, cast, narratorRef, persona, acceptedHistory, lore, recentReceipts } = snapshot || {};
+    const { scene, currentAction, cast, narratorRef, persona, acceptedHistory, lore, recentReceipts, interruption } = snapshot || {};
     return [
         section('SCENE', scene?.title),
         section('PERFORMER', describePerformer(narratorRef)),
@@ -376,6 +376,10 @@ function describeSnapshot(snapshot) {
         section('LORE', describeLore(lore)),
         section('RECENT CHANGES', describeReceipts(recentReceipts)),
         section('STORY SO FAR', describeHistory(acceptedHistory, persona)),
+        // Between the transcript and the action, because that is where it
+        // happened: the last line of STORY SO FAR is the response that was cut,
+        // and CURRENT ACTION is what cut it.
+        section('THE INTERRUPTION', describeInterruption(interruption)),
         // Last, and alone under its own heading: this is the event the
         // direction is about, and it is the one line here that is not also
         // inside STORY SO FAR. The user's message IS written to the chat
@@ -454,12 +458,71 @@ function describeReceipts(recentReceipts) {
         .join('\n');
 }
 
-/** The accepted history as a transcript. The bulk of this block, by far. */
+/**
+ * The accepted history as a transcript. The bulk of this block, by far.
+ *
+ * An interrupted turn carries a one-line note under its own text. Without it
+ * the line is prose that stops mid-sentence for no stated reason, and a
+ * Director reading that has no way to tell a cut performance from a performer
+ * that simply had little to say — which is why the same beat came back on the
+ * next turn as though it had never been delivered. The note is placed under
+ * the line rather than beside the speaker so it reads as an annotation on what
+ * was said, and it states the consequence (nothing past here reached the user)
+ * rather than merely labelling the line.
+ */
 function describeHistory(history, persona) {
     return (Array.isArray(history) ? history : []).map((message) => {
         const content = String(message?.content || '').trim();
-        return content ? `${speakerOf(message, persona)}: ${content}` : '';
+        if (!content) return '';
+        const line = `${speakerOf(message, persona)}: ${content}`;
+        return message?.interrupted
+            ? `${line}\n[The user cut in here. Nothing past this point was ever shown to them.]`
+            : line;
     }).filter(Boolean).join('\n\n');
+}
+
+/**
+ * The interruption the next direction has to be written around.
+ *
+ * THE FRAMING IS THE FEATURE, and it has exactly one thing to get right: the
+ * remainder must never read as something that occurred. It is text a performer
+ * was part-way through delivering when the user cut in; it never reached the
+ * user, so by the design's own rule — only fiction the user actually read may
+ * change what is established — it is not fiction and nothing in it has
+ * happened. A Director that takes it as fact will have the scene refer back to
+ * events the user never read, which is a worse failure than the restart this
+ * whole section exists to fix, and an invisible one: the user cannot tell a
+ * hallucinated callback from a beat they skimmed. So the text is introduced as
+ * an intention, quoted rather than narrated (a quotation is plainly something
+ * said-or-not, where a paraphrase blends into the record around it), and
+ * followed immediately by what must not be done with it and what may.
+ *
+ * The read half gets the opposite treatment in the same breath: it IS fiction,
+ * it stands, and it has already been delivered — which is the sentence that
+ * actually stops the re-issue. Telling the Director only that an interruption
+ * happened leaves "so start that beat again" as a perfectly reasonable reading.
+ *
+ * An interruption that reached this function at all is one where something was
+ * read; character zero never gets here (live-direction.js's
+ * describeRunInterruption), because at zero there is no half-delivered beat and
+ * no reason to say anything to the Director about it.
+ */
+function describeInterruption(interruption) {
+    const performer = String(interruption?.performer || '').trim() || 'The performer';
+    const acceptedLength = Math.floor(Number(interruption?.acceptedLength));
+    if (!Number.isFinite(acceptedLength) || acceptedLength <= 0) return '';
+    const remainder = String(interruption.unspokenRemainder || '').trim();
+    const read = `${performer} was still delivering the last response in STORY SO FAR when the user cut in. It stops at the exact character the user had read up to, ${acceptedLength} in. Everything up to that point was read, so it is fiction and it stands — and it has already been delivered, so do not direct it to be given again from the beginning.`;
+    if (!remainder) {
+        return `${read}\nNothing further had been written when the cut landed, so there is no unsaid remainder to rule on. Direct the next response onward from where the reading stopped.`;
+    }
+    return [
+        read,
+        `${performer} had not finished. This is the rest of what was about to be delivered, which never reached the user:`,
+        `"${remainder}"`,
+        'Treat that as an unspoken intention, not as an event. None of it has happened, none of it is established, and nobody in the scene has seen or heard it. Never refer to it, or to anything it implies, as something that occurred.',
+        `Ruling on it is yours. Decide how much of it survives what the user has just done — all of it, some of it later, or none of it — and say so in your entries, so ${performer} knows what is still to come and what has been overtaken.`,
+    ].join('\n');
 }
 
 /**

@@ -870,7 +870,28 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         role: message.is_user ? 'user' : 'assistant',
         name: message.name || '',
         content: sanitizeDirectionText(message.extra?.remodelDirection?.acceptedText ?? message.mes ?? ''),
+        // A transcript line that simply stops mid-sentence is exactly what made
+        // the Director re-issue a beat it had already been given: nothing in the
+        // text said the line was cut rather than finished. Every interrupted
+        // turn in the window is marked, not only the newest one, because a
+        // truncated line two turns back is just as unreadable as a fresh one.
+        interrupted: Boolean(readInterruptionRecord(message)),
     })).filter((message) => message.content.trim());
+    // The interruption this pass is being asked to direct around: the newest
+    // thing in the chat is a performance the user cut into, and no performer
+    // has spoken since. A later completed response answers the question by
+    // existing, so only the LAST entry is consulted — an older interruption is
+    // history the Director already ruled on, and re-offering its unsaid
+    // remainder would invite the same beat to be replayed turns later.
+    //
+    // `effectiveChat`, so the user's own just-posted message (excluded from
+    // this window by identity, above) does not hide the response it interrupted.
+    //
+    // Gated on that message still being inside the rendered history window:
+    // the section below talks about "the last response under STORY SO FAR", and
+    // at a history depth that drops it there is no such response to talk about.
+    const cutOff = effectiveChat[effectiveChat.length - 1];
+    const cutOffRecord = recentChat[recentChat.length - 1] === cutOff ? readInterruptionRecord(cutOff) : null;
     let lore = {};
     try {
         const scan = [action, ...history.slice(-12).reverse().map((message) => message.content)];
@@ -917,6 +938,16 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         narratorRef: scene.liveDirection?.narratorRef || null,
         persona,
         acceptedHistory: history,
+        // What the user cut into, in the performer's own words — the half that
+        // reached them (already in acceptedHistory, ending exactly where the
+        // reveal froze) and the half that did not. Null on an ordinary turn.
+        //
+        // Carried on the snapshot rather than fetched by the renderer because
+        // direction-sources.js takes data in and returns text and imports
+        // nothing at all; a renderer that reached into context.chat for this
+        // would end that, and with it the ability to assert the exact prose the
+        // Director reads from a plain fixture.
+        interruption: cutOffRecord ? { performer: String(cutOff.name || '').trim(), ...cutOffRecord } : null,
         // The Director's own notebook, read back to its author.
         //
         // `readAllEntriesForOwner`, deliberately, NOT `readNarratorEntries`:
@@ -1853,13 +1884,20 @@ async function finalizeRunMessage(run, { state }) {
     // marker to preserve: only fiction the user actually read may change
     // stored state.
     applyPendingRequests(run);
+    const interruption = describeRunInterruption(run);
     journal('finalize', {
         directionId: run.directionId,
         state,
         messageId: run.messageId,
         acceptedLength: accepted.length,
+        // Still "discarded" from the VISIBLE message — the user never read it
+        // and it never becomes prose. It is no longer destroyed: when this turn
+        // was cut short, the same tail is kept on the record below as the
+        // performer's unspoken intention for the Director to rule on.
         discardedLength: Math.max(0, run.rawBufferedText.length - run.rawOffset),
         interrupted: Boolean(run.interrupted),
+        cutShort: Boolean(interruption),
+        unspokenLength: interruption?.unspokenRemainder.length ?? 0,
     }, { correlationId: run.directionId });
     message.mes = accepted;
     if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)) message.swipes[message.swipe_id] = accepted;
@@ -2078,9 +2116,74 @@ function serializeRun(run, state) {
         authorizedGoalIds: [...(run.authorizedGoalIds || [])],
         pendingRequestsApplied: Boolean(run.pendingRequestsApplied),
         interrupted: Boolean(run.interrupted),
+        // What the user cut off, and what the performer had not said yet. Null
+        // on every turn nobody cut into — see describeRunInterruption.
+        interruption: describeRunInterruption(run),
         autonomousSequence: run.autonomousSequence,
         updatedAt: new Date().toISOString(),
     };
+}
+
+/**
+ * The record that says the user cut the performer off mid-delivery, and keeps
+ * the text that never reached them.
+ *
+ * WHY IT IS NOT `run.interrupted`. That flag says "interruptLiveDirection ran",
+ * which is a much wider set than "a performance was cut short": `Stop` on a run
+ * that has already finished revealing goes through the same function and sets
+ * the same flag (see the re-entrancy test in remodel-direction-lifecycle), as
+ * does closing out a run that is sitting at "Waiting for you". Recording those
+ * as interruptions would put a cut-off notice on the Director's desk for every
+ * ordinary completed turn — the loudest possible way to be wrong. `acceptedComplete`
+ * is what completeVisibleRun sets once the whole buffer has been revealed and
+ * accepted, so `interrupted && !acceptedComplete` is the pair that means the
+ * reveal stopped early because the user made it stop.
+ *
+ * NOTHING ACCEPTED RETURNS NULL, and that is the design's distinction, not a
+ * defensive guard. An interruption at character zero is not a small version of
+ * an interruption at character four hundred: nothing was read, so nothing
+ * became fiction, and finalizeRunMessage deletes the message and applies no
+ * state at all. There is no turn for the Director to direct around, and telling
+ * it a beat was cut short would invite it to write around a beat the user never
+ * saw a word of. Mid-sentence is the opposite case: the read half IS fiction and
+ * has to be worked with. The two must not arrive as one flag.
+ *
+ * The remainder is KEPT rather than dropped. It is the tail of the buffer past
+ * `rawOffset` — the exact text the reveal loop had not emitted when it froze —
+ * and it is the only evidence of what the performer was in the middle of doing.
+ * Destroying it is what made an interruption an error instead of an event: a
+ * Director asked to rule on "someone grabs you and drags you toward the door"
+ * cut after "grabs you" cannot decide whether the drag still happens if the
+ * drag no longer exists anywhere. It is stored, and rendered, as an unspoken
+ * intention (direction-sources.js's describeInterruption) — never as something
+ * that occurred, because only fiction the user actually read may change what
+ * is established.
+ */
+function describeRunInterruption(run) {
+    if (!run?.interrupted || run.acceptedComplete) return null;
+    const accepted = sanitizeDirectionText(run.acceptedVisibleText);
+    if (!accepted) return null;
+    return {
+        acceptedLength: accepted.length,
+        unspokenRemainder: sanitizeDirectionText(String(run.rawBufferedText || '').slice(run.rawOffset)).trim(),
+    };
+}
+
+/**
+ * The saved interruption on one chat message, or null.
+ *
+ * `acceptedLength` must be positive for the same reason describeRunInterruption
+ * refuses to write a zero one: a record claiming a performance was cut short
+ * after nothing was read describes a turn that, by the design's own rule, did
+ * not happen. Read defensively here as well because this reads messages saved
+ * by older builds and by other passes, not only ones this session wrote.
+ */
+function readInterruptionRecord(message) {
+    const record = message?.extra?.remodelDirection?.interruption;
+    if (!record || message?.is_user) return null;
+    const acceptedLength = Math.floor(Number(record.acceptedLength));
+    if (!Number.isFinite(acceptedLength) || acceptedLength <= 0) return null;
+    return { acceptedLength, unspokenRemainder: String(record.unspokenRemainder || '').trim() };
 }
 
 function publicRun(run) {
