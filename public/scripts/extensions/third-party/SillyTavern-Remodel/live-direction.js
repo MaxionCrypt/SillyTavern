@@ -16,6 +16,7 @@ import {
 import { buildMechanicalSnapshot, previewMechanicalContext } from './mechanics-runtime.js';
 import { buildDirectionSources, describeAllLore } from './direction-sources.js';
 import { resolveByName } from './direction-address.js';
+import { resolveDirectionActions } from './direction-chrome.js';
 import { deriveBeats } from './direction-beats.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
 import { PROMPT_SOURCE_DEFINITIONS } from './prompt-studio-store.js';
@@ -426,6 +427,134 @@ export async function stopLiveDirection() {
  * beginDirection's (and buildDirectionSnapshot's) questions to answer, not
  * this function's to guess at.
  */
+/**
+ * A direction that was produced and never spoken.
+ *
+ * The Director has no message in the transcript on purpose — one there would
+ * put its entries, secrets included, into the chat history the Narrator reads
+ * — so "the Director went last" is this state rather than anything readable
+ * off the chat. It is what a failed or stopped performer leaves behind, and it
+ * is what the owner sees as "Direction paused".
+ *
+ * IN MEMORY ONLY, and deliberately. The envelope carries this pass's resolved
+ * address book — the closed set of Variable and Goal names the model may
+ * write to — and re-establishing that from a reload would mean persisting the
+ * authorization alongside it. A reload therefore costs the standing direction
+ * and Continue falls back to a fresh pass, which is a worse outcome than
+ * keeping it and a much better one than speaking a direction against an
+ * address book nobody can vouch for.
+ */
+let standingDirection = null;
+
+function rememberStandingDirection({ scene, turn, envelope, performer, autonomousSequence, asked }) {
+    // `asked` is the same fact the abandon-check in beginDirection's `finally`
+    // keys on, and it has to be: a take the performer was never asked to speak
+    // has its entries abandoned there, so remembering it here would leave
+    // Continue offering to speak a direction that has been withdrawn.
+    if (!asked || !envelope || !performer || turn === null) return;
+    standingDirection = { sceneId: scene?.id || '', turn, envelope, performer, autonomousSequence: Number(autonomousSequence) || 0 };
+    journal('standing.kept', { sceneId: standingDirection.sceneId, turn }, {
+        summary: 'direction.standing: the direction was not spoken and is held for Continue',
+    });
+}
+
+function readStandingDirection(scene) {
+    if (!standingDirection) return null;
+    // Scene-scoped for the same reason regenerate is: nothing structurally
+    // prevents two Scenes resolving to the same chat, and a direction spoken
+    // into the wrong one would apply an address book that Scene never
+    // advertised.
+    if (standingDirection.sceneId !== scene?.id) return null;
+    // The turn has to still be there. The owner can delete it from the
+    // notebook panel, and a direction whose entries are gone is a direction
+    // that no longer says anything.
+    if (!notebookTurnEntries(scene, standingDirection.turn).length) {
+        standingDirection = null;
+        return null;
+    }
+    return standingDirection;
+}
+
+/** Whether Continue should speak an existing direction rather than make a new one. */
+export function hasStandingDirection(scene = hooks.getActiveScene()) {
+    return Boolean(readStandingDirection(scene));
+}
+
+export function clearStandingDirection() {
+    standingDirection = null;
+}
+
+/**
+ * Retry: re-run the last step IN PLACE, discarding what it produced.
+ *
+ * Which step that is comes from the same pure resolver the buttons are
+ * labelled from, so the button and the action cannot disagree about what
+ * "last" means — they read one function.
+ */
+export async function retryLiveStep(scene = hooks.getActiveScene()) {
+    const { retry } = resolveDirectionActions(describeDirectionStep(scene));
+    if (retry.target === 'director') {
+        const standing = readStandingDirection(scene);
+        standingDirection = null;
+        // The entries go with the direction they belong to: this is a retake
+        // of that moment, and leaving the discarded take's rulings behind
+        // would have the next Director read its own withdrawn judgment as
+        // settled fact. Filed under the SAME turn number, so a retake of an
+        // earlier moment is not stored as the newest turn.
+        if (standing) discardNotebookTurn(scene, standing.turn);
+        return requestNextDirection(scene, { notebookTurn: standing?.turn ?? null });
+    }
+    if (retry.target === 'narrator') return regenerateLastDirectedResponse(scene);
+    journal('retry.rejected', { reason: retry.reason }, { severity: 'warn' });
+    return false;
+}
+
+/**
+ * Continue: advance to the next step, touching nothing that already exists.
+ */
+export async function continueLiveStep(scene = hooks.getActiveScene()) {
+    const { continue: advance } = resolveDirectionActions(describeDirectionStep(scene));
+    if (advance.target === 'narrator') return speakStandingDirection(scene);
+    if (advance.target === 'director') return requestNextDirection(scene);
+    journal('continue.rejected', { reason: advance.reason }, { severity: 'warn' });
+    return false;
+}
+
+/**
+ * Ask the performer again for a direction that already exists. No Director
+ * call — that is the entire point, and on the owner's own connection it is the
+ * half of the pass that costs seconds rather than milliseconds.
+ */
+async function speakStandingDirection(scene) {
+    const standing = readStandingDirection(scene);
+    if (!standing) return false;
+    standingDirection = null;
+    journal('standing.spoken', { sceneId: standing.sceneId, turn: standing.turn }, {
+        summary: 'direction.standing: speaking the direction that was already made',
+    });
+    return generateDirectedPerformer({
+        scene, envelope: standing.envelope, performer: standing.performer,
+        autonomousSequence: standing.autonomousSequence,
+    });
+}
+
+/** The inputs resolveDirectionActions needs, read from the chat and the store. */
+function describeDirectionStep(scene) {
+    const chat = getContext().chat || [];
+    const last = chat[chat.length - 1];
+    return {
+        hasMessages: chat.length > 0,
+        lastMessageIsUser: Boolean(last?.is_user),
+        standingDirection: hasStandingDirection(scene),
+        busy: Boolean(directionInFlight || activeRun && !['Waiting for you', 'Complete'].includes(activeRun.state)),
+    };
+}
+
+/** What Retry and Continue would do right now, for labelling the buttons. */
+export function describeLiveStepActions(scene = hooks.getActiveScene()) {
+    return resolveDirectionActions(describeDirectionStep(scene));
+}
+
 export async function retryLiveDirection() {
     if (directionInFlight) {
         journal('retry.rejected', { reason: 'a direction is already in flight' }, { severity: 'warn' });
@@ -572,6 +701,11 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
     // not be able to skip it.
     let storedTurn = null;
     let askedThePerformer = false;
+    // What Continue needs to speak a direction that was produced and never
+    // said. Scoped beside the two above and for the same reason: the catch has
+    // to be able to read them, and a throw must not be able to skip past them.
+    let standingEnvelope = null;
+    let standingPerformer = null;
     journal('begin', {
         passId: token.id,
         sceneId: scene.id,
@@ -588,6 +722,12 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
     }, { correlationId: token.id, summary: insertUser ? 'direction.begin (user)' : 'direction.begin (autonomous)' });
     try {
         pendingFailure = null;
+        // Any direction held from an earlier pass is superseded by this one.
+        // Kept beside pendingFailure because they answer the same question —
+        // what is left over from a pass that did not finish — and a leftover
+        // that outlives the moment it was made would have Continue offering to
+        // speak a direction about a scene that has since moved on.
+        standingDirection = null;
         notifyTransient('Directing');
         const ready = await hooks.ensureSceneReady(scene);
         if (!ready) throw new Error('The native chat linked to this Scene could not be loaded.');
@@ -771,8 +911,20 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // empty-response retry path (failEmptyVisibleRun) re-runs this same
         // turn and must be able to read its own notes.
         askedThePerformer = true;
+        standingEnvelope = normalized;
+        standingPerformer = performer;
         return await generateDirectedPerformer({ scene, envelope: normalized, performer, autonomousSequence, token });
     } catch (error) {
+        // A direction the performer was asked to speak and did not is not
+        // wasted — it is the expensive half of the pass, already paid for, and
+        // its notebook entries are standing (the `finally` below abandons a
+        // turn only when the performer was never asked). Keeping it lets
+        // Continue ask the performer again for free, instead of spending a
+        // second Director call to re-derive a direction that already exists.
+        rememberStandingDirection({
+            scene, turn: storedTurn, envelope: standingEnvelope,
+            performer: standingPerformer, autonomousSequence, asked: askedThePerformer,
+        });
         return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage });
     } finally {
         // A take that never reached the performer produced nothing — no

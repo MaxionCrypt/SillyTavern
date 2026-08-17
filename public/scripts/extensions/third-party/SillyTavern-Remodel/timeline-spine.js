@@ -105,6 +105,10 @@ import {
     previewDirectorPrompt,
     regenerateLastDirectedResponse,
     requestNextDirection,
+    retryLiveStep,
+    continueLiveStep,
+    describeLiveStepActions,
+    clearStandingDirection,
     retryLiveDirection,
     sendWithoutLiveDirection,
     setLiveDirectionEnabled,
@@ -3145,6 +3149,36 @@ async function handleAction(element) {
             }
             break;
         }
+        case 'notebook-turn-delete': {
+            const { timelineId, sceneId, turn } = element.dataset;
+            const entries = notebookTurnEntriesForOwner(timelineId, sceneId, turn);
+            if (!entries.length) break;
+            if (!confirm(`Delete all ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} in turn ${turn}? This cannot be undone.`)) break;
+            for (const entry of entries) {
+                deleteDirectorEntry(timelineId, entry.id);
+                if (directorNotebook.editingId === entry.id) directorNotebook.editingId = '';
+            }
+            // A standing direction whose entries are gone says nothing, and
+            // Continue must stop offering to speak it. live-direction drops it
+            // on its own next read, but clearing here means the button updates
+            // with this click rather than on whatever refresh comes later.
+            clearStandingDirection();
+            break;
+        }
+        case 'notebook-turn-rerun': {
+            const { timelineId, sceneId, turn } = element.dataset;
+            const entries = notebookTurnEntriesForOwner(timelineId, sceneId, turn);
+            if (!confirm(`Direct turn ${turn} again? Its ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} will be discarded and the Director asked for a new take.`)) break;
+            for (const entry of entries) deleteDirectorEntry(timelineId, entry.id);
+            directorNotebook.editingId = '';
+            clearStandingDirection();
+            // Filed under the SAME turn number, not a fresh one: this is a
+            // retake of that moment. `nextNotebookTurn` is max+1, so letting
+            // it recompute would file the retake as a new turn and hand the
+            // Narrator this Scene's fiction out of order.
+            requestNextDirection(getActiveScene(), { notebookTurn: Number(turn) });
+            break;
+        }
         case 'create-arc': {
             const title = askForTitle('Arc title?', 'New Arc');
             if (title) {
@@ -4130,7 +4164,17 @@ function renderDirectorNotebook(timeline, store) {
         </div>
         <div class="remodel-notebook-turns">
             ${turns.length
-        ? turns.map((group) => renderNotebookTurn(timeline, group)).join('')
+        ? turns.map((group) => renderNotebookTurn(timeline, group, {
+            sceneId: activeSceneId,
+            // Newest turn of the Scene the app is actually on, and only when
+            // that Scene is directed. `turns` is filtered, so "newest" is read
+            // from the unfiltered entries — otherwise filtering to `secret`
+            // would make whatever secret turn happened to be last look like
+            // the newest turn in the Scene.
+            rerunnable: group.turn === newestNotebookTurn(entries)
+                && activeSceneId === getActiveScene()?.id
+                && isDirectedLiveScene(getActiveScene()),
+        })).join('')
         : `<div class="remodel-notebook-empty">
                 <i class="fa-solid fa-note-sticky" aria-hidden="true"></i>
                 <p>${entries.length ? 'No entries match this filter.' : 'No Director entries yet for this Scene.'}</p>
@@ -4139,17 +4183,47 @@ function renderDirectorNotebook(timeline, store) {
     </section>`;
 }
 
-function renderNotebookTurn(timeline, group) {
+/**
+ * @param {object} timeline
+ * @param {object} group one turn's entries
+ * @param {{sceneId: string, rerunnable: boolean}} context `rerunnable` is true
+ *        only for the newest turn of the Scene the app is actually on. A
+ *        rerun of an older turn would direct a moment the story has already
+ *        narrated past, producing a direction for a scene that no longer
+ *        exists — so it is not offered rather than offered and refused.
+ */
+function renderNotebookTurn(timeline, group, context) {
     const allWithheld = group.entries.length > 0 && group.entries.every((entry) => entry.abandoned);
+    const turnAttrs = `data-timeline-id="${escapeAttribute(timeline.id)}" data-scene-id="${escapeAttribute(context.sceneId)}" data-turn="${escapeAttribute(String(group.turn))}"`;
     return `<section class="remodel-notebook-turn">
         <header>
             <span>Turn ${group.turn}</span>
             ${allWithheld ? '<span class="remodel-notebook-turn-flag"><i class="fa-solid fa-ban" aria-hidden="true"></i> Cancelled take — withheld from the Narrator</span>' : ''}
+            <span class="remodel-notebook-turn-actions">
+                ${context.rerunnable
+        ? `<button type="button" title="Direct this moment again — discards these entries and asks the Director for a new take" data-remodel-timeline-action="notebook-turn-rerun" ${turnAttrs}><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Rerun</button>`
+        : ''}
+                <button type="button" class="danger" title="Delete every entry in this turn" data-remodel-timeline-action="notebook-turn-delete" ${turnAttrs}><i class="fa-solid fa-trash-can" aria-hidden="true"></i> Delete turn</button>
+            </span>
         </header>
         <ul class="remodel-notebook-entries">
             ${group.visible.map((entry) => renderNotebookEntry(timeline, entry)).join('')}
         </ul>
     </section>`;
+}
+
+/** The highest turn number present, or null when there are no entries. */
+function newestNotebookTurn(entries) {
+    const turns = (entries || []).map((entry) => Number(entry.turn)).filter(Number.isFinite);
+    return turns.length ? Math.max(...turns) : null;
+}
+
+/** One turn's entries, read fresh from the store at the moment of the click. */
+function notebookTurnEntriesForOwner(timelineId, sceneId, turn) {
+    const wanted = Number(turn);
+    if (!timelineId || !Number.isFinite(wanted)) return [];
+    return readAllEntriesForOwner(timelineId, { sceneId: sceneId || '' })
+        .filter((entry) => Number(entry.turn) === wanted);
 }
 
 function renderNotebookEntry(timeline, entry) {
@@ -8328,6 +8402,17 @@ function renderRoleplayComposer(root) {
         ? 'data-remodel-rp-action="trigger"'
         : 'data-remodel-rp-act-disabled="Only in group scenes — there\'s just one character here"';
 
+    // What Retry and Continue would do from where the loop currently stands.
+    // Read once here and used for the label, the tooltip AND the enabled state,
+    // so a button cannot offer something the handler would then refuse — the
+    // handler resolves the same function against the same inputs.
+    //
+    // Directed Scenes only. In free play these buttons map onto core's own
+    // regenerate/continue, which have no Director step to be between.
+    const step = isDirectedLiveScene(activeScene)
+        ? describeLiveStepActions(activeScene)
+        : { retry: { target: 'narrator', reason: 'Regenerate the last response' }, continue: { target: 'narrator', reason: 'Generate the next response' } };
+
     zone.innerHTML = `
         <div class="remodel-rp-command-dock" aria-label="Roleplay commands">
             <button type="button" class="remodel-rp-command remodel-rp-nextspeaker" ${nextSpeakerAttrs} title="${inGroup ? 'Choose the next speaker' : 'Next speaker is only available in group scenes'}">
@@ -8335,11 +8420,11 @@ function renderRoleplayComposer(root) {
                 <span class="remodel-rp-command-stack"><small>Next speaker</small><strong>AI decides</strong></span>
                 ${inGroup ? '<i class="fa-solid fa-chevron-down remodel-rp-command-caret" aria-hidden="true"></i>' : ''}
             </button>
-            <button type="button" class="remodel-rp-command remodel-rp-act" data-remodel-rp-action="regenerate" title="Regenerate">
-                <span class="remodel-rp-command-icon"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Regenerate</span>
+            <button type="button" class="remodel-rp-command remodel-rp-act" ${stepAttrs(step.retry, 'regenerate')} title="${escapeAttribute(step.retry.reason)}">
+                <span class="remodel-rp-command-icon"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i></span><span class="remodel-rp-command-label">${escapeHtml(stepLabel('Retry', step.retry))}</span>
             </button>
-            <button type="button" class="remodel-rp-command remodel-rp-act" data-remodel-rp-action="next" title="Generate the next response">
-                <span class="remodel-rp-command-icon"><i class="fa-solid fa-forward-step" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Next</span>
+            <button type="button" class="remodel-rp-command remodel-rp-act" ${stepAttrs(step.continue, 'next')} title="${escapeAttribute(step.continue.reason)}">
+                <span class="remodel-rp-command-icon"><i class="fa-solid fa-forward-step" aria-hidden="true"></i></span><span class="remodel-rp-command-label">${escapeHtml(stepLabel('Continue', step.continue))}</span>
             </button>
             <button type="button" class="remodel-rp-command remodel-rp-act" ${triggerAttrs} title="Trigger a group member">
                 <span class="remodel-rp-command-icon"><i class="fa-solid fa-bolt" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Trigger&hellip;</span>
@@ -9338,6 +9423,33 @@ function autosizeRoleplayInput(input) {
     input.style.height = Math.min(input.scrollHeight, 160) + 'px';
 }
 
+/**
+ * A step button's wiring: live when it has something to do, and inert with a
+ * stated reason when it does not.
+ *
+ * `data-remodel-rp-act-disabled` is the dock's existing idiom for "present but
+ * refusing, and able to say why" — the same one the group-only controls use —
+ * rather than a `disabled` attribute the user can hover and learn nothing from.
+ */
+function stepAttrs(action, name) {
+    return action.target
+        ? `data-remodel-rp-action="${name}"`
+        : `data-remodel-rp-act-disabled="${escapeAttribute(action.reason)}"`;
+}
+
+/**
+ * "Retry" and "Continue" name the verb; the suffix names what it will act on.
+ *
+ * Worth the extra word because the two targets are not interchangeable: a
+ * Continue that speaks a standing direction costs one generation, and a
+ * Continue that directs the next moment costs a Director call as well. The
+ * suffix is the only thing on screen that distinguishes them.
+ */
+function stepLabel(verb, action) {
+    if (!action.target) return verb;
+    return `${verb} · ${action.target === 'director' ? 'Director' : 'Narrator'}`;
+}
+
 // Maps the roleplay action buttons onto core's real controls. Reuses the
 // same native buttons the story action bar drives, so behavior is
 // identical to native — no reimplementation of generation/regeneration.
@@ -9345,7 +9457,12 @@ function handleRoleplayAction(action) {
     switch (action) {
         case 'regenerate': {
             if (isDirectedLiveScene(getActiveScene())) {
-                regenerateLastDirectedResponse(getActiveScene());
+                // Retry, not regenerate: re-runs the last STEP of the loop in
+                // place, which is the Director when a direction is standing
+                // unspoken and the performer otherwise. retryLiveStep decides
+                // that from the same resolver the button is labelled from, so
+                // the label and the action cannot disagree.
+                retryLiveStep(getActiveScene());
                 break;
             }
             // core's regenerate = swipe/regenerate the last message. Flip the
@@ -9362,7 +9479,11 @@ function handleRoleplayAction(action) {
         }
         case 'next': {
             if (isDirectedLiveScene(getActiveScene())) {
-                requestNextDirection(getActiveScene());
+                // Continue advances the loop by one step without touching
+                // what is already there. When a direction is standing that
+                // means asking the performer to speak it — no second Director
+                // call, which is the expensive half.
+                continueLiveStep(getActiveScene());
                 break;
             }
             // Advance the group's turn / continue — core's continue option.

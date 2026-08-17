@@ -40,6 +40,71 @@
  *        - `idle`: neither. Both surfaces come down; a plain generating
  *          indicator (free play) is the caller's business, not this one's.
  */
+/**
+ * What Retry and Continue mean right now.
+ *
+ * Two verbs, and the difference between them is the whole point:
+ *
+ * - **Retry** re-runs the last thing that happened, IN PLACE. It deletes what
+ *   that step produced — the message, and the notebook entries if the step was
+ *   a direction — and does it again. It never appends.
+ * - **Continue** advances to whatever comes next in the loop. It never touches
+ *   what is already there.
+ *
+ * The Director deliberately has no message in the transcript: putting one there
+ * would place its entries, secrets included, in the chat history the Narrator
+ * reads, and its isolation would then depend on a filter rather than on the
+ * text never being there. So "the last message was the Director's" cannot be
+ * read off the chat, and is instead the `standingDirection` state — a direction
+ * was produced and the performer never spoke it. That is what a failed or
+ * stopped pass leaves behind, and it is the state the owner sees as "Direction
+ * paused".
+ *
+ * PURE, and separated from the store queries that answer its inputs, because
+ * this is a three-way branch over two booleans and one message shape — exactly
+ * the kind of thing that was hand-decided in two places once already (see the
+ * defect above) and got it wrong in one of them.
+ *
+ * @param {{lastMessageIsUser?: boolean, hasMessages?: boolean,
+ *          standingDirection?: boolean, busy?: boolean}} [input]
+ * @returns {{retry: {target: 'director'|'narrator'|null, reason: string},
+ *            continue: {target: 'director'|'narrator'|null, reason: string}}}
+ *          `target` is null when the action cannot do anything, and `reason`
+ *          says why — a disabled button that cannot explain itself is the
+ *          thing this return shape exists to prevent.
+ */
+export function resolveDirectionActions({
+    lastMessageIsUser = false, hasMessages = false, standingDirection = false, busy = false,
+} = {}) {
+    if (busy) {
+        return {
+            retry: { target: null, reason: 'Something is already running.' },
+            continue: { target: null, reason: 'Something is already running.' },
+        };
+    }
+    // Checked FIRST, before the chat is consulted at all. A standing direction
+    // sits after the last chat message by definition — it was produced in
+    // response to it — so whatever that message is says nothing about what
+    // should happen next while a direction is waiting to be spoken.
+    if (standingDirection) {
+        return {
+            retry: { target: 'director', reason: 'Direct this moment again, discarding the direction that was not spoken.' },
+            continue: { target: 'narrator', reason: 'Let the performer speak the direction that is already standing.' },
+        };
+    }
+    if (hasMessages && !lastMessageIsUser) {
+        return {
+            retry: { target: 'narrator', reason: 'Replace the last response.' },
+            continue: { target: 'director', reason: 'Direct the next moment.' },
+        };
+    }
+    return {
+        // The user's own message is theirs to edit, not ours to regenerate.
+        retry: { target: null, reason: hasMessages ? 'The last message is yours — edit it instead.' : 'Nothing has happened yet.' },
+        continue: { target: 'director', reason: 'Direct the next moment.' },
+    };
+}
+
 export function resolveDirectionChromeMode({ run = null, uiState = null } = {}) {
     // `directionId` is assigned once, in generateDirectedPerformer, and
     // publicRun carries it — so it is present on every real run and on no

@@ -12196,6 +12196,48 @@ body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDraw
     letter-spacing: .02em;
 }
 
+/* Pushed to the trailing edge so the turn number and the withheld flag stay
+   together on the reading side, and the destructive controls sit apart from
+   them. */
+.remodel-notebook-turn-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.remodel-notebook-turn-actions > button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border: 1px solid rgba(242, 219, 66, .22);
+    border-radius: 5px;
+    background: transparent;
+    color: rgba(242, 219, 66, .72);
+    font-size: 10px;
+    letter-spacing: .02em;
+    cursor: pointer;
+    transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+
+.remodel-notebook-turn-actions > button:hover {
+    background: rgba(242, 219, 66, .1);
+    border-color: rgba(242, 219, 66, .4);
+    color: rgba(242, 219, 66, .95);
+}
+
+.remodel-notebook-turn-actions > button.danger {
+    border-color: rgba(255, 154, 154, .22);
+    color: rgba(255, 154, 154, .72);
+}
+
+.remodel-notebook-turn-actions > button.danger:hover {
+    background: rgba(255, 120, 120, .12);
+    border-color: rgba(255, 154, 154, .45);
+    color: rgba(255, 178, 178, .95);
+}
+
 .remodel-notebook-entries {
     display: flex;
     flex-direction: column;
