@@ -90,6 +90,97 @@ test('the protocol describes the untagged-line rule the parser actually implemen
         .toEqual({ type: 'note', text: 'Colour before any tag.' });
 });
 
+// --- the Director's own notebook (review I5) --------------------------------
+//
+// The notebook was write-only from its author's side: entries reached the
+// Narrator (filtered) and the owner's panel, and nothing fed them back to the
+// Director. A `[secret]` therefore reached NOBODY on the next turn, so a
+// hidden twist could not survive one turn — in a design whose decision table
+// promises "an active member with a persistent notebook".
+//
+// `directorNotebook` is the one function-form source: compilePromptRecipe
+// calls it with the block's own `settings`, which is how a per-block depth
+// reaches a source without becoming part of what is sent.
+
+const notebookEntries = [
+    { turn: 1, type: 'note', text: 'The rain has not let up.' },
+    { turn: 2, type: 'ruling', text: 'Teo answers once Eli sits.' },
+    { turn: 2, type: 'secret', text: 'The boy already knows she will.' },
+    { turn: 3, type: 'result', text: 'Eli sat.' },
+];
+
+function notebookSource(entries, settings) {
+    return buildDirectionSources({ ...snapshot, notebook: entries }, { mechanicsEnabled: true })
+        .directorNotebook(settings);
+}
+
+test("the Director's notebook source is a function that reads the block's own depth", () => {
+    // Not a string. If it were, the depth setting could not reach it and the
+    // source would be as inert as the control that used to configure it.
+    const { directorNotebook } = buildDirectionSources(snapshot, { mechanicsEnabled: true });
+    expect(typeof directorNotebook).toBe('function');
+});
+
+test('the Director sees its own secrets, which is the whole point of feeding the notebook back', () => {
+    const text = notebookSource(notebookEntries, { depth: 3 });
+    expect(text).toContain('The boy already knows she will.');
+    // Labelled as what it is, so the Director knows the performer never saw it
+    // and can still choose to reveal it in a later ruling.
+    expect(text).toMatch(/Secret, never shown to the performer: The boy already knows she will\./);
+});
+
+test('depth counts turns, oldest first, so the newest turn lands closest to the request', () => {
+    const narrow = notebookSource(notebookEntries, { depth: 1 });
+    expect(narrow).toContain('Eli sat.');
+    expect(narrow).not.toContain('Teo answers once Eli sits.');
+    expect(narrow).not.toContain('The rain has not let up.');
+
+    const wide = notebookSource(notebookEntries, { depth: 2 });
+    // Ordering, not just membership: a turn later in the fiction must appear
+    // later in the text.
+    expect(wide.indexOf('Teo answers once Eli sits.')).toBeLessThan(wide.indexOf('Eli sat.'));
+    expect(wide).not.toContain('The rain has not let up.');
+});
+
+test("a cancelled take's entries are withheld from the Director too, and do not consume a depth slot", () => {
+    // Same asymmetry readNarratorEntries applies, for the same reason: a
+    // secret's turn happened, so it sits inside the window; a cancelled take
+    // did not happen at all, so it is removed before the window is counted —
+    // otherwise it would push a real turn out of view while contributing
+    // nothing in its place.
+    const withCancelled = [
+        { turn: 1, type: 'ruling', text: 'The oldest real turn.' },
+        { turn: 2, type: 'ruling', text: 'A take the user stopped.', abandoned: true },
+        { turn: 3, type: 'ruling', text: 'The newest real turn.' },
+    ];
+    const text = notebookSource(withCancelled, { depth: 2 });
+    expect(text).toContain('The oldest real turn.');
+    expect(text).toContain('The newest real turn.');
+    expect(text).not.toContain('A take the user stopped.');
+});
+
+test('an empty notebook renders nothing rather than an empty heading', () => {
+    expect(notebookSource([], { depth: 3 })).toBe('');
+    expect(notebookSource(undefined, { depth: 3 })).toBe('');
+});
+
+test('a missing depth renders nothing rather than dumping the whole notebook into the prompt', () => {
+    // The recipe normaliser always fills a declared setting, so an absent
+    // depth means a caller outside the recipe path. Rendering an unbounded
+    // notebook there is the worse of the two answers.
+    expect(notebookSource(notebookEntries, {})).toBe('');
+    expect(notebookSource(notebookEntries, undefined)).toBe('');
+});
+
+test('the notebook is not rendered into the Scene Snapshot, which picks its fields explicitly', () => {
+    // The separation the secret guarantee rests on: this text is a
+    // director-mode source and nothing else. A snapshot that rendered it would
+    // put secrets into a block the Narrator preview also compiles.
+    const { directorSnapshot } = buildDirectionSources({ ...snapshot, notebook: notebookEntries }, { mechanicsEnabled: true });
+    expect(directorSnapshot).not.toContain('The boy already knows she will.');
+    expect(directorSnapshot).not.toContain('Teo answers once Eli sits.');
+});
+
 test('the protocol carries no pacing, autonomy or style policy', () => {
     const { directionProtocol } = buildDirectionSources(snapshot, { mechanicsEnabled: true });
     expect(directionProtocol).not.toMatch(/pacing|rhythm|opening|breath|length/i);

@@ -20,8 +20,54 @@ test('a new director recipe carries the expected blocks in order', () => {
         'directorCard',
         'message',
         'mechanicsSkill',
+        // The Director's own notebook, read back before the Scene Snapshot:
+        // the memory is read before the moment it is being asked about, and
+        // after the mechanics block whose names its entries refer to.
+        'directorNotebook',
         'directorSnapshot',
     ]);
+});
+
+test('the seeded notebook block carries its declared depth, so the source is not wired-and-inert', () => {
+    const recipe = createPromptRecipe({ name: 'Test Director', mode: 'director', apiType: 'chat' });
+    const notebook = recipe.blocks.find((block) => block.sourceKey === 'directorNotebook');
+    expect(notebook.settings.depth).toBe(3);
+});
+
+test('an existing Director recipe is migrated to carry the notebook block, defaulted to depth 3', () => {
+    // THE path the guarantee actually lives on, and the one this plan has been
+    // bitten by twice: `ensureDirectorNotebookSource` splices a fresh block
+    // into an ALREADY-NORMALIZED blocks array, so without the re-normalize
+    // beside it the migrated block keeps `settings: {}`, the source renders
+    // nothing, and every other symptom looks healthy — the feature wired and
+    // inert.
+    //
+    // Rolled back to a real pre-upgrade shape rather than hand-built: strip
+    // the block seeding just added and set the version back to what a
+    // pre-existing user would have stored.
+    const settings = __setExtensionSettings({});
+    getPromptStudioStore();
+    const store = settings.remodel.promptStudioV1;
+    const director = Object.values(store.recipes).find((recipe) => recipe.mode === 'director');
+    director.blocks = director.blocks.filter((block) => block.sourceKey !== 'directorNotebook');
+    store.version = 6;
+
+    const migrated = Object.values(getPromptStudioStore().recipes).find((recipe) => recipe.mode === 'director');
+    const notebook = migrated.blocks.find((block) => block.sourceKey === 'directorNotebook');
+    expect(notebook).toBeDefined();
+    expect(notebook.settings.depth).toBe(3);
+    // Placed before the Scene Snapshot, not appended after it — the memory is
+    // read before the moment it is being asked about.
+    const keys = migrated.blocks.map((block) => block.sourceKey);
+    expect(keys.indexOf('directorNotebook')).toBeLessThan(keys.indexOf('directorSnapshot'));
+});
+
+test('a Director recipe that already has the notebook block is not given a second one', () => {
+    const settings = __setExtensionSettings({});
+    getPromptStudioStore();
+    settings.remodel.promptStudioV1.version = 6;
+    const migrated = Object.values(getPromptStudioStore().recipes).find((recipe) => recipe.mode === 'director');
+    expect(migrated.blocks.filter((block) => block.sourceKey === 'directorNotebook')).toHaveLength(1);
 });
 
 test('the protocol and snapshot blocks are locked, the style block is not', () => {

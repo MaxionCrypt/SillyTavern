@@ -18,6 +18,7 @@ import { buildDirectionSources } from './direction-sources.js';
 import { resolveByName } from './direction-address.js';
 import { deriveBeats } from './direction-beats.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
+import { PROMPT_SOURCE_DEFINITIONS } from './prompt-studio-store.js';
 import { parseDirectorReply } from './director-reply.js';
 import { filterNarratorHistory } from './narrator-history.js';
 import {
@@ -900,6 +901,23 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         narratorRef: scene.liveDirection?.narratorRef || null,
         persona,
         acceptedHistory: history,
+        // The Director's own notebook, read back to its author.
+        //
+        // `readAllEntriesForOwner`, deliberately, NOT `readNarratorEntries`:
+        // the Director wrote the secrets and is the one reader they were
+        // always meant to reach. Only the Narrator is excluded, at a
+        // different funnel entirely (formatDirectorNotesPrompt).
+        //
+        // Built HERE, before requestDirection appends this turn's reply, so
+        // what the Director reads is strictly earlier turns — the memory,
+        // not a copy of the thing it is about to write.
+        //
+        // It is not rendered by describeSnapshot (which picks its fields
+        // explicitly, so a new snapshot field starts life unrendered rather
+        // than arriving in the prompt because someone added it upstream). It
+        // reaches the prompt only through the `directorNotebook` recipe
+        // source, which is director-mode only.
+        notebook: readAllEntriesForOwner(scene.timelineId, { sceneId: scene.id }),
         lore: { before: lore.worldInfoBefore || '', after: lore.worldInfoAfter || '', examples: lore.worldInfoExamples || [], depth: lore.worldInfoDepth || [] },
         mechanics,
         // Receipts carry before/after snapshots of whole records, which is how
@@ -955,10 +973,19 @@ function compileDirectorPrompt(snapshot, { mechanicsEnabled = false, trace = fal
     const compiledCount = prompt?.length || 0;
     const usedFallback = !prompt?.length || !prompt.some((message) => message.content.includes(sources.directionProtocol.slice(0, 40)));
     if (usedFallback) {
+        // The notebook is resolved at the DECLARED default depth here, read
+        // from the source definition rather than written out again — the
+        // fallback has no recipe and therefore no block settings to consult,
+        // and a second copy of the number would be one more place for the
+        // vocabulary to drift. A Director whose recipe is broken still gets
+        // its memory; losing that as well as the user's style block would
+        // make the fallback worse than it needs to be.
+        const notebook = sources.directorNotebook({ depth: declaredDirectorNotebookDepth() });
         prompt = [
             { role: 'system', content: sources.directionProtocol },
             ...(sources.directorCard ? [{ role: 'system', content: sources.directorCard }] : []),
             ...(sources.mechanicsSkill ? [{ role: 'system', content: sources.mechanicsSkill }] : []),
+            ...(notebook ? [{ role: 'system', content: notebook }] : []),
             { role: 'user', content: sources.directorSnapshot },
         ];
         // The trace describes the user's recipe, and the recipe is no longer
@@ -967,6 +994,12 @@ function compileDirectorPrompt(snapshot, { mechanicsEnabled = false, trace = fal
         trail = [];
     }
     return { recipe, sources, prompt, usedFallback, compiledCount, trace: trail };
+}
+
+/** The `directorNotebook` source's own declared default depth — one place. */
+function declaredDirectorNotebookDepth() {
+    return PROMPT_SOURCE_DEFINITIONS.director
+        .find((source) => source.key === 'directorNotebook')?.settings?.depth?.default;
 }
 
 /**

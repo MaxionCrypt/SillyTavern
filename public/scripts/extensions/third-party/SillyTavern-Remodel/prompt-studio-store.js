@@ -2,7 +2,7 @@ import { getContext } from '../../../st-context.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 6;
+const STORE_VERSION = 7;
 
 export const PROMPT_MODES = ['story', 'roleplay', 'director'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
@@ -57,6 +57,25 @@ export const PROMPT_SOURCE_DEFINITIONS = Object.freeze({
         { key: 'directionProtocol', label: 'Direction Protocol', role: 'system' },
         { key: 'directorCard', label: 'Director Card', role: 'system' },
         { key: 'mechanicsSkill', label: 'Goals & Variables', role: 'system' },
+        // The Director reading its own notebook back. Without this the
+        // notebook was write-only from its author's side: a `[secret]`
+        // reached the Narrator never (by design) and the Director never
+        // (because nothing carried it), so a hidden twist could not survive
+        // one turn. Secrets ARE included — the Director owns them; only the
+        // Narrator is excluded, and that exclusion lives at a different
+        // funnel entirely (readNarratorEntries).
+        //
+        // No `nativeIdentifier`, unlike the roleplay sources: a director
+        // recipe is never mirrored into SillyTavern's native Prompt Manager
+        // (isNativeApplicableMode refuses it). It is compiled by Remodel and
+        // streamed on its own, so the compile IS the delivery route.
+        {
+            key: 'directorNotebook',
+            label: 'Your Notebook',
+            role: 'system',
+            description: 'The Director\'s own entries from earlier turns of this Scene, secrets included — the memory a hidden twist has to survive in. Never reaches the performer.',
+            settings: { depth: { type: 'number', label: 'Turns to include', min: 1, max: 20, default: 3 } },
+        },
         { key: 'directorSnapshot', label: 'Scene Snapshot', role: 'user' },
     ]),
 });
@@ -358,8 +377,32 @@ function defaultDirectorBlocks() {
         createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directorCard', enabled: true, locked: false }),
         createPromptBlock({ kind: 'message', role: 'system', enabled: true, locked: false, content: DIRECTOR_STYLE_DEFAULT }),
         createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'mechanicsSkill', enabled: true, locked: false }),
+        // The only block in this list that declares settings, so the only one
+        // whose `mode` could matter: `normalizeBlock` derives settings from
+        // its mode's source definitions, and without a mode this would be
+        // `settings: {}` and a source that renders nothing.
+        //
+        // REDUNDANT WITH the recipe-level `normalizeRecipe` every path runs
+        // these blocks through, and stated so on purpose: a mutation showed
+        // removing either one alone leaves the suite green. Both are kept
+        // because this plan has twice shipped a settings-bearing block that
+        // reached production with `settings: {}`, and the covering test
+        // (remodel-director-recipe.test.js) is verified against removing BOTH.
+        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directorNotebook', enabled: true, locked: false, mode: 'director' }),
         createPromptBlock({ kind: 'source', role: 'user', sourceKey: 'directorSnapshot', enabled: true, locked: true }),
     ];
+}
+
+/** Same shape as ensureDirectorNotesSource, for the Director's own side of the
+ *  notebook. Inserted immediately before the Scene Snapshot, so the memory is
+ *  read before the moment it is being asked about — and after the mechanics
+ *  block, whose names its entries refer to. */
+function ensureDirectorNotebookSource(blocks) {
+    if (!Array.isArray(blocks) || blocks.some((block) => block.kind === 'source' && block.sourceKey === 'directorNotebook')) return false;
+    const source = createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directorNotebook', mode: 'director' });
+    const snapshotIndex = blocks.findIndex((block) => block.kind === 'source' && block.sourceKey === 'directorSnapshot');
+    blocks.splice(snapshotIndex >= 0 ? snapshotIndex : blocks.length, 0, source);
+    return true;
 }
 
 /** One-shot: retire the style block that instructs about deleted machinery. */
@@ -519,6 +562,22 @@ function normalizeStore(store, seed) {
     if (previousVersion < 6) {
         for (const recipe of Object.values(store.recipes)) {
             if (recipe?.mode === 'roleplay' && recipe.apiType === 'chat' && ensureDirectorNotesSource(recipe.blocks)) {
+                recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
+                changed = true;
+            }
+        }
+    }
+    // The Director's own side of the notebook. Same shape and the same
+    // re-normalize as the migration above, and for the same reason: the
+    // spliced block declares `settings`, and without the re-normalize it
+    // would carry `settings: {}` instead of the declared depth — a source
+    // that appears in the editor and renders nothing.
+    //
+    // Runs after the active-slot loop, so a director recipe seeded on this
+    // very load already has the block and matches nothing here.
+    if (previousVersion < 7) {
+        for (const recipe of Object.values(store.recipes)) {
+            if (recipe?.mode === 'director' && ensureDirectorNotebookSource(recipe.blocks)) {
                 recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
                 changed = true;
             }

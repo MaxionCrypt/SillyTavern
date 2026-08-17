@@ -53,11 +53,19 @@ function rebuildFromTrace(trace) {
     return byMessage.map((message) => ({ role: message.role, content: message.chunks.join('\n\n') }));
 }
 
-/** Sources for the seeded Director recipe, distinct enough to be traceable. */
+/**
+ * Sources for the seeded Director recipe, distinct enough to be traceable.
+ *
+ * `directorNotebook` is a FUNCTION, matching what `buildDirectionSources`
+ * actually returns for it — it is the one source resolved from the block's own
+ * `settings`, and a plain string here would let the trace pass while the real
+ * (function-form) resolution went untraced.
+ */
 const directorSources = Object.freeze({
     directionProtocol: 'PROTOCOL: reply with an envelope.',
     directorCard: 'CARD: the Director judges, never speaks.',
     mechanicsSkill: 'MECHANICS: two Variables are in play.',
+    directorNotebook: (settings) => `NOTEBOOK: the last ${settings?.depth} turns, secrets included.`,
     directorSnapshot: 'SNAPSHOT: the scene so far.',
 });
 

@@ -1147,6 +1147,47 @@ test('a cancelled take does not consume a slot in the Narrator depth window', ()
     expect(window.map((entry) => entry.text)).toEqual(['oldest real turn', 'newest real turn']);
 });
 
+test("the Director reads its own notebook back on the next turn, secrets and all, while the Narrator still cannot", async () => {
+    // Review I5, end to end through the real transport. The two readers are
+    // asserted against the SAME entry in the SAME run, which is the only way
+    // to show that "secrets reach the Director" and "secrets never reach the
+    // Narrator" are one arrangement rather than two settings that happen to
+    // be configured compatibly today.
+    streamDirector(['[ruling] Teo answers once Eli sits.\n[secret] The boy already knows she will.']);
+    await completeAndSettle();
+    expect(notebook().map((entry) => entry.type)).toEqual(['ruling', 'secret']);
+
+    // Turn two, capturing the prompt core is actually handed — the compiled
+    // recipe, not an intermediate shape.
+    let directorPrompt = '';
+    setLiveDirectionTestAdapters({ generatePerformer: speak });
+    __setOpenAIRequestHandler(({ messages }) => {
+        directorPrompt = messages.map((message) => message.content).join('\n\n');
+        return async function* streamData() {
+            yield { text: '[note] Turn two happens.', state: { reasoning: '' } };
+        };
+    });
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    // The Director's own memory, in the prompt it was actually sent.
+    expect(directorPrompt).toContain('Teo answers once Eli sits.');
+    expect(directorPrompt).toContain('The boy already knows she will.');
+    // The notebook block, not some other block that happens to echo the text:
+    // the ruling arrives under the notebook heading with its own label.
+    expect(directorPrompt).toContain('[YOUR NOTEBOOK');
+    // And it is memory, not a copy of the reply it is about to write.
+    expect(directorPrompt).not.toContain('Turn two happens.');
+
+    // The other half, same run, same entry: the Narrator gets turn two's note
+    // and turn one's ruling, and never the secret.
+    const prompt = performerPrompt();
+    expect(prompt).toContain('Turn two happens.');
+    expect(prompt).toContain('Teo answers once Eli sits.');
+    expect(prompt).not.toContain('The boy already knows she will.');
+});
+
 test('a request the mechanics layer cannot read does not void its valid siblings', async () => {
     streamDirector([[
         '[ruling] Two things happen.',

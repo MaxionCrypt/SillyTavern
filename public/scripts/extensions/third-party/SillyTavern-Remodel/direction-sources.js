@@ -6,13 +6,22 @@
 /**
  * @param {object} snapshot the direction snapshot
  * @param {{mechanicsEnabled: boolean}} options
- * @returns {{directionProtocol: string, directorCard: string, mechanicsSkill: string, directorSnapshot: string}}
+ * @returns {{directionProtocol: string, directorCard: string, mechanicsSkill: string,
+ *   directorNotebook: (settings?: {depth?: number}) => string, directorSnapshot: string}}
+ *
+ * `directorNotebook` is a FUNCTION, not a string, and it is the only one.
+ * `compilePromptRecipe` resolves a function-form source by calling it with the
+ * block's own `settings` (prompt-studio.js), which is how a per-block setting
+ * reaches a source without ever becoming part of what is sent — design §5's
+ * third consequence. Every other source here has nothing to configure, so
+ * every other source is a plain string.
  */
 export function buildDirectionSources(snapshot, { mechanicsEnabled = false } = {}) {
     return {
         directionProtocol: PROTOCOL,
         directorCard: snapshot?.director ? describeCard(snapshot.director) : '',
         mechanicsSkill: describeMechanics(snapshot?.mechanics, { mechanicsEnabled }),
+        directorNotebook: (settings) => describeNotebook(snapshot?.notebook, settings?.depth),
         directorSnapshot: describeSnapshot(snapshot),
     };
 }
@@ -70,6 +79,102 @@ If, and only if, anything mechanical changed this turn, close with a single fenc
 \`\`\`state
 {"requests":[{"id":"r1","capability":"variable.adjust","arguments":{"variableRef":"Morale","delta":-1},"reason":"the in-fiction reason this happened, one sentence"}],"flow":{"continue":false}}
 \`\`\``;
+
+/**
+ * The Director reading its OWN notebook back — including the secrets.
+ *
+ * WHY THIS EXISTS: the notebook was write-only from the Director's side. Its
+ * entries reached the Narrator (filtered) and the owner's panel, and nothing
+ * fed them back to their author, so a `[secret]` recorded on turn 4 reached
+ * NOBODY afterwards — not the Narrator by design, and not the Director because
+ * nothing carried it. A hidden twist could not survive one turn, in a design
+ * whose decision table promises "an active member with a persistent notebook,
+ * not a one-shot instruction" and whose contract tells the model to use
+ * `[secret]` "when a Goal or twist must stay hidden". `ruling` and `result`
+ * fared slightly better only because the Narrator's prose echoes them back
+ * into chat history; a secret has no such echo by construction.
+ *
+ * SECRETS ARE INCLUDED HERE ON PURPOSE, and it is not a weakening of the
+ * secret guarantee — it is what the guarantee is FOR. The Director is the
+ * author and owner of its secrets; only the NARRATOR is excluded. The
+ * separation is structural rather than remembered: this text is only ever a
+ * `director`-mode recipe source, and the one funnel to the Narrator
+ * (`formatDirectorNotesPrompt` -> `readNarratorEntries`) filters `secret` at
+ * the store boundary and cannot reach this function.
+ *
+ * `abandoned` entries are excluded, and — as in `readNarratorEntries` —
+ * BEFORE the depth window rather than after, because a cancelled take did not
+ * happen at all and must not push a real turn out of view. Secrets are
+ * inside the window for the same reason they are inside the Narrator's: that
+ * turn happened.
+ *
+ * @param {Array<{turn: number, type: string, text: string, abandoned?: boolean}>} entries
+ *        every stored entry for this Scene, oldest first
+ * @param {number} depth how many TURNS to include, counted like the
+ *        Narrator's: a turn arrives whole or not at all. A missing or
+ *        unusable depth renders nothing — the value is a declared block
+ *        setting the recipe normaliser always fills, so its absence means a
+ *        caller outside the recipe path, and dumping an unbounded notebook
+ *        into a prompt is a worse answer there than dumping none.
+ */
+function describeNotebook(entries, depth) {
+    const turns = notebookTurnsAscending((Array.isArray(entries) ? entries : []).filter((entry) => entry && !entry.abandoned), depth);
+    const body = turns
+        .map(([turn, turnEntries]) => {
+            const lines = turnEntries.map(describeNotebookEntry).filter(Boolean);
+            return lines.length ? `Turn ${turn}\n${lines.join('\n')}` : '';
+        })
+        .filter(Boolean)
+        .join('\n\n');
+    if (!body) return '';
+    return `[YOUR NOTEBOOK — what you wrote on earlier turns of this Scene. The performer never saw the secret entries and still has not.]\n${body}`;
+}
+
+/**
+ * The last `depth` turns present, oldest first — the same ordering STORY SO
+ * FAR uses, so the newest turn lands closest to the request.
+ *
+ * A local grouper rather than a shared one because this module is pure by
+ * contract and the two existing groupers both live in modules that import
+ * `st-context.js`. Deliberately NOT named `groupNotebookEntriesByTurn`: there
+ * are already two functions with that name and opposite sorts
+ * (live-direction.js ascending, timeline-spine.js descending), and adding a
+ * third would make the name mean nothing at all.
+ */
+function notebookTurnsAscending(entries, depth) {
+    const window = Math.max(0, Math.floor(Number(depth)) || 0);
+    if (!window) return [];
+    const byTurn = new Map();
+    for (const entry of entries) {
+        const turn = Number.isFinite(Number(entry.turn)) ? Number(entry.turn) : 0;
+        if (!byTurn.has(turn)) byTurn.set(turn, []);
+        byTurn.get(turn).push(entry);
+    }
+    const ordered = [...byTurn.entries()].sort((a, b) => a[0] - b[0]);
+    return ordered.slice(Math.max(0, ordered.length - window));
+}
+
+/**
+ * Labels the four types for their author.
+ *
+ * A separate map from the Narrator's (live-direction.js's
+ * NOTEBOOK_ENTRY_LABELS) rather than a shared one, because the difference is
+ * the point: this one has a `secret` label, and the Narrator's cannot ever
+ * have one — there is no entry it could caption. Sharing a map between a
+ * reader that must never see a type and a reader that must would put the two
+ * one edit apart.
+ */
+const NOTEBOOK_LABELS = Object.freeze({
+    ruling: 'Ruling, still binding: ',
+    result: 'Established: ',
+    secret: 'Secret, never shown to the performer: ',
+});
+
+function describeNotebookEntry(entry) {
+    const text = String(entry?.text || '').trim();
+    if (!text) return '';
+    return `- ${NOTEBOOK_LABELS[entry?.type] || ''}${text}`;
+}
 
 function describeCard(director) {
     return `[DIRECTOR CARD — directing temperament, not dialogue]
