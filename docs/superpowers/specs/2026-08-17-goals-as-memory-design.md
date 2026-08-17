@@ -24,18 +24,25 @@ converts it to a number; never state a percentage yourself."* The Director is
 forbidden from expressing judgement about how far a Goal moved, and can only
 select from four magnitudes someone else chose.
 
-There is also a plain gap. §13 records it: **Goals have no human authoring
-path.** `createSceneGoal`, `deleteStoryGoal`, `linkGoalToScene`,
-`unlinkGoalFromScene`, `createSceneGoalRelation`, `deleteStoryGoalRelation`,
-`addStoryGoalEvent`, `getGoalEvents` and `getTimelineGoalEvents` are all
-exported and referenced by nothing. `story-goals.js` imports exactly three
-store functions. Every write path to a Goal runs through an AI capability
-request, and the deck's own empty state says so: *"Goal creation will return
-after the timeline-owned system is designed."* That system shipped; the UI
-never caught up.
+There is also a gap in owner authoring, though a narrower one than §13 claims.
 
-That is backwards from Variables, where the owner authors and the Director
-moves what exists.
+§13 says Goals have **no** human authoring path, on the evidence that
+`story-goals.js` imports exactly three store functions. That counts static
+imports only. The deck in fact has a working create form — title, description,
+holder, target, opening chance, visibility — reaching the store through a
+**dynamic** `await import('./story-goals-store.js')`. Creation works. This
+document said otherwise in its first draft, for the same reason.
+
+What genuinely has no path is everything after creation: **edit, delete, link
+an existing Timeline Goal into a Scene, unlink it, and relate two Goals**.
+`deleteStoryGoal`, `linkGoalToScene`, `unlinkGoalFromScene`,
+`createSceneGoalRelation` and `deleteStoryGoalRelation` are exported and
+referenced by nothing. And the deck's empty state still reads *"Goal creation
+will return after the timeline-owned system is designed"* — stale copy above a
+button that works.
+
+So the shape is backwards from Variables in one respect only: the owner can
+make a Goal but cannot afterwards change it, while the Director can do both.
 
 ## The principle
 
@@ -117,10 +124,11 @@ in its notes and reads the value. Nothing binds them in code.
 
 ### 4. The deck becomes an authoring surface
 
-`story-goals.js` gains what its store has always exposed: create, edit, delete,
-link an existing Timeline Goal into this Scene, unlink it, and relate two
-Goals. Every attribute the record holds is editable — title, description,
-holders, targets, visibility, success rate, status, relationships.
+`story-goals.js` gains what its store has always exposed and it has never
+called: edit, delete, link an existing Timeline Goal into this Scene, unlink
+it, and relate two Goals. Creation already works. Every attribute the record
+holds becomes editable — title, description, holders, targets, visibility,
+success rate, status, relationships.
 
 **Creating and bringing-in are different actions.** Goals are Timeline-owned
 and Scenes hold links; the deck's own empty state distinguishes them
