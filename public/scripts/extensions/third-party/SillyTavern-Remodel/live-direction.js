@@ -17,6 +17,7 @@ import { buildMechanicalSnapshot, previewMechanicalContext } from './mechanics-r
 import { buildDirectionSources, describeAllLore } from './direction-sources.js';
 import { resolveByName } from './direction-address.js';
 import { resolveDirectionActions } from './direction-chrome.js';
+import { clearStandingDirection, readStandingDirection, saveStandingDirection } from './standing-direction-store.js';
 import { deriveBeats } from './direction-beats.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
 import { PROMPT_SOURCE_DEFINITIONS } from './prompt-studio-store.js';
@@ -428,60 +429,77 @@ export async function stopLiveDirection() {
  * this function's to guess at.
  */
 /**
- * A direction that was produced and never spoken.
+ * Keep a direction that was produced and never spoken, so Continue can ask the
+ * performer again without paying for a second Director call.
  *
- * The Director has no message in the transcript on purpose — one there would
- * put its entries, secrets included, into the chat history the Narrator reads
- * — so "the Director went last" is this state rather than anything readable
- * off the chat. It is what a failed or stopped performer leaves behind, and it
- * is what the owner sees as "Direction paused".
- *
- * IN MEMORY ONLY, and deliberately. The envelope carries this pass's resolved
- * address book — the closed set of Variable and Goal names the model may
- * write to — and re-establishing that from a reload would mean persisting the
- * authorization alongside it. A reload therefore costs the standing direction
- * and Continue falls back to a fresh pass, which is a worse outcome than
- * keeping it and a much better one than speaking a direction against an
- * address book nobody can vouch for.
+ * PERSISTED, in its own per-Scene bucket, because the Director has no message
+ * in the transcript to hang metadata off — one there would put its entries,
+ * secrets included, into the chat history the Narrator reads. What makes this
+ * safe to persist is that the address book travels with it and is re-validated
+ * on read: see standing-direction-store.js.
  */
-let standingDirection = null;
-
 function rememberStandingDirection({ scene, turn, envelope, performer, autonomousSequence, asked }) {
     // `asked` is the same fact the abandon-check in beginDirection's `finally`
     // keys on, and it has to be: a take the performer was never asked to speak
     // has its entries abandoned there, so remembering it here would leave
     // Continue offering to speak a direction that has been withdrawn.
-    if (!asked || !envelope || !performer || turn === null) return;
-    standingDirection = { sceneId: scene?.id || '', turn, envelope, performer, autonomousSequence: Number(autonomousSequence) || 0 };
-    journal('standing.kept', { sceneId: standingDirection.sceneId, turn }, {
+    if (!asked || !envelope || !performer || turn === null || !scene?.id) return;
+    saveStandingDirection({
+        protocol: DIRECTION_PROTOCOL,
+        sceneId: scene.id,
+        timelineId: scene.timelineId || '',
+        turn,
+        performerRef: performer.ref,
+        ...splitEnvelopeForStorage(envelope),
+        autonomousSequence: Number(autonomousSequence) || 0,
+        // How long the chat was when this direction was made. A longer chat on
+        // read means something was said after it, and this direction is
+        // answering a question the scene has moved past.
+        chatLength: (getContext().chat || []).length,
+    });
+    journal('standing.kept', { sceneId: scene.id, turn }, {
         summary: 'direction.standing: the direction was not spoken and is held for Continue',
     });
 }
 
-function readStandingDirection(scene) {
-    if (!standingDirection) return null;
-    // Scene-scoped for the same reason regenerate is: nothing structurally
-    // prevents two Scenes resolving to the same chat, and a direction spoken
-    // into the wrong one would apply an address book that Scene never
-    // advertised.
-    if (standingDirection.sceneId !== scene?.id) return null;
+/**
+ * The Scene's standing direction, hydrated and vouched for, or null.
+ *
+ * Three ways a stored record is refused, and none of them are load failures:
+ * the protocol and the chat position are checked by the store, the notebook
+ * turn is checked here, and the performer is re-resolved against the CURRENT
+ * cast rather than trusted from the record — a Narrator that has since been
+ * unbound cannot be conjured back by a saved reference.
+ */
+function readStandingDirectionFor(scene) {
+    if (!scene?.id) return null;
+    const saved = readStandingDirection(scene.id, {
+        protocol: DIRECTION_PROTOCOL,
+        chatLength: (getContext().chat || []).length,
+    });
+    if (!saved) return null;
     // The turn has to still be there. The owner can delete it from the
-    // notebook panel, and a direction whose entries are gone is a direction
-    // that no longer says anything.
-    if (!notebookTurnEntries(scene, standingDirection.turn).length) {
-        standingDirection = null;
+    // notebook panel, and a direction whose entries are gone says nothing.
+    if (!notebookTurnEntries(scene, saved.turn).length) {
+        clearStandingDirection(scene.id);
         return null;
     }
-    return standingDirection;
+    const performer = resolvePerformer(saved.performerRef, scene);
+    if (!performer) {
+        journal('standing.dropped', { sceneId: scene.id, turn: saved.turn, reason: 'the performer is no longer in the cast' }, { severity: 'warn' });
+        clearStandingDirection(scene.id);
+        return null;
+    }
+    return { saved, performer };
 }
 
 /** Whether Continue should speak an existing direction rather than make a new one. */
 export function hasStandingDirection(scene = hooks.getActiveScene()) {
-    return Boolean(readStandingDirection(scene));
+    return Boolean(readStandingDirectionFor(scene));
 }
 
-export function clearStandingDirection() {
-    standingDirection = null;
+export function forgetStandingDirection(scene = hooks.getActiveScene()) {
+    return clearStandingDirection(scene?.id || '');
 }
 
 /**
@@ -494,15 +512,16 @@ export function clearStandingDirection() {
 export async function retryLiveStep(scene = hooks.getActiveScene()) {
     const { retry } = resolveDirectionActions(describeDirectionStep(scene));
     if (retry.target === 'director') {
-        const standing = readStandingDirection(scene);
-        standingDirection = null;
+        const standing = readStandingDirectionFor(scene);
+        const turn = standing?.saved?.turn ?? null;
+        forgetStandingDirection(scene);
         // The entries go with the direction they belong to: this is a retake
         // of that moment, and leaving the discarded take's rulings behind
         // would have the next Director read its own withdrawn judgment as
         // settled fact. Filed under the SAME turn number, so a retake of an
         // earlier moment is not stored as the newest turn.
-        if (standing) discardNotebookTurn(scene, standing.turn);
-        return requestNextDirection(scene, { notebookTurn: standing?.turn ?? null });
+        if (turn !== null) discardNotebookTurn(scene, turn);
+        return requestNextDirection(scene, { notebookTurn: turn });
     }
     if (retry.target === 'narrator') return regenerateLastDirectedResponse(scene);
     journal('retry.rejected', { reason: retry.reason }, { severity: 'warn' });
@@ -526,15 +545,21 @@ export async function continueLiveStep(scene = hooks.getActiveScene()) {
  * half of the pass that costs seconds rather than milliseconds.
  */
 async function speakStandingDirection(scene) {
-    const standing = readStandingDirection(scene);
+    const standing = readStandingDirectionFor(scene);
     if (!standing) return false;
-    standingDirection = null;
-    journal('standing.spoken', { sceneId: standing.sceneId, turn: standing.turn }, {
+    const { saved, performer } = standing;
+    // Cleared BEFORE the generation, not after. If this attempt also produces
+    // nothing, beginDirection is not involved and nothing else would clear it
+    // — the record would sit there offering the same failing direction
+    // forever. A failure here leaves the turn's entries standing, so Retry can
+    // still discard them and direct the moment again.
+    forgetStandingDirection(scene);
+    journal('standing.spoken', { sceneId: saved.sceneId, turn: saved.turn }, {
         summary: 'direction.standing: speaking the direction that was already made',
     });
     return generateDirectedPerformer({
-        scene, envelope: standing.envelope, performer: standing.performer,
-        autonomousSequence: standing.autonomousSequence,
+        scene, envelope: hydrateSavedEnvelope(saved, scene), performer,
+        autonomousSequence: Number(saved.autonomousSequence) || 0,
     });
 }
 
@@ -661,20 +686,15 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
         discardNotebookTurn(scene, savedTurn);
         return requestNextDirection(scene, { notebookTurn: savedTurn });
     }
-    const envelope = normalizeEnvelope(saved.envelope, scene);
     // Every pending request that survived to this point (the undo loop above
     // reversed the ones this run actually applied) still needs the same
-    // name-to-id resolution it had originally. Without these, regenerate
-    // would resolve every name against empty Maps and reject them all as
-    // "not advertised" — reverting a Variable or Goal change the user already
-    // read, silently, while the notebook it was reasoned from still stands.
-    envelope.variableRefs = new Map(Object.entries(saved.variableRefs || {}));
-    envelope.goalRefs = new Map(Object.entries(saved.goalRefs || {}));
-    envelope.addressBook = saved.addressBook || { entries: [], duplicates: [] };
-    // Same reason: without the original authorization a persona-held Goal
-    // request would be deferred for review on the replay of a turn the user
-    // already authorized.
-    envelope.authorizedGoalIds = [...(saved.authorizedGoalIds || [])];
+    // name-to-id resolution it had originally. Without it, regenerate would
+    // resolve every name against empty Maps and reject them all as "not
+    // advertised" — reverting a Variable or Goal change the user already read,
+    // silently, while the notebook it was reasoned from still stands. And
+    // without the original authorization a persona-held Goal request would be
+    // deferred for review on the replay of a turn the user already authorized.
+    const envelope = hydrateSavedEnvelope(saved, scene);
     return generateDirectedPerformer({ scene, envelope, performer, autonomousSequence: Number(saved.autonomousSequence) || 0 });
 }
 
@@ -727,7 +747,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // what is left over from a pass that did not finish — and a leftover
         // that outlives the moment it was made would have Continue offering to
         // speak a direction about a scene that has since moved on.
-        standingDirection = null;
+        forgetStandingDirection(scene);
         notifyTransient('Directing');
         const ready = await hooks.ensureSceneReady(scene);
         if (!ready) throw new Error('The native chat linked to this Scene could not be loaded.');
@@ -2247,13 +2267,57 @@ async function recoverLiveDirectionMessages() {
     }
 }
 
+/**
+ * Split an envelope into the part that stores and the authorization that
+ * travels beside it.
+ *
+ * The two Maps stringify to `{}` — which reads like data and is not — so a
+ * record that kept them inline would come back resolving no names at all and
+ * every surviving request would be rejected as never advertised. That is
+ * fail-safe and still wrong: the user already read the fiction those requests
+ * earned.
+ *
+ * One function because there are now three places that persist an envelope
+ * (a run's message metadata, a standing direction, and regenerate reading one
+ * back), and the cost of them disagreeing is silent loss of authorization.
+ */
+function splitEnvelopeForStorage(source) {
+    const { variableRefs, goalRefs, addressBook, authorizedGoalIds, ...envelope } = source || {};
+    return {
+        envelope,
+        variableRefs: Object.fromEntries(variableRefs || []),
+        goalRefs: Object.fromEntries(goalRefs || []),
+        addressBook: addressBook || { entries: [], duplicates: [] },
+        // The user's attached Goal attempts. Without these a request applied
+        // after recovery loses its authority and is deferred to the pending
+        // queue instead of applying.
+        authorizedGoalIds: [...(authorizedGoalIds || [])],
+    };
+}
+
+/** The inverse: a stored record back into an envelope that can be spoken. */
+function hydrateSavedEnvelope(saved, scene) {
+    const envelope = normalizeEnvelope(saved?.envelope, scene);
+    envelope.variableRefs = new Map(Object.entries(saved?.variableRefs || {}));
+    envelope.goalRefs = new Map(Object.entries(saved?.goalRefs || {}));
+    envelope.addressBook = saved?.addressBook || { entries: [], duplicates: [] };
+    envelope.authorizedGoalIds = [...(saved?.authorizedGoalIds || [])];
+    return envelope;
+}
+
 function serializeRun(run, state) {
     // beginDirection attaches the pass's runtime state to the envelope; none
     // of it belongs in the saved copy. The two Maps stringify to `{}`, which
     // reads like data and is not, and addressBook/authorizedGoalIds are
     // written once at the top level below — storing them twice per message
     // made the inert copy look like the authoritative one.
-    const { variableRefs, goalRefs, addressBook, authorizedGoalIds, ...envelope } = run.envelope || {};
+    // The run's own refs, not the envelope's: beginDirection copies them onto
+    // both, and the run's are the ones every acceptance path reads.
+    const stored = splitEnvelopeForStorage({
+        ...(run.envelope || {}),
+        variableRefs: run.variableRefs, goalRefs: run.goalRefs,
+        addressBook: run.addressBook, authorizedGoalIds: run.authorizedGoalIds,
+    });
     return {
         protocol: DIRECTION_PROTOCOL,
         directionId: run.directionId,
@@ -2262,19 +2326,8 @@ function serializeRun(run, state) {
         acceptedText: sanitizeDirectionText(run.acceptedVisibleText),
         revealOffset: run.rawOffset,
         performerRef: run.performer.ref,
-        envelope,
+        ...stored,
         checkpointTransactionIds: [...run.checkpointTransactionIds],
-        // As plain objects: a Map stringifies to {}, so a recovered run would
-        // otherwise resolve no refs at all and every surviving request would
-        // be rejected as never advertised.
-        variableRefs: Object.fromEntries(run.variableRefs || []),
-        goalRefs: Object.fromEntries(run.goalRefs || []),
-        addressBook: run.addressBook || { entries: [], duplicates: [] },
-        // The user's attached Goal attempts. Without these a request applied
-        // after recovery or regenerate loses its authority and is deferred to
-        // the pending-review queue instead of applying — fail-safe, but the
-        // user already read the fiction that earned it.
-        authorizedGoalIds: [...(run.authorizedGoalIds || [])],
         pendingRequestsApplied: Boolean(run.pendingRequestsApplied),
         interrupted: Boolean(run.interrupted),
         // What the user cut off, and what the performer had not said yet. Null

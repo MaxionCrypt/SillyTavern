@@ -108,7 +108,7 @@ import {
     retryLiveStep,
     continueLiveStep,
     describeLiveStepActions,
-    clearStandingDirection,
+    forgetStandingDirection,
     retryLiveDirection,
     sendWithoutLiveDirection,
     setLiveDirectionEnabled,
@@ -3162,7 +3162,7 @@ async function handleAction(element) {
             // Continue must stop offering to speak it. live-direction drops it
             // on its own next read, but clearing here means the button updates
             // with this click rather than on whatever refresh comes later.
-            clearStandingDirection();
+            forgetStandingDirection(getActiveScene());
             break;
         }
         case 'notebook-turn-rerun': {
@@ -3171,7 +3171,7 @@ async function handleAction(element) {
             if (!confirm(`Direct turn ${turn} again? Its ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} will be discarded and the Director asked for a new take.`)) break;
             for (const entry of entries) deleteDirectorEntry(timelineId, entry.id);
             directorNotebook.editingId = '';
-            clearStandingDirection();
+            forgetStandingDirection(getActiveScene());
             // Filed under the SAME turn number, not a fresh one: this is a
             // retake of that moment. `nextNotebookTurn` is max+1, so letting
             // it recompute would file the retake as a new turn and hand the
