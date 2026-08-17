@@ -292,6 +292,36 @@ test('the mechanics skill carries the Goal state the Director is asked to move',
     expect(sources.mechanicsSkill).toMatch(/ATTEMPTED THIS TURN[\s\S]*Survive the night/);
 });
 
+test('the Director is given rate reference points to reason from, not a table to pick from', () => {
+    // The seven bands and four magnitudes used to be lookup tables in
+    // story-goals-math.js, and goal.shift accepted only the four words — so the
+    // Director could not say how far a Goal had actually moved. The numbers are
+    // guidance now; the Director states the rate.
+    const { mechanicsSkill } = buildDirectionSources(snapshot, { mechanicsEnabled: true });
+    expect(mechanicsSkill).toMatch(/\b5\b/);
+    expect(mechanicsSkill).toMatch(/\b95\b/);
+    expect(mechanicsSkill).toMatch(/nearly assured/i);
+});
+
+test('the guidance says code owns the roll and the result binds', () => {
+    const { mechanicsSkill } = buildDirectionSources(snapshot, { mechanicsEnabled: true });
+    expect(mechanicsSkill).toMatch(/code rolls/i);
+});
+
+test('the guidance carries no pacing or style policy', () => {
+    // That belongs to the owner's own recipe. Mixing authorial policy into the
+    // block the Director badge contributes is the problem the whole rework
+    // exists to end — the Director's prompt used to be a hardcoded template
+    // literal blending protocol with taste.
+    const { mechanicsSkill } = buildDirectionSources(snapshot, { mechanicsEnabled: true });
+    expect(mechanicsSkill).not.toMatch(/pacing|rhythm|breath|prose style|tone of the/i);
+});
+
+test('rate guidance is omitted when there are no Goals to rate', () => {
+    const bare = { ...snapshot, mechanics: { ...snapshot.mechanics, goals: [] } };
+    expect(buildDirectionSources(bare, { mechanicsEnabled: true }).mechanicsSkill).not.toMatch(/nearly assured/i);
+});
+
 test('the capability dictionary is rendered, and its heading is omitted when there is none', () => {
     expect(buildDirectionSources(snapshot, { mechanicsEnabled: true }).mechanicsSkill).toContain('variable.adjust');
     const bare = { ...snapshot, mechanics: { ...snapshot.mechanics, capabilities: [] } };

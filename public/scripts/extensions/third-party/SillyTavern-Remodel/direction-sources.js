@@ -213,6 +213,7 @@ function describeMechanics(mechanics, { mechanicsEnabled = false } = {}) {
         mechanicsEnabled ? section('CAPABILITIES', describeCapabilities(mechanics?.capabilities)) : '',
         section('VARIABLES', mechanics?.serializedVariables || '(none retrieved this turn)', describeRetrieval(mechanics?.retrieval)),
         section('GOALS', goals.map(describeGoal).join('\n') || '(none active)'),
+        mechanicsEnabled && goals.length ? section('RATING A GOAL', rateGuidance()) : '',
         section('RELATIONSHIPS', describeRelationships(mechanics?.relationships, titleByRef)),
         section('ATTEMPTED THIS TURN', describeAttempts(mechanics?.authorizedGoalRefs, titleByRef)),
     ].filter(Boolean);
@@ -250,6 +251,25 @@ function section(title, body, note = '') {
  * a named band, and the Director was previously shown only title and status —
  * asked to shift a value it could not read.
  */
+/**
+ * What a Success Rate means, and roughly what a given chance is worth.
+ *
+ * These numbers used to be two lookup tables in story-goals-math.js —
+ * seven named bands and four movement magnitudes — and `goal.shift` accepted
+ * only the four words, with a schema line telling the model "never state a
+ * percentage yourself". So the Director could not express how far a Goal had
+ * actually moved; it could only pick one of four sizes someone else chose.
+ *
+ * They are reference points now. The Director reads them and states a number,
+ * which is the whole difference between a rulebook and guidance.
+ */
+function rateGuidance() {
+    return `A Success Rate is the chance a decisive attempt lands from the position the fiction has reached. These are reference points, not a list to choose from — state the number that fits:
+  5 nearly impossible · 15 extreme · 30 difficult · 50 uncertain · 70 favourable · 85 strongly favoured · 95 nearly assured
+Rates hold between 5 and 95: a Goal already certain or already lost is a status, not a roll. When the fiction moves a Goal's position, say what its rate now is. For scale, a small shift is a few points, a real one is nearer seven, and a decisive turn is twenty or more.
+Code rolls the d100 and settles the outcome. A reach returns a result you must respect — narrate the hit or the miss you were given, never the one you wanted.`;
+}
+
 function describeGoal(goal) {
     const facets = [goal.status, goal.visibility].filter(Boolean).join(', ');
     const rate = Number.isFinite(Number(goal.successRate)) ? ` — ${Number(goal.successRate)}%` : '';
