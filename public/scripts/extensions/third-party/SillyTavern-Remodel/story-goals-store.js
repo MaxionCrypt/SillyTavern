@@ -161,7 +161,11 @@ export function updateStoryGoal(goalId, patch = {}, context = {}) {
     const before = copy(goal);
     if (typeof patch.title === 'string' && patch.title.trim()) goal.title = patch.title.trim();
     if (typeof patch.description === 'string') goal.description = patch.description;
-    if (patch.successRate !== undefined) goal.successRate = clampRate(patch.successRate);
+    // An unusable rate leaves the existing one alone rather than blanking it.
+    if (patch.successRate !== undefined) {
+        const rate = clampRate(patch.successRate);
+        if (rate !== null) goal.successRate = rate;
+    }
     if (patch.holders !== undefined) goal.holders = normalizeHolders(patch.holders);
     if (patch.holderRefs !== undefined) goal.holderRefs = normalizeGoalOwnerRefs(patch.holderRefs, goal.holders);
     if (patch.targetRefs !== undefined) goal.targetRefs = normalizeGoalOwnerRefs(patch.targetRefs);
@@ -441,7 +445,7 @@ function normalizeGoal(value) {
     return {
         id: String(value.id), timelineId: String(value.timelineId), originSceneId: String(value.originSceneId || ''),
         title: String(value.title || '').trim() || 'Untitled Goal', description: String(value.description || ''),
-        successRate: clampRate(value.successRate ?? 30), constitution: value.constitution ? createConstitutionPool(value.constitution) : null,
+        successRate: clampRate(value.successRate) ?? 30, constitution: value.constitution ? createConstitutionPool(value.constitution) : null,
         holders: normalizeHolders(value.holders), token: String(value.token || '').trim() || '[goal]',
         holderRefs: normalizeGoalOwnerRefs(value.holderRefs, value.holders), targetRefs: normalizeGoalOwnerRefs(value.targetRefs),
         status: STORY_GOAL_STATUSES.includes(value.status) ? value.status : 'active',

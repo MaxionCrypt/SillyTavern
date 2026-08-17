@@ -104,7 +104,10 @@ export function createStoryGoal({
         originSceneId: String(originSceneId || ''),
         title: resolvedTitle,
         description: String(description || ''),
-        successRate: clampRate(successRate),
+        // clampRate returns null for an unusable value rather than reading it
+        // as zero, so every write path supplies its own default. A Goal with no
+        // rate at all cannot be reached: resolveReach throws on one.
+        successRate: clampRate(successRate) ?? 30,
         // Legacy fields remain readable only long enough for the store migration
         // to externalize them into a typed Variable instance.
         constitution: constitution ? createConstitutionPool(constitution) : null,
