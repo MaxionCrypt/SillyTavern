@@ -3,7 +3,6 @@ import {
 } from './story-goals-model.js';
 import { getSceneGoalState, getSceneGoals, updateSceneGoalState } from './story-goals-store.js';
 import { registerStoryStatMacros } from './story-stats-macros.js';
-import { formatVariable, getVariableValue } from './variables-store.js';
 
 // Story Goals — the roleplay-facing surface.
 //
@@ -181,7 +180,6 @@ function renderGoalTarotCard(goal, index) {
 // with the display title and numbered record rows.
 function renderGoalDetailMarkup(goal, goals) {
     const index = Math.max(0, goals.indexOf(goal));
-    const pool = goal.resolution?.kind === 'tracked' ? getVariableValue(goal.resolution.variableId || goal.resolution.variableInstanceId) : null;
     const rows = [];
     rows.push({ label: 'Success rate', value: `${goal.successRate}%`, sub: 'The chance a determined reach lands.' });
     rows.push({
@@ -189,16 +187,6 @@ function renderGoalDetailMarkup(goal, goals) {
         value: formatHolders(goal),
         sub: (goal.holderRefs?.length || goal.holders?.length || 0) > 1 ? 'A shared goal — one rate held between them.' : '',
     });
-    if (pool) {
-        const direction = goal.resolution.direction === 'increase' ? 'raise to win' : 'lower to win';
-        rows.push({
-            label: 'Constitution',
-            value: formatVariable(pool),
-            // When the pool points at a character stat, say so: the goal is
-            // grinding a real, shared number rather than a private copy.
-            sub: `${pool.name} · ${direction} · threshold ${goal.resolution.completionThreshold}`,
-        });
-    }
     rows.push({ label: 'Token', value: goal.token, sub: goal.status });
     return `
         <div class="remodel-goal-detail-view">
@@ -229,7 +217,6 @@ function renderGoalDetailMarkup(goal, goals) {
 
 // Choose a minimal glyph per goal so cards read as varied symbols.
 function goalGlyph(goal) {
-    if (goal.resolution?.kind === 'tracked') return 'fa-hourglass-half';
     if ((goal.holderRefs?.length || goal.holders?.length || 0) > 1) return 'fa-people-group';
     return 'fa-bullseye';
 }
@@ -350,7 +337,7 @@ function openManualGoalCreator(root, scene) {
         const data = new FormData(form);
         const persona = hooks.getPersona?.() || { kind: 'persona', id: 'user', label: String(data.get('holder') || 'You') };
         const { createTimelineGoal } = await import('./story-goals-store.js');
-        createTimelineGoal(scene.timelineId, { title: data.get('title'), description: data.get('description'), successRate: data.get('rate'), visibility: data.get('visibility'), holderRefs: [{ ...persona, label: String(data.get('holder') || persona.label) }], targetRefs: data.get('target') ? [{ kind: 'custom', id: `custom-${String(data.get('target')).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`, label: data.get('target') } ] : [], resolution: { kind: 'instant' } }, { sceneId: scene.id, actor: 'user', reason: 'Created explicitly from the Story Goals board.' });
+        createTimelineGoal(scene.timelineId, { title: data.get('title'), description: data.get('description'), successRate: data.get('rate'), visibility: data.get('visibility'), holderRefs: [{ ...persona, label: String(data.get('holder') || persona.label) }], targetRefs: data.get('target') ? [{ kind: 'custom', id: `custom-${String(data.get('target')).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`, label: data.get('target') } ] : [] }, { sceneId: scene.id, actor: 'user', reason: 'Created explicitly from the Story Goals board.' });
         form.remove();
         hooks.requestRender();
     });

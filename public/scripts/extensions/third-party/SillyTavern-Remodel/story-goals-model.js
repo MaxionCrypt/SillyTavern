@@ -24,7 +24,6 @@ export const STORY_GOAL_VISIBILITIES = Object.freeze(['public', 'secret']);
 export const STORY_GOAL_WIN_DIRECTIONS = Object.freeze(['drain', 'fill']);
 /** A relationship runs one way; A opposing B implies nothing about B (spec §3). */
 export const STORY_GOAL_RELATION_TYPES = Object.freeze(['antagonistic', 'sympathetic']);
-export const STORY_GOAL_RESOLUTION_KINDS = Object.freeze(['instant', 'tracked']);
 
 /**
  * A Constitution pool: depth behind a goal, so a formidable outcome has to be
@@ -83,20 +82,6 @@ export function normalizeGoalOwnerRefs(value, legacy = []) {
     return [...new Map(refs.map((ref) => [`${ref.kind}:${ref.id}`, ref])).values()];
 }
 
-export function normalizeGoalResolution(value) {
-    const kind = STORY_GOAL_RESOLUTION_KINDS.includes(value?.kind) ? value.kind : 'instant';
-    if (kind === 'instant') return { kind: 'instant', variableId: '', field: '', direction: '', completionThreshold: null };
-    const direction = value?.direction === 'increase' ? 'increase' : 'decrease';
-    const threshold = Number(value?.completionThreshold);
-    return {
-        kind,
-        variableId: String(value?.variableId || value?.variableInstanceId || ''),
-        field: String(value?.field || 'value'),
-        direction,
-        completionThreshold: Number.isFinite(threshold) ? threshold : direction === 'increase' ? 100 : 0,
-    };
-}
-
 export function createStoryGoal({
     id = null,
     timelineId = '',
@@ -108,7 +93,6 @@ export function createStoryGoal({
     holders = [],
     holderRefs = [],
     targetRefs = [],
-    resolution = null,
     token = '',
     status = 'active',
     visibility = 'public',
@@ -127,7 +111,6 @@ export function createStoryGoal({
         holders: normalizeHolders(holders),
         holderRefs: normalizeGoalOwnerRefs(holderRefs, holders),
         targetRefs: normalizeGoalOwnerRefs(targetRefs),
-        resolution: normalizeGoalResolution(resolution),
         // The token is the lorebook activation key for this goal's own rules
         // (spec §10): an entry keyed to it is present exactly while the goal is
         // live, and disappears when it closes, with no manual bookkeeping.

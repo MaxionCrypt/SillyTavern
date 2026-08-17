@@ -83,17 +83,13 @@ export async function resolveVariableContext({
     const activatedKeys = new Set([...activatedEntries].map(entryKey).filter(Boolean));
     const historyText = history.map((item) => String(item?.content ?? item?.mes ?? item ?? '')).filter(Boolean);
     const subjects = cast.flatMap((item) => [item?.label, item?.name, item?.ref?.label]).filter(Boolean);
-    const goalVariableIds = goals.flatMap((goal) => [
-        goal?.resolution?.variableId,
-        goal?.resolution?.variableInstanceId,
-    ]).filter(Boolean);
     const recentVariableIds = listVariableEvents({ timelineId: id }).slice(-30).map((event) => event.variableId).filter(Boolean);
     const query = buildVariableQuery({ action, historyText, subjects, activatedKeys, entries, goals, windowSize });
 
     journal('retrieval.begin', {
         timelineId: id, variableCount: variables.length, queryChars: query.length, windowSize,
         castCount: subjects.length, activatedCount: activatedKeys.size, goalCount: goals.length,
-        goalLinkedCount: goalVariableIds.length, recentCount: recentVariableIds.length,
+        recentCount: recentVariableIds.length,
     }, { correlationId, summary: `Retrieving from ${variables.length} Variables` });
 
     // One query per distinct threshold in play — see queryVariableVectors.
@@ -108,7 +104,6 @@ export async function resolveVariableContext({
         vectorMatches: vectors.matches,
         activatedKeys,
         presentSubjects: subjects,
-        goalVariableIds,
         explicitText: action,
         recentVariableIds,
         limit: limit || profile.retrievalLimit || 6,

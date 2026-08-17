@@ -17,16 +17,6 @@ test('a plain variableRef resolves to its advertised id', () => {
     expect(unresolvedReasons).toEqual([]);
 });
 
-test('a nested resolution.variableRef resolves — goal.create with a tracked resolution', () => {
-    const requests = [{
-        id: 'r1', capability: 'goal.create',
-        arguments: { title: 'Win the duel', resolution: { kind: 'tracked', variableRef: 'Faction Heat', completionThreshold: 100 } },
-    }];
-    const { variableRefs, unresolvedReasons } = addressRequestsByName(requests, book, new Map(), new Map());
-    expect(variableRefs.get('Faction Heat')).toBe('var-heat');
-    expect(unresolvedReasons).toEqual([]);
-});
-
 test('a goalRef resolves into the goal map, not the variable map', () => {
     const requests = [{ id: 'r1', capability: 'goal.shift', arguments: { goalRef: 'Survive the night', direction: 'up', magnitude: 'minor' } }];
     const { variableRefs, goalRefs } = addressRequestsByName(requests, book, new Map(), new Map());

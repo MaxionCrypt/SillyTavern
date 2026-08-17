@@ -119,14 +119,6 @@ describe('V1 to V3 migration', () => {
         expect(events.some((e) => e.type === 'variable.adjusted')).toBe(true);
     });
 
-    test('repoints a tracked Goal at the migrated Variable', () => {
-        const namespace = { storyVariablesV1: v1Store(), storyGoalsV3: goalsStore() };
-        migrate(namespace);
-        const resolution = namespace.storyGoalsV3.goals['goal-1'].resolution;
-        expect(resolution.variableId).toBe('v1-inst-vitality');
-        expect(listVariableValues({ timelineId: TIMELINE }).some((v) => v.id === resolution.variableId)).toBe(true);
-    });
-
     test('retains the legacy stores and carries the mechanics profile forward', () => {
         const namespace = { storyVariablesV1: v1Store() };
         const store = migrate(namespace);

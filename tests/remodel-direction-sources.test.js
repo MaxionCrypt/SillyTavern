@@ -287,9 +287,6 @@ test('the mechanics skill carries the Goal state the Director is asked to move',
     expect(sources.mechanicsSkill).toContain('45%');
     expect(sources.mechanicsSkill).toContain('Reach dawn alive.');
     expect(sources.mechanicsSkill).toContain('secret');
-    // A tracked resolution names its Variable the way every other reference
-    // does now — by name.
-    expect(sources.mechanicsSkill).toMatch(/Tracks .*Aiden's HP/);
     expect(sources.mechanicsSkill).toContain('Survive the night → Keep the ledger hidden');
     // The Goal the user actually attached this turn.
     expect(sources.mechanicsSkill).toMatch(/ATTEMPTED THIS TURN[\s\S]*Survive the night/);

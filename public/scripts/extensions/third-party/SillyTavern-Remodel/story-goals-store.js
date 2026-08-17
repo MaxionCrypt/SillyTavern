@@ -8,7 +8,6 @@ import {
     createStoryGoal,
     createStoryGoalRelation,
     normalizeGoalOwnerRefs,
-    normalizeGoalResolution,
     normalizeHolders,
 } from './story-goals-model.js';
 import {
@@ -166,7 +165,6 @@ export function updateStoryGoal(goalId, patch = {}, context = {}) {
     if (patch.holders !== undefined) goal.holders = normalizeHolders(patch.holders);
     if (patch.holderRefs !== undefined) goal.holderRefs = normalizeGoalOwnerRefs(patch.holderRefs, goal.holders);
     if (patch.targetRefs !== undefined) goal.targetRefs = normalizeGoalOwnerRefs(patch.targetRefs);
-    if (patch.resolution !== undefined) goal.resolution = normalizeGoalResolution(patch.resolution);
     if (typeof patch.token === 'string' && patch.token.trim()) goal.token = patch.token.trim();
     if (STORY_GOAL_STATUSES.includes(patch.status)) goal.status = patch.status;
     if (STORY_GOAL_VISIBILITIES.includes(patch.visibility)) goal.visibility = patch.visibility;
@@ -446,7 +444,6 @@ function normalizeGoal(value) {
         successRate: clampRate(value.successRate ?? 30), constitution: value.constitution ? createConstitutionPool(value.constitution) : null,
         holders: normalizeHolders(value.holders), token: String(value.token || '').trim() || '[goal]',
         holderRefs: normalizeGoalOwnerRefs(value.holderRefs, value.holders), targetRefs: normalizeGoalOwnerRefs(value.targetRefs),
-        resolution: normalizeGoalResolution(value.resolution),
         status: STORY_GOAL_STATUSES.includes(value.status) ? value.status : 'active',
         visibility: STORY_GOAL_VISIBILITIES.includes(value.visibility) ? value.visibility : 'public',
         createdAt: value.createdAt || now(), updatedAt: value.updatedAt || now(),
@@ -456,7 +453,7 @@ function normalizeGoal(value) {
 function migrateEmbeddedConstitutions(store) {
     let changed = false;
     for (const goal of Object.values(store.goals)) {
-        if (!goal.constitution || goal.resolution?.kind === 'tracked') continue;
+        if (!goal.constitution) continue;
         const pool = goal.constitution;
         const variableId = `legacy-constitution-${goal.id}`;
         const instance = getVariableValue(variableId, goal.timelineId)
@@ -477,12 +474,6 @@ function migrateEmbeddedConstitutions(store) {
                 authority: 'world',
             }, { actor: 'migration' });
         if (!instance) continue;
-        goal.resolution = normalizeGoalResolution({
-            kind: 'tracked',
-            variableId: instance.id,
-            direction: pool.winDirection === 'fill' ? 'increase' : 'decrease',
-            completionThreshold: pool.winDirection === 'fill' ? pool.max : 0,
-        });
         goal.constitution = null;
         goal.updatedAt = now();
         changed = true;

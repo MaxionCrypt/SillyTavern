@@ -1601,11 +1601,9 @@ export function addressRequestsByName(requests, addressBook, variableRefs, goalR
         const args = request?.arguments || {};
         addResolved(resolvedVariableRefs, 'variable', args.variableRef);
         addResolved(resolvedVariableRefs, 'variable', args.modifierVariableRef);
-        // A tracked Goal's resolution names its Variable the same way every
         // other Variable reference does — see mechanics-capabilities.js's
         // normalizeResolutionArgs, which resolves it through this same
         // lookup. Missing this is the only way to create a tracked Goal.
-        addResolved(resolvedVariableRefs, 'variable', args.resolution?.variableRef);
         addResolved(resolvedGoalRefs, 'goal', args.goalRef);
         addResolved(resolvedGoalRefs, 'goal', args.fromGoalRef);
         addResolved(resolvedGoalRefs, 'goal', args.toGoalRef);

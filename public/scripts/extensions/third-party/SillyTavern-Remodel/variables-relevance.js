@@ -16,11 +16,10 @@ export const HARD_LIMIT = 12;
 
 export function retrieveRelevantVariables({
     variables = [], entries = new Map(), messages = [], vectorMatches = [], activatedKeys = new Set(),
-    presentSubjects = [], goalVariableIds = [], explicitText = '', recentVariableIds = [], limit = DEFAULT_LIMIT,
+    presentSubjects = [], explicitText = '', recentVariableIds = [], limit = DEFAULT_LIMIT,
 } = {}) {
     const getEntry = lookup(entries);
     const subjects = new Set(presentSubjects.map((item) => String(item || '').toLowerCase()).filter(Boolean));
-    const goalIds = new Set(goalVariableIds.map(String));
     const recentIds = new Set(recentVariableIds.map(String));
     const explicit = String(explicitText || '').toLowerCase();
     const vectorByVariable = groupVectors(vectorMatches);
@@ -64,8 +63,8 @@ export function retrieveRelevantVariables({
             }
         }
 
-        const direct = goalIds.has(variable.id) || explicit.includes(variable.name.toLowerCase());
-        if (direct) { channels.add('direct'); reasons.push('Directly referenced by the action or a Goal.'); }
+        const direct = explicit.includes(variable.name.toLowerCase());
+        if (direct) { channels.add('direct'); reasons.push('Directly named by the action.'); }
         if (recentIds.has(variable.id) && variable.retrieval.continuity) { channels.add('continuity'); evidence.push({ type: 'continuity' }); }
         const distinctLinks = new Set([...channels].map((channel) => channel.includes(':') ? channel.split(':').slice(1).join(':') : channel));
         const semanticLinks = new Set(semanticHits.filter((item) => item.channel === 'link').map((item) => item.loreKey));

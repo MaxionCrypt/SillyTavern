@@ -257,7 +257,6 @@ function describeGoal(goal) {
         goal.description,
         describeOwners('Held by', goal.holderRefs),
         describeOwners('Against', goal.targetRefs),
-        describeGoalResolution(goal.resolution),
     ].filter(Boolean).map((line) => `  ${line}`);
     return [`- ${goal.title}${rate}${facets ? ` (${facets})` : ''}`, ...detail].join('\n');
 }
@@ -265,22 +264,6 @@ function describeGoal(goal) {
 function describeOwners(label, refs) {
     const names = (Array.isArray(refs) ? refs : []).map((ref) => ref?.label).filter(Boolean);
     return names.length ? `${label}: ${names.join(', ')}` : '';
-}
-
-/**
- * What a tracked Goal tracks, named the way everything else is now.
- *
- * `variableName` is supplied by mechanics-runtime.js's describeResolution; it
- * used to be `variableRef`, which would have reintroduced `v1` into the prompt
- * the moment this block started rendering resolutions at all.
- */
-function describeGoalResolution(resolution) {
-    if (!resolution || resolution.kind !== 'tracked') return '';
-    if (!resolution.variableName) return `Tracks a Variable that was not retrieved this turn${resolution.note ? ` — ${resolution.note}` : ''}.`;
-    const direction = resolution.direction === 'decrease' ? 'down to' : 'up to';
-    const threshold = resolution.completionThreshold ?? null;
-    const field = resolution.field && resolution.field !== 'value' ? ` (${resolution.field})` : '';
-    return `Tracks ${resolution.variableName}${field}, achieved when it goes ${direction} ${threshold}.`;
 }
 
 function describeRelationships(relationships, titleByRef) {

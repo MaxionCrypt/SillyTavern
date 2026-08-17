@@ -600,7 +600,6 @@ function migrateLegacyStores(namespace, store) {
     migrateV2(v2, store);
     migrateV1(v1, store);
     migrateLegacyEvents(v1, v2, store);
-    remapGoalResolutions(namespace, store);
     // Migration imports Variables through importVariable, which deliberately
     // writes no event — the legacy ledger is carried across separately — so it
     // bypasses appendEvent's notice. It can land in any Timeline at once.
@@ -636,29 +635,6 @@ function migrateLegacyEvents(v1, v2, store) {
         }
     }
     trimMap(store.eventIds, store.events, MAX_EVENTS);
-}
-
-/**
- * Point migrated Goals at the Variables they actually track.
- *
- * A tracked Goal stores `resolution.variableId`. After migration that id names
- * a V1 record that no longer exists, so `goal.reach` would throw "Variable
- * instance … is unavailable" — the Goal would look fine and be unreachable.
- * idMap was already being built for this and never read.
- */
-function remapGoalResolutions(namespace, store) {
-    const idMap = store.migrationBackup.idMap;
-    const goals = namespace.storyGoalsV3?.goals;
-    if (!goals) return;
-    let remapped = 0;
-    for (const goal of Object.values(goals)) {
-        const current = String(goal?.resolution?.variableId || goal?.resolution?.variableInstanceId || '');
-        if (!current || !idMap[current]) continue;
-        goal.resolution.variableId = idMap[current];
-        delete goal.resolution.variableInstanceId;
-        remapped++;
-    }
-    if (remapped) store.migrationBackup.remappedGoalResolutions = remapped;
 }
 
 function migrateV2(v2, store) {

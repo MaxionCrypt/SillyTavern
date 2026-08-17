@@ -114,17 +114,6 @@ export function getMechanicsRequestSchema() {
                                     holderRefs: { type: 'array', items: ownerRefSchema(), description: 'goal.create only: who holds this Goal — at least one typed owner is required.' },
                                     targetRefs: { type: 'array', items: ownerRefSchema(), description: 'goal.create only: who or what the Goal is directed at, if it has a target. Optional.' },
                                     successRate: { type: 'number', description: 'goal.create only: the new Goal\'s starting Success Rate as a number. It is clamped to 5-95, because a Goal that is already certain or already impossible is a status rather than a roll. Your guidance gives reference points for what a given chance is worth; choose the number that fits this Goal.' },
-                                    resolution: {
-                                        type: 'object', additionalProperties: false,
-                                        description: 'goal.create only: how this Goal resolves when reached. Omit, or set kind to instant, for a Goal that just succeeds or fails outright. Set kind to tracked to bind it to a Variable that must cross a threshold.',
-                                        properties: {
-                                            kind: { type: 'string', enum: ['instant', 'tracked'], description: 'instant: goal.reach settles this Goal outright. tracked: goal.reach instead moves the named Variable, and the Goal completes only once it crosses completionThreshold.' },
-                                            variableRef: { type: 'string', description: 'tracked only: the exact advertised name of the Variable this Goal tracks.' },
-                                            field: { type: 'string', description: 'tracked only: which subvalue of that Variable is tracked. Omit for the Variable\'s primary value.' },
-                                            direction: { type: 'string', enum: ['increase', 'decrease'], description: 'tracked only: whether completion means the tracked field rising to, or falling to, completionThreshold.' },
-                                            completionThreshold: { type: 'number', description: 'tracked only: the value the tracked field must reach to complete this Goal.' },
-                                        },
-                                    },
                                     direction: { type: 'string', enum: ['up', 'down'], description: 'goal.shift only: which way to move the Goal\'s Success Rate.' },
                                     amount: { type: 'number', description: 'goal.shift only: how many percentage points the Success Rate moves, as a positive number, with `direction` saying which way. Judge the size yourself from what happened in the fiction.' },
                                     impact: { type: 'number', description: 'goal.reach only, for a tracked Goal: how far the tracked Variable moves when this reach hits, in that Variable\'s own units.' },
@@ -490,13 +479,12 @@ function createGoal(request, args, runtime) {
     const holderRefs = requireOwners(args.holderRefs);
     const targetRefs = requireOwners(args.targetRefs || [], true);
     if (holderRefs.some((owner) => !isAuthorizedOwner(owner, runtime)) && !runtime.allowUserGoalCreate) return defer(request, runtime, 'A user-owned Goal proposal requires review.');
-    const resolution = normalizeResolutionArgs(args.resolution, runtime);
     // The Director states a number, informed by the rate guidance in its
     // prompt. `?? 30` is the record's own default for a Goal created without a
     // stated rate — clampRate returns null rather than reading an absent value
     // as zero, which would have made such a Goal nearly impossible.
     const rate = clampRate(args.successRate) ?? 30;
-    const goal = createTimelineGoal(runtime.timelineId, { title: args.title, description: args.description, holderRefs, targetRefs, successRate: rate, visibility: args.visibility, resolution }, { sceneId: runtime.sceneId, actor: 'mechanics', reason: request.reason });
+    const goal = createTimelineGoal(runtime.timelineId, { title: args.title, description: args.description, holderRefs, targetRefs, successRate: rate, visibility: args.visibility }, { sceneId: runtime.sceneId, actor: 'mechanics', reason: request.reason });
     if (!goal) throw new MechanicsError(`${request.id}: Goal could not be created.`);
     setAlias(runtime, args.alias, goal.id, 'goal');
     receipt(runtime, request, null, goal);
@@ -547,54 +535,17 @@ function reachGoal(request, args, runtime) {
         modifierInstance = requireVariable(resolveVariableReference(args.modifierVariableRef, runtime), runtime);
         modifier = Number(computeVariable(modifierInstance)?.value || 0);
     }
-    // The tracked Variable comes from stored Goal data, not from model input, so
-    // it is resolved by id rather than by ref — but it must still be a Variable
-    // this pass advertised. Otherwise a reach reads and writes a Variable the
-    // Director was never shown, which is the containment this check exists for.
-    //
-    // Read off retrievedVariableIds, not the address table: the address table
-    // holds only the names THIS BATCH resolved, so a reach that names no
-    // Variable of its own would otherwise look like a pass that retrieved
-    // nothing.
-    const trackedId = String(goal.resolution?.variableId || goal.resolution?.variableInstanceId || '');
-    if (goal.resolution?.kind === 'tracked' && trackedId && !runtime.retrievedVariableIds.size) {
-        throw new MechanicsError(`${request.id}: the Goal tracks a Variable that was not retrieved for this request.`);
-    }
-    if (goal.resolution?.kind === 'tracked' && trackedId && !runtime.retrievedVariableIds.has(trackedId)) {
-        throw new MechanicsError(`${request.id}: the Goal tracks a Variable that was not advertised for this request.`);
-    }
-    const trackedInstance = goal.resolution?.kind === 'tracked' ? requireVariable(trackedId, runtime) : null;
-    const frozen = {
-        successRate: goal.successRate,
-        modifierVariableId: modifierInstance?.id || '', modifier,
-        variableId: trackedInstance?.id || '', field: goal.resolution?.field || 'value', direction: goal.resolution?.direction || '',
-        completionThreshold: goal.resolution?.completionThreshold ?? null,
-        impact: args.impact,
-    };
+    // Frozen before the die so the receipt shows exactly what was rolled
+    // against what, and cannot be re-derived differently afterwards.
+    const frozen = { successRate: goal.successRate, modifierVariableId: modifierInstance?.id || '', modifier };
     const result = resolveReach({ rate: frozen.successRate, modifier });
-    let variableAfter = null;
-    let goalAfter = goal;
-    if (!result.hit) {
-        // A miss no longer charges an automatic rate penalty. How badly a miss
-        // went is the Director's to judge in the fiction and to request as its
-        // own change with its own reason — code silently docking 2/5/10/18
-        // points by depth band was arithmetic nobody asked for.
-        goalAfter = goal;
-    } else if (goal.resolution.kind === 'instant') {
-        goalAfter = updateStoryGoal(goal.id, { status: 'achieved' }, { ...txContext(runtime, request), type: 'goal.reach.hit' });
-    } else {
-        const impact = Math.round(Number(frozen.impact));
-        if (!Number.isFinite(impact) || impact === 0) throw new MechanicsError(`${request.id}: a tracked reach needs a numeric Variable and a non-zero impact.`);
-        const delta = goal.resolution.direction === 'increase' ? impact : -impact;
-        variableAfter = adjustVariableValue(trackedInstance.id, delta, { ...txContext(runtime, request), field: frozen.field, type: 'goal.impact' });
-        if (!variableAfter) throw new MechanicsError(`${request.id}: tracked Goal field is not numeric.`);
-        const trackedValue = frozen.field === 'value' ? variableAfter.value : variableAfter.subvalues.find((item) => item.key === frozen.field)?.value;
-        const reachedThreshold = goal.resolution.direction === 'increase'
-            ? Number(trackedValue) >= Number(goal.resolution.completionThreshold)
-            : Number(trackedValue) <= Number(goal.resolution.completionThreshold);
-        if (reachedThreshold) goalAfter = updateStoryGoal(goal.id, { status: 'achieved' }, { ...txContext(runtime, request), type: 'goal.reach.hit' });
-    }
-    receipt(runtime, request, before, goalAfter, { frozen, roll: result, variableAfter });
+    // A hit achieves the Goal; a miss changes nothing. How badly a miss went is
+    // the Director's to judge in the fiction and to request as its own change
+    // with its own reason — code used to dock 2/5/10/18 points by depth band.
+    const goalAfter = result.hit
+        ? updateStoryGoal(goal.id, { status: 'achieved' }, { ...txContext(runtime, request), type: 'goal.reach.hit' })
+        : goal;
+    receipt(runtime, request, before, goalAfter, { frozen, roll: result });
 }
 
 function validateArguments(request) {
@@ -605,7 +556,7 @@ function validateArguments(request) {
     const missing = (key) => (args[key] == null || args[key] === '') && (!legacy[key] || args[legacy[key]] == null || args[legacy[key]] === '');
     const require = (...keys) => { for (const key of keys) if (missing(key)) throw new MechanicsError(`${request.id}: ${key} is required.`); };
     switch (request.capability) {
-        case 'goal.create': require('title', 'holderRefs', 'resolution'); break;
+        case 'goal.create': require('title', 'holderRefs'); break;
         case 'goal.shift': require('goalRef', 'direction', 'amount'); break;
         case 'goal.reach': require('goalRef'); break;
         case 'goal.relate': require('fromGoalRef', 'toGoalRef', 'type'); break;
@@ -618,11 +569,6 @@ function validateArguments(request) {
         case 'modifier.add': require('variableRef', 'label', 'delta', 'target'); break;
         case 'modifier.remove': require('variableRef', 'modifierId'); break;
     }
-}
-
-function normalizeResolutionArgs(value, runtime) {
-    if (!value || value.kind !== 'tracked') return { kind: 'instant' };
-    return { kind: 'tracked', variableId: resolveVariableReference(value.variableRef, runtime), field: value.field || 'value', direction: value.direction, completionThreshold: value.completionThreshold };
 }
 
 function isAuthorizedVariable(variable, ref, runtime) {
