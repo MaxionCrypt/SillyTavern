@@ -22,8 +22,31 @@ export function buildDirectionSources(snapshot, { mechanicsEnabled = false } = {
         directorCard: snapshot?.director ? describeCard(snapshot.director) : '',
         mechanicsSkill: describeMechanics(snapshot?.mechanics, { mechanicsEnabled }),
         directorNotebook: (settings) => describeNotebook(snapshot?.notebook, settings?.depth),
+        // The four World Info sources, each its own block.
+        //
+        // They used to be one LORE section inside directorSnapshot, which is
+        // `locked: true` — so the Director's world information had a fixed
+        // position, could not be turned off, and could not be reordered
+        // against the notebook or the mechanics block, while the Roleplay
+        // recipe had all four as movable blocks. Same lorebook, same scan,
+        // same four fields; there was no reason for the Director to be the
+        // one prompt that could not arrange them.
+        worldInfoBefore: describeLorePart(snapshot?.lore?.before),
+        worldInfoAfter: describeLorePart(snapshot?.lore?.after),
+        worldInfoExamples: describeLoreExamples(snapshot?.lore?.examples),
+        worldInfoDepth: describeLoreDepth(snapshot?.lore?.depth),
         directorSnapshot: describeSnapshot(snapshot),
     };
+}
+
+/** All four World Info sources as one string, for the recipe-less fallback. */
+export function describeAllLore(lore) {
+    return [
+        describeLorePart(lore?.before),
+        describeLoreExamples(lore?.examples),
+        describeLoreDepth(lore?.depth),
+        describeLorePart(lore?.after),
+    ].filter(Boolean).join('\n\n');
 }
 
 // Contract only. Pacing, autonomy and response length live in the recipe's
@@ -414,7 +437,9 @@ function describeSnapshot(snapshot) {
         section('PERFORMER', describePerformer(narratorRef)),
         section('CAST', describeCast(cast)),
         section('PERSONA', describePersona(persona)),
-        section('LORE', describeLore(lore)),
+        // No LORE section. World Info is four blocks of its own now, so
+        // rendering it here as well would send every activated entry twice —
+        // once from its block and once inside this locked one.
         section('RECENT CHANGES', describeReceipts(recentReceipts)),
         section('STORY SO FAR', describeHistory(acceptedHistory, persona)),
         // Between the transcript and the action, because that is where it
@@ -472,14 +497,19 @@ function describePersona(persona) {
  * entry into a native prompt. There is no native prompt here, so they describe
  * nothing about the story and are dropped; the entry text is the content.
  */
-function describeLore(lore) {
-    const examples = (Array.isArray(lore?.examples) ? lore.examples : [])
-        .map((entry) => String(entry?.content ?? entry ?? ''));
-    const depth = (Array.isArray(lore?.depth) ? lore.depth : [])
+function describeLorePart(part) {
+    return String(part || '').trim();
+}
+
+function describeLoreExamples(examples) {
+    return (Array.isArray(examples) ? examples : [])
+        .map((entry) => String(entry?.content ?? entry ?? '').trim()).filter(Boolean).join('\n\n');
+}
+
+function describeLoreDepth(depth) {
+    return (Array.isArray(depth) ? depth : [])
         .flatMap((entry) => (Array.isArray(entry?.entries) ? entry.entries : [entry]))
-        .map((entry) => String(entry ?? ''));
-    return [lore?.before, ...examples, ...depth, lore?.after]
-        .map((part) => String(part || '').trim()).filter(Boolean).join('\n\n');
+        .map((entry) => String(entry ?? '').trim()).filter(Boolean).join('\n\n');
 }
 
 /**

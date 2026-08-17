@@ -17,9 +17,17 @@ test('a new director recipe carries the expected blocks in order', () => {
     expect(recipe.mode).toBe('director');
     expect(recipe.blocks.map((block) => block.sourceKey || block.kind)).toEqual([
         'directionProtocol',
+        // World Info brackets the Director's own material the way it brackets
+        // the character's in a Roleplay recipe. These were one LORE section
+        // inside the locked Scene Snapshot, so the Director was the only
+        // prompt that could not reorder or disable part of its world info.
+        'worldInfoBefore',
         'directorCard',
         'message',
         'mechanicsSkill',
+        'worldInfoAfter',
+        'worldInfoExamples',
+        'worldInfoDepth',
         // The Director's own notebook, read back before the Scene Snapshot:
         // the memory is read before the moment it is being asked about, and
         // after the mechanics block whose names its entries refer to.
@@ -68,6 +76,61 @@ test('a Director recipe that already has the notebook block is not given a secon
     settings.remodel.promptStudioV1.version = 6;
     const migrated = Object.values(getPromptStudioStore().recipes).find((recipe) => recipe.mode === 'director');
     expect(migrated.blocks.filter((block) => block.sourceKey === 'directorNotebook')).toHaveLength(1);
+});
+
+test('an existing Director recipe is migrated to carry the four World Info blocks', () => {
+    // World Info stopped being a LORE section inside the locked Scene Snapshot
+    // and became four blocks. An existing recipe has neither, and the failure
+    // mode of a source that MOVES is silence: no error, no empty heading, the
+    // Director simply stops being told anything about the world. This is the
+    // path that guarantee lives on.
+    const settings = __setExtensionSettings({});
+    getPromptStudioStore();
+    const store = settings.remodel.promptStudioV1;
+    const director = Object.values(store.recipes).find((recipe) => recipe.mode === 'director');
+    const worldInfoKeys = ['worldInfoBefore', 'worldInfoAfter', 'worldInfoExamples', 'worldInfoDepth'];
+    director.blocks = director.blocks.filter((block) => !worldInfoKeys.includes(block.sourceKey));
+    store.version = 7;
+
+    const migrated = Object.values(getPromptStudioStore().recipes).find((recipe) => recipe.mode === 'director');
+    const keys = migrated.blocks.map((block) => block.sourceKey);
+    for (const key of worldInfoKeys) expect(keys).toContain(key);
+
+    // Placed in reading order, not appended: `before` ahead of the card, the
+    // rest ahead of the notebook. The names mean nothing unless the order does.
+    expect(keys.indexOf('worldInfoBefore')).toBeLessThan(keys.indexOf('directorCard'));
+    expect(keys.indexOf('worldInfoAfter')).toBeLessThan(keys.indexOf('directorNotebook'));
+    expect(keys.indexOf('worldInfoDepth')).toBeLessThan(keys.indexOf('directorSnapshot'));
+});
+
+test('a Director recipe that already has some World Info blocks gains only the rest', () => {
+    const settings = __setExtensionSettings({});
+    getPromptStudioStore();
+    const store = settings.remodel.promptStudioV1;
+    const director = Object.values(store.recipes).find((recipe) => recipe.mode === 'director');
+    // Strip one from each half of the migration — `before` is placed on its
+    // own, the other three as a group — so both halves are exercised with a
+    // sibling already present. Keeping all three of the group absent would let
+    // a migration that ignores what is already there pass unnoticed: with
+    // nothing to duplicate, filtering and not filtering agree.
+    director.blocks = director.blocks.filter((block) => !['worldInfoBefore', 'worldInfoDepth'].includes(block.sourceKey));
+    store.version = 7;
+
+    const migrated = Object.values(getPromptStudioStore().recipes).find((recipe) => recipe.mode === 'director');
+    const keys = migrated.blocks.map((block) => block.sourceKey);
+    // Every one present exactly once: the two restored, and the two that
+    // survived and must not have been added a second time.
+    for (const key of ['worldInfoBefore', 'worldInfoAfter', 'worldInfoExamples', 'worldInfoDepth']) {
+        expect(keys.filter((item) => item === key)).toHaveLength(1);
+    }
+});
+
+test('migration is idempotent: a current-version Director recipe gains nothing', () => {
+    const settings = __setExtensionSettings({});
+    getPromptStudioStore();
+    settings.remodel.promptStudioV1.version = 7;
+    const migrated = Object.values(getPromptStudioStore().recipes).find((recipe) => recipe.mode === 'director');
+    expect(migrated.blocks.filter((block) => block.sourceKey === 'worldInfoBefore')).toHaveLength(1);
 });
 
 test('the protocol and snapshot blocks are locked, the style block is not', () => {

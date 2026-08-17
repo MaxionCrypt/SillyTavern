@@ -477,7 +477,7 @@ test('a section with nothing in it is omitted, not rendered as a bare heading', 
     expect(directorSnapshot).toBe(`CURRENT ACTION\n${bare.currentAction}`);
 });
 
-test('the snapshot names the performer and renders lore and applied changes as text', () => {
+test('the snapshot names the performer and renders applied changes as text', () => {
     const { directorSnapshot } = buildDirectionSources(sceneSnapshot, { mechanicsEnabled: true });
     // By name. The Scene's narratorRef.id is an avatar filename.
     expect(directorSnapshot).toContain('PERFORMER\nSera writes the next response.');
@@ -486,15 +486,43 @@ test('the snapshot names the performer and renders lore and applied changes as t
     // Sera has no personality or scenario text; neither gets an empty label.
     expect(directorSnapshot).not.toContain('Personality: \n');
     expect(directorSnapshot).not.toContain('Scenario: \n');
-    // All four lore shapes, including the two that are not strings.
-    expect(directorSnapshot).toContain('MARROW STREET GUILD');
-    expect(directorSnapshot).toContain('THE FOG');
-    expect(directorSnapshot).toContain('<START>\nAiden: "Nine seals."');
-    expect(directorSnapshot).toContain('The freight gate has been forced twice this season.');
+    // World Info is four blocks of its own now. Rendering it here as well
+    // would send every activated entry twice - once from its block and once
+    // inside this locked one.
+    expect(directorSnapshot).not.toContain('MARROW STREET GUILD');
+    expect(directorSnapshot).not.toContain('LORE');
     // The same `- capability: reason` shape formatMechanicsReceipts uses.
     expect(directorSnapshot).toContain('- variable.adjust: The blow landed before he could turn.');
     // A rolled-back transaction changed nothing, so it is not a recent change.
     expect(directorSnapshot).not.toContain('awaiting user review');
+});
+
+test('World Info reaches the Director as four separately addressable sources', () => {
+    const sources = buildDirectionSources(sceneSnapshot, { mechanicsEnabled: true });
+
+    // All four lore shapes, including the two that are not strings, each in
+    // its own block so a recipe can move it, disable it, or place it against
+    // the notebook - which is what the Roleplay recipe could always do.
+    expect(sources.worldInfoBefore).toContain('MARROW STREET GUILD');
+    expect(sources.worldInfoAfter).toContain('THE FOG');
+    expect(sources.worldInfoExamples).toContain('<START>\nAiden: "Nine seals."');
+    expect(sources.worldInfoDepth).toContain('The freight gate has been forced twice this season.');
+
+    // And they do not bleed into each other: disabling one block has to
+    // actually withhold that content, which it cannot do if another carries it.
+    expect(sources.worldInfoBefore).not.toContain('THE FOG');
+    expect(sources.worldInfoAfter).not.toContain('MARROW STREET GUILD');
+});
+
+test('a Timeline with no lore yields empty sources rather than empty headings', () => {
+    const sources = buildDirectionSources({ ...sceneSnapshot, lore: null }, { mechanicsEnabled: true });
+
+    // compilePromptRecipe drops an empty source, so empty here means the block
+    // contributes no message at all - never a bare heading with nothing under it.
+    expect(sources.worldInfoBefore).toBe('');
+    expect(sources.worldInfoAfter).toBe('');
+    expect(sources.worldInfoExamples).toBe('');
+    expect(sources.worldInfoDepth).toBe('');
 });
 
 test('the current action is the last thing the Director reads', () => {

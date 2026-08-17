@@ -14,7 +14,7 @@ import {
     undoMechanicsTransaction,
 } from './mechanics-capabilities.js';
 import { buildMechanicalSnapshot, previewMechanicalContext } from './mechanics-runtime.js';
-import { buildDirectionSources } from './direction-sources.js';
+import { buildDirectionSources, describeAllLore } from './direction-sources.js';
 import { resolveByName } from './direction-address.js';
 import { deriveBeats } from './direction-beats.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
@@ -1028,8 +1028,15 @@ function compileDirectorPrompt(snapshot, { mechanicsEnabled = false, trace = fal
         // its memory; losing that as well as the user's style block would
         // make the fallback worse than it needs to be.
         const notebook = sources.directorNotebook({ depth: declaredDirectorNotebookDepth() });
+        // World Info as one block here, not four. The fallback exists for a
+        // recipe that compiled to nothing, so it has no block order to honour
+        // — but it still must not be the path where the Director quietly
+        // loses its world information, which is exactly what would happen if
+        // this list kept reading only the sources it read before the split.
+        const lore = describeAllLore(snapshot?.lore);
         prompt = [
             { role: 'system', content: sources.directionProtocol },
+            ...(lore ? [{ role: 'system', content: lore }] : []),
             ...(sources.directorCard ? [{ role: 'system', content: sources.directorCard }] : []),
             ...(sources.mechanicsSkill ? [{ role: 'system', content: sources.mechanicsSkill }] : []),
             ...(notebook ? [{ role: 'system', content: notebook }] : []),

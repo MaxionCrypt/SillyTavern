@@ -65,6 +65,10 @@ const directorSources = Object.freeze({
     directionProtocol: 'PROTOCOL: reply with an envelope.',
     directorCard: 'CARD: the Director judges, never speaks.',
     mechanicsSkill: 'MECHANICS: two Variables are in play.',
+    worldInfoBefore: 'LORE BEFORE: the Guild runs Marrow Street.',
+    worldInfoAfter: 'LORE AFTER: the fog comes off the water at four.',
+    worldInfoExamples: 'LORE EXAMPLES: <START>',
+    worldInfoDepth: 'LORE AT DEPTH: the gate was forced twice.',
     directorNotebook: (settings) => `NOTEBOOK: the last ${settings?.depth} turns, secrets included.`,
     directorSnapshot: 'SNAPSHOT: the scene so far.',
 });

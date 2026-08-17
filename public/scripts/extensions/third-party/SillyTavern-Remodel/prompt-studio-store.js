@@ -2,7 +2,7 @@ import { getContext } from '../../../st-context.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 7;
+const STORE_VERSION = 8;
 
 export const PROMPT_MODES = ['story', 'roleplay', 'director'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
@@ -57,6 +57,17 @@ export const PROMPT_SOURCE_DEFINITIONS = Object.freeze({
         { key: 'directionProtocol', label: 'Direction Protocol', role: 'system' },
         { key: 'directorCard', label: 'Director Card', role: 'system' },
         { key: 'mechanicsSkill', label: 'Goals & Variables', role: 'system' },
+        // The same four World Info fields the Roleplay recipe exposes, from
+        // the same scan. They were one LORE section inside the Scene Snapshot,
+        // which is locked — so the Director alone could not reorder its world
+        // information, turn a part of it off, or place it against the notebook.
+        // No `nativeIdentifier`: a director recipe is never mirrored into
+        // SillyTavern's Prompt Manager (isNativeApplicableMode refuses it), so
+        // the compile is the delivery route, exactly as for directorNotebook.
+        { key: 'worldInfoBefore', label: 'World Info (before)', role: 'system' },
+        { key: 'worldInfoAfter', label: 'World Info (after)', role: 'system' },
+        { key: 'worldInfoExamples', label: 'World Info Examples', role: 'system' },
+        { key: 'worldInfoDepth', label: 'World Info at Depth', role: 'system' },
         // The Director reading its own notebook back. Without this the
         // notebook was write-only from its author's side: a `[secret]`
         // reached the Narrator never (by design) and the Director never
@@ -387,9 +398,18 @@ const DIRECTOR_STYLE_LEGACY = 'The world may move without waiting for the user. 
 function defaultDirectorBlocks() {
     return [
         createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directionProtocol', enabled: true, locked: true }),
+        // World Info brackets the Director's own material the same way it
+        // brackets the character's in a Roleplay recipe: `before` ahead of the
+        // card, the other three behind the mechanics block and ahead of the
+        // notebook. The names mean nothing unless the default order honours
+        // them, which is why they are not simply parked together.
+        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoBefore', enabled: true, locked: false }),
         createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directorCard', enabled: true, locked: false }),
         createPromptBlock({ kind: 'message', role: 'system', enabled: true, locked: false, content: DIRECTOR_STYLE_DEFAULT }),
         createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'mechanicsSkill', enabled: true, locked: false }),
+        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoAfter', enabled: true, locked: false }),
+        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoExamples', enabled: true, locked: false }),
+        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoDepth', enabled: true, locked: false }),
         // The only block in this list that declares settings, so the only one
         // whose `mode` could matter: `normalizeBlock` derives settings from
         // its mode's source definitions, and without a mode this would be
@@ -596,7 +616,52 @@ function normalizeStore(store, seed) {
             }
         }
     }
+    // World Info stopped being rendered inside the locked Scene Snapshot and
+    // became four blocks. An existing director recipe has neither, so without
+    // this migration the Director would simply STOP receiving world
+    // information — the failure mode of a source that moves is silence, not
+    // an error, which is why this runs for every director recipe rather than
+    // only ones that look default.
+    if (previousVersion < 8) {
+        for (const recipe of Object.values(store.recipes)) {
+            if (recipe?.mode === 'director' && ensureDirectorWorldInfoSources(recipe.blocks)) {
+                recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
+                changed = true;
+            }
+        }
+    }
     return changed;
+}
+
+/**
+ * Add whichever of the four World Info blocks a director recipe is missing.
+ *
+ * `before` goes ahead of the Director Card and the rest immediately before the
+ * notebook (or the Scene Snapshot, whichever comes first), so a migrated
+ * recipe lands in the same reading order a fresh one is built with. Each key
+ * is checked on its own: a user who already added one by hand must not have it
+ * duplicated, and must still receive the other three.
+ */
+function ensureDirectorWorldInfoSources(blocks) {
+    if (!Array.isArray(blocks)) return false;
+    const present = new Set(blocks.filter((block) => block.kind === 'source').map((block) => block.sourceKey));
+    let added = false;
+
+    if (!present.has('worldInfoBefore')) {
+        const cardIndex = blocks.findIndex((block) => block.kind === 'source' && block.sourceKey === 'directorCard');
+        blocks.splice(cardIndex >= 0 ? cardIndex : 0, 0, createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoBefore' }));
+        added = true;
+    }
+
+    const trailing = ['worldInfoAfter', 'worldInfoExamples', 'worldInfoDepth']
+        .filter((key) => !present.has(key))
+        .map((key) => createPromptBlock({ kind: 'source', role: 'system', sourceKey: key }));
+    if (trailing.length) {
+        const anchor = blocks.findIndex((block) => block.kind === 'source' && ['directorNotebook', 'directorSnapshot'].includes(block.sourceKey));
+        blocks.splice(anchor >= 0 ? anchor : blocks.length, 0, ...trailing);
+        added = true;
+    }
+    return added;
 }
 
 function ensureStoryGoalsSource(blocks) {
