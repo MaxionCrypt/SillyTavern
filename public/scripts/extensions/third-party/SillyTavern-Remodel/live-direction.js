@@ -2777,7 +2777,16 @@ export function buildDirectorNotesSource(entries) {
         .filter(Boolean)
         .join('\n\n');
     if (!body) return '';
-    return `[DIRECTOR'S NOTES — established by the hidden director; treat as settled fact]\n${body}`;
+    // "treat as settled fact" was the whole header, applied to every line.
+    //
+    // It is right for a `result` and wrong for a `ruling`, which is an
+    // instruction about the response not yet written — and it actively invites
+    // the failure the owner reported, a Narrator re-narrating its own previous
+    // turn. The Director's notes describe the state of the scene; that state is
+    // the outcome of the last response; a header calling all of it settled fact
+    // and no line saying "do not write this again" leaves re-rendering it a
+    // reasonable reading of the job.
+    return `[DIRECTOR'S NOTES — from the hidden director. These are not prose to reproduce. Write only what happens NEXT.]\n${body}`;
 }
 
 function groupNotebookEntriesByTurn(entries) {
@@ -2791,7 +2800,22 @@ function groupNotebookEntriesByTurn(entries) {
     return [...byTurn.entries()].sort((a, b) => a[0] - b[0]);
 }
 
-const NOTEBOOK_ENTRY_LABELS = Object.freeze({ ruling: 'Ruling — binding: ', result: 'Established: ' });
+/**
+ * What the performer is supposed to DO with each kind of entry.
+ *
+ * Every label here is an instruction, not a category name, and `note` has one
+ * now where it used to render bare. A bare line in a block headed "treat as
+ * settled fact" reads as prose to reproduce, which is the likeliest reading
+ * behind a Narrator that re-narrated its own previous turn: the Director's
+ * notes describe the CURRENT state of the scene, the current state is the
+ * outcome of the last response, and nothing told the performer that describing
+ * it again was not the job.
+ */
+const NOTEBOOK_ENTRY_LABELS = Object.freeze({
+    note: 'Context (already on the page — draw on it, do not restate it): ',
+    ruling: 'Binding (your next response must honour this): ',
+    result: 'Already happened (do NOT narrate this again): ',
+});
 
 function describeNotebookTurn(turn, turnEntries) {
     const lines = turnEntries.map(describeNotebookEntry).filter(Boolean);
