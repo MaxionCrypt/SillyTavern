@@ -402,9 +402,29 @@ function describeRetrieval(retrieval) {
  * puts `getCapabilityDictionary()`'s output into `mechanics.capabilities` for
  * exactly this reason.
  */
+/**
+ * Each capability, and the arguments it cannot run without.
+ *
+ * The required arguments are the part that was missing, and their absence was
+ * the whole defect: `validateArguments` refused every write the Director
+ * attempted — `valueType is required`, `holderRefs is required`, turn after
+ * turn — while the words `valueType` and `holderRefs` appeared NOWHERE in the
+ * prompt it was refusing. The Director had one worked example in the protocol
+ * block and guessed the rest, which is all it could do.
+ *
+ * The list comes from mechanics-capabilities.js's REQUIRED_ARGUMENTS, the same
+ * table the validator reads, so the prompt and the refusal can no longer
+ * disagree about what a capability needs.
+ */
 function describeCapabilities(capabilities) {
     return (Array.isArray(capabilities) ? capabilities : [])
-        .map((capability) => `- ${capability.name} (${capability.applicableKinds.join(', ')}): ${capability.description}`)
+        .map((capability) => {
+            const head = `- ${capability.name} (${capability.applicableKinds.join(', ')}): ${capability.description}`;
+            const required = Array.isArray(capability.requiredArguments) ? capability.requiredArguments : [];
+            if (!required.length) return head;
+            return `${head}
+    arguments: ${required.map((argument) => `${argument.key} — ${argument.hint}`).join('; ')}`;
+        })
         .join('\n');
 }
 

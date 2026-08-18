@@ -53,7 +53,14 @@ const CAPABILITIES = Object.freeze({
 });
 
 export function getCapabilityDictionary() {
-    return CAPABILITY_NAMES.map((name) => ({ name, ...CAPABILITIES[name] }));
+    // `requiredArguments` travels with every capability so direction-sources.js
+    // can render it without importing this module — it is required to stay free
+    // of anything that reaches st-context.js.
+    return CAPABILITY_NAMES.map((name) => ({
+        name,
+        ...CAPABILITIES[name],
+        requiredArguments: (REQUIRED_ARGUMENTS[name] || []).map(([key, hint]) => ({ key, hint })),
+    }));
 }
 
 /**
@@ -563,6 +570,57 @@ function reachGoal(request, args, runtime) {
     receipt(runtime, request, before, goalAfter, { frozen, roll: result });
 }
 
+/**
+ * The arguments each capability cannot run without, and a one-line shape for
+ * each so the Director can supply them.
+ *
+ * ONE TABLE, read by BOTH the validator and the prompt. They used to be
+ * separate, and the result was the defect the owner spent three sessions
+ * hitting: `validateArguments` demanded `valueType`, `holderRefs` and
+ * `enumValues`, and NONE of those words appeared anywhere in the Director's
+ * prompt. The full per-argument schema exists further up this file, but it was
+ * only ever consumed by the structured-output path that was deleted with the
+ * envelope — the Director now writes a free-form state fence and is handed
+ * only `describeCapabilities`, which printed a name and a sentence.
+ *
+ * So the Director guessed its arguments from the single example in the
+ * protocol block, and every write it attempted was refused:
+ * `valueType is required`, `holderRefs is required`, four turns running.
+ *
+ * Keeping the requirement and its explanation in one place is the point. A
+ * required argument the model is never told about is indistinguishable, from
+ * the outside, from a capability that does not work.
+ */
+export const REQUIRED_ARGUMENTS = Object.freeze({
+    'goal.create': Object.freeze([
+        ['title', 'what is being attempted, as a short line'],
+        ['holderRefs', 'who holds it: [{"kind":"character","id":"<cast name>","label":"<cast name>"}] — at least one'],
+    ]),
+    'goal.edit': Object.freeze([["goalRef", "the Goal's exact advertised name"]]),
+    'goal.delete': Object.freeze([["goalRef", "the Goal's exact advertised name"]]),
+    'goal.reach': Object.freeze([["goalRef", "the Goal's exact advertised name"]]),
+    'goal.relate': Object.freeze([
+        ['fromGoalRef', 'the Goal the relationship starts from'],
+        ['toGoalRef', 'the Goal it points at'],
+        ['type', '"antagonistic" or "sympathetic"'],
+    ]),
+    'variable.create': Object.freeze([
+        ['name', 'the name you will address it by from next turn on'],
+        ['valueType', 'one of "number", "enum", "text", "boolean"'],
+        ['value', 'its starting value'],
+        ['description', 'what it means in the fiction, one line, written for your future self'],
+    ]),
+    'variable.set': Object.freeze([['variableRef', 'its exact advertised name'], ['value', 'the new value']]),
+    'variable.subvalue.set': Object.freeze([['variableRef', 'its exact advertised name'], ['field', 'which subvalue'], ['value', 'the new value']]),
+    'variable.adjust': Object.freeze([['variableRef', 'its exact advertised name'], ['delta', 'how much it moves, positive or negative']]),
+    'variable.transition': Object.freeze([['variableRef', 'its exact advertised name'], ['nextState', 'one of its declared states']]),
+    'modifier.add': Object.freeze([
+        ['variableRef', 'its exact advertised name'], ['label', 'what the modifier is'],
+        ['delta', 'how much it shifts'], ['target', 'which field it applies to'],
+    ]),
+    'modifier.remove': Object.freeze([['variableRef', 'its exact advertised name'], ["modifierId", "the modifier's id on the record"]]),
+});
+
 function validateArguments(request) {
     const args = request.arguments;
     // `goalRef` also accepts the older `goalId` spelling, so a request deferred
@@ -570,20 +628,9 @@ function validateArguments(request) {
     const legacy = { goalRef: 'goalId', fromGoalRef: 'fromGoalId', toGoalRef: 'toGoalId' };
     const missing = (key) => (args[key] == null || args[key] === '') && (!legacy[key] || args[legacy[key]] == null || args[legacy[key]] === '');
     const require = (...keys) => { for (const key of keys) if (missing(key)) throw new MechanicsError(`${request.id}: ${key} is required.`); };
-    switch (request.capability) {
-        case 'goal.create': require('title', 'holderRefs'); break;
-        case 'goal.edit': require('goalRef'); break;
-        case 'goal.delete': require('goalRef'); break;
-        case 'goal.reach': require('goalRef'); break;
-        case 'goal.relate': require('fromGoalRef', 'toGoalRef', 'type'); break;
-        case 'variable.create': require('name', 'valueType', 'value', 'description'); break;
-        case 'variable.set': require('variableRef', 'value'); break;
-        case 'variable.subvalue.set': require('variableRef', 'field', 'value'); break;
-        case 'variable.adjust': require('variableRef', 'delta'); break;
-        case 'variable.transition': require('variableRef', 'nextState'); break;
-        case 'modifier.add': require('variableRef', 'label', 'delta', 'target'); break;
-        case 'modifier.remove': require('variableRef', 'modifierId'); break;
-    }
+    // Read from the same table the prompt is built from, so a requirement can
+    // never again exist here without the Director being told about it.
+    require(...(REQUIRED_ARGUMENTS[request.capability] || []).map(([key]) => key));
 }
 
 function isAuthorizedVariable(variable, ref, runtime) {
