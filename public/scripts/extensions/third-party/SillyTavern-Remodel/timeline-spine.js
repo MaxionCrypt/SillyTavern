@@ -8992,7 +8992,7 @@ async function fillDirectorPreviewPanel(panel, scene, directed) {
         return;
     }
     try {
-        const { prompt, usedFallback, trace } = await previewDirectorPrompt(scene);
+        const { prompt, usedFallback, trace, contractOk, hasTags, hasFence } = await previewDirectorPrompt(scene);
         bodyEl.textContent = formatPromptStudioPreview({ apiType: 'chat', messages: prompt });
         // Keyed on usedFallback, not on "no recipe": compileDirectorPrompt also
         // falls back when a recipe exists but compiles to nothing or lost its
@@ -9000,6 +9000,16 @@ async function fillDirectorPreviewPanel(panel, scene, directed) {
         // looking at the built-in prompt, not their own recipe's output.
         if (usedFallback && warnEl) {
             warnEl.textContent = '⚠ No usable Director recipe — showing the built-in fallback prompt.';
+            warnEl.hidden = false;
+        } else if (!contractOk && warnEl) {
+            // The recipe compiles and will be sent exactly as shown. What it
+            // no longer carries is the part the REPLY PARSER depends on, and
+            // the symptom of that is silent: a Director writes prose, nothing
+            // tags it, and the whole reply is stored as one untagged note with
+            // any secret inside it. Said here because this panel is where an
+            // owner rewriting the protocol is standing.
+            const missing = [!hasTags && 'the notebook tags ({{director::notebook.tags}})', !hasFence && 'the state fence ({{director::state.fence}})'].filter(Boolean).join(' and ');
+            warnEl.textContent = `⚠ This prompt is missing ${missing}. It will be sent as shown, but the Director's reply cannot be parsed into typed entries — everything it writes lands as a single untagged note, secrets included, and no Goal or Variable request can be read.`;
             warnEl.hidden = false;
         }
         // No trace on the fallback path: the cards would be captioning the

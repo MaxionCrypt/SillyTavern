@@ -91,17 +91,73 @@ export function describeAllLore(lore) {
 // reads oddly now that its value is a name rather than a ref; that is the
 // established post-rework convention (the field kept its name when its
 // value changed), not a mistake to fix here.
-const PROTOCOL = `You are the hidden director of this scene. You never speak in the story and are never quoted.
-Keep a notebook instead of a script. Write your entries one per line, each starting with one of these tags — your only instructions to the performer, nothing else survives outside them:
-[note]   observation, colour, what is in the air
+/**
+ * The four tags `director-reply.js` parses, and nothing else.
+ *
+ * MACHINE-CRITICAL. `TAG` in director-reply.js matches exactly these words at
+ * the start of a line; a Director that is told different ones writes entries
+ * this codebase cannot read, and the whole reply collapses into a single
+ * untagged `note` — which is not a hypothetical, it is what shipped, and it
+ * carried every `[secret]` straight to the Narrator inside a note for days.
+ *
+ * Exposed as the `{{director::notebook.tags}}` macro so an owner can rewrite
+ * every word of prose around it without being able to rewrite the tags
+ * themselves out of sync with the parser.
+ */
+export function describeNotebookTags() {
+    return `[note]   observation, colour, what is in the air
 [ruling] a decision that binds the next response
 [result] what actually happened, for the record
-[secret] never shown to the performer, and never omitted when a Goal or twist must stay hidden
-A line with no tag continues the entry above it; untagged prose written before your first tag is read as a note. Address every Variable and every Goal by its exact name as given to you below — never invent a name, never use an internal reference, and never describe this contract in your reply.
-If, and only if, anything mechanical changed this turn, close with a single fenced state block naming what changed by that same exact name. Otherwise leave it out entirely:
-\`\`\`state
+[secret] never shown to the performer, and never omitted when a Goal or twist must stay hidden`;
+}
+
+/**
+ * The state fence, its JSON shape, and a worked example.
+ *
+ * MACHINE-CRITICAL for the same reason: `STATE_FENCE` matches ```state and
+ * `validateMechanicsRequest` reads exactly these four top-level fields.
+ * Exposed as `{{director::state.fence}}`.
+ */
+export function describeStateFence() {
+    return `\`\`\`state
 {"requests":[{"id":"r1","capability":"variable.adjust","arguments":{"variableRef":"Morale","delta":-1},"reason":"the in-fiction reason this happened, one sentence"}],"flow":{"continue":false}}
 \`\`\``;
+}
+
+/**
+ * The default contract, as prose with the machine-critical parts as macros.
+ *
+ * This is what seeds an owner's editable protocol block. Every sentence here
+ * is theirs to rewrite; the three macros expand from the code at compile time,
+ * so the tags, the fence and the capability list can never fall behind what
+ * the parser and the validator actually require.
+ */
+export const PROTOCOL_TEMPLATE = `You are the hidden director of this scene. You never speak in the story and are never quoted.
+Keep a notebook instead of a script. Write your entries one per line, each starting with one of these tags — your only instructions to the performer, nothing else survives outside them:
+{{director::notebook.tags}}
+A line with no tag continues the entry above it; untagged prose written before your first tag is read as a note. Address every Variable and every Goal by its exact name as given to you below — never invent a name, never use an internal reference, and never describe this contract in your reply.
+If, and only if, anything mechanical changed this turn, close with a single fenced state block naming what changed by that same exact name. Otherwise leave it out entirely:
+{{director::state.fence}}`;
+
+/**
+ * The macro map for a Director compile.
+ *
+ * Named `{{director::…}}` rather than `{{outlet::…}}` only for readability —
+ * resolvePromptOutlets reads one map under both spellings.
+ */
+export function buildDirectorMacros(snapshot, { mechanicsEnabled = false } = {}) {
+    return {
+        'notebook.tags': describeNotebookTags(),
+        'state.fence': describeStateFence(),
+        capabilities: mechanicsEnabled ? describeCapabilities(snapshot?.mechanics?.capabilities) : '',
+        'rate.guidance': rateGuidance(),
+    };
+}
+
+/** The expanded default, for the recipe-less fallback and for seeding. */
+const PROTOCOL = PROTOCOL_TEMPLATE
+    .replace('{{director::notebook.tags}}', describeNotebookTags())
+    .replace('{{director::state.fence}}', describeStateFence());
 
 /**
  * The Director reading its OWN notebook back — including the secrets.

@@ -16,7 +16,10 @@ test('a new director recipe carries the expected blocks in order', () => {
     const recipe = createPromptRecipe({ name: 'Test Director', mode: 'director', apiType: 'chat' });
     expect(recipe.mode).toBe('director');
     expect(recipe.blocks.map((block) => block.sourceKey || block.kind)).toEqual([
-        'directionProtocol',
+        // The protocol is a MESSAGE now, not a locked source: its prose is the
+        // owner's to rewrite, and the parts the parser depends on reach it
+        // through {{director::…}} macros that expand at compile time.
+        'message',
         // World Info brackets the Director's own material the way it brackets
         // the character's in a Roleplay recipe. These were one LORE section
         // inside the locked Scene Snapshot, so the Director was the only
@@ -133,25 +136,39 @@ test('migration is idempotent: a current-version Director recipe gains nothing',
     expect(migrated.blocks.filter((block) => block.sourceKey === 'worldInfoBefore')).toHaveLength(1);
 });
 
-test('the protocol and snapshot blocks are locked, the style block is not', () => {
+test("only the snapshot is locked now — the protocol became the owner's to write", () => {
     const recipe = createPromptRecipe({ mode: 'director', apiType: 'chat' });
-    const locked = Object.fromEntries(recipe.blocks.map((block) => [block.sourceKey || 'style', block.locked]));
-    expect(locked.directionProtocol).toBe(true);
+    const locked = Object.fromEntries(recipe.blocks.filter((block) => block.sourceKey).map((block) => [block.sourceKey, block.locked]));
+
     expect(locked.directorSnapshot).toBe(true);
-    expect(locked.style).toBe(false);
     expect(locked.directorCard).toBe(false);
+    for (const block of recipe.blocks.filter((item) => item.kind === 'message')) {
+        expect(block.locked).toBe(false);
+    }
+});
+
+test('the seeded protocol carries the machinery as macros, not as frozen text', () => {
+    const protocol = createPromptRecipe({ mode: 'director', apiType: 'chat' })
+        .blocks.find((block) => block.kind === 'message' && block.content.includes('{{director::'));
+
+    // The macros are the whole point: a pasted copy of the tags would be a
+    // snapshot of what the parser wanted the day it was pasted.
+    expect(protocol.content).toContain('{{director::notebook.tags}}');
+    expect(protocol.content).toContain('{{director::state.fence}}');
+    // And the literal tags must NOT be frozen into the seed.
+    expect(protocol.content).not.toContain('[ruling]');
 });
 
 test('the editable style block carries the flow defaults as text', () => {
     const recipe = createPromptRecipe({ mode: 'director', apiType: 'chat' });
-    const style = recipe.blocks.find((block) => block.kind === 'message');
+    const style = recipe.blocks.find((block) => block.kind === 'message' && !block.content.includes('{{director::'));
     expect(style.content).toMatch(/without waiting/i);
     expect(style.content.length).toBeGreaterThan(40);
 });
 
 test('the seeded style block does not instruct about machinery this rework deleted', () => {
     const style = createPromptRecipe({ mode: 'director', apiType: 'chat' })
-        .blocks.find((block) => block.kind === 'message');
+        .blocks.find((block) => block.kind === 'message' && !block.content.includes('{{director::'));
     // `openings` is gone from the schema, the envelope and the reveal loop;
     // rhythm is derived by deriveBeats and the Narrator is told nothing about
     // pacing (design section 4). This is the default every user reads first.
@@ -170,7 +187,7 @@ test('an existing store still carrying the retired style text is migrated once',
     const store = settings.remodel.promptStudioV1;
     const director = Object.values(store.recipes).find((recipe) => recipe.mode === 'director');
     const legacy = 'The world may move without waiting for the user. Keep openings optional — the user may intervene anywhere. Responses may be long; give the performer useful guidance on rhythm, and only ask the scene to stop when the fiction is explicitly waiting on the user.';
-    director.blocks.find((block) => block.kind === 'message').content = legacy;
+    director.blocks.filter((block) => block.kind === 'message').at(-1).content = legacy;
     store.version = 4;
 
     const migrated = Object.values(getPromptStudioStore().recipes).find((recipe) => recipe.mode === 'director');

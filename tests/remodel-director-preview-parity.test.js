@@ -161,7 +161,7 @@ test('the default seeded Director recipe compiles identically for a real pass an
     expect(preview.prompt).toEqual(real);
 });
 
-test('a Director recipe missing its protocol block falls back identically on both paths', async () => {
+test('a Director recipe with no contract is sent as written, and flagged', async () => {
     const broken = createPromptRecipe({
         name: 'Broken Director',
         mode: 'director',
@@ -173,12 +173,35 @@ test('a Director recipe missing its protocol block falls back identically on bot
     const real = await captureRealCompiledPrompt();
     const preview = await previewDirectorPrompt(scene);
 
-    // Confirms this is genuinely exercising the fallback, not an accidental
-    // empty-array match.
+    // WARN AND SEND, not refuse. A recipe that compiles to SOMETHING is the
+    // owner's recipe and is sent as written — this one has no notebook tags
+    // and no state fence, so the Director's reply will not parse into typed
+    // entries, and `contractOk` is how the preview and the journal say so.
+    //
+    // Falling back here would mean an owner who deliberately rewrote the
+    // protocol silently got the built-in one instead, which is exactly the
+    // trap the old first-40-characters check set.
     expect(real.length).toBeGreaterThan(0);
-    expect(real.some((message) => message.content.includes('hidden director'))).toBe(true);
-    expect(preview.usedFallback).toBe(true);
+    expect(preview.usedFallback).toBe(false);
+    expect(preview.contractOk).toBe(false);
+    expect(preview.hasTags).toBe(false);
+    expect(preview.hasFence).toBe(false);
+    // The parity guarantee is the part that matters and it still holds: what
+    // the preview shows is byte-for-byte what the real path sends.
     expect(preview.prompt).toEqual(real);
+});
+
+test('an empty recipe still falls back, because there is nothing to send', async () => {
+    const empty = createPromptRecipe({
+        name: 'Empty Director', mode: 'director', apiType: 'chat',
+        blocks: [createPromptBlock({ kind: 'message', role: 'system', content: '', enabled: true })],
+    });
+    setActivePromptRecipe('director', 'chat', empty.id);
+
+    const preview = await previewDirectorPrompt(scene);
+
+    expect(preview.usedFallback).toBe(true);
+    expect(preview.prompt.some((message) => message.content.includes('hidden director'))).toBe(true);
 });
 
 // ------------------------------------------------------ real Variables, real path

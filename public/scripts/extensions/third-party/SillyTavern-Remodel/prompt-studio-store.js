@@ -1,8 +1,9 @@
 import { getContext } from '../../../st-context.js';
+import { PROTOCOL_TEMPLATE } from './direction-sources.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 8;
+const STORE_VERSION = 9;
 
 export const PROMPT_MODES = ['story', 'roleplay', 'director'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
@@ -397,7 +398,7 @@ const DIRECTOR_STYLE_LEGACY = 'The world may move without waiting for the user. 
  */
 function defaultDirectorBlocks() {
     return [
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directionProtocol', enabled: true, locked: true }),
+        createPromptBlock({ kind: 'message', role: 'system', enabled: true, locked: false, content: PROTOCOL_TEMPLATE }),
         // World Info brackets the Director's own material the same way it
         // brackets the character's in a Roleplay recipe: `before` ahead of the
         // card, the other three behind the mechanics block and ahead of the
@@ -628,6 +629,31 @@ function normalizeStore(store, seed) {
                 recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
                 changed = true;
             }
+        }
+    }
+    // The protocol stopped being a locked source and became an ordinary
+    // editable message, seeded with the text that source produced. Nothing
+    // about the compiled prompt changes on the day of the migration — the
+    // seed expands, through {{director::…}}, to exactly what was there before
+    // — but from here the owner can rewrite every sentence of it while the
+    // tags, the state fence and the capability list keep coming from the code.
+    if (previousVersion < 9) {
+        for (const recipe of Object.values(store.recipes)) {
+            if (recipe?.mode !== 'director' || !Array.isArray(recipe.blocks)) continue;
+            const index = recipe.blocks.findIndex((block) => block.kind === 'source' && block.sourceKey === 'directionProtocol');
+            if (index < 0) continue;
+            const previous = recipe.blocks[index];
+            recipe.blocks[index] = createPromptBlock({
+                kind: 'message',
+                role: previous.role || 'system',
+                // Position, enabled state and role are carried over; `locked`
+                // deliberately is not. Being unlockable is the whole feature.
+                enabled: previous.enabled !== false,
+                locked: false,
+                content: PROTOCOL_TEMPLATE,
+            });
+            recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
+            changed = true;
         }
     }
     return changed;

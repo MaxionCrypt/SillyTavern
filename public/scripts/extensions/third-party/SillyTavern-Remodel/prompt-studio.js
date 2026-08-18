@@ -338,8 +338,24 @@ function withPromptTrace(compiled, traceEntries, wanted) {
     return wanted ? { ...compiled, trace: traceEntries } : compiled;
 }
 
+/**
+ * Expand `{{outlet::name}}` and `{{director::name}}` from the same map.
+ *
+ * Two spellings, one mechanism, because they are the same idea reached from
+ * two directions. Story recipes fill outlets from World Info; a Director
+ * recipe fills them with the parts of its contract that the PARSER depends on
+ * — the notebook tags, the state fence, the capability list.
+ *
+ * Those parts have to expand at compile time rather than being pasted into a
+ * recipe once. A pasted copy is a snapshot of what the code required on the
+ * day it was pasted, and the moment a capability gains a required argument
+ * that copy is silently wrong — which is precisely the defect this codebase
+ * just spent three sessions on, where `validateArguments` demanded `valueType`
+ * and the prompt had never heard of it. A macro cannot drift from the code
+ * that renders it.
+ */
 function resolvePromptOutlets(content, outlets) {
-    return String(content || '').replace(/{{outlet::(.+?)}}/gi, (_, name) => {
+    return String(content || '').replace(/{{(?:outlet|director)::(.+?)}}/gi, (_, name) => {
         const value = outlets?.[String(name).trim()];
         return Array.isArray(value) ? value.join('\n') : String(value || '');
     });

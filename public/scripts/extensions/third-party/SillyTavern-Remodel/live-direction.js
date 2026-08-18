@@ -14,14 +14,14 @@ import {
     undoMechanicsTransaction,
 } from './mechanics-capabilities.js';
 import { buildMechanicalSnapshot, previewMechanicalContext } from './mechanics-runtime.js';
-import { buildDirectionSources, describeAllLore } from './direction-sources.js';
+import { buildDirectionSources, buildDirectorMacros, describeAllLore } from './direction-sources.js';
 import { resolveByName } from './direction-address.js';
 import { resolveDirectionActions } from './direction-chrome.js';
 import { clearStandingDirection, readStandingDirection, saveStandingDirection } from './standing-direction-store.js';
 import { deriveBeats } from './direction-beats.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
 import { PROMPT_SOURCE_DEFINITIONS } from './prompt-studio-store.js';
-import { parseDirectorReply } from './director-reply.js';
+import { ENTRY_TYPES, parseDirectorReply } from './director-reply.js';
 import { filterNarratorHistory } from './narrator-history.js';
 import {
     abandonDirectorTurn,
@@ -1196,7 +1196,14 @@ function compileDirectorPrompt(snapshot, { mechanicsEnabled = false, trace = fal
     // below is compiling the identical prompt whether or not this is on.
     let trail = [];
     if (recipe) {
-        const compiled = compilePromptRecipe(recipe, sources, { trace });
+        // The Director's macros travel as outlets: resolvePromptOutlets reads
+        // one map under both {{outlet::x}} and {{director::x}}. This is what
+        // lets an owner rewrite the protocol's prose while the tags, the state
+        // fence and the capability list keep expanding from the code.
+        const compiled = compilePromptRecipe(recipe, sources, {
+            trace,
+            outlets: buildDirectorMacros(snapshot, { mechanicsEnabled }),
+        });
         prompt = compiled.messages;
         trail = compiled.trace || [];
     }
@@ -1204,7 +1211,37 @@ function compileDirectorPrompt(snapshot, { mechanicsEnabled = false, trace = fal
     // compiled to, which is the number a diagnostic needs — after the swap
     // below, prompt.length would only ever report the fallback's own size.
     const compiledCount = prompt?.length || 0;
-    const usedFallback = !prompt?.length || !prompt.some((message) => message.content.includes(sources.directionProtocol.slice(0, 40)));
+    // WHAT COUNTS AS A USABLE PROMPT CHANGED WITH THE PROTOCOL BLOCK.
+    //
+    // This used to ask whether the compiled text still contained the first 40
+    // characters of the built-in protocol. That was a fair proxy while the
+    // protocol was a locked source producing one fixed string; it is wrong now
+    // that it is an editable message, because an owner rewriting its opening
+    // sentence — the entire point of making it editable — would have silently
+    // been switched onto the built-in fallback and never told.
+    //
+    // The real question is whether the contract the PARSER depends on survived
+    // the owner's edits: the four tags director-reply.js matches, and the
+    // state fence. Prose is theirs; those are not negotiable, and a prompt
+    // missing them produces a Director whose reply this codebase cannot read.
+    const compiledText = (prompt || []).map((message) => message.content).join('\n');
+    const hasTags = ENTRY_TYPES.every((type) => compiledText.includes(`[${type}]`));
+    const hasFence = compiledText.includes('```state');
+    const usedFallback = !prompt?.length;
+    if (!usedFallback && !(hasTags && hasFence)) {
+        // Warn and send, rather than refuse. It is the owner's recipe and they
+        // may be deliberately running a Director that never writes state — but
+        // a notebook silently collapsing into one untagged blob is the exact
+        // failure this codebase already shipped once, so it says so loudly in
+        // the journal and the preview rather than only in the result.
+        journal('recipe.contract-missing', {
+            missingTags: !hasTags,
+            missingFence: !hasFence,
+        }, {
+            severity: 'warn',
+            summary: `direction.recipe: the compiled prompt is missing ${[!hasTags && 'the notebook tags', !hasFence && 'the state fence'].filter(Boolean).join(' and ')}`,
+        });
+    }
     if (usedFallback) {
         // The notebook is resolved at the DECLARED default depth here, read
         // from the source definition rather than written out again — the
@@ -1233,7 +1270,7 @@ function compileDirectorPrompt(snapshot, { mechanicsEnabled = false, trace = fal
         // from captioning the built-in fallback with the blocks it replaced.
         trail = [];
     }
-    return { recipe, sources, prompt, usedFallback, compiledCount, trace: trail };
+    return { recipe, sources, prompt, usedFallback, compiledCount, trace: trail, contractOk: hasTags && hasFence, hasTags, hasFence };
 }
 
 /** The `directorNotebook` source's own declared default depth — one place. */
@@ -1316,8 +1353,11 @@ export async function previewDirectorPrompt(scene) {
     const action = hooks.getComposerDraft() || '[preview only: retrieve state; do not mutate or roll]';
     const snapshot = await buildDirectionSnapshot(scene, action, [], { preview: true });
     const profile = getMechanicsProfile();
-    const { recipe, prompt, usedFallback, trace } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled, trace: true });
-    return { prompt, recipe, snapshot, usedFallback, trace };
+    const { recipe, prompt, usedFallback, trace, contractOk, hasTags, hasFence } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled, trace: true });
+    // contractOk/hasTags/hasFence travel to the preview so the panel can say
+    // "your recipe compiles, but the Director's reply will not parse" — the
+    // one thing an owner rewriting the protocol most needs to be told.
+    return { prompt, recipe, snapshot, usedFallback, trace, contractOk, hasTags, hasFence };
 }
 
 /**
