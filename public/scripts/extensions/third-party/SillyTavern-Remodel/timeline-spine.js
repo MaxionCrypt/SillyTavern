@@ -5786,6 +5786,38 @@ function getCurrentLinkedChat() {
     return null;
 }
 
+/**
+ * How deep into the chat an injected Roleplay block sits, counted back from
+ * the newest message.
+ *
+ * BOTH of these blocks used to pass a hardcoded 1, and the editor described
+ * them as being "mirrored into the native Roleplay prompt at this position" —
+ * which was false. They are IN_CHAT depth injections: core places them by
+ * counting back from the end of the chat, so where the block sat in the recipe
+ * reached nothing. An owner who moved Director's Notes above an instruction
+ * block got the opposite order in the actual prompt and no indication why.
+ *
+ * Recipe ORDER still does not govern these two — that is what an IN_CHAT
+ * injection is — but the depth is now theirs to set, and the block's
+ * description says so instead of claiming otherwise.
+ *
+ * `0` is a real, supported value (after the newest message, not "unset"), so
+ * the fallback is applied only when the setting is genuinely absent or
+ * unusable. This codebase has shipped the `Number(null) === 0` trap three
+ * times; `??` and an explicit finite check are what keep a deliberate 0 from
+ * being read as missing and silently replaced by the default.
+ */
+function roleplayInjectionDepth(sourceKey, fallback = 1) {
+    const recipe = getCurrentPromptStudioRecipe('roleplay', 'chat');
+    const block = (recipe?.blocks || [])
+        .filter((entry) => entry.kind === 'source' && entry.sourceKey === sourceKey)
+        .find((entry) => entry.enabled !== false);
+    const raw = block?.settings?.injectionDepth;
+    const depth = typeof raw === 'number' ? raw : (typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN);
+    if (!Number.isFinite(depth)) return fallback;
+    return Math.max(0, Math.min(20, Math.round(depth)));
+}
+
 function writeSceneMetadata(scene) {
     if (!scene) {
         return;
@@ -10632,7 +10664,7 @@ function renderRoleplayScene() {
         'remodel_story_goals',
         formatStoryGoalsPrompt(activeRoleplayScene),
         extension_prompt_types.IN_CHAT,
-        1,
+        roleplayInjectionDepth('storyGoals'),
         false,
         extension_prompt_roles.SYSTEM,
         () => getActiveScene()?.id === activeRoleplayScene?.id,
@@ -10645,7 +10677,7 @@ function renderRoleplayScene() {
         'remodel_director_notes',
         formatDirectorNotesPrompt(activeRoleplayScene),
         extension_prompt_types.IN_CHAT,
-        1,
+        roleplayInjectionDepth('directorNotes'),
         false,
         extension_prompt_roles.SYSTEM,
         () => getActiveScene()?.id === activeRoleplayScene?.id,

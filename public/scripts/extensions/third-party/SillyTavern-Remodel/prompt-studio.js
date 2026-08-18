@@ -1149,7 +1149,7 @@ function sourceDescription(recipe, key) {
         scenario: 'The Scenario field from the character card bound to the active Roleplay scene.',
         dialogueExamples: 'Example Dialogue from the bound character card, formatted by SillyTavern at generation time.',
         storyGoals: 'The active Scene’s public goals plus private NPC instructions and the latest resolved Goal events.',
-        directorNotes: 'The hidden Director’s recent notes for this Scene, rendered by Remodel and mirrored into the native Roleplay prompt at this position. Never includes a secret entry.',
+        directorNotes: 'The hidden Director’s recent notes for this Scene, rendered by Remodel and injected INTO the chat history, counted back from the newest message by “Messages from the end”. Its position is set by that number, NOT by where this block sits in the recipe. Only note, ruling and result entries are ever included.',
         chatHistory: 'The token-budgeted messages from the active Roleplay conversation, including the newest user turn.',
         currentInput: 'The newest user message, carried through SillyTavern’s native Chat History marker.',
         generationNudge: 'The generation-specific quiet prompt or nudge supplied by SillyTavern for the current request.',
