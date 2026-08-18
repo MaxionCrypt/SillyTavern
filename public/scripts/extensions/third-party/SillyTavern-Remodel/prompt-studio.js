@@ -490,6 +490,28 @@ function renderRecipeEditor(recipe) {
     `;
 }
 
+/**
+ * The depth badge, on the face of any block whose position is set by depth
+ * rather than by where it sits in this list.
+ *
+ * The rail number beside every block reads as an order, and for these two
+ * blocks it is not one: Director's Notes and Story Goals are IN_CHAT
+ * injections, placed by counting back from the newest chat message. An owner
+ * moved Director's Notes above an instruction block, wrote "the director's
+ * instructions below", and got the opposite order in the compiled prompt with
+ * nothing on screen to explain it.
+ *
+ * So the real control is stated where the wrong one is: on the block face,
+ * beside the position number that does not apply to it.
+ */
+function renderInjectionDepthBadge(source, block) {
+    if (!source?.settings?.injectionDepth) return '';
+    const depth = block?.settings?.injectionDepth;
+    const value = Number.isFinite(Number(depth)) ? Number(depth) : source.settings.injectionDepth.default;
+    const where = value === 0 ? 'after the newest message' : `${value} message${value === 1 ? '' : 's'} back from the newest`;
+    return `<span class="remodel-prompt-depth-badge" title="This block is injected into the chat history at this depth. Dragging it in this list does not move it — change &quot;Messages from the end&quot; below.">↧ Depth ${value} · ${escapeHtml(where)}</span>`;
+}
+
 function renderPromptBlock(recipe, block, index) {
     const source = block.kind === 'source' ? getSourceDefinition(recipe, block.sourceKey) : null;
     const bindingNote = sourceBindingNote(recipe, block);
@@ -518,7 +540,7 @@ function renderPromptBlock(recipe, block, index) {
                     </div>
                 </div>
                 ${block.kind === 'source'
-                    ? `<div class="remodel-prompt-source-card"><strong>${escapeHtml(source?.label || block.sourceKey)}</strong><p>${escapeHtml(sourceDescription(recipe, block.sourceKey))}</p>${bindingNote ? `<span>${escapeHtml(bindingNote)}</span>` : ''}${canOpenSource(block.sourceKey) ? '<button type="button" data-remodel-prompt-source-open><i class="fa-solid fa-arrow-up-right-from-square"></i> Open source</button>' : ''}</div>`
+                    ? `<div class="remodel-prompt-source-card"><strong>${escapeHtml(source?.label || block.sourceKey)}</strong>${renderInjectionDepthBadge(source, block)}<p>${escapeHtml(sourceDescription(recipe, block.sourceKey))}</p>${bindingNote ? `<span>${escapeHtml(bindingNote)}</span>` : ''}${canOpenSource(block.sourceKey) ? '<button type="button" data-remodel-prompt-source-open><i class="fa-solid fa-arrow-up-right-from-square"></i> Open source</button>' : ''}</div>`
                     : `<textarea data-remodel-prompt-block-content placeholder="Write the ${escapeAttribute(roleLabels[block.role].toLowerCase())} message…">${escapeHtml(block.content)}</textarea>`}
                 ${renderPromptBlockSettings(recipe, block)}
             </div>

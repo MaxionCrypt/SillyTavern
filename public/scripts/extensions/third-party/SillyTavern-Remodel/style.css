@@ -12475,3 +12475,21 @@ body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDraw
     color: #ff9b9e !important;
     background: rgba(191, 42, 52, .16) !important;
 }
+
+/* A block positioned by depth, not by its place in the recipe list. Coloured
+   apart from the binding note beside it because it is the one control that
+   contradicts the position number in the rail. */
+.remodel-prompt-depth-badge {
+  display:inline-block;
+  margin-left:8px;
+  padding:1px 8px;
+  border:1px solid rgba(255,214,120,.35);
+  border-radius:999px;
+  color:rgba(255,224,150,.92);
+  background:rgba(255,196,84,.08);
+  font-size:11px;
+  letter-spacing:.02em;
+  white-space:nowrap;
+  vertical-align:middle;
+  cursor:help;
+}
