@@ -6,6 +6,20 @@ const SETTINGS_KEY = 'remodel.debugJournal.settings.v1';
 const CHANNEL_NAME = 'remodel.debugJournal.live.v1';
 const MAX_RECORDS = 5000;
 const PERSISTED_RECORDS = 1000;
+// Persistence is a convenience — it survives a reload — and it was costing the
+// app its responsiveness to provide it. `persist` serializes up to
+// PERSISTED_RECORDS records, and a record's detail can hold a whole 15KB
+// prompt body, so one flush could stringify megabytes. On a 250ms timer that
+// ran four times a second, synchronously, on the main thread, for the entire
+// length of a streaming response — which is exactly when the app has the least
+// to spare. Slower timer, idle callback where the browser offers one, and a
+// byte budget so a flush is bounded no matter what the records contain.
+const PERSIST_INTERVAL_MS = 2000;
+const PERSIST_BYTE_BUDGET = 512 * 1024;
+// The live cross-tab mirror structured-clones every record. Batched, for the
+// same reason.
+const BROADCAST_INTERVAL_MS = 400;
+const MAX_PENDING_MUTATIONS = 500;
 const MAX_TEXT = 32000;
 const SECRET_KEY = /authorization|api[-_]?key|token|secret|password|cookie|session/i;
 const SENSITIVE_KEY = /prompt|messages|content|response|body|description|history|persona|character|payload|raw|objective|constraints|currentAction|draft|text/i;
@@ -21,11 +35,21 @@ let originalFetch = null;
 let originalConsole = null;
 let xhrInstalled = false;
 let liveChannel = null;
+let broadcastTimer = null;
+let pendingBroadcast = [];
+let refreshHandle = 0;
+let droppedMutations = 0;
 const TAB_ID = `tab-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
 
 const settings = {
     recording: true,
     captureSensitive: false,
+    // The DOM recorder is the single highest-volume source in the journal and
+    // the least diagnostic: a streaming response mutates the document on every
+    // token, and the resulting `dom/mutation.batch` records outnumbered every
+    // other category combined in each of the owner's exports. Off unless it is
+    // actually being used to chase a rendering bug.
+    recordDom: false,
     viewPaused: false,
     category: 'all',
     severity: 'all',
@@ -117,13 +141,35 @@ function load() {
     }
 }
 
+/**
+ * Newest records that fit inside PERSIST_BYTE_BUDGET.
+ *
+ * Bounded by BYTES, not by count, because the count says nothing about the
+ * cost: one `fetch.request` record carrying a 15KB prompt body is worth
+ * hundreds of `click` records, and it was the byte size that made a flush
+ * block the main thread. Walks newest-first and stops at the budget, so what
+ * survives a reload is always the most recent thing that happened.
+ */
+function persistableRecords() {
+    const kept = [];
+    let bytes = 0;
+    for (let index = records.length - 1; index >= 0 && kept.length < PERSISTED_RECORDS; index--) {
+        const encoded = JSON.stringify(records[index]);
+        if (bytes + encoded.length > PERSIST_BYTE_BUDGET) break;
+        bytes += encoded.length;
+        kept.push(records[index]);
+    }
+    return kept.reverse();
+}
+
 function persist() {
     flushTimer = null;
     try {
-        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(records.slice(-PERSISTED_RECORDS)));
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(persistableRecords()));
         localStorage.setItem(SETTINGS_KEY, JSON.stringify({
             recording: settings.recording,
             captureSensitive: settings.captureSensitive,
+            recordDom: settings.recordDom,
         }));
     } catch (error) {
         originalConsole?.warn?.('Remodel debug journal could not persist.', error);
@@ -131,7 +177,47 @@ function persist() {
 }
 
 function schedulePersist() {
-    if (!flushTimer) flushTimer = setTimeout(persist, 250);
+    if (flushTimer) return;
+    // requestIdleCallback where it exists, so a flush waits for a gap rather
+    // than taking one. The timeout keeps it bounded on browsers that never go
+    // idle, and setTimeout is the fallback for Safari.
+    flushTimer = typeof requestIdleCallback === 'function'
+        ? requestIdleCallback(persist, { timeout: PERSIST_INTERVAL_MS * 2 })
+        : setTimeout(persist, PERSIST_INTERVAL_MS);
+}
+
+/**
+ * Mirror to other tabs in batches.
+ *
+ * `postMessage` structured-clones whatever it is given, so doing it per record
+ * paid a full deep copy of every prompt body on every event, on the main
+ * thread, whether or not a second tab existed to receive it.
+ */
+function scheduleBroadcast(record) {
+    if (!liveChannel) return;
+    pendingBroadcast.push(record);
+    if (broadcastTimer) return;
+    broadcastTimer = setTimeout(() => {
+        broadcastTimer = null;
+        const batch = pendingBroadcast.splice(0);
+        if (batch.length) liveChannel?.postMessage({ type: 'records', sender: TAB_ID, records: batch });
+    }, BROADCAST_INTERVAL_MS);
+}
+
+/**
+ * Repaint the console at most once a frame, and only when it is on screen.
+ *
+ * This used to run on EVERY recorded event, unconditionally, re-rendering up
+ * to MAX_RECORDS rows into innerHTML — including while the workspace was
+ * closed and nothing could see the result.
+ */
+function scheduleWorkspaceRefresh() {
+    if (refreshHandle) return;
+    if (!document.querySelector('[data-remodel-debug-stream]')) return;
+    refreshHandle = requestAnimationFrame(() => {
+        refreshHandle = 0;
+        refreshDebugConsoleWorkspace();
+    });
 }
 
 export function recordDebugEvent(category, type, detail = {}, options = {}) {
@@ -152,8 +238,8 @@ export function recordDebugEvent(category, type, detail = {}, options = {}) {
     records.push(record);
     if (records.length > MAX_RECORDS) records.splice(0, records.length - MAX_RECORDS);
     schedulePersist();
-    liveChannel?.postMessage({ type: 'record', sender: TAB_ID, record });
-    window.dispatchEvent(new CustomEvent('remodel-debug-record', { detail: record }));
+    scheduleBroadcast(record);
+    scheduleWorkspaceRefresh();
     return record;
 }
 
@@ -188,6 +274,7 @@ function initCrossTabChannel() {
         const message = event.data;
         if (!message || message.sender === TAB_ID) return;
         if (message.type === 'record') acceptRemoteRecords(message.record);
+        if (message.type === 'records') acceptRemoteRecords(message.records);
         if (message.type === 'sync-request') {
             liveChannel.postMessage({ type: 'snapshot', sender: TAB_ID, target: message.sender, records: records.slice(-PERSISTED_RECORDS) });
         }
@@ -341,14 +428,38 @@ function installUiRecorder() {
     }, true);
 }
 
+/**
+ * The DOM recorder, which is off unless `recordDom` is switched on.
+ *
+ * A streaming response mutates the document on every token. Left running it
+ * produced more records than every other category combined, and each one cost
+ * a `closest()` walk per mutation plus a sanitize of up to 36 described
+ * elements. Recording the DOM while chasing a rendering bug is worth that;
+ * recording it during ordinary play was paying for a diagnostic nobody was
+ * reading.
+ */
 function installMutationRecorder() {
     const observer = new MutationObserver((mutations) => {
-        pendingMutations.push(...mutations);
+        if (!settings.recordDom || !settings.recording) return;
+        // Bounded, and NOT spread. `push(...mutations)` passes every mutation
+        // as an argument, which on a heavy batch can exceed the argument limit
+        // outright; and an unbounded queue during a long stream grows until
+        // the flush walks all of it. Overflow is counted rather than silently
+        // dropped, so the record says what it did not see.
+        for (const mutation of mutations) {
+            if (pendingMutations.length >= MAX_PENDING_MUTATIONS) { droppedMutations++; continue; }
+            pendingMutations.push(mutation);
+        }
         if (mutationTimer) return;
         mutationTimer = setTimeout(() => {
             mutationTimer = null;
+            // Resolved ONCE per flush. `closest()` walks to the root, and
+            // calling it per mutation made the filter cost scale with both the
+            // batch size and the DOM depth — on the flush that is already the
+            // expensive part of this recorder.
+            const workspace = document.querySelector('.remodel-debug-workspace');
             const batch = pendingMutations.splice(0).filter((mutation) => {
-                if (mutation.target instanceof Element && mutation.target.closest('.remodel-debug-workspace')) return false;
+                if (workspace && mutation.target instanceof Node && workspace.contains(mutation.target)) return false;
                 if (mutation.type === 'attributes' && mutation.attributeName) {
                     const currentValue = mutation.target.getAttribute?.(mutation.attributeName);
                     if ((mutation.oldValue ?? null) === (currentValue ?? null)) return false;
@@ -372,12 +483,14 @@ function installMutationRecorder() {
                 for (const node of mutation.removedNodes) {
                     if (removedNodes.length < 12 && node instanceof Element) removedNodes.push(describeElement(node));
                 }
-                if (samples.length < 12 && mutation.target instanceof Element && !mutation.target.closest('.remodel-debug-workspace')) {
+                if (samples.length < 12 && mutation.target instanceof Element) {
                     samples.push({ kind: mutation.type, target: describeElement(mutation.target), attribute: mutation.attributeName || undefined });
                 }
             }
-            if (added || removed || attributes) recordDebugEvent('dom', 'mutation.batch', { mutationCount: batch.length, added, removed, attributes, addedNodes, removedNodes, samples }, {
-                summary: `DOM +${added} -${removed} ~${attributes}`,
+            const skipped = droppedMutations;
+            droppedMutations = 0;
+            if (added || removed || attributes) recordDebugEvent('dom', 'mutation.batch', { mutationCount: batch.length, added, removed, attributes, addedNodes, removedNodes, samples, skipped }, {
+                summary: `DOM +${added} -${removed} ~${attributes}${skipped ? ` (${skipped} not recorded)` : ''}`,
             });
         }, 120);
     });
@@ -500,6 +613,7 @@ export function renderDebugConsoleWorkspace() {
                 <div class="remodel-debug-actions">
                     <button type="button" data-remodel-debug-action="record">${settings.recording ? 'Pause recording' : 'Resume recording'}</button>
                     <button type="button" data-remodel-debug-action="view">${settings.viewPaused ? 'Resume view' : 'Pause view'}</button>
+                    <button type="button" data-remodel-debug-action="dom" title="Record every DOM mutation. High volume — a streaming response mutates the document on every token — so this is off unless you are chasing a rendering bug.">${settings.recordDom ? 'Stop DOM capture' : 'Capture DOM'}</button>
                     <button type="button" data-remodel-debug-action="export">Export JSON</button>
                     <button type="button" data-remodel-debug-action="clear">Clear</button>
                 </div>
@@ -592,10 +706,11 @@ export function handleDebugConsoleClick(target, requestRender) {
     if (!action) return false;
     if (action === 'record') settings.recording = !settings.recording;
     if (action === 'view') settings.viewPaused = !settings.viewPaused;
+    if (action === 'dom') settings.recordDom = !settings.recordDom;
     if (action === 'export') downloadDebugRecords();
     if (action === 'clear') clearDebugRecords();
     persist();
-    if (action === 'record') broadcastSharedSettings();
+    if (action === 'record' || action === 'dom') broadcastSharedSettings();
     requestRender();
     return true;
 }
@@ -631,5 +746,8 @@ export function handleDebugConsoleChange(target, requestRender) {
     return true;
 }
 
-window.addEventListener('remodel-debug-record', refreshDebugConsoleWorkspace);
+// Deliberately NOT a per-record listener any more. recordDebugEvent calls
+// scheduleWorkspaceRefresh itself, which coalesces to one repaint per frame
+// and does nothing at all when the workspace is not mounted.
+
 window.addEventListener('remodel-debug-cleared', refreshDebugConsoleWorkspace);
