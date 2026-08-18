@@ -18,7 +18,12 @@ test('a declared setting is defaulted when absent', () => {
 
 test('an undeclared setting key is dropped', () => {
     const recipe = normalizeRecipe({ id: 'r3', mode: 'roleplay', apiType: 'chat', blocks: [{ kind: 'source', sourceKey: 'directorNotes', role: 'system', enabled: true, settings: { depth: 5, nonsense: true } }] });
-    expect(recipe.blocks[0].settings).toEqual({ depth: 5 });
+    // `nonsense` is gone; `depth` survives; and injectionDepth is filled in
+    // from its declaration. Asserted by field rather than by whole-object
+    // equality so that declaring a new setting does not fail a test that is
+    // about refusing UNdeclared ones.
+    expect(recipe.blocks[0].settings).not.toHaveProperty('nonsense');
+    expect(recipe.blocks[0].settings.depth).toBe(5);
 });
 
 test('a setting outside its declared range is clamped, not rejected', () => {

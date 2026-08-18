@@ -111,7 +111,11 @@ test('a function-form source receives the block settings, and only its return va
     const compiled = compilePromptRecipe(recipe, {
         directorNotes: (settings) => { receivedSettings = settings; return 'Teo stalls.'; },
     });
-    expect(receivedSettings).toEqual({ depth: 7 });
+    // The declared settings are normalized onto the block, so this object also
+    // carries injectionDepth's default. Asserted by field rather than by whole
+    // -object equality: this test is about `depth` reaching the resolver, and
+    // it should not fail every time the source declares an unrelated setting.
+    expect(receivedSettings.depth).toBe(7);
     expect(compiled.messages[0].content).toBe('Teo stalls.');
     expect(JSON.stringify(compiled.messages)).not.toContain('depth');
 });

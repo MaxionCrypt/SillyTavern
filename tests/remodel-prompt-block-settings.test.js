@@ -118,8 +118,13 @@ test('a key the source definition does not declare is refused rather than saved 
     const recipe = recipeWithNotesBlock();
     const block = blockFor(recipe, (entry) => entry.sourceKey === 'directorNotes');
     expect(applyPromptBlockSetting(recipe.id, block.id, 'notADeclaredSetting', '5')).toBeNull();
-    expect(getPromptRecipe(recipe.id).blocks.find((entry) => entry.id === block.id).settings)
-        .toEqual({ depth: 3 });
+    const saved = getPromptRecipe(recipe.id).blocks.find((entry) => entry.id === block.id).settings;
+    // The undeclared key is absent, and every DECLARED key survives. Checked
+    // this way round on purpose: whole-object equality would fail whenever the
+    // source gains a setting, which says nothing about whether an undeclared
+    // one was refused.
+    expect(saved).not.toHaveProperty('notADeclaredSetting');
+    expect(saved.depth).toBe(3);
 });
 
 test('a block whose source declares nothing cannot be written to', () => {
