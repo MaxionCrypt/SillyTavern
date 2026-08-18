@@ -1,5 +1,5 @@
 import { getContext } from '../../../st-context.js';
-import { ENTRY_TYPES } from './director-reply.js';
+import { NARRATOR_VISIBLE_TYPES, STORED_ENTRY_TYPES } from './director-reply.js';
 
 // Persistence for the Director's typed notebook: the entries `director-reply.js`
 // parses out of a free-form reply, kept per Timeline so they survive across
@@ -64,7 +64,7 @@ export function appendDirectorEntries(timelineId, { sceneId, turn, entries } = {
     const turnNumber = Math.floor(Number(turn)) || 0;
     const timestamp = now();
     const stored = (Array.isArray(entries) ? entries : [])
-        .filter((entry) => entry && ENTRY_TYPES.includes(entry.type))
+        .filter((entry) => entry && STORED_ENTRY_TYPES.includes(entry.type))
         .map((entry) => ({
             id: createId('director-entry'),
             sceneId: scene,
@@ -105,7 +105,12 @@ export function readNarratorEntries(timelineId, { sceneId, depth } = {}) {
     const entries = entriesForScene(timelineId, sceneId).filter((entry) => !entry.abandoned);
     const allowedTurns = turnsForDepth(entries, depth);
     return entries
-        .filter((entry) => entry.type !== 'secret' && allowedTurns.has(entry.turn))
+        // ALLOWLIST. This was `entry.type !== 'secret'`, which could only
+        // withhold what it already knew to name — so a secret the Director
+        // wrote without the exact tag was not typed `secret`, was not caught,
+        // and reached the performer. Anything not positively recognised as
+        // performer-safe is withheld now, `unknown` included.
+        .filter((entry) => NARRATOR_VISIBLE_TYPES.includes(entry.type) && allowedTurns.has(entry.turn))
         .map(copy);
 }
 

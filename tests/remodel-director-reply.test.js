@@ -44,10 +44,31 @@ test('untagged prose after a [secret] stays inside the secret, which is why the 
     expect(entries[0].text).toBe('The boy already knows.\nThe rain gets heavier, and Teo notices.');
 });
 
-test('an unknown tag stays literal text inside the current entry', () => {
+test('a line-leading unknown tag becomes its own withheld entry - REVERSED deliberately', () => {
+    // This previously asserted the opposite: that `[foreshadow]` stayed literal
+    // text inside the note above it. That behaviour is what let a secret the
+    // Director spelled differently inherit a note's visibility and reach the
+    // performer, so it was reversed on purpose.
+    //
+    // An unrecognised label is now an `unknown` entry, which
+    // NARRATOR_VISIBLE_TYPES does not admit. The cost is a Director inventing
+    // a label loses that line from the performer's view; the cost of the old
+    // behaviour was a spoiled twist, which cannot be undone.
     const { entries } = parseDirectorReply('[note] Teo stalls.\n[foreshadow] the closet\n[result] Eli sat.');
-    expect(entries).toHaveLength(2);
-    expect(entries[0].text).toBe('Teo stalls.\n[foreshadow] the closet');
+
+    expect(entries.map((entry) => entry.type)).toEqual(['note', 'unknown', 'result']);
+    expect(entries[0].text).toBe('Teo stalls.');
+    expect(entries[1].text).toBe('the closet');
+});
+
+test('an unknown tag mid-sentence is still literal text, so prose is not shredded', () => {
+    // Only LINE-LEADING unknown labels count as tags. A stray bracket inside a
+    // sentence must not split the entry and silently withhold its remainder -
+    // that is the same failure pointing the other way.
+    const { entries } = parseDirectorReply('[note] she read it [sic] twice before speaking.');
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].text).toBe('she read it [sic] twice before speaking.');
 });
 
 test('reads the LAST state fence, so mid-reply talk about state cannot confuse it', () => {

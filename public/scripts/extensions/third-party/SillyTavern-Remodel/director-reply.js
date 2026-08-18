@@ -9,6 +9,31 @@
 export const ENTRY_TYPES = ['note', 'ruling', 'result', 'secret'];
 
 /**
+ * What a parsed entry may be STORED as. `unknown` is not a type the Director
+ * is ever told about — it is where a line that looks like a tag but names
+ * nothing we recognise ends up, kept for the owner and withheld from the
+ * performer instead of silently joining the entry above it.
+ */
+export const STORED_ENTRY_TYPES = [...ENTRY_TYPES, 'unknown'];
+
+/**
+ * The only types the performer may ever see. An ALLOWLIST, deliberately.
+ *
+ * This was a denylist — everything except `secret` — and it failed open in the
+ * one direction that cannot be undone. On the owner's turn 4 the Director
+ * wrote three secrets as `Secret: …` rather than `[secret] …`; no tag matched,
+ * the text joined the `note` above it, and all three went to the Narrator
+ * under "treat as settled fact". That turn's entryTypes were
+ * `[note, note, ruling, ruling, result]` — not one secret parsed, so the
+ * filter had nothing to catch.
+ *
+ * A denylist can only withhold what it already knows to name. An allowlist
+ * withholds whatever it does not positively recognise, which is the only shape
+ * that survives a Director inventing a spelling.
+ */
+export const NARRATOR_VISIBLE_TYPES = ['note', 'ruling', 'result'];
+
+/**
  * A tag is the type name in square brackets. Everything around it is noise the
  * model adds and we have to survive.
  *
@@ -29,10 +54,33 @@ export const ENTRY_TYPES = ['note', 'ruling', 'result', 'secret'];
  * literal text and a typo still cannot invent a type nothing reads.
  */
 const EMPHASIS = '(?:\\*{1,3}|_{1,3})';
-const TAG = new RegExp(
-    `(?:^|\\s)(?:[-*+]\\s+|\\d+[.)]\\s+)?${EMPHASIS}?\\[(note|ruling|result|secret)\\]${EMPHASIS}?:?[ \\t]*`,
-    'gi',
-);
+const LIST = '(?:[-*+]\\s+|\\d+[.)]\\s+)?';
+const KNOWN = 'note|ruling|result|secret';
+
+/**
+ * Three shapes, and the difference between them is how much prose each can
+ * damage when it is wrong.
+ *
+ * 1. A KNOWN type in brackets, anywhere on a line. Widest, because it is
+ *    unambiguous — nothing writes `[ruling]` mid-sentence by accident — and a
+ *    Director that puts its whole reply on one line must still parse.
+ * 2. A KNOWN type with no brackets, LINE-LEADING, followed by a colon or a
+ *    dash: `Secret: …`, `Ruling — …`. THIS IS THE SHAPE THAT LEAKED: on the
+ *    owner's turn 4 the Director wrote three secrets this way, no tag matched,
+ *    the text joined the note above it and all three reached the Narrator.
+ *    Restricted to line starts because "the secret: he lied" is prose, and
+ *    treating that as a tag would cut a note in half.
+ * 3. Anything else in brackets, LINE-LEADING only: `[foobar]`. Classified
+ *    `unknown` and withheld from the performer. Line-leading only for the
+ *    same reason — a stray `[sic]` inside a note must not split it and
+ *    silently withhold the remainder, which is this fix failing in the
+ *    opposite direction.
+ */
+const TAG = new RegExp([
+    `(?:^|\\s)${LIST}${EMPHASIS}?\\[(${KNOWN})\\]${EMPHASIS}?:?[ \\t]*`,
+    `^[ \\t]*${LIST}${EMPHASIS}?(${KNOWN})${EMPHASIS}?[ \\t]*[:—–-][ \\t]*`,
+    `^[ \\t]*${LIST}${EMPHASIS}?\\[([A-Za-z][A-Za-z0-9 _'-]{0,40})\\]${EMPHASIS}?:?[ \\t]*`,
+].join('|'), 'gim');
 const STATE_FENCE = /```state\s*\n([\s\S]*?)\n?```/gi;
 
 export function parseDirectorReply(text) {
@@ -92,7 +140,11 @@ function readEntries(body) {
     matches.forEach((match, index) => {
         const start = match.index + match[0].length;
         const end = index + 1 < matches.length ? matches[index + 1].index : text.length;
-        entries.push({ type: match[1].toLowerCase(), text: text.slice(start, end) });
+        // Groups 1 and 2 are the two known-type shapes; group 3 is the
+        // bracketed-but-unrecognised one. A word we do not know becomes
+        // `unknown`, and `unknown` reaches nobody.
+        const known = (match[1] || match[2] || '').toLowerCase();
+        entries.push({ type: known || 'unknown', text: text.slice(start, end) });
     });
 
     return entries.map((entry) => ({ ...entry, text: tidy(entry.text) })).filter((entry) => entry.text);

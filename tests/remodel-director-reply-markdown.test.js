@@ -93,12 +93,15 @@ test('a tag with nothing after it is dropped rather than stored as a blank entry
     expect(entries.map((entry) => entry.type)).toEqual(['ruling']);
 });
 
-test('an unknown tag is still literal text and still cannot invent a type', () => {
+test('an emphasised unknown tag is withheld rather than absorbed - REVERSED deliberately', () => {
+    // Was: `**[observation]**` stayed inside the note above it. An unrecognised
+    // label now becomes `unknown`, which the performer never sees, because a
+    // label inheriting a note's visibility is how a secret escaped.
     const { entries } = parseDirectorReply('**[note]** real\n**[observation]** not a type');
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0].type).toBe('note');
-    expect(entries[0].text).toContain('[observation]');
+    expect(entries.map((entry) => entry.type)).toEqual(['note', 'unknown']);
+    expect(entries[0].text).toBe('real');
+    expect(entries[1].type).toBe('unknown');
 });
 
 test('prose before the first tag is kept as a note rather than dropped', () => {
