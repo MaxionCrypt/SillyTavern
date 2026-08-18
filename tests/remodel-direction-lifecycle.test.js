@@ -40,7 +40,7 @@ import { createPromptRecipe, setActivePromptRecipe } from '../public/scripts/ext
 import { appendDirectorEntries, readAllEntriesForOwner, readNarratorEntries } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-notes-store.js';
 import { buildDirectionSources } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/direction-sources.js';
 import { __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
-import { __setOnlineStatus, __getExtensionPrompt, __clearExtensionPromptCalls } from './util/script-stub.js';
+import { __setOnlineStatus, __clearExtensionPromptCalls } from './util/script-stub.js';
 import { __setOpenAIRequestHandler } from './util/openai-stub.js';
 import { __getDebugEvents, __clearDebugEvents } from './util/debug-console-stub.js';
 
@@ -113,6 +113,8 @@ async function speak() {
     await __emit('MESSAGE_RECEIVED', chat.length - 1);
 }
 
+const nativePromptCapture = new Map();
+
 function wire({ onSpeak = speak } = {}) {
     initLiveDirection({
         getActiveScene: () => scene,
@@ -125,6 +127,7 @@ function wire({ onSpeak = speak } = {}) {
         onStateChange: () => {},
         onSettled: () => {},
         onFailure: () => {},
+        setNativePromptContent: (key, content) => { nativePromptCapture.set(key, content); },
     });
     setLiveDirectionTestAdapters({
         requestDirection: async () => directorReply(),
@@ -180,6 +183,7 @@ beforeEach(() => {
     __clearExtensionPromptCalls();
     __clearDebugEvents();
     __setOpenAIRequestHandler(null);
+    nativePromptCapture.clear();
     scene.liveDirection.pacing = 'instant';
     updateMechanicsProfile({ enabled: true });
     variableId = createVariableValue({
@@ -692,7 +696,7 @@ function journalEntries(type) {
 
 /** Everything the performer's prompt was given this turn, as one string. */
 function performerPrompt() {
-    return String(__getExtensionPrompt('remodel_director_notes') || '');
+    return String(nativePromptCapture.get('directorNotes') || '');
 }
 
 test('a streamed Director reply becomes notebook entries and applies its requests', async () => {

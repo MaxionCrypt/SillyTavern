@@ -26,7 +26,7 @@ import {
     clearLiveDirectionFailure,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
-import { __setOnlineStatus, __getExtensionPrompt, __clearExtensionPromptCalls } from './util/script-stub.js';
+import { __setOnlineStatus, __clearExtensionPromptCalls } from './util/script-stub.js';
 
 // generateDirectedPerformer clears SillyTavern's native composer before it
 // hands generation to core, so it touches the DOM once. Jest's environment is
@@ -228,10 +228,13 @@ async function until(predicate, timeoutMs = 3000) {
     return true;
 }
 
+const nativePromptCapture = new Map();
+
 beforeEach(() => {
     __setExtensionSettings({});
     __setOnlineStatus('connected');
     __clearExtensionPromptCalls();
+    nativePromptCapture.clear();
     scene.liveDirection.pacing = 'instant';
     initLiveDirection({
         getActiveScene: () => scene,
@@ -244,6 +247,7 @@ beforeEach(() => {
         onStateChange: () => {},
         onSettled: () => {},
         onFailure: () => {},
+        setNativePromptContent: (key, content) => { nativePromptCapture.set(key, content); },
     });
 });
 
@@ -265,13 +269,13 @@ test("the Narrator's own native request keeps its own prior line and the Directo
     setLiveDirectionTestAdapters({
         requestDirection: async () => directorReply(),
         // Stands in for core's native generate(): by this point
-        // generateDirectedPerformer has already called setExtensionPrompt
+        // generateDirectedPerformer has already called setNativePromptContent
         // for this turn's notes (mirrors production ordering — see the
         // comment on that call in live-direction.js), so reading it here is
         // reading the SAME content core would have merged into its own
         // compiled prompt as a system-role entry.
         generatePerformer: async () => {
-            capturedNotes = __getExtensionPrompt('remodel_director_notes');
+            capturedNotes = nativePromptCapture.get('directorNotes');
             const eventData = {
                 chat: [
                     { role: 'system', content: 'World info before...' },

@@ -30,7 +30,7 @@ export const PROMPT_SOURCE_DEFINITIONS = Object.freeze({
         { key: 'scenario', label: 'Scenario', role: 'system', nativeIdentifier: 'scenario' },
         { key: 'worldInfoAfter', label: 'World Info (after)', role: 'system', nativeIdentifier: 'worldInfoAfter' },
         { key: 'dialogueExamples', label: 'Dialogue Examples', role: 'user', nativeIdentifier: 'dialogueExamples' },
-        { key: 'storyGoals', label: 'Story Goals', role: 'system', nativeIdentifier: 'remodel_story_goals', settings: { injectionDepth: { type: 'number', label: 'Messages from the end', min: 0, max: 20, default: 1 } } },
+        { key: 'storyGoals', label: 'Story Goals', role: 'system', nativeIdentifier: 'remodel_story_goals' },
         // Rendered by Remodel (live-direction.js's buildDirectorNotesSource),
         // same as storyGoals above — not resolved from a card or lorebook.
         // `nativeIdentifier` is required, not decorative: a roleplay recipe is
@@ -39,7 +39,7 @@ export const PROMPT_SOURCE_DEFINITIONS = Object.freeze({
         // into the real Narrator generation. A source with no native identifier
         // renders in the editor, accepts a depth setting, and reaches nothing —
         // this is the storyGoals precedent, followed exactly.
-        { key: 'directorNotes', label: 'Director’s Notes', role: 'system', nativeIdentifier: 'remodel_director_notes', settings: { depth: { type: 'number', label: 'Turns to include', min: 1, max: 20, default: 3 }, injectionDepth: { type: 'number', label: 'Messages from the end', min: 0, max: 20, default: 1 } } },
+        { key: 'directorNotes', label: 'Director’s Notes', role: 'system', nativeIdentifier: 'remodel_director_notes', settings: { depth: { type: 'number', label: 'Turns to include', min: 1, max: 20, default: 3 } } },
         { key: 'chatHistory', label: 'Chat History', role: 'user', nativeIdentifier: 'chatHistory' },
         // Native Chat Completion keeps the latest input inside chatHistory;
         // exposing it as an alias preserves that real marker boundary.

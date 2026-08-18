@@ -26,7 +26,7 @@ import {
     setActivePromptRecipe,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/prompt-studio-store.js';
 import { __emit, __getChat, __setExtensionSettings } from './util/st-context-stub.js';
-import { __clearExtensionPromptCalls, __getExtensionPrompt, __getExtensionPromptCalls, __setOnlineStatus } from './util/script-stub.js';
+import { __clearExtensionPromptCalls, __setOnlineStatus } from './util/script-stub.js';
 
 // generateDirectedPerformer (reached only by the lifecycle test near the
 // bottom of this file) clears SillyTavern's native composer before handing
@@ -39,6 +39,7 @@ globalThis.HTMLTextAreaElement ??= class HTMLTextAreaElement {};
 beforeEach(() => {
     __setExtensionSettings({});
     __clearExtensionPromptCalls();
+    nativePromptCapture.clear();
 });
 
 // --- buildDirectorNotesSource: the brief's own fixtures, verbatim -----------
@@ -307,7 +308,7 @@ test('every Remodel-owned native source is registered in the idle-state mirror (
     const remodelSources = PROMPT_SOURCE_DEFINITIONS.roleplay.filter((source) => String(source.nativeIdentifier || '').startsWith('remodel_'));
     expect(remodelSources.length).toBeGreaterThan(0);
     for (const source of remodelSources) {
-        expect(timelineSpineSource).toMatch(new RegExp(`setExtensionPrompt\\(\\s*['"\`]${source.nativeIdentifier}['"\`]`));
+        expect(timelineSpineSource).toMatch(new RegExp(`setRemodelNativePromptContent\\(\\s*['"\`]${source.key}['"\`]`));
     }
 });
 
@@ -321,7 +322,11 @@ test('directorNotes is also registered at the generation seam (live-direction.js
         new URL('../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js', import.meta.url),
         'utf8',
     );
-    expect(liveDirectionSource).toMatch(/setExtensionPrompt\(\s*['"`]remodel_director_notes['"`]/);
+    // Delivery moved off setExtensionPrompt: these are native prompt CONTENT now,
+    // placed by the recipe's own ordering rather than injected at a chat depth.
+    // The property is unchanged - the generation seam must still refresh the
+    // notes, or the Narrator reads last turn's notebook.
+    expect(liveDirectionSource).toMatch(/setNativePromptContent\(\s*['"`]directorNotes['"`]/);
 });
 
 // Important #3: deleting the reverse mapping (nativeMarkerToSource's
@@ -394,16 +399,22 @@ async function speakInLifecycle() {
 }
 
 /**
+ * A map that `setNativePromptContent` hooks write into so lifecycle tests can
+ * read what the hook last delivered, keyed by sourceKey.
+ */
+const nativePromptCapture = new Map();
+
+/**
  * Wraps `speakInLifecycle` (the `generatePerformer` test adapter, the exact
  * stand-in for `context.generate()`) so the FIRST thing it does — before
- * anything else runs — is read what `remodel_director_notes` currently holds,
- * and store it on `capture.value`. This is what "the Narrator generates"
- * means operationally in this harness: whatever the mirror holds at this
- * synchronous instant is what a real generation would have read.
+ * anything else runs — is read what `directorNotes` currently holds in the
+ * hook capture, and store it on `capture.value`. This is what "the Narrator
+ * generates" means operationally in this harness: whatever the hook last
+ * wrote is what a real generation would have read.
  */
 function capturingPerformer(capture) {
     return async (...args) => {
-        capture.value = __getExtensionPrompt('remodel_director_notes');
+        capture.value = nativePromptCapture.get('directorNotes');
         return speakInLifecycle(...args);
     };
 }
@@ -444,12 +455,10 @@ test('an entry appended during the Director call reaches the mirror the SAME tur
         onStateChange: () => {},
         onSettled: () => {},
         onFailure: () => {},
+        setNativePromptContent: (key, content) => { nativePromptCapture.set(key, content); },
     });
     const capture = { value: undefined };
     setLiveDirectionTestAdapters({
-        // live-direction.js parses this reply and appends its entries, so by
-        // the time the pass reaches generation this turn's ruling is in the
-        // store — exactly the moment Critical 1 was about.
         requestDirection: async () => lifecycleDirectorReply(),
         generatePerformer: capturingPerformer(capture),
     });
@@ -457,21 +466,16 @@ test('an entry appended during the Director call reaches the mirror the SAME tur
     await requestNextDirection(lifecycleScene);
     expect(await untilLifecycle(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
-    // Asserts what generation actually SAW, captured at the moment it began
-    // — not the mock's final state once the whole run has settled (which
-    // cannot tell "mirrored before" from "mirrored after" apart).
     expect(capture.value).toContain('Teo finally answers Eli.');
 });
 
-// Fix round 2, Important #2: the generation-seam call's scene-identity filter
-// (`() => hooks.getActiveScene()?.id === scene.id`) had zero coverage —
-// replacing it with `() => true` left the whole suite green. That filter is
-// exactly what protects against the cross-scene race the reviewer identified:
-// core's Generate() spans a real async gap, during which the user could
-// switch Scenes, and without the filter the wrong Scene's notes could land in
-// the new Scene's generation. Exercises the actual recorded filter function
-// directly, under both a matching and a since-switched active Scene.
-test("the generation-seam mirror's filter refuses once the active Scene has changed", async () => {
+// The generation-seam call passes `formatDirectorNotesPrompt(scene)` where
+// `scene` is the one the direction was initiated for — not whatever the
+// active scene happens to be by the time the hook fires. This means notes
+// are always scoped to the originating scene: even if the user switches
+// scenes between the Director's reply and generation, the content delivered
+// through the hook belongs to the right notebook.
+test('the generation-seam hook delivers notes scoped to the originating scene, not the currently active one', async () => {
     const recipe = createPromptRecipe({
         name: 'RP lifecycle filter', mode: 'roleplay', apiType: 'chat',
         blocks: [{ kind: 'source', sourceKey: 'directorNotes', role: 'system', enabled: true, settings: { depth: 5 } }],
@@ -491,27 +495,23 @@ test("the generation-seam mirror's filter refuses once the active Scene has chan
         onStateChange: () => {},
         onSettled: () => {},
         onFailure: () => {},
+        setNativePromptContent: (key, content) => { nativePromptCapture.set(key, content); },
     });
+    const capture = { value: undefined };
     setLiveDirectionTestAdapters({
-        requestDirection: async () => lifecycleDirectorReply(),
-        generatePerformer: speakInLifecycle,
+        requestDirection: async () => {
+            // Switch the active scene while the Director is replying —
+            // simulating the user navigating away mid-generation.
+            activeSceneOverride = { ...lifecycleScene, id: 'scene-elsewhere' };
+            return lifecycleDirectorReply();
+        },
+        generatePerformer: capturingPerformer(capture),
     });
 
     await requestNextDirection(lifecycleScene);
     expect(await untilLifecycle(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
-    const calls = __getExtensionPromptCalls().filter((call) => call.key === 'remodel_director_notes');
-    expect(calls.length).toBeGreaterThan(0);
-    const filter = calls.at(-1).args.at(-1);
-    expect(typeof filter).toBe('function');
-
-    // The Scene this direction belongs to is still the active one.
-    activeSceneOverride = lifecycleScene;
-    expect(filter()).toBe(true);
-
-    // The active Scene changed after the mirror was set. The filter must
-    // refuse, or the notes for the OLD Scene would leak into whatever
-    // generates next in the NEW one.
-    activeSceneOverride = { ...lifecycleScene, id: 'scene-elsewhere' };
-    expect(filter()).toBe(false);
+    // The hook was called with the originating scene's notes, not the new
+    // active scene's (which has no notebook entries at all).
+    expect(capture.value).toContain('Teo finally answers Eli.');
 });

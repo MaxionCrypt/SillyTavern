@@ -55,6 +55,10 @@ const hooks = {
     sendNormally: () => {},
     onStateChange: () => {},
     onSettled: () => {},
+    // Writes one of Remodel's own native prompts. Injected as a hook rather
+    // than imported, because prompt-studio.js reaches oai_settings and this
+    // module is driven from timeline-spine.js, which already owns that seam.
+    setNativePromptContent: () => false,
     // A response landed after a failure was reported. The notice is stale.
     onRecovered: () => {},
     onFailure: () => {},
@@ -192,7 +196,7 @@ export function initLiveDirection(options = {}) {
     // only by its OWN prior prose, never by the user's words or another cast
     // member's. Everything the user did reaches it solely through the
     // Director's notes, which arrive as a separate injected system-role entry
-    // (setExtensionPrompt('remodel_director_notes', …) above) — not through
+    // (setNativePromptContent('directorNotes', …) above) — not through
     // this array — so this listener only ever narrows chat history, never
     // context.chat itself (still the true record other surfaces read) and
     // never the notes block.
@@ -1650,7 +1654,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     // would always read last turn's notebook and never the one just written
     // for it — reproducing, from outside, the exact "Narrator ignoring the
     // direction" symptom this whole rework exists to fix.
-    setExtensionPrompt('remodel_director_notes', formatDirectorNotesPrompt(scene), extension_prompt_types.IN_CHAT, 1, false, extension_prompt_roles.SYSTEM, () => hooks.getActiveScene()?.id === scene.id);
+    hooks.setNativePromptContent('directorNotes', formatDirectorNotesPrompt(scene));
     // The user message was inserted explicitly above. Native normal
     // generation also reads #send_textarea and would send any stale draft a
     // second time, producing a duplicate user line and a second response.
