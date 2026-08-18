@@ -435,7 +435,7 @@ function describeSnapshot(snapshot) {
     return [
         section('SCENE', scene?.title),
         section('PERFORMER', describePerformer(narratorRef)),
-        section('CAST', describeCast(cast)),
+        section('CAST', describeCast(cast, narratorRef)),
         section('PERSONA', describePersona(persona)),
         // No LORE section. World Info is four blocks of its own now, so
         // rendering it here as well would send every activated entry twice —
@@ -464,10 +464,38 @@ function describePerformer(narratorRef) {
     return label ? `${label} writes the next response.` : '';
 }
 
-function describeCast(cast) {
+/**
+ * The people in the scene, minus the one writing it.
+ *
+ * THE PERFORMER IS EXCLUDED, and that is the whole point of this function
+ * taking a second argument. A performer's card is not a person in the room —
+ * it is the instrument the prose comes out of, and its description is an
+ * authoring style guide. On the owner's Timeline that card carried "Author
+ * Rules" and "Literary Rules": catachresis, hypallage, kennings, sentence
+ * cadence, tense. Rendered here it was 3,341 of the snapshot's 9,180
+ * characters — 36% of everything the Director read, and by far the most
+ * specific and most imperative text in the whole prompt.
+ *
+ * So the Director wrote prose. It had been handed a style manual under a
+ * heading saying these are the people in your scene, and nothing else in its
+ * prompt competed with that for concreteness. Its own `[note]` entries came
+ * back as finished narration, the Narrator received them under "treat as
+ * settled fact" and continued PAST them, and the two halves of the loop
+ * stopped corresponding.
+ *
+ * PERFORMER already names who writes the next response, which is the only
+ * thing about them the Director needs. Real character cards in the cast keep
+ * their descriptions in full: those describe people the Director is actually
+ * directing.
+ */
+function describeCast(cast, narratorRef = null) {
+    const performerId = String(narratorRef?.id || '').trim();
     return (Array.isArray(cast) ? cast : []).map((member) => {
         const label = String(member?.label || '').trim();
         if (!label) return '';
+        // By id, not by label: two cards can share a display name, and the id
+        // is what resolvePerformer itself matched on.
+        if (performerId && String(member?.ref?.id || '').trim() === performerId) return '';
         const detail = [
             describeField('Description', member.description),
             describeField('Personality', member.personality),
