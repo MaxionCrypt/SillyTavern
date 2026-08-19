@@ -7,6 +7,7 @@ import {
     setExtensionPrompt,
 } from '../../../../script.js';
 import { getContext } from '../../../st-context.js';
+import { generateGroupWrapper, is_group_generating } from '../../../group-chats.js';
 import {
     executeMechanicsRequest,
     MECHANICS_PROTOCOL,
@@ -18,7 +19,7 @@ import { resolveByName } from './direction-address.js';
 import { resolveDirectionActions } from './direction-chrome.js';
 import { clearStandingDirection, readStandingDirection, saveStandingDirection } from './standing-direction-store.js';
 import { deriveBeats } from './direction-beats.js';
-import { compilePromptRecipe, captureDirectorPromptLog, captureNarratorPromptLog, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
+import { compilePromptRecipe, captureDirectorPromptLog, capturePromptLog, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
 import { PROMPT_SOURCE_DEFINITIONS } from './prompt-studio-store.js';
 import { ENTRY_TYPES, parseDirectorReply } from './director-reply.js';
 import { filterNarratorHistory } from './narrator-history.js';
@@ -33,7 +34,7 @@ import { getMechanicsProfile, listMechanicsTransactions } from './variables-stor
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
 import { StructuredReplyError } from './structured-reply.js';
 import { streamChatPrompt } from './story-stream.js';
-import { compileNarratorPrompt, buildNarratorArchivistSections, narratorStreamBlock, NARRATOR_HISTORY_BUDGET, NARRATOR_HISTORY_MAX_MESSAGES } from './narrator-prompt.js';
+import { buildNarratorArchivistSections } from './narrator-prompt.js';
 import { updateScene } from './timeline-state.js';
 import { recordDebugEvent } from './debug-console.js';
 
@@ -1668,67 +1669,7 @@ function ownedByEmptyRetry(directionId) {
     return Boolean(directionId) && retryingEmpty.has(directionId);
 }
 
-/**
- * Gather the Narrator's inputs from context, mirroring how the Director builds
- * its own snapshot. Everything is guarded: a missing core helper degrades to an
- * empty section rather than throwing. The full chat history is never gathered —
- * only the last few lines, as a voice window.
- */
-async function buildNarratorSnapshot(scene, run) {
-    const context = getContext();
-    const chid = Number(run.performer.characterId);
-    const character = context.characters?.[chid] || null;
-    let card = '';
-    try {
-        const fields = context.getCharacterCardFields?.({ chid });
-        card = [fields?.description, fields?.personality, fields?.scenario].filter(Boolean).join('\n\n') || String(character?.description || '');
-    } catch { card = String(character?.description || ''); }
-    const persona = String(context.getPersonaDescription?.() || (context.name1 ? `The user plays ${context.name1}.` : ''));
-    let worldInfo = '';
-    try {
-        const scan = [buildNarratorArchivistSections(scene.timelineId, scene.id), card].join('\n');
-        const lore = await context.getWorldInfoPrompt?.(scan, context.maxContext, true);
-        worldInfo = typeof lore === 'string' ? lore : String(lore?.worldInfoString || '');
-    } catch { worldInfo = ''; }
-    const chat = Array.isArray(context.chat) ? context.chat : [];
-    // The most recent lines, newest last, bounded by a character budget and a
-    // hard message cap so the prompt stays affordable. The just-created empty
-    // performer row (blank mes) is skipped by the non-empty check. Long-range
-    // facts live in the archivist block, so this window can stay small — but it
-    // must be a real window, not 3 lines, or the prose loses its grounding.
-    const recentHistory = [];
-    let budget = NARRATOR_HISTORY_BUDGET;
-    for (let i = chat.length - 1; i >= 0 && recentHistory.length < NARRATOR_HISTORY_MAX_MESSAGES; i--) {
-        const content = String(chat[i]?.mes || '').trim();
-        if (!content) continue;
-        if (budget - content.length < 0 && recentHistory.length) break;
-        budget -= content.length;
-        recentHistory.unshift({ role: chat[i].is_user ? 'user' : 'assistant', content });
-    }
-    return {
-        card,
-        persona,
-        worldInfo,
-        archivistSections: buildNarratorArchivistSections(scene.timelineId, scene.id),
-        reasoning: frameDirectorReasoning(run.envelope?.reasoning) || '',
-        recentHistory,
-    };
-}
-
 async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0 }) {
-    // The directed Narrator streams via streamChatPrompt (Chat Completion +
-    // streaming only). Refuse here, before any message is created — the Director
-    // has already run, but the Narrator step cannot. Tests drive generation
-    // through a performer adapter and bypass streaming, so the gate is skipped
-    // when one is installed.
-    if (!testAdapters?.generatePerformer) {
-        const streamBlock = narratorStreamBlock();
-        if (streamBlock) {
-            journal('narrator.refused', { directionId: envelope.directionId, reason: streamBlock }, { severity: 'warn', correlationId: envelope.directionId, summary: 'Directed Narrator unavailable: backend cannot stream' });
-            releaseDirectionLock(token);
-            throw new Error(streamBlock);
-        }
-    }
     const director = resolveDirector(scene);
     persistDirectionRecord(scene, envelope, performer, director);
     activeRun = {
@@ -1759,9 +1700,6 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         addressBook: envelope.addressBook || { entries: [], duplicates: [] },
         pendingRequestsApplied: false,
         emptyRetries: Number(emptyRetries) || 0,
-        // Owned by this run so interruptLiveDirection can abort the custom
-        // stream directly — the custom path has no core stopGeneration() handle.
-        abortController: new AbortController(),
     };
     // A visible run now exists, so activeRun is the authoritative guard and the
     // hidden-phase lock has done its job. Releasing it here — rather than when
@@ -1774,14 +1712,25 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     // notebook entries as the Narrator's creative channel: richer, unfiltered,
     // and free of the tagged-journal format that contaminated prose. When no
     // reasoning is available (non-thinking models), fall back to the notebook.
+    // The Narrator generates natively — its full configured prompt (system
+    // prompt, card, persona, world info, author's notes, examples, history) —
+    // with the direction injected here into the roleplay recipe's Director's
+    // Notes slot, so it rides the real prompt rather than a stripped hand-built
+    // one. The injected direction is the archivist's structured state (what is
+    // established, what has already happened) plus the Director's own direction
+    // (its reasoning when the model exposes a reasoning channel, else the
+    // notebook).
+    const archivistState = buildNarratorArchivistSections(scene.timelineId, scene.id);
     const reasoningBridge = frameDirectorReasoning(envelope.reasoning);
+    const directorDirection = reasoningBridge || formatDirectorNotesPrompt(scene);
     hooks.setNativePromptContent(
         'directorNotes',
-        reasoningBridge || formatDirectorNotesPrompt(scene),
+        [archivistState, directorDirection].filter((part) => String(part || '').trim()).join('\n\n'),
     );
     journal('notes.bridge', {
         directionId: envelope.directionId,
         path: reasoningBridge ? 'reasoning' : 'notebook',
+        hasArchivist: Boolean(String(archivistState || '').trim()),
         reasoningLength: (envelope.reasoning || '').length,
     }, { correlationId: envelope.directionId });
     // The user message was inserted explicitly above. Native normal
@@ -1804,74 +1753,49 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             throw new Error(`${performer.label || 'The selected performer'} is not a loaded character card in this group, so no native index could be resolved for it.`);
         }
         const options = context.groupId ? { force_chid: performer.characterId } : {};
+        capturePromptLog('narrator');
         journal('generation.start', {
             directionId: envelope.directionId,
             performerLabel: performer.label,
-            transport: testAdapters?.generatePerformer ? 'test-adapter' : 'custom-stream',
+            nativeIndex: performer.characterId,
+            transport: context.groupId ? 'group' : 'solo',
             pacing: activeRun.pacing,
         }, { correlationId: envelope.directionId });
         if (testAdapters?.generatePerformer) {
-            await testAdapters.generatePerformer({ scene, envelope, performer, options, context, run: activeRun });
+            await testAdapters.generatePerformer({ scene, envelope, performer, options, context });
+        } else if (context.groupId) {
+            // Do not route an owned performer request back through generic
+            // Generate(). In a native group that function conditionally enters
+            // the group wrapper; if core still considers a preceding group
+            // operation active, it silently falls through as a solo request and
+            // can return after only /api/ping. The Director has already selected
+            // one validated cast member, so invoke the real group boundary
+            // explicitly and force that member.
+            const idleDeadline = Date.now() + 5000;
+            while (is_group_generating && Date.now() < idleDeadline) {
+                // eslint-disable-next-line no-await-in-loop
+                await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+            if (is_group_generating) {
+                throw new Error('The native group generator is still busy. Try Direction again.');
+            }
+            // Re-checked here as well as before the Director call: the Director
+            // round-trip takes many seconds, and the connection can drop inside
+            // that window.
+            const lateBlock = describeNativeGenerationBlock();
+            if (lateBlock) {
+                throw new Error(lateBlock);
+            }
+            const messageCount = context.chat?.length || 0;
+            await generateGroupWrapper(false, 'normal', options);
+            if ((getContext().chat?.length || 0) <= messageCount) {
+                // Reaching here means core accepted the request and returned
+                // without writing a message. Say that plainly rather than
+                // implying the model replied with nothing.
+                throw new Error(`${performer.name || performer.label || 'The selected performer'} was asked to speak, but SillyTavern's group generator returned without producing a message. ${describeNativeGenerationBlock() || 'Check the Debug Console for a failed request.'}`);
+            }
         } else {
-            // Custom, archivist-driven Narrator. Core no longer creates the
-            // message or feeds the reveal: we push the performer's own row,
-            // compile exactly what the Narrator may see (archivist state, card,
-            // world info, voice window, beat, reasoning — never the full chat
-            // history), and stream via streamChatPrompt into the same buffer the
-            // reveal loop reads. onChunk.text is cumulative, which is what
-            // acceptNativeBuffer already expects.
-            const performerCard = context.characters?.[Number(performer.characterId)] || null;
-            const performerMessage = {
-                name: performerCard?.name || performer.label || 'Narrator',
-                is_user: false,
-                is_system: false,
-                send_date: Date.now(),
-                mes: '',
-                extra: {},
-            };
-            if (performerCard?.avatar && performerCard.avatar !== 'none') {
-                performerMessage.original_avatar = performerCard.avatar;
-                performerMessage.force_avatar = context.getThumbnailUrl?.('avatar', performerCard.avatar) || performerCard.avatar;
-            }
-            context.chat.push(performerMessage);
-            activeRun.messageId = context.chat.length - 1;
-            // Marks this run as the custom stream so finalizeRunMessage knows to
-            // announce the finished message itself (core fires no events for it).
-            activeRun.customStream = true;
-            const snapshot = await buildNarratorSnapshot(scene, activeRun);
-            const prompt = compileNarratorPrompt(snapshot);
-            // Record the ACTUAL streamed prompt for the Prompt Log → Narrator
-            // view. Labels track compileNarratorPrompt's construction order:
-            // persona+camera, world info, archivist state, reasoning, then the
-            // voice window. The content is the source of truth either way.
-            const narratorLabels = ['Narrator persona + camera'];
-            if (String(snapshot.worldInfo || '').trim()) narratorLabels.push('World info');
-            if (String(snapshot.archivistSections || '').trim()) narratorLabels.push('Archivist state');
-            if (String(snapshot.reasoning || '').trim()) narratorLabels.push('Director reasoning');
-            for (const line of snapshot.recentHistory) narratorLabels.push(line.role === 'user' ? 'Recent history — you' : 'Recent history — character');
-            captureNarratorPromptLog(prompt.map((message, index) => ({ label: narratorLabels[index] || 'Context', role: message.role, content: message.content })));
-            journal('narrator.compiled', {
-                directionId: envelope.directionId,
-                blocks: prompt.length,
-                hasArchivist: Boolean(String(snapshot.archivistSections || '').trim()),
-                archivistChars: String(snapshot.archivistSections || '').length,
-                hasReasoning: Boolean(String(snapshot.reasoning || '').trim()),
-                worldInfoChars: String(snapshot.worldInfo || '').length,
-                recentHistory: snapshot.recentHistory.length,
-            }, { correlationId: envelope.directionId, summary: 'Narrator prompt compiled (custom stream)' });
-            try {
-                const result = await streamChatPrompt({
-                    prompt,
-                    onChunk: (update) => acceptNativeBuffer(update.text),
-                    signal: activeRun.abortController.signal,
-                });
-                if (!result.streamed) acceptNativeBuffer(result.text);
-                activeRun.reasoning = result.reasoning;
-            } catch (error) {
-                // An aborted stream is an interruption, not a failure — the same
-                // rule the Director's own streamChatPrompt call follows.
-                if (!activeRun.abortController.signal.aborted) throw error;
-            }
+            await context.generate('normal', options);
         }
     } finally {
         ownedGenerationDepth = Math.max(0, ownedGenerationDepth - 1);
@@ -2314,12 +2238,7 @@ async function interruptLiveDirection({ preserveForIntervention }) {
     run.interrupted = true;
     run.holdReason = 'interrupt';
     if (!run.generationSettled && ownsLiveDirectionGeneration()) {
-        // The custom Narrator stream has no core stopGeneration() handle — abort
-        // the run's own controller instead. streamChatPrompt honours the signal
-        // (per-iteration and inside sendOpenAIRequest), and the generation
-        // finally sets generationSettled as the awaited call unwinds, so the
-        // wait resolves promptly rather than racing a core event.
-        run.abortController?.abort();
+        getContext().stopGeneration?.();
         await waitFor(() => run.generationSettled, 2200);
     }
     // A completed API call can still have an unseen suffix buffered. It no
@@ -2398,19 +2317,6 @@ async function finalizeRunMessage(run, { state }) {
     message.extra.remodelDirection = serializeRun(run, state);
     if (run.performer.ref.kind === 'narrator') message.extra.type = 'narrator';
     await context.saveChat();
-    // AUDIT (2026-08-19): native generation fired MESSAGE_RECEIVED, which
-    // Remodel's OWN roleplay scene listens to (timeline-spine.js — MESSAGE_RECEIVED
-    // → renderRoleplayScene rebuild), and which downstream extensions (TTS,
-    // translation, expressions) use to process a new AI reply. The custom stream
-    // fires none of core's events, so announce the finished message ourselves —
-    // once, and only on the custom path (the test-adapter path already fired it
-    // during generation, so re-emitting would double-announce). Deliberately
-    // withheld: CHAT_CHANGED (slow async, ~8.5s/21 listeners — must not sit on
-    // finalize) and CHARACTER_MESSAGE_RENDERED (a "rendered" signal with no real
-    // DOM node risks listeners that manipulate the node; confirm in-app first).
-    if (run.customStream) {
-        await context.eventSource.emit(context.eventTypes.MESSAGE_RECEIVED, run.messageId);
-    }
 }
 
 /**
