@@ -2286,7 +2286,12 @@ async function interruptLiveDirection({ preserveForIntervention }) {
     run.interrupted = true;
     run.holdReason = 'interrupt';
     if (!run.generationSettled && ownsLiveDirectionGeneration()) {
-        getContext().stopGeneration?.();
+        // The custom Narrator stream has no core stopGeneration() handle — abort
+        // the run's own controller instead. streamChatPrompt honours the signal
+        // (per-iteration and inside sendOpenAIRequest), and the generation
+        // finally sets generationSettled as the awaited call unwinds, so the
+        // wait resolves promptly rather than racing a core event.
+        run.abortController?.abort();
         await waitFor(() => run.generationSettled, 2200);
     }
     // A completed API call can still have an unseen suffix buffered. It no

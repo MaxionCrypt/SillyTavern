@@ -59,6 +59,28 @@ function narratorStreams(chunks, { reasoning = '' } = {}) {
     });
 }
 
+function deferred() {
+    let resolve;
+    const promise = new Promise((r) => { resolve = r; });
+    return { promise, resolve };
+}
+
+/** Yield the first delta, signal it, then wait on a gate before the rest — so a
+ *  test can abort mid-stream and assert only the pre-abort prose survives. */
+function narratorStreamsGated(firstDelta, restDeltas, { onFirst, gate }) {
+    __setOpenAIRequestHandler(({ signal }) => async function* streamData() {
+        let text = firstDelta;
+        yield { text, state: { reasoning: '' } };
+        onFirst?.();
+        await gate.promise;
+        for (const chunk of restDeltas) {
+            if (signal?.aborted) return;
+            text += chunk;
+            yield { text, state: { reasoning: '' } };
+        }
+    });
+}
+
 async function until(predicate, timeoutMs = 3000) {
     const deadline = Date.now() + timeoutMs;
     while (!predicate()) {
@@ -93,6 +115,28 @@ test('the custom path creates the performer message and reveals the streamed tex
     expect(chat[0].mes).toBe('Wren steps forward.');
     expect(chat[0].name).toBe('Wren');
     expect(chat[0].is_user).toBe(false);
+});
+
+test('interrupting mid-stream keeps the revealed prose and drops the rest', async () => {
+    let firstEmitted = false;
+    const gate = deferred();
+    narratorStreamsGated('Wren steps forward.', [' She never finishes the step.'], {
+        onFirst: () => { firstEmitted = true; },
+        gate,
+    });
+    const turn = requestNextDirection(scene);
+    // Wait until the first delta has streamed and revealed.
+    expect(await until(() => firstEmitted && getLiveDirectionRun()?.acceptedVisibleText?.includes('forward'))).toBe(true);
+    // Interrupt: aborts the run's controller. Release the gate so the paused
+    // generator resumes and observes the abort instead of hanging.
+    const stopping = stopLiveDirection();
+    gate.resolve();
+    await stopping;
+    await turn;
+    const chat = __getChat();
+    expect(chat).toHaveLength(1);
+    expect(chat[0].mes).toBe('Wren steps forward.');
+    expect(chat[0].mes).not.toContain('never finishes');
 });
 
 test('the directed Narrator is refused when the backend cannot stream', async () => {
