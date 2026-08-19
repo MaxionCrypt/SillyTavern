@@ -96,6 +96,7 @@ import {
     clearLiveDirectionFailure,
     continueLiveDirection,
     formatDirectorNotesPrompt,
+    frameDirectorReasoning,
     getLiveDirectionRun,
     getLiveDirectionUiState,
     handleLiveDirectionDraft,
@@ -123,6 +124,7 @@ import { resolveDirectionChromeMode } from './direction-chrome.js';
 import {
     deleteDirectorEntry,
     readAllEntriesForOwner,
+    readTurnReasoning,
     updateDirectorEntry,
 } from './director-notes-store.js';
 import { ENTRY_TYPES } from './director-reply.js';
@@ -10636,8 +10638,16 @@ function renderRoleplayScene() {
     // Same mirroring as Story Goals above, under the Director's Notes source's
     // own native identifier (remodel_director_notes) — this call, not the
     // recipe editor, is what actually gets the Director's notebook into a real
-    // Narrator generation.
-    setRemodelNativePromptContent('directorNotes', formatDirectorNotesPrompt(activeRoleplayScene));
+    // Narrator generation. Reasoning-first: when the Director's raw thinking
+    // tokens are stored for the latest turn, use them instead of the tagged
+    // journal entries that contaminate Narrator prose.
+    const latestTurn = readAllEntriesForOwner(activeRoleplayScene.timelineId, { sceneId: activeRoleplayScene.id })
+        .reduce((highest, entry) => Math.max(highest, Number(entry.turn) || 0), 0);
+    const storedReasoning = latestTurn > 0
+        ? readTurnReasoning(activeRoleplayScene.timelineId, { sceneId: activeRoleplayScene.id, turn: latestTurn })
+        : '';
+    const reasoningBridge = frameDirectorReasoning(storedReasoning);
+    setRemodelNativePromptContent('directorNotes', reasoningBridge || formatDirectorNotesPrompt(activeRoleplayScene));
     const stream = root.querySelector('[data-remodel-rp-stream]');
     if (!stream) {
         return;
