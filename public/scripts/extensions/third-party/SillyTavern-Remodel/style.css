@@ -9946,6 +9946,21 @@ body.remodel-roleplay-workspace-active .remodel-rp-direction-stream-inner header
   font-size:.56rem !important;
 }
 
+body.remodel-roleplay-workspace-active .remodel-rp-direction-dismiss {
+  all:unset !important;
+  cursor:pointer !important;
+  padding:2px 6px !important;
+  color:rgba(239,234,219,.35) !important;
+  font-size:.7rem !important;
+  line-height:1 !important;
+  border-radius:3px !important;
+  transition:color .15s, background .15s !important;
+}
+body.remodel-roleplay-workspace-active .remodel-rp-direction-dismiss:hover {
+  color:#e8604c !important;
+  background:rgba(232,96,76,.12) !important;
+}
+
 /* The Director's OWN live shell (ensureDirectionStreamCard/
    updateDirectionStreamCard, timeline-spine.js) — shown from the moment a
    pass begins, replaced by the finished .remodel-rp-direction-stream-card

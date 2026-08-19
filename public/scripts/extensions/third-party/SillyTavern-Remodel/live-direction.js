@@ -499,6 +499,33 @@ function readStandingDirectionFor(scene) {
     return { saved, performer };
 }
 
+/**
+ * Restore the standing direction from a deleted message's saved metadata.
+ *
+ * When the user deletes a directed response, its direction — already paid for
+ * — should become standing again so Continue replays it instead of spending a
+ * second Director call. The metadata is the same shape `serializeRun` wrote.
+ */
+export function restoreStandingDirectionFromMessage(scene, saved) {
+    if (!scene?.id || !saved?.envelope) return false;
+    const turn = toTurnNumber(saved.envelope?.notebookTurn);
+    if (turn === null || !notebookTurnEntries(scene, turn).length) return false;
+    saveStandingDirection({
+        protocol: DIRECTION_PROTOCOL,
+        sceneId: scene.id,
+        timelineId: scene.timelineId || '',
+        turn,
+        performerRef: saved.performerRef,
+        ...splitEnvelopeForStorage(hydrateSavedEnvelope(saved, scene)),
+        autonomousSequence: Number(saved.autonomousSequence) || 0,
+        chatLength: (getContext().chat || []).length,
+    });
+    journal('standing.restored', { sceneId: scene.id, turn }, {
+        summary: 'direction.standing: restored from a deleted message so Continue can replay it',
+    });
+    return true;
+}
+
 /** Whether Continue should speak an existing direction rather than make a new one. */
 export function hasStandingDirection(scene = hooks.getActiveScene()) {
     return Boolean(readStandingDirectionFor(scene));
@@ -554,19 +581,27 @@ async function speakStandingDirection(scene) {
     const standing = readStandingDirectionFor(scene);
     if (!standing) return false;
     const { saved, performer } = standing;
-    // Cleared BEFORE the generation, not after. If this attempt also produces
-    // nothing, beginDirection is not involved and nothing else would clear it
-    // — the record would sit there offering the same failing direction
-    // forever. A failure here leaves the turn's entries standing, so Retry can
-    // still discard them and direct the moment again.
-    forgetStandingDirection(scene);
     journal('standing.spoken', { sceneId: saved.sceneId, turn: saved.turn }, {
         summary: 'direction.standing: speaking the direction that was already made',
     });
-    return generateDirectedPerformer({
-        scene, envelope: hydrateSavedEnvelope(saved, scene), performer,
-        autonomousSequence: Number(saved.autonomousSequence) || 0,
-    });
+    try {
+        const result = await generateDirectedPerformer({
+            scene, envelope: hydrateSavedEnvelope(saved, scene), performer,
+            autonomousSequence: Number(saved.autonomousSequence) || 0,
+        });
+        forgetStandingDirection(scene);
+        return result;
+    } catch (error) {
+        journal('standing.failed', {
+            sceneId: saved.sceneId, turn: saved.turn,
+            message: String(error?.message || error),
+        }, { severity: 'warn', summary: 'direction.standing: Narrator generation failed, direction kept for retry' });
+        return directionFailure(error, {
+            scene, action: null, insertUser: false,
+            authorizedGoalIds: saved.authorizedGoalIds || [],
+            autonomousSequence: Number(saved.autonomousSequence) || 0,
+        });
+    }
 }
 
 /** The inputs resolveDirectionActions needs, read from the chat and the store. */
@@ -615,6 +650,36 @@ export function sendWithoutLiveDirection() {
     pendingFailure = null;
     if (!retry?.insertUser || retry.postedMessage) return false;
     hooks.sendNormally(retry.action);
+    return true;
+}
+
+/**
+ * Discard a direction from the stream: remove its direction log record,
+ * discard its notebook turn, and clear any standing direction it left behind.
+ *
+ * Used when the user dismisses a direction card — typically a direction whose
+ * Narrator generation failed and cannot be retried, or one the user simply
+ * wants to undo so they can retype their message.
+ */
+export function dismissDirectionRecord(scene, recordId) {
+    if (!scene || !recordId) return false;
+    const log = Array.isArray(scene.liveDirection?.directionLog)
+        ? scene.liveDirection.directionLog : [];
+    const record = log.find((item) => item?.id === recordId);
+    if (!record) return false;
+    const turn = toTurnNumber(record.notebookTurn);
+    if (turn !== null) discardNotebookTurn(scene, turn);
+    forgetStandingDirection(scene);
+    pendingFailure = null;
+    updateScene(scene.id, {
+        liveDirection: {
+            ...scene.liveDirection,
+            directionLog: log.filter((item) => item?.id !== recordId),
+        },
+    });
+    journal('direction.dismissed', { directionId: recordId, turn }, {
+        summary: 'direction.dismissed: user discarded a direction card',
+    });
     return true;
 }
 
@@ -2709,6 +2774,7 @@ function persistDirectionRecord(scene, envelope, performer, director) {
         // direction card already reads) to keep the record instead of silently
         // dropping it. Its content is the turn's notebook now.
         objective,
+        notebookTurn: toTurnNumber(envelope.notebookTurn),
         operations: summarizeRequests(envelope.mechanics.pendingRequests),
         reasoning: lastDirectorReasoning,
         continueAfter: envelope.flow.continueAfter,

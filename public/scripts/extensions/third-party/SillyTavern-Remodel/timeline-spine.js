@@ -95,6 +95,8 @@ import {
     canSendWithoutLiveDirection,
     clearLiveDirectionFailure,
     continueLiveDirection,
+    dismissDirectionRecord,
+    restoreStandingDirectionFromMessage,
     formatDirectorNotesPrompt,
     frameDirectorReasoning,
     getLiveDirectionRun,
@@ -9897,6 +9899,18 @@ function bindRoleplayComposerEvents() {
             return;
         }
 
+        const directionDismiss = target.closest('[data-remodel-direction-card-dismiss]');
+        if (directionDismiss) {
+            event.preventDefault();
+            const recordId = directionDismiss.getAttribute('data-remodel-direction-card-dismiss');
+            if (recordId && confirm('Discard this direction? Its notebook entries will be removed.')) {
+                dismissDirectionRecord(getActiveScene(), recordId);
+                document.getElementById('remodel-direction-failure')?.remove();
+                renderRoleplayScene();
+            }
+            return;
+        }
+
         // Per-bubble controls (edit / delete / swipe).
         const bubbleCtrl = target.closest('[data-remodel-rp-bubble]');
         if (bubbleCtrl) {
@@ -10462,7 +10476,12 @@ async function handleRoleplayBubbleControl(action, mesId, row) {
             if (!confirm('Delete this message? This cannot be undone.')) {
                 return;
             }
+            const deleted = context.chat[mesId];
+            const directionMeta = deleted?.extra?.remodelDirection;
             await context.deleteMessage(mesId);
+            if (directionMeta && !deleted.is_user) {
+                restoreStandingDirectionFromMessage(getActiveScene(), directionMeta);
+            }
             renderRoleplayScene();
             break;
         }
@@ -11399,7 +11418,7 @@ function buildRoleplayDirectionCard(record) {
         : '';
 
     row.innerHTML = `<div class="remodel-rp-direction-stream-inner">
-        <header><span class="remodel-rp-direction-badge"><i class="fa-solid fa-clapperboard"></i> Roleplay Director</span><strong>${escapeHtml(record.directorLabel || 'Game Director')}</strong><small>${escapeHtml(formatRoleplayTime(record.createdAt))}</small></header>
+        <header><span class="remodel-rp-direction-badge"><i class="fa-solid fa-clapperboard"></i> Roleplay Director</span><strong>${escapeHtml(record.directorLabel || 'Game Director')}</strong><small>${escapeHtml(formatRoleplayTime(record.createdAt))}</small><button type="button" class="remodel-rp-direction-dismiss" data-remodel-direction-card-dismiss="${escapeAttribute(record.id)}" title="Discard this direction and its notebook entries" aria-label="Discard direction"><i class="fa-solid fa-xmark"></i></button></header>
         <p>${escapeHtml(record.objective)}</p>
         ${beatsSection}
         ${operationsSection}
