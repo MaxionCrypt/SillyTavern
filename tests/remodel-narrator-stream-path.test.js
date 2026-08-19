@@ -12,7 +12,7 @@ import {
     stopLiveDirection,
     clearLiveDirectionFailure,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
-import { __setExtensionSettings, __getChat, __setContextOverrides } from './util/st-context-stub.js';
+import { __setExtensionSettings, __getChat, __setContextOverrides, __onEvent } from './util/st-context-stub.js';
 import { __setOnlineStatus } from './util/script-stub.js';
 import { __setOpenAIRequestHandler } from './util/openai-stub.js';
 
@@ -107,6 +107,8 @@ afterEach(async () => {
 });
 
 test('the custom path creates the performer message and reveals the streamed text', async () => {
+    const received = [];
+    __onEvent('MESSAGE_RECEIVED', (id) => received.push(id));
     narratorStreams(['Wren ', 'steps ', 'forward.']);
     await requestNextDirection(scene);
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
@@ -115,6 +117,10 @@ test('the custom path creates the performer message and reveals the streamed tex
     expect(chat[0].mes).toBe('Wren steps forward.');
     expect(chat[0].name).toBe('Wren');
     expect(chat[0].is_user).toBe(false);
+    // The custom path fires MESSAGE_RECEIVED itself (core fires nothing) so
+    // Remodel's roleplay scene and downstream extensions still react — exactly
+    // once, for the finalized message.
+    expect(received).toEqual([0]);
 });
 
 test('interrupting mid-stream keeps the revealed prose and drops the rest', async () => {

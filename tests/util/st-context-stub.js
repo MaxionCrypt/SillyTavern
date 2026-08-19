@@ -106,6 +106,12 @@ export function __emit(type, ...args) {
     return eventSource.emit(type, ...args);
 }
 
+/** Register a listener on the shared event bus (for a test to spy on emits). */
+export function __onEvent(type, handler) {
+    eventSource.on(type, handler);
+    return () => eventSource.off(type, handler);
+}
+
 export function __getCounters() {
     return { savedChatCount, stopGenerationCount };
 }

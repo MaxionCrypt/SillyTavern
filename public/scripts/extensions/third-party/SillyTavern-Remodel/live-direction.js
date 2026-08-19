@@ -1829,6 +1829,9 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             }
             context.chat.push(performerMessage);
             activeRun.messageId = context.chat.length - 1;
+            // Marks this run as the custom stream so finalizeRunMessage knows to
+            // announce the finished message itself (core fires no events for it).
+            activeRun.customStream = true;
             const snapshot = await buildNarratorSnapshot(scene, activeRun);
             const prompt = compileNarratorPrompt(snapshot);
             try {
@@ -2370,6 +2373,19 @@ async function finalizeRunMessage(run, { state }) {
     message.extra.remodelDirection = serializeRun(run, state);
     if (run.performer.ref.kind === 'narrator') message.extra.type = 'narrator';
     await context.saveChat();
+    // AUDIT (2026-08-19): native generation fired MESSAGE_RECEIVED, which
+    // Remodel's OWN roleplay scene listens to (timeline-spine.js — MESSAGE_RECEIVED
+    // → renderRoleplayScene rebuild), and which downstream extensions (TTS,
+    // translation, expressions) use to process a new AI reply. The custom stream
+    // fires none of core's events, so announce the finished message ourselves —
+    // once, and only on the custom path (the test-adapter path already fired it
+    // during generation, so re-emitting would double-announce). Deliberately
+    // withheld: CHAT_CHANGED (slow async, ~8.5s/21 listeners — must not sit on
+    // finalize) and CHARACTER_MESSAGE_RENDERED (a "rendered" signal with no real
+    // DOM node risks listeners that manipulate the node; confirm in-app first).
+    if (run.customStream) {
+        await context.eventSource.emit(context.eventTypes.MESSAGE_RECEIVED, run.messageId);
+    }
 }
 
 /**
