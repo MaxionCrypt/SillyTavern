@@ -1,4 +1,4 @@
-import { appendDirectorEntries, readNarratorEntries, readAllEntriesForOwner, deleteDirectorEntry, updateDirectorEntry } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-notes-store.js';
+import { appendDirectorEntries, readNarratorEntries, readAllEntriesForOwner, deleteDirectorEntry, updateDirectorEntry, readTurnReasoning } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-notes-store.js';
 import { __getExtensionSettings } from './util/st-context-stub.js';
 
 const TL = 'tl-test';
@@ -53,4 +53,29 @@ test('updateDirectorEntry edits text but cannot retype an entry', () => {
     expect(updated.text).toBe('revised draft');
     expect(updated.type).toBe('note');
     expect(readAllEntriesForOwner(TL, { sceneId: 's6' })[0]).toMatchObject({ text: 'revised draft', type: 'note' });
+});
+
+// --- readTurnReasoning: reasoning stored alongside entries -------------------
+
+test('appendDirectorEntries stores reasoning alongside entries for the same turn', () => {
+    appendDirectorEntries(TL, {
+        sceneId: 's7',
+        turn: 3,
+        entries: [{ type: 'note', text: 'A quiet scene.' }],
+        reasoning: 'The tension needs to build slowly here.',
+    });
+    expect(readTurnReasoning(TL, { sceneId: 's7', turn: 3 })).toBe('The tension needs to build slowly here.');
+});
+
+test('readTurnReasoning returns empty string when no reasoning was stored', () => {
+    appendDirectorEntries(TL, {
+        sceneId: 's8',
+        turn: 4,
+        entries: [{ type: 'note', text: 'No reasoning.' }],
+    });
+    expect(readTurnReasoning(TL, { sceneId: 's8', turn: 4 })).toBe('');
+});
+
+test('readTurnReasoning returns empty string for a nonexistent turn', () => {
+    expect(readTurnReasoning(TL, { sceneId: 's9', turn: 999 })).toBe('');
 });

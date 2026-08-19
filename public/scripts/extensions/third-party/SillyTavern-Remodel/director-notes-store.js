@@ -57,7 +57,7 @@ function saveDirectorNotesStore() {
  *   owner-facing detail — it marks a fragment as a fragment in a store the
  *   owner edits by hand.
  */
-export function appendDirectorEntries(timelineId, { sceneId, turn, entries } = {}) {
+export function appendDirectorEntries(timelineId, { sceneId, turn, entries, reasoning } = {}) {
     const id = String(timelineId || '');
     if (!id) return [];
     const scene = String(sceneId || '');
@@ -80,6 +80,10 @@ export function appendDirectorEntries(timelineId, { sceneId, turn, entries } = {
     for (const entry of stored) {
         bucket.entryIds.push(entry.id);
         bucket.entries[entry.id] = entry;
+    }
+    if (typeof reasoning === 'string' && reasoning.trim()) {
+        bucket.reasoning ??= {};
+        bucket.reasoning[`${scene}:${turnNumber}`] = reasoning.trim();
     }
     bucket.updatedAt = timestamp;
     saveDirectorNotesStore();
@@ -124,6 +128,13 @@ export function readNarratorEntries(timelineId, { sceneId, depth } = {}) {
  */
 export function readAllEntriesForOwner(timelineId, { sceneId } = {}) {
     return entriesForScene(timelineId, sceneId).map(copy);
+}
+
+export function readTurnReasoning(timelineId, { sceneId, turn } = {}) {
+    const bucket = getTimelineNotesState(String(timelineId || ''), { create: false });
+    if (!bucket?.reasoning) return '';
+    const key = `${String(sceneId || '')}:${Math.floor(Number(turn)) || 0}`;
+    return String(bucket.reasoning[key] || '');
 }
 
 /**
