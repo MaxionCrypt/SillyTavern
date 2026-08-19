@@ -36,3 +36,22 @@ export function buildNarratorArchivistSections(timelineId, sceneId) {
     }
     return sections.map(([label, body]) => `## ${label}\n${body}`).join('\n\n');
 }
+
+/**
+ * Build the Narrator's message array. Order: a single system message (card +
+ * persona + camera constraint), then world info, archivist state, and the
+ * framed Director reasoning as system context, then the voice window as the
+ * only prior prose. The full chat history is deliberately absent.
+ */
+export function compileNarratorPrompt(input = {}) {
+    const { card = '', persona = '', worldInfo = '', archivistSections = '', reasoning = '', voiceWindow = [] } = input;
+    const systemParts = [card, persona, CAMERA_CONSTRAINT].filter((p) => String(p || '').trim());
+    const messages = [{ role: 'system', content: systemParts.join('\n\n') }];
+    if (String(worldInfo || '').trim()) messages.push({ role: 'system', content: worldInfo });
+    if (String(archivistSections || '').trim()) messages.push({ role: 'system', content: archivistSections });
+    if (String(reasoning || '').trim()) messages.push({ role: 'system', content: reasoning });
+    for (const line of Array.isArray(voiceWindow) ? voiceWindow : []) {
+        if (line && String(line.content || '').trim()) messages.push({ role: line.role === 'user' ? 'user' : 'assistant', content: line.content });
+    }
+    return messages;
+}
