@@ -35,6 +35,7 @@ import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from
 import { StructuredReplyError } from './structured-reply.js';
 import { streamChatPrompt } from './story-stream.js';
 import { buildNarratorArchivistSections } from './narrator-prompt.js';
+import { buildExtractionPrompt } from './narrator-extract.js';
 import { updateScene } from './timeline-state.js';
 import { recordDebugEvent } from './debug-console.js';
 
@@ -1995,6 +1996,48 @@ function executeDirectionRequests(requests, context) {
     return { ...result, unresolvedReasons };
 }
 
+/**
+ * Pass 2 — the Archivist. Read the prose the Narrator just delivered (plus the
+ * Director's reasoning, the intent channel) and record what happened as archivist
+ * state, so the next turn's injection is grounded in it. Diagnostics only — a
+ * failure here never touches the turn the user already read.
+ */
+async function extractStateFromProse(run) {
+    const prose = acceptedProse(run);
+    if (!prose) return;
+    const currentState = buildNarratorArchivistSections(run.timelineId, run.sceneId);
+    const prompt = buildExtractionPrompt({ prose, reasoning: run.envelope?.reasoning || '', currentState });
+    let raw = '';
+    try {
+        if (testAdapters?.extractState) {
+            raw = String(await testAdapters.extractState({ run, prose, prompt }) || '');
+        } else if (testAdapters) {
+            // Test mode with no extraction stub: extraction is opt-in for tests
+            // (a test that cares provides extractState), so never fire the real
+            // transport here — it would pollute Director-prompt captures.
+            return;
+        } else {
+            const result = await streamChatPrompt({ prompt });
+            raw = String(result?.text || '');
+        }
+    } catch (error) {
+        journal('extract.failed', { directionId: run.directionId, phase: 'generate', error: String(error?.message || error) }, { severity: 'warn', correlationId: run.directionId });
+        return;
+    }
+    const reply = parseDirectorReply(String(raw || '').trim());
+    const requests = reply?.state?.requests || [];
+    if (!requests.length) {
+        journal('extract.empty', { directionId: run.directionId }, { correlationId: run.directionId });
+        return;
+    }
+    try {
+        const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests }, { timelineId: run.timelineId, sceneId: run.sceneId });
+        journal('extract', { directionId: run.directionId, requestCount: requests.length, ok: result.ok, receipts: result.receipts?.length || 0 }, { correlationId: run.directionId, summary: 'Archivist recorded state from the narration' });
+    } catch (error) {
+        journal('extract.failed', { directionId: run.directionId, phase: 'apply', error: String(error?.message || error) }, { severity: 'warn', correlationId: run.directionId });
+    }
+}
+
 async function completeVisibleRun(run) {
     if (activeRun !== run) return;
     // revealStep is async and nulls revealTimer before it awaits, so a
@@ -2014,6 +2057,11 @@ async function completeVisibleRun(run) {
     }
     await finalizeRunMessage(run, { state: 'complete' });
     run.acceptedComplete = true;
+    // Pass 2: read the prose the user just received and record what happened
+    // into the archivist, so next turn's injection is grounded in it. Never
+    // allowed to break the turn — a failed extraction just leaves the state as
+    // it was.
+    await extractStateFromProse(run);
     run.autonomousSequence += 1;
     // A response landed, so any failure notice still on screen is describing a
     // turn that has since recovered. The empty-response retries are the case
