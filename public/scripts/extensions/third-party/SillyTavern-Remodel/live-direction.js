@@ -7,7 +7,6 @@ import {
     setExtensionPrompt,
 } from '../../../../script.js';
 import { getContext } from '../../../st-context.js';
-import { generateGroupWrapper, is_group_generating } from '../../../group-chats.js';
 import {
     executeMechanicsRequest,
     MECHANICS_PROTOCOL,
