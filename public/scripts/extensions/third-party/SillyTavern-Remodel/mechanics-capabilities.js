@@ -28,6 +28,16 @@ import {
 } from './story-goals-store.js';
 import { clampRate, resolveReach } from './story-goals-math.js';
 import { STORY_GOAL_STATUSES, STORY_GOAL_VISIBILITIES } from './story-goals-model.js';
+import {
+    setSceneFact,
+    clearSceneFact,
+    recordEvent,
+    setCharStateFacet,
+    clearCharStateFacet,
+    setBeat,
+    setSecret,
+    clearSecret,
+} from './archivist-store.js';
 
 export const MECHANICS_PROTOCOL = 'remodel-mechanics/1';
 
@@ -35,6 +45,7 @@ const CAPABILITY_NAMES = Object.freeze([
     'goal.create', 'goal.edit', 'goal.delete', 'goal.reach', 'goal.relate',
     'variable.create', 'variable.set', 'variable.adjust', 'variable.transition', 'variable.subvalue.set',
     'modifier.add', 'modifier.remove',
+    'scene.set', 'scene.clear', 'event.record', 'char_state.set', 'char_state.clear', 'beat.set', 'secret.set', 'secret.clear',
 ]);
 
 const CAPABILITIES = Object.freeze({
@@ -50,6 +61,14 @@ const CAPABILITIES = Object.freeze({
     'variable.subvalue.set': capability('Set one advertised scalar subvalue.', ['number', 'enum', 'text', 'boolean'], 'hybrid'),
     'modifier.add': capability('Attach a bounded value or maximum modifier to an advertised Variable.', ['variable'], 'hybrid'),
     'modifier.remove': capability('Remove one existing Variable modifier by ID.', ['variable'], 'hybrid'),
+    'scene.set': capability('Record or update a scene fact the Narrator treats as given — location, time of day, weather, atmosphere. Overwriting the same key replaces it.', ['narrative'], 'hybrid'),
+    'scene.clear': capability('Remove a scene fact that no longer holds.', ['narrative'], 'hybrid'),
+    'event.record': capability('Append one thing that has just happened to the permanent event log. Append-only — the Narrator reads this as "already written, do not restate".', ['narrative'], 'hybrid'),
+    'char_state.set': capability("Set one facet of a character's current state — mood, injury, stance. Overwrites that facet.", ['narrative'], 'hybrid'),
+    'char_state.clear': capability("Remove one facet of a character's current state that no longer applies.", ['narrative'], 'hybrid'),
+    'beat.set': capability("Set the current beat — what should happen next. Replaces the previous beat. This is the Narrator's forward instruction.", ['narrative'], 'hybrid'),
+    'secret.set': capability('Store knowledge the Narrator must not see — a twist or hidden motive. Overwriting the same key replaces it.', ['narrative'], 'hybrid'),
+    'secret.clear': capability('Remove a secret, e.g. once it has been revealed.', ['narrative'], 'hybrid'),
 });
 
 export function getCapabilityDictionary() {
@@ -141,6 +160,12 @@ export function getMechanicsRequestSchema() {
                                     label: { type: 'string', description: 'modifier.add only: a short label identifying this modifier, e.g. "Wounded" or "Blessed".' },
                                     target: { type: 'string', enum: ['value', 'maximum'], description: 'modifier.add only: whether the modifier bounds the Variable\'s value or its maximum.' },
                                     endingCondition: { type: 'string', description: 'modifier.add only: in prose, when this modifier should end. Code does not expire it automatically — this is a note for whoever reviews it later.' },
+                                    key: { type: 'string', description: 'scene.set / scene.clear / secret.set / secret.clear: the fact or secret name — the stable key you address it by.' },
+                                    summary: { type: 'string', description: 'event.record only: what just happened, one line. Appended to the permanent log the Narrator reads as already-written.' },
+                                    charId: { type: 'string', description: 'char_state.set / char_state.clear: which character, by cast name.' },
+                                    facet: { type: 'string', description: 'char_state.set / char_state.clear: which facet of the character\'s current state, e.g. "mood", "injury", "stance".' },
+                                    directive: { type: 'string', description: 'beat.set only: what should happen next — the Narrator\'s forward instruction.' },
+                                    tone: { type: 'string', description: 'beat.set only, optional: the emotional register of the next beat, e.g. "tense", "tender".' },
                                 },
                             },
                             reason: { type: 'string', minLength: 1, maxLength: 1000, description: 'The in-fiction reason for this request — required, and shown alongside the mechanical receipt as why the change happened.' },
@@ -297,8 +322,45 @@ function applyRequest(request, runtime) {
         case 'goal.delete': return deleteGoal(request, args, runtime);
         case 'goal.relate': return relateGoals(request, args, runtime);
         case 'goal.reach': return reachGoal(request, args, runtime);
+        case 'scene.set': return applySceneSet(request, args, runtime);
+        case 'scene.clear': return applySceneClear(request, args, runtime);
+        case 'event.record': return applyEventRecord(request, args, runtime);
+        case 'char_state.set': return applyCharStateSet(request, args, runtime);
+        case 'char_state.clear': return applyCharStateClear(request, args, runtime);
+        case 'beat.set': return applyBeatSet(request, args, runtime);
+        case 'secret.set': return applySecretSet(request, args, runtime);
+        case 'secret.clear': return applySecretClear(request, args, runtime);
         default: throw new MechanicsError(`Unsupported capability ${request.capability}.`);
     }
+}
+
+function applySceneSet(request, args, runtime) {
+    const { before, after } = setSceneFact(runtime.timelineId, runtime.sceneId, args.key, args.value, { establishedMsgId: runtime.messageId });
+    return receipt(runtime, request, before, after);
+}
+function applySceneClear(request, args, runtime) {
+    return receipt(runtime, request, clearSceneFact(runtime.timelineId, runtime.sceneId, args.key), null);
+}
+function applyEventRecord(request, args, runtime) {
+    return receipt(runtime, request, null, recordEvent(runtime.timelineId, runtime.sceneId, args.summary, { msgId: runtime.messageId, turnIndex: null }));
+}
+function applyCharStateSet(request, args, runtime) {
+    const { before, after } = setCharStateFacet(runtime.timelineId, runtime.sceneId, args.charId, args.facet, args.value);
+    return receipt(runtime, request, before, after);
+}
+function applyCharStateClear(request, args, runtime) {
+    return receipt(runtime, request, clearCharStateFacet(runtime.timelineId, runtime.sceneId, args.charId, args.facet), null);
+}
+function applyBeatSet(request, args, runtime) {
+    const { before, after } = setBeat(runtime.timelineId, runtime.sceneId, args.directive, args.tone || '');
+    return receipt(runtime, request, before, after);
+}
+function applySecretSet(request, args, runtime) {
+    const { before, after } = setSecret(runtime.timelineId, runtime.sceneId, args.key, args.value);
+    return receipt(runtime, request, before, after);
+}
+function applySecretClear(request, args, runtime) {
+    return receipt(runtime, request, clearSecret(runtime.timelineId, runtime.sceneId, args.key), null);
 }
 
 /**
@@ -619,6 +681,14 @@ export const REQUIRED_ARGUMENTS = Object.freeze({
         ['delta', 'how much it shifts'], ['target', 'which field it applies to'],
     ]),
     'modifier.remove': Object.freeze([['variableRef', 'its exact advertised name'], ["modifierId", "the modifier's id on the record"]]),
+    'scene.set': Object.freeze([['key', 'the fact name, e.g. "location"'], ['value', 'the fact itself, e.g. "rain-soaked rooftop"']]),
+    'scene.clear': Object.freeze([['key', 'the fact name to remove']]),
+    'event.record': Object.freeze([['summary', 'what just happened, one line']]),
+    'char_state.set': Object.freeze([['charId', 'the character, by cast name'], ['facet', 'which facet, e.g. "mood"'], ['value', 'the new value, e.g. "desperate"']]),
+    'char_state.clear': Object.freeze([['charId', 'the character, by cast name'], ['facet', 'which facet to remove']]),
+    'beat.set': Object.freeze([['directive', 'what should happen next, one or two lines']]),
+    'secret.set': Object.freeze([['key', 'the secret name'], ['value', 'the secret itself']]),
+    'secret.clear': Object.freeze([['key', 'the secret name to remove']]),
 });
 
 function validateArguments(request) {
