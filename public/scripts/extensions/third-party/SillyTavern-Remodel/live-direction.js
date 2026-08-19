@@ -2773,6 +2773,14 @@ function normalizeEnvelope(value, scene) {
  * is a settled fact, and the performer needs to tell those apart from
  * scene-setting observation.
  */
+const SCENE_DIRECTION_HEADER = `[A scene director has reviewed the full context of this conversation — the user's messages, the world's mechanics, and the story so far — and worked out what should happen next. Below is their creative thinking. Write the narrative from it. Ignore any technical references you don't recognise.]`;
+
+export function frameDirectorReasoning(reasoning) {
+    const text = String(reasoning || '').trim();
+    if (!text) return '';
+    return `${SCENE_DIRECTION_HEADER}\n\n${text}`;
+}
+
 export function buildDirectorNotesSource(entries) {
     const turns = groupNotebookEntriesByTurn(entries);
     if (!turns.length) return '';

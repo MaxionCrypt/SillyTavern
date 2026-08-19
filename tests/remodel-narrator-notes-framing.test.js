@@ -1,4 +1,4 @@
-import { buildDirectorNotesSource } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
+import { buildDirectorNotesSource, frameDirectorReasoning } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { NARRATOR_VISIBLE_TYPES } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/director-reply.js';
 
 // The Director's notes describe the STATE of the scene, and that state is the
@@ -64,4 +64,31 @@ test('every type the performer can see carries an instruction — structurally',
 test('an empty notebook produces nothing at all, not a bare header', () => {
     expect(buildDirectorNotesSource([])).toBe('');
     expect(buildDirectorNotesSource([entry('note', '   ')])).toBe('');
+});
+
+// --- frameDirectorReasoning: the reasoning-to-Narrator bridge ----------------
+
+test('frameDirectorReasoning prepends the director-awareness header to raw reasoning', () => {
+    const reasoning = 'Teo has been dodging for three turns and Eli is about to snap.';
+    const result = frameDirectorReasoning(reasoning);
+
+    expect(result).toContain('scene director');
+    expect(result).toContain('creative thinking');
+    expect(result).toContain('Ignore any technical references');
+    expect(result).toContain(reasoning);
+});
+
+test('frameDirectorReasoning returns empty string for falsy reasoning', () => {
+    expect(frameDirectorReasoning('')).toBe('');
+    expect(frameDirectorReasoning(null)).toBe('');
+    expect(frameDirectorReasoning(undefined)).toBe('');
+});
+
+test('frameDirectorReasoning passes the full reasoning without truncation or filtering', () => {
+    const mechanical = '[ruling] If Eli sits, Teo talks.\n|||STATE_FENCE|||\nvariable.adjust: mood +2\n|||END_FENCE|||';
+    const result = frameDirectorReasoning(mechanical);
+
+    expect(result).toContain('[ruling]');
+    expect(result).toContain('|||STATE_FENCE|||');
+    expect(result).toContain('variable.adjust: mood +2');
 });
