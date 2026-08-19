@@ -46,6 +46,7 @@ const state = {
     apiType: 'chat',
     search: '',
     selectedRecipeId: null,
+    showLog: false,
     requestRender: () => {},
     getRuntimeMode: () => 'roleplay',
     getRuntimeRecipeId: () => null,
@@ -61,6 +62,8 @@ const state = {
     boundApiType: null,
     boundRecipeId: null,
 };
+
+const promptLog = { director: null, narrator: null, chat: null };
 
 let saveLabelTimer = null;
 let transportFeedbackTimer = null;
@@ -383,6 +386,9 @@ export function renderPromptStudioWorkspace() {
                         <span class="remodel-prompt-kicker">Prompt Studio</span>
                         <h2>Recipes</h2>
                     </div>
+                    <button type="button" class="remodel-prompt-icon-button ${state.showLog ? 'is-active' : ''}" data-remodel-prompt-log-toggle title="Prompt Log" aria-label="Prompt Log" aria-pressed="${state.showLog ? 'true' : 'false'}">
+                        <i class="fa-solid fa-clipboard-list" aria-hidden="true"></i>
+                    </button>
                     <button type="button" class="remodel-prompt-icon-button" data-remodel-prompt-create title="New prompt" aria-label="New prompt">
                         <i class="fa-solid fa-plus" aria-hidden="true"></i>
                     </button>
@@ -402,7 +408,7 @@ export function renderPromptStudioWorkspace() {
                 </div>
             </aside>
             <div class="remodel-prompt-editor">
-                ${selected ? renderRecipeEditor(selected) : renderEmptyEditor()}
+                ${state.showLog ? renderPromptLogView() : (selected ? renderRecipeEditor(selected) : renderEmptyEditor())}
             </div>
         </section>
     `;
@@ -650,6 +656,69 @@ function renderTransportTextarea(path, label, value) {
     return `<label class="is-wide"><span>${escapeHtml(label)}</span><textarea data-remodel-prompt-transport="${path}">${escapeHtml(value || '')}</textarea></label>`;
 }
 
+function renderPromptLogView() {
+    const modes = [
+        { key: 'director', label: 'Director', icon: 'fa-bullhorn' },
+        { key: 'narrator', label: 'Narrator', icon: 'fa-book-open' },
+        { key: 'chat', label: 'Chat', icon: 'fa-comments' },
+    ];
+    const sections = modes.map(({ key, label, icon }) => {
+        const entry = promptLog[key];
+        if (!entry) {
+            return `<section class="remodel-prompt-log-section">
+                <h3><i class="fa-solid ${icon}" aria-hidden="true"></i> ${label}</h3>
+                <p class="remodel-prompt-log-empty">No generation recorded yet.</p>
+            </section>`;
+        }
+        const ago = formatTimeAgo(entry.timestamp);
+        const blockRows = entry.blocks.map((block) => {
+            const roleClass = `role-${escapeAttribute(block.role)}`;
+            const roleBadge = escapeHtml(roleLabels[block.role] || block.role || 'system');
+            const blockLabel = escapeHtml(block.label);
+            const kindTag = block.kind === 'source'
+                ? '<span class="remodel-prompt-log-kind"><i class="fa-solid fa-link"></i></span>'
+                : '';
+            let body;
+            if (block.marker) {
+                body = '<em class="remodel-prompt-log-marker">Linked source — resolved by SillyTavern</em>';
+            } else if (!block.content) {
+                body = '<em class="remodel-prompt-log-marker">Empty</em>';
+            } else {
+                body = `<pre class="remodel-prompt-log-pre">${escapeHtml(block.content)}</pre>`;
+            }
+            return `<article class="remodel-prompt-log-block ${roleClass}">
+                <div class="remodel-prompt-log-block-head">
+                    <span class="remodel-prompt-log-role">${roleBadge}</span>
+                    <span class="remodel-prompt-log-label">${kindTag} ${blockLabel}</span>
+                </div>
+                ${body}
+            </article>`;
+        }).join('');
+        return `<details class="remodel-prompt-log-section" open>
+            <summary><i class="fa-solid ${icon}" aria-hidden="true"></i> ${escapeHtml(label)} <small>${escapeHtml(entry.recipeName)} · ${ago}</small></summary>
+            ${blockRows}
+        </details>`;
+    }).join('');
+    return `<div class="remodel-prompt-log-view">
+        <header class="remodel-prompt-log-head">
+            <div>
+                <span class="remodel-prompt-kicker">Prompt Studio</span>
+                <h2>Prompt Log</h2>
+            </div>
+            <p>Last recipe blocks sent for each generation mode.</p>
+        </header>
+        ${sections}
+    </div>`;
+}
+
+function formatTimeAgo(ts) {
+    const diff = Date.now() - ts;
+    if (diff < 60_000) return 'just now';
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+    return new Date(ts).toLocaleTimeString();
+}
+
 function renderEmptyEditor() {
     return `<div class="remodel-prompt-editor-empty"><i class="fa-solid fa-wand-magic-sparkles"></i><h2>Select a prompt recipe</h2><p>Create a recipe or choose one from the library to edit its message stack.</p></div>`;
 }
@@ -688,6 +757,11 @@ function bindPromptStudioEvents() {
         const select = target.closest('[data-remodel-prompt-select]');
         if (select) {
             state.selectedRecipeId = select.dataset.remodelPromptSelect;
+            state.requestRender();
+            return;
+        }
+        if (target.closest('[data-remodel-prompt-log-toggle]')) {
+            state.showLog = !state.showLog;
             state.requestRender();
             return;
         }
@@ -844,19 +918,26 @@ function bindPromptStudioEvents() {
         const card = event.target instanceof Element ? event.target.closest('[data-remodel-prompt-block]') : null;
         if (!card || card.getAttribute('draggable') !== 'true') return;
         state.dragBlockId = card.dataset.remodelPromptBlock;
+        event.dataTransfer.setData('text/plain', state.dragBlockId);
+        event.dataTransfer.effectAllowed = 'move';
         card.classList.add('is-dragging');
     });
     document.addEventListener('dragover', (event) => {
         if (!state.dragBlockId || !(event.target instanceof Element) || !event.target.closest('.remodel-prompt-studio')) return;
-        if (event.target.closest('[data-remodel-prompt-block]')) event.preventDefault();
+        if (event.target.closest('[data-remodel-prompt-block]') || event.target.closest('[data-remodel-prompt-blocks]')) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+        }
     });
     document.addEventListener('drop', (event) => {
-        const targetCard = event.target instanceof Element ? event.target.closest('[data-remodel-prompt-block]') : null;
         const recipe = getPromptRecipe(state.selectedRecipeId);
-        if (!targetCard || !recipe || !state.dragBlockId) return;
+        if (!recipe || !state.dragBlockId) return;
+        const targetCard = event.target instanceof Element ? event.target.closest('[data-remodel-prompt-block]') : null;
+        const container = event.target instanceof Element ? event.target.closest('[data-remodel-prompt-blocks]') : null;
+        if (!targetCard && !container) return;
         event.preventDefault();
         const from = recipe.blocks.findIndex((block) => block.id === state.dragBlockId);
-        const to = recipe.blocks.findIndex((block) => block.id === targetCard.dataset.remodelPromptBlock);
+        let to = targetCard ? recipe.blocks.findIndex((block) => block.id === targetCard.dataset.remodelPromptBlock) : recipe.blocks.length - 1;
         if (from !== -1 && to !== -1 && from !== to && canMoveBlock(recipe, recipe.blocks[from])) {
             const blocks = [...recipe.blocks];
             const [moved] = blocks.splice(from, 1);
@@ -872,9 +953,15 @@ function bindPromptStudioEvents() {
 }
 
 function patchRecipeBlocks(recipe, blocks) {
+    const scrollContainer = document.querySelector('.remodel-prompt-editor-scroll');
+    const savedScroll = scrollContainer ? scrollContainer.scrollTop : 0;
     updatePromptRecipe(recipe.id, { blocks });
     onRecipeChanged(recipe);
     state.requestRender();
+    requestAnimationFrame(() => {
+        const container = document.querySelector('.remodel-prompt-editor-scroll');
+        if (container) container.scrollTop = savedScroll;
+    });
 }
 
 // Reordering and deleting are different permissions, and conflating them is
@@ -988,6 +1075,79 @@ export function setRemodelNativePromptContent(sourceKey, content) {
     prompt.role = 'system';
     prompt.content = String(content || '');
     return true;
+}
+
+export function capturePromptLog(mode) {
+    const recipeMode = mode === 'director' ? 'director' : 'roleplay';
+    const recipe = getCurrentPromptStudioRecipe(recipeMode, 'chat');
+    if (!recipe) return;
+    const blocks = (recipe.blocks || []).filter((b) => b.enabled !== false).map((block) => {
+        const source = block.kind === 'source' ? getSourceDefinition(recipe, block.sourceKey) : null;
+        const identifier = block.nativeIdentifier || source?.nativeIdentifier;
+        const nativePrompt = identifier
+            ? (oai_settings.prompts || []).find((p) => p?.identifier === identifier)
+            : null;
+        let content = '';
+        if (block.kind === 'source') {
+            content = nativePrompt?.marker ? '' : (nativePrompt?.content || '');
+        } else {
+            content = substituteParams(block.content || '');
+        }
+        return {
+            label: source?.label || nativePrompt?.name || 'Message',
+            role: nativePrompt?.role || (block.role === 'instruction' ? 'system' : block.role),
+            kind: block.kind,
+            sourceKey: block.sourceKey || null,
+            marker: Boolean(nativePrompt?.marker),
+            content,
+        };
+    });
+    promptLog[mode] = { mode, recipeName: recipe.name, timestamp: Date.now(), blocks };
+}
+
+export function captureDirectorPromptLog(recipeName, traceBlocks) {
+    if (!Array.isArray(traceBlocks)) return;
+    const blocks = traceBlocks.map((entry) => ({
+        label: entry.label || 'Block',
+        role: entry.role || 'system',
+        kind: entry.kind || 'message',
+        sourceKey: entry.sourceKey || null,
+        marker: false,
+        content: entry.text || '',
+    }));
+    promptLog.director = { mode: 'director', recipeName: recipeName || 'Director', timestamp: Date.now(), blocks };
+}
+
+/**
+ * Record the Narrator's ACTUAL streamed prompt for the Prompt Log view.
+ *
+ * The custom Narrator path compiles its own message array and bypasses core's
+ * prompt assembly, so `capturePromptLog('narrator')` — which reads the roleplay
+ * recipe and oai_settings.prompts — would show a stale prompt nobody sent. This
+ * stores the compiled messages the way captureDirectorPromptLog stores the
+ * Director's, so the Narrator section shows exactly what went out.
+ *
+ * @param {{label?: string, role?: string, content?: string}[]} blocks
+ */
+export function captureNarratorPromptLog(blocks) {
+    if (!Array.isArray(blocks)) return;
+    promptLog.narrator = {
+        mode: 'narrator',
+        recipeName: 'Narrator (custom stream)',
+        timestamp: Date.now(),
+        blocks: blocks.map((entry) => ({
+            label: entry.label || 'Message',
+            role: entry.role || 'system',
+            kind: 'message',
+            sourceKey: null,
+            marker: false,
+            content: String(entry.content || ''),
+        })),
+    };
+}
+
+export function getPromptLog() {
+    return { ...promptLog };
 }
 
 function applyRoleplayChatRecipe(recipe) {

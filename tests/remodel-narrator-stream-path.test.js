@@ -15,6 +15,7 @@ import {
 import { __setExtensionSettings, __getChat, __setContextOverrides, __onEvent } from './util/st-context-stub.js';
 import { __setOnlineStatus } from './util/script-stub.js';
 import { __setOpenAIRequestHandler } from './util/openai-stub.js';
+import { __getDebugEvents, __clearDebugEvents } from './util/debug-console-stub.js';
 
 globalThis.document ??= { getElementById: () => null };
 globalThis.HTMLTextAreaElement ??= class HTMLTextAreaElement {};
@@ -96,6 +97,7 @@ beforeEach(() => {
     __setOnlineStatus('connected');
     // canStreamStory() must be true or the gate refuses the turn.
     __setContextOverrides({ mainApi: 'openai', chatCompletionSettings: { stream_openai: true } });
+    __clearDebugEvents();
     wireWithoutPerformerAdapter();
 });
 
@@ -121,6 +123,11 @@ test('the custom path creates the performer message and reveals the streamed tex
     // Remodel's roleplay scene and downstream extensions still react — exactly
     // once, for the finalized message.
     expect(received).toEqual([0]);
+    // The custom path is visible in the debug console: it journals what it
+    // compiled, so the Prompt Log / debug workspace shows the real Narrator run.
+    const compiled = __getDebugEvents().find((e) => e.type === 'narrator.compiled');
+    expect(compiled).toBeTruthy();
+    expect(compiled.detail.blocks).toBeGreaterThan(0);
 });
 
 test('interrupting mid-stream keeps the revealed prose and drops the rest', async () => {

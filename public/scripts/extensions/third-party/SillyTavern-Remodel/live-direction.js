@@ -18,7 +18,7 @@ import { resolveByName } from './direction-address.js';
 import { resolveDirectionActions } from './direction-chrome.js';
 import { clearStandingDirection, readStandingDirection, saveStandingDirection } from './standing-direction-store.js';
 import { deriveBeats } from './direction-beats.js';
-import { compilePromptRecipe, captureDirectorPromptLog, capturePromptLog, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
+import { compilePromptRecipe, captureDirectorPromptLog, captureNarratorPromptLog, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
 import { PROMPT_SOURCE_DEFINITIONS } from './prompt-studio-store.js';
 import { ENTRY_TYPES, parseDirectorReply } from './director-reply.js';
 import { filterNarratorHistory } from './narrator-history.js';
@@ -1716,6 +1716,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     if (!testAdapters?.generatePerformer) {
         const streamBlock = narratorStreamBlock();
         if (streamBlock) {
+            journal('narrator.refused', { directionId: envelope.directionId, reason: streamBlock }, { severity: 'warn', correlationId: envelope.directionId, summary: 'Directed Narrator unavailable: backend cannot stream' });
             releaseDirectionLock(token);
             throw new Error(streamBlock);
         }
@@ -1795,12 +1796,10 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             throw new Error(`${performer.label || 'The selected performer'} is not a loaded character card in this group, so no native index could be resolved for it.`);
         }
         const options = context.groupId ? { force_chid: performer.characterId } : {};
-        capturePromptLog('narrator');
         journal('generation.start', {
             directionId: envelope.directionId,
             performerLabel: performer.label,
-            nativeIndex: performer.characterId,
-            transport: context.groupId ? 'group' : 'solo',
+            transport: testAdapters?.generatePerformer ? 'test-adapter' : 'custom-stream',
             pacing: activeRun.pacing,
         }, { correlationId: envelope.directionId });
         if (testAdapters?.generatePerformer) {
@@ -1833,6 +1832,25 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             activeRun.customStream = true;
             const snapshot = await buildNarratorSnapshot(scene, activeRun);
             const prompt = compileNarratorPrompt(snapshot);
+            // Record the ACTUAL streamed prompt for the Prompt Log → Narrator
+            // view. Labels track compileNarratorPrompt's construction order:
+            // persona+camera, world info, archivist state, reasoning, then the
+            // voice window. The content is the source of truth either way.
+            const narratorLabels = ['Narrator persona + camera'];
+            if (String(snapshot.worldInfo || '').trim()) narratorLabels.push('World info');
+            if (String(snapshot.archivistSections || '').trim()) narratorLabels.push('Archivist state');
+            if (String(snapshot.reasoning || '').trim()) narratorLabels.push('Director reasoning');
+            for (const line of snapshot.voiceWindow) narratorLabels.push(line.role === 'user' ? 'Voice window — you' : 'Voice window — character');
+            captureNarratorPromptLog(prompt.map((message, index) => ({ label: narratorLabels[index] || 'Context', role: message.role, content: message.content })));
+            journal('narrator.compiled', {
+                directionId: envelope.directionId,
+                blocks: prompt.length,
+                hasArchivist: Boolean(String(snapshot.archivistSections || '').trim()),
+                archivistChars: String(snapshot.archivistSections || '').length,
+                hasReasoning: Boolean(String(snapshot.reasoning || '').trim()),
+                worldInfoChars: String(snapshot.worldInfo || '').length,
+                voiceWindow: snapshot.voiceWindow.length,
+            }, { correlationId: envelope.directionId, summary: 'Narrator prompt compiled (custom stream)' });
             try {
                 const result = await streamChatPrompt({
                     prompt,
