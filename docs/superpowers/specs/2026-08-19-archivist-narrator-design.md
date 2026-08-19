@@ -15,7 +15,7 @@ Prompt-level instructions ("Write only what happens NEXT", "do NOT narrate this 
 
 ## Solution
 
-Introduce an **Archivist** — a single structured store that holds the narrative's ground truth as typed records. The Director writes to it through capabilities (the same mechanism it already uses for variables and goals). The Narrator moves off native `Generate()` to a **custom generation path** that assembles exactly what it should see: the archivist's structured state, world info, character card, and a small voice window — **not** the full chat history, **not** the notebook.
+Introduce an **Archivist** — a single structured store that holds the narrative's ground truth as typed records. The Director writes to it through capabilities (the same mechanism it already uses for variables and goals). The Narrator moves off native `Generate()` to a **custom generation path** that assembles exactly what it should see: the archivist's structured state, world info, character card, a small voice window, and the framed Director reasoning (kept from the prior design) — **not** the full chat history, **not** the notebook.
 
 Append-only is enforced by construction: events are facts in a list ("this happened"), never prose to echo; the Narrator never receives the raw text of prior turns, so it has nothing to rewrite.
 
@@ -70,8 +70,11 @@ The Narrator moves from native `Generate()` (`generateDirectedPerformer` → `ho
    - *Scene:* current `scene_fact` records
    - *Characters:* current `char_state` records
    - *What has happened:* the `event` log, chronological — framed as "already written, do not restate"
-   - *What happens next:* the current `beat.directive` (and `tone`)
-4. **Voice window** — the last 2–3 chat messages, for stylistic continuity only, labelled: "These are the most recent lines. Continue from where they end. Do not rewrite or restate them."
+   - *What happens next:* the current `beat.directive` (and `tone`) — the authoritative forward directive
+4. **Director's reasoning bridge** — the Director's raw reasoning tokens from this turn, framed by `frameDirectorReasoning` (retained from the prior design). This is fuller creative texture — mood, subtext, pacing nuance the compact `beat` leaves out. The `beat` is the authoritative instruction; the reasoning enriches it. Present only when the Director's model returns reasoning; absent otherwise (the beat still stands alone).
+5. **Voice window** — the last 2–3 chat messages, for stylistic continuity only, labelled: "These are the most recent lines. Continue from where they end. Do not rewrite or restate them."
+
+**Beat vs. reasoning:** the `beat` is a short, deliberate, structured directive the Director writes on purpose; the reasoning is its fuller unstructured thinking. They agree by construction — the Director produces both in the same turn. The beat wins any conflict, and the Narrator is told so. The reasoning is *direction*, not prose to echo, so it does not reintroduce the rewrite bug: append-only still holds because the Narrator never receives the raw prose of prior turns.
 
 **What the Narrator never receives:** the full chat history, the notebook, secrets, variables/goals internals, the Director's card or protocol.
 
@@ -99,7 +102,8 @@ User sends message (or Continue / Retry)
         ▼
 3. Narrator runs
    compileNarratorPrompt reads the UPDATED archivist state,
-   character card, world info, voice window, beat
+   character card, world info, voice window, beat,
+   and the framed Director reasoning from step 1
    → streamChatPrompt → insert as performer message
         │
         ▼
@@ -120,6 +124,7 @@ The Narrator always reads archivist state *after* the Director's writes for that
 | Recipe system / Prompt Studio | Unchanged (new `directionHandbook` section added) |
 | Reveal / pacing pipeline, direction cards | Unchanged |
 | `buildDirectionSnapshot` (Director's own context) | Unchanged — still slices chat history for Director memory |
+| `frameDirectorReasoning` + reasoning capture (prior design) | Kept — becomes a Narrator input alongside the beat (storage moves off the notebook in Layer 3) |
 
 ## What Changes
 
@@ -147,7 +152,8 @@ The Narrator always reads archivist state *after* the Director's writes for that
 |------|-------------|-------|
 | `director-notes-store.js` | Notebook store | Retired — secrets → `secret` records, self-memory → Director chat history |
 | `buildDirectorNotesSource`, `formatDirectorNotesPrompt`, `NOTEBOOK_ENTRY_LABELS`, `readNarratorEntries` | Render notebook for the Narrator | Removed — Narrator reads the archivist |
-| `frameDirectorReasoning` + reasoning-bridge wiring | Pipe raw Director reasoning to Narrator (prior design) | Retired — the `beat` is the Director's deliberate, structured forward directive; raw reasoning no longer leaks to the Narrator |
+
+`frameDirectorReasoning` and the reasoning capture/storage from the prior design are **kept** — the framed reasoning becomes one of the Narrator's inputs (input #4 above) alongside the beat, not removed. The reasoning still needs a per-turn home once the notebook store is gone; Layer 3 moves it from the notebook turn record onto the archivist (e.g. carried on the current `beat` record or a per-turn reasoning slot) so nothing depends on `director-notes-store.js`.
 
 ## Migration Path
 
@@ -172,7 +178,6 @@ Three independently deployable layers. Each ships and is tested on its own.
 
 ## Out of Scope
 
-- Reintroducing the Director's raw reasoning to the Narrator (the prior design's bridge) — the `beat` replaces it.
 - Archivist UI cards / inspector — v1 is data + generation only; surfacing archivist state in the timeline UI is a later enhancement.
 - Multi-scene archivist history / long-term memory retrieval beyond the current scene's records.
 - Changes to the variable/goal systems beyond adding the new sibling capabilities.
