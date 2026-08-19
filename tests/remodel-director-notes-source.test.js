@@ -3,6 +3,7 @@ import {
     buildDirectorNotesSource,
     clearLiveDirectionFailure,
     formatDirectorNotesPrompt,
+    frameDirectorReasoning,
     getLiveDirectionRun,
     initLiveDirection,
     requestNextDirection,
@@ -514,4 +515,79 @@ test('the generation-seam hook delivers notes scoped to the originating scene, n
     // The hook was called with the originating scene's notes, not the new
     // active scene's (which has no notebook entries at all).
     expect(capture.value).toContain('Teo finally answers Eli.');
+});
+
+test('when the Director returns reasoning, the generation-seam delivers framed reasoning instead of notebook entries', async () => {
+    const recipe = createPromptRecipe({
+        name: 'RP reasoning', mode: 'roleplay', apiType: 'chat',
+        blocks: [{ kind: 'source', sourceKey: 'directorNotes', role: 'system', enabled: true, settings: { depth: 5 } }],
+    });
+    setActivePromptRecipe('roleplay', 'chat', recipe.id);
+    __setOnlineStatus('connected');
+
+    initLiveDirection({
+        getActiveScene: () => lifecycleScene,
+        getCast: () => lifecycleCast,
+        getPersona: () => null,
+        ensureSceneReady: async () => true,
+        getComposerDraft: () => '',
+        clearComposer: () => {},
+        sendNormally: () => {},
+        onStateChange: () => {},
+        onSettled: () => {},
+        onFailure: () => {},
+        setNativePromptContent: (key, content) => { nativePromptCapture.set(key, content); },
+    });
+    const capture = { value: undefined };
+    setLiveDirectionTestAdapters({
+        requestDirection: async () => ({
+            text: '[note] Quiet scene.\n|||STATE_FENCE|||\n{"continue":true}\n|||END_FENCE|||',
+            reasoning: 'The silence here is doing the heavy lifting.',
+        }),
+        generatePerformer: capturingPerformer(capture),
+    });
+
+    await requestNextDirection(lifecycleScene);
+    expect(await untilLifecycle(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    expect(capture.value).toContain('scene director');
+    expect(capture.value).toContain('The silence here is doing the heavy lifting.');
+    expect(capture.value).not.toContain("DIRECTOR'S NOTES");
+});
+
+test('when the Director returns no reasoning, the generation-seam falls back to notebook entries', async () => {
+    const recipe = createPromptRecipe({
+        name: 'RP no reasoning', mode: 'roleplay', apiType: 'chat',
+        blocks: [{ kind: 'source', sourceKey: 'directorNotes', role: 'system', enabled: true, settings: { depth: 5 } }],
+    });
+    setActivePromptRecipe('roleplay', 'chat', recipe.id);
+    __setOnlineStatus('connected');
+
+    initLiveDirection({
+        getActiveScene: () => lifecycleScene,
+        getCast: () => lifecycleCast,
+        getPersona: () => null,
+        ensureSceneReady: async () => true,
+        getComposerDraft: () => '',
+        clearComposer: () => {},
+        sendNormally: () => {},
+        onStateChange: () => {},
+        onSettled: () => {},
+        onFailure: () => {},
+        setNativePromptContent: (key, content) => { nativePromptCapture.set(key, content); },
+    });
+    const capture = { value: undefined };
+    setLiveDirectionTestAdapters({
+        requestDirection: async () => ({
+            text: '[note] Quiet scene.\n|||STATE_FENCE|||\n{"continue":true}\n|||END_FENCE|||',
+            reasoning: '',
+        }),
+        generatePerformer: capturingPerformer(capture),
+    });
+
+    await requestNextDirection(lifecycleScene);
+    expect(await untilLifecycle(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    expect(capture.value).toContain("DIRECTOR'S NOTES");
+    expect(capture.value).toContain('Quiet scene.');
 });

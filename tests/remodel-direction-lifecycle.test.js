@@ -725,13 +725,14 @@ test('a streamed Director reply becomes notebook entries and applies its request
     expect(listMechanicsTransactions({ timelineId: scene.timelineId })
         .filter((transaction) => transaction.status === 'applied')).toHaveLength(1);
 
-    // 3. The raw reply never reaches the performer. The notes block delivers
-    //    the ruling; the secret, the fence and the tags stay out of it.
+    // 3. When reasoning is present, the performer gets framed reasoning — not
+    //    the tagged notebook entries. The secret, the fence and the tags stay
+    //    out of it (they live in the output text, not in reasoning).
     const prompt = performerPrompt();
-    expect(prompt).toContain('Wren takes the blow meant for the boy.');
+    expect(prompt).toContain('scene director');
+    expect(prompt).toContain('She has to be the one who moves.');
     expect(prompt).not.toContain('The boy already knows.');
     expect(prompt).not.toContain('```state');
-    expect(prompt).not.toContain('[ruling]');
     expect(prompt).not.toContain('req-1');
 
     // 4. The streamed reasoning arrived with the text, so it is available

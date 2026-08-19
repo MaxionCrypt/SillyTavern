@@ -849,6 +849,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             sceneId: scene.id,
             turn,
             entries: markSeveredEntry(reply.entries, reply.interrupted),
+            reasoning: reply.reasoning,
         });
         if (stored.length) storedTurn = turn;
         // The one place that knows both facts: this pass stored entries, and
@@ -1470,6 +1471,7 @@ function buildDirectionEnvelope(reply, turn) {
         protocol: DIRECTION_PROTOCOL,
         directionId: createId('direction'),
         notebookTurn: turn,
+        reasoning: reply.reasoning || '',
         flow: {
             continueAfter: reply.state.flow.continue === true,
             hardPauseAfter: reply.state.flow.continue !== true,
@@ -1638,23 +1640,21 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     // be able to submit over a revealing response.
     releaseDirectionLock(token);
     notifyState();
-    // NOTE: there is no depth-0 direction injection any more (design §7). It
-    // carried the Director's one-line `instruction`, and there is no longer an
-    // instruction to carry: this turn's notebook entries ARE the direction and
-    // they reach the performer through the Director's Notes block below. A
-    // second channel here would deliver the same entries twice, at two depths,
-    // inside one prompt.
-    //
-    // Re-mirror the Director's Notes HERE, at the generation seam — not only
-    // from renderRoleplayScene's idle-state mirror (which stays in place for
-    // when no generation is in flight). renderRoleplayScene only runs on UI
-    // and post-generation events; nothing calls it in the window between this
-    // turn's entries landing in the store (appendDirectorEntries) and
-    // context.generate() a few lines below. Without this call the Narrator
-    // would always read last turn's notebook and never the one just written
-    // for it — reproducing, from outside, the exact "Narrator ignoring the
-    // direction" symptom this whole rework exists to fix.
-    hooks.setNativePromptContent('directorNotes', formatDirectorNotesPrompt(scene));
+    // The Director's reasoning — its raw thinking tokens — is the primary
+    // creative bridge to the Narrator. When reasoning is available, it replaces
+    // notebook entries as the Narrator's creative channel: richer, unfiltered,
+    // and free of the tagged-journal format that contaminated prose. When no
+    // reasoning is available (non-thinking models), fall back to the notebook.
+    const reasoningBridge = frameDirectorReasoning(envelope.reasoning);
+    hooks.setNativePromptContent(
+        'directorNotes',
+        reasoningBridge || formatDirectorNotesPrompt(scene),
+    );
+    journal('notes.bridge', {
+        directionId: envelope.directionId,
+        path: reasoningBridge ? 'reasoning' : 'notebook',
+        reasoningLength: (envelope.reasoning || '').length,
+    }, { correlationId: envelope.directionId });
     // The user message was inserted explicitly above. Native normal
     // generation also reads #send_textarea and would send any stale draft a
     // second time, producing a duplicate user line and a second response.
@@ -2747,6 +2747,7 @@ function normalizeEnvelope(value, scene) {
         protocol: DIRECTION_PROTOCOL,
         directionId,
         notebookTurn: toTurnNumber(value.notebookTurn),
+        reasoning: String(value.reasoning || ''),
         flow: { continueAfter: Boolean(value.flow?.continueAfter), hardPauseAfter: Boolean(value.flow?.hardPauseAfter) },
         mechanics: { pendingRequests },
         sceneId: scene.id,
