@@ -3,6 +3,7 @@ import {
     executeMechanicsRequest,
     getCapabilityDictionary,
     REQUIRED_ARGUMENTS,
+    undoMechanicsTransaction,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/mechanics-capabilities.js';
 import { buildDirectionSources } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/direction-sources.js';
 import {
@@ -64,4 +65,23 @@ test('every archivist required argument is named in the Director prompt', () => 
             expect(`${cap} names ${key}: ${mechanicsSkill.includes(key)}`).toBe(`${cap} names ${key}: true`);
         }
     }
+});
+
+test('a failed batch rolls back archivist writes', () => {
+    // scene.set applies, then variable.set on an unadvertised ref throws and
+    // rolls the whole transaction back — the scene fact must not survive.
+    const result = run([
+        req('scene.set', { key: 'location', value: 'rooftop' }, 'a'),
+        req('variable.set', { variableRef: 'Ghost', value: 5 }, 'b'),
+    ]);
+    expect(result.ok).toBe(false);
+    expect(listSceneFacts(T, S)).toEqual([]);
+});
+
+test('undoing a transaction restores the prior archivist state', () => {
+    run([req('scene.set', { key: 'location', value: 'rooftop' }, 'a')]);
+    const second = run([req('scene.set', { key: 'location', value: 'alley' }, 'b')]);
+    expect(listSceneFacts(T, S)[0].value).toBe('alley');
+    expect(undoMechanicsTransaction(second.transaction)).toBe(true);
+    expect(listSceneFacts(T, S)[0].value).toBe('rooftop');
 });

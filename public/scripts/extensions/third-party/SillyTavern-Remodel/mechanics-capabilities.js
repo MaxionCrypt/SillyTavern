@@ -37,6 +37,8 @@ import {
     setBeat,
     setSecret,
     clearSecret,
+    snapshotArchivistStore,
+    restoreArchivistStore,
 } from './archivist-store.js';
 
 export const MECHANICS_PROTOCOL = 'remodel-mechanics/1';
@@ -204,6 +206,7 @@ export function executeMechanicsRequest(envelope, context = {}) {
     if (!validation.valid) return rejectedTransaction(envelope, context, validation.errors);
     const variableSnapshot = snapshotVariableStore();
     const goalSnapshot = snapshotStoryGoalsStore();
+    const archivistSnapshot = snapshotArchivistStore();
     const transactionId = createId('mechanics-tx');
     const runtime = {
         transactionId,
@@ -257,12 +260,13 @@ export function executeMechanicsRequest(envelope, context = {}) {
             id: transactionId, protocol: MECHANICS_PROTOCOL, timelineId: runtime.timelineId, sceneId: runtime.sceneId,
             turnId: runtime.turnId, directionId: runtime.directionId, messageId: runtime.messageId, checkpointId: runtime.checkpointId,
             status, requests: envelope.requests, receipts: [...runtime.receipts, ...runtime.pending.map((item) => item.receipt)],
-            undo: { variables: variableSnapshot, goals: goalSnapshot },
+            undo: { variables: variableSnapshot, goals: goalSnapshot, archivist: archivistSnapshot },
         });
         return { ok: true, transaction, receipts: transaction.receipts, pending: runtime.pending.length };
     } catch (error) {
         restoreVariableStore(variableSnapshot, { save: false });
         restoreStoryGoalsStore(goalSnapshot, { save: false });
+        restoreArchivistStore(archivistSnapshot, { save: false });
         const message = error instanceof MechanicsError ? error.message : `Mechanical transaction failed: ${error.message}`;
         const transaction = recordMechanicsTransaction({ id: transactionId, protocol: MECHANICS_PROTOCOL, timelineId: runtime.timelineId, sceneId: runtime.sceneId, turnId: runtime.turnId, directionId: runtime.directionId, messageId: runtime.messageId, checkpointId: runtime.checkpointId, status: 'rolled-back', requests: envelope.requests, receipts: [{ status: 'rejected', rejectionReason: message }] });
         return { ok: false, transaction, receipts: transaction.receipts, errors: [message] };
@@ -303,6 +307,7 @@ export function undoMechanicsTransaction(transaction) {
     const beforeUndo = { transactionId: transaction.id, restoredAt: new Date().toISOString() };
     restoreVariableStore(transaction.undo.variables, { save: false });
     restoreStoryGoalsStore(transaction.undo.goals, { save: false });
+    if (transaction.undo.archivist) restoreArchivistStore(transaction.undo.archivist, { save: false });
     recordMechanicsTransaction({ protocol: MECHANICS_PROTOCOL, timelineId: transaction.timelineId, sceneId: transaction.sceneId, status: 'applied', requests: [], receipts: [{ status: 'applied', capability: 'transaction.undo', before: beforeUndo, after: { restored: true }, reason: 'User reversed an automatic mechanical transaction.' }] });
     return true;
 }
