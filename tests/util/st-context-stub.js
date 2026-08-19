@@ -49,6 +49,10 @@ const eventSource = {
 
 let savedChatCount = 0;
 let stopGenerationCount = 0;
+// Extra context fields a test wants to control (e.g. mainApi / stream settings
+// that canStreamStory reads). Spread last so a test can set them; reset per
+// __setExtensionSettings.
+let overrides = {};
 
 export function getContext() {
     return {
@@ -67,6 +71,7 @@ export function getContext() {
             if (Number.isInteger(id) && id >= 0 && id < chat.length) chat.splice(id, 1);
         },
         stopGeneration() { stopGenerationCount++; },
+        ...overrides,
     };
 }
 
@@ -76,7 +81,15 @@ export function __setExtensionSettings(value) {
     chat.length = 0;
     savedChatCount = 0;
     stopGenerationCount = 0;
+    overrides = {};
     return settings;
+}
+
+/** Merge extra fields onto the context getContext() returns (e.g. mainApi,
+ *  chatCompletionSettings). Reset by __setExtensionSettings. */
+export function __setContextOverrides(value) {
+    overrides = value || {};
+    return overrides;
 }
 
 export function __getExtensionSettings() {

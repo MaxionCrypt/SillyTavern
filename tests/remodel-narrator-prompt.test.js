@@ -1,4 +1,5 @@
-import { compileNarratorPrompt, CAMERA_CONSTRAINT } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/narrator-prompt.js';
+import { compileNarratorPrompt, CAMERA_CONSTRAINT, narratorStreamBlock } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/narrator-prompt.js';
+import { __setContextOverrides } from './util/st-context-stub.js';
 
 function baseInput(overrides = {}) {
     return {
@@ -49,4 +50,17 @@ test('empty optional inputs still yield a valid system message', () => {
     const system = messages.find((m) => m.role === 'system');
     expect(system).toBeTruthy();
     expect(system.content).toContain(CAMERA_CONSTRAINT);
+});
+
+describe('narratorStreamBlock', () => {
+    test('returns empty when Chat Completion streaming is available', () => {
+        __setContextOverrides({ mainApi: 'openai', chatCompletionSettings: { stream_openai: true } });
+        expect(narratorStreamBlock()).toBe('');
+    });
+    test('returns a clear reason when the backend cannot stream', () => {
+        __setContextOverrides({ mainApi: 'textgenerationwebui', chatCompletionSettings: { stream_openai: false } });
+        const reason = narratorStreamBlock();
+        expect(reason).not.toBe('');
+        expect(reason.toLowerCase()).toContain('stream');
+    });
 });

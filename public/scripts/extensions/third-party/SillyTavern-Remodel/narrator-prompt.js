@@ -1,4 +1,5 @@
 import { listSceneFacts, listCharStates, listEvents, getBeat } from './archivist-store.js';
+import { canStreamStory } from './story-stream.js';
 
 // The Narrator is framed as a camera to make append-only intuitive: it can
 // only move forward, so it never restates what is already on the page.
@@ -54,4 +55,14 @@ export function compileNarratorPrompt(input = {}) {
         if (line && String(line.content || '').trim()) messages.push({ role: line.role === 'user' ? 'user' : 'assistant', content: line.content });
     }
     return messages;
+}
+
+/**
+ * Why the directed Narrator cannot run right now, or '' if it can. The custom
+ * path streams via streamChatPrompt, which only works on Chat Completion with
+ * streaming enabled; there is no native fallback.
+ */
+export function narratorStreamBlock() {
+    if (canStreamStory()) return '';
+    return 'The directed Narrator needs a Chat Completion backend with streaming enabled. Switch to a Chat Completion API and turn on streaming to use it.';
 }
