@@ -33,7 +33,7 @@ import { getMechanicsProfile, listMechanicsTransactions } from './variables-stor
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
 import { StructuredReplyError } from './structured-reply.js';
 import { streamChatPrompt } from './story-stream.js';
-import { compileNarratorPrompt, buildNarratorArchivistSections, narratorStreamBlock } from './narrator-prompt.js';
+import { compileNarratorPrompt, buildNarratorArchivistSections, narratorStreamBlock, NARRATOR_HISTORY_BUDGET, NARRATOR_HISTORY_MAX_MESSAGES } from './narrator-prompt.js';
 import { updateScene } from './timeline-state.js';
 import { recordDebugEvent } from './debug-console.js';
 
@@ -1691,19 +1691,27 @@ async function buildNarratorSnapshot(scene, run) {
         worldInfo = typeof lore === 'string' ? lore : String(lore?.worldInfoString || '');
     } catch { worldInfo = ''; }
     const chat = Array.isArray(context.chat) ? context.chat : [];
-    // The voice window is the last few lines for stylistic continuity only —
-    // never the whole history. A message the run just created (empty mes) is
-    // skipped by the non-empty filter.
-    const voiceWindow = chat.slice(-3)
-        .map((m) => ({ role: m.is_user ? 'user' : 'assistant', content: String(m.mes || '') }))
-        .filter((m) => m.content.trim());
+    // The most recent lines, newest last, bounded by a character budget and a
+    // hard message cap so the prompt stays affordable. The just-created empty
+    // performer row (blank mes) is skipped by the non-empty check. Long-range
+    // facts live in the archivist block, so this window can stay small — but it
+    // must be a real window, not 3 lines, or the prose loses its grounding.
+    const recentHistory = [];
+    let budget = NARRATOR_HISTORY_BUDGET;
+    for (let i = chat.length - 1; i >= 0 && recentHistory.length < NARRATOR_HISTORY_MAX_MESSAGES; i--) {
+        const content = String(chat[i]?.mes || '').trim();
+        if (!content) continue;
+        if (budget - content.length < 0 && recentHistory.length) break;
+        budget -= content.length;
+        recentHistory.unshift({ role: chat[i].is_user ? 'user' : 'assistant', content });
+    }
     return {
         card,
         persona,
         worldInfo,
         archivistSections: buildNarratorArchivistSections(scene.timelineId, scene.id),
         reasoning: frameDirectorReasoning(run.envelope?.reasoning) || '',
-        voiceWindow,
+        recentHistory,
     };
 }
 
@@ -1840,7 +1848,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             if (String(snapshot.worldInfo || '').trim()) narratorLabels.push('World info');
             if (String(snapshot.archivistSections || '').trim()) narratorLabels.push('Archivist state');
             if (String(snapshot.reasoning || '').trim()) narratorLabels.push('Director reasoning');
-            for (const line of snapshot.voiceWindow) narratorLabels.push(line.role === 'user' ? 'Voice window — you' : 'Voice window — character');
+            for (const line of snapshot.recentHistory) narratorLabels.push(line.role === 'user' ? 'Recent history — you' : 'Recent history — character');
             captureNarratorPromptLog(prompt.map((message, index) => ({ label: narratorLabels[index] || 'Context', role: message.role, content: message.content })));
             journal('narrator.compiled', {
                 directionId: envelope.directionId,
@@ -1849,7 +1857,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
                 archivistChars: String(snapshot.archivistSections || '').length,
                 hasReasoning: Boolean(String(snapshot.reasoning || '').trim()),
                 worldInfoChars: String(snapshot.worldInfo || '').length,
-                voiceWindow: snapshot.voiceWindow.length,
+                recentHistory: snapshot.recentHistory.length,
             }, { correlationId: envelope.directionId, summary: 'Narrator prompt compiled (custom stream)' });
             try {
                 const result = await streamChatPrompt({

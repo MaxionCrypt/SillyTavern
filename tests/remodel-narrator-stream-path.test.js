@@ -130,6 +130,16 @@ test('the custom path creates the performer message and reveals the streamed tex
     expect(compiled.detail.blocks).toBeGreaterThan(0);
 });
 
+test('the narrator prompt includes a real window of recent history, not just 3 lines', async () => {
+    const chat = __getChat();
+    for (let i = 0; i < 8; i++) chat.push({ name: i % 2 ? 'Wren' : 'You', is_user: i % 2 === 0, mes: `history line ${i}`, extra: {} });
+    narratorStreams(['Wren ', 'moves.']);
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    const compiled = __getDebugEvents().find((e) => e.type === 'narrator.compiled');
+    expect(compiled.detail.recentHistory).toBeGreaterThan(3);
+});
+
 test('interrupting mid-stream keeps the revealed prose and drops the rest', async () => {
     let firstEmitted = false;
     const gate = deferred();

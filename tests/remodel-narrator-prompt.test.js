@@ -8,7 +8,7 @@ function baseInput(overrides = {}) {
         worldInfo: 'The city of Vell is under curfew.',
         archivistSections: '## Scene\n- location: rooftop',
         reasoning: 'Marcus should feel cornered and lash out.',
-        voiceWindow: [
+        recentHistory: [
             { role: 'assistant', content: 'Marcus watched the door.' },
             { role: 'user', content: 'I step closer.' },
         ],
@@ -31,7 +31,7 @@ test('world info, archivist state, and reasoning each appear as content', () => 
     expect(joined).toContain('cornered and lash out');
 });
 
-test('the voice window is the last content, in order, and is the only prior prose', () => {
+test('recent history is the last content, in order, and continues the story', () => {
     const messages = compileNarratorPrompt(baseInput());
     const tail = messages.slice(-2);
     expect(tail).toEqual([
@@ -46,7 +46,7 @@ test('an absent reasoning bridge is simply omitted (no empty block)', () => {
 });
 
 test('empty optional inputs still yield a valid system message', () => {
-    const messages = compileNarratorPrompt({ card: '', persona: '', worldInfo: '', archivistSections: '', reasoning: '', voiceWindow: [] });
+    const messages = compileNarratorPrompt({ card: '', persona: '', worldInfo: '', archivistSections: '', reasoning: '', recentHistory: [] });
     const system = messages.find((m) => m.role === 'system');
     expect(system).toBeTruthy();
     expect(system.content).toContain(CAMERA_CONSTRAINT);

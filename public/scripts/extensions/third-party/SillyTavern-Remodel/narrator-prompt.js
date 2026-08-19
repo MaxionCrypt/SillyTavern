@@ -1,6 +1,12 @@
 import { listSceneFacts, listCharStates, listEvents, getBeat } from './archivist-store.js';
 import { canStreamStory } from './story-stream.js';
 
+// The Narrator's grounding window: the most recent chat lines, newest last,
+// bounded so the prompt stays affordable. Long-range memory is the archivist's
+// job, not raw history — so this is a window, not the whole log.
+export const NARRATOR_HISTORY_BUDGET = 8000;        // characters (~2000 tokens)
+export const NARRATOR_HISTORY_MAX_MESSAGES = 40;
+
 // The Narrator is framed as a camera to make append-only intuitive: it can
 // only move forward, so it never restates what is already on the page.
 export const CAMERA_CONSTRAINT = 'You are a camera. You can only move forward. You see the current scene, you hear the director\'s instruction, and you write what happens next. You never cut away, never rewind, and never restate what is already on the page.';
@@ -45,13 +51,13 @@ export function buildNarratorArchivistSections(timelineId, sceneId) {
  * only prior prose. The full chat history is deliberately absent.
  */
 export function compileNarratorPrompt(input = {}) {
-    const { card = '', persona = '', worldInfo = '', archivistSections = '', reasoning = '', voiceWindow = [] } = input;
+    const { card = '', persona = '', worldInfo = '', archivistSections = '', reasoning = '', recentHistory = [] } = input;
     const systemParts = [card, persona, CAMERA_CONSTRAINT].filter((p) => String(p || '').trim());
     const messages = [{ role: 'system', content: systemParts.join('\n\n') }];
     if (String(worldInfo || '').trim()) messages.push({ role: 'system', content: worldInfo });
     if (String(archivistSections || '').trim()) messages.push({ role: 'system', content: archivistSections });
     if (String(reasoning || '').trim()) messages.push({ role: 'system', content: reasoning });
-    for (const line of Array.isArray(voiceWindow) ? voiceWindow : []) {
+    for (const line of Array.isArray(recentHistory) ? recentHistory : []) {
         if (line && String(line.content || '').trim()) messages.push({ role: line.role === 'user' ? 'user' : 'assistant', content: line.content });
     }
     return messages;
