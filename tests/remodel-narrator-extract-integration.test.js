@@ -11,6 +11,7 @@ import {
     clearLiveDirectionFailure,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { listEvents, listSceneFacts } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
+import { createVariableValue, getVariableValue, updateMechanicsProfile } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
 import { __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
 import { __setOnlineStatus } from './util/script-stub.js';
 
@@ -38,9 +39,12 @@ const extractionFence = JSON.stringify({
     requests: [
         { id: 'e1', capability: 'event.record', arguments: { summary: 'Wren took the blade on her forearm' }, reason: 'She stepped between them.' },
         { id: 'e2', capability: 'scene.set', arguments: { key: 'mood', value: 'tense' }, reason: 'Violence just broke out.' },
+        { id: 'e3', capability: 'variable.adjust', arguments: { variableRef: "Wren's HP", delta: -4 }, reason: 'The blade caught her forearm.' },
     ],
     flow: { continue: false },
 });
+
+let variableId = '';
 
 async function until(predicate, timeoutMs = 3000) {
     const deadline = Date.now() + timeoutMs;
@@ -55,6 +59,16 @@ async function until(predicate, timeoutMs = 3000) {
 beforeEach(() => {
     __setExtensionSettings({});
     __setOnlineStatus('connected');
+    updateMechanicsProfile({ enabled: true });
+    variableId = createVariableValue({
+        timelineId: scene.timelineId,
+        name: "Wren's HP",
+        valueType: 'number',
+        value: 12,
+        description: 'capacity to withstand injury',
+        authority: 'world',
+        retrieval: { mode: 'always' },
+    }).id;
     initLiveDirection({
         getActiveScene: () => scene,
         getCast: () => cast,
@@ -86,5 +100,8 @@ test('extraction records the narration into the archivist after the turn complet
     await requestNextDirection(scene);
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     expect(listEvents(scene.timelineId, scene.id).map((e) => e.summary)).toEqual(['Wren took the blade on her forearm']);
-    expect(listSceneFacts(scene.timelineId, scene.id)).toEqual([{ key: 'mood', value: 'tense', establishedMsgId: null }]);
+    expect(listSceneFacts(scene.timelineId, scene.id)).toEqual([{ key: 'mood', value: 'tense', establishedMsgId: 0 }]);
+    // v2: extraction also authored the numeric consequence, resolved against the
+    // run's address book — Wren's HP fell from 12 to 8.
+    expect(Number(getVariableValue(variableId, scene.timelineId)?.value)).toBe(8);
 });

@@ -999,6 +999,11 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         normalized.goalRefs = snapshot.mechanics.goalRefs;
         normalized.addressBook = snapshot.mechanics.addressBook;
         normalized.authorizedGoalIds = authorizedGoalIds;
+        // Carried so Pass 2 extraction can advertise the same Variables/Goals to
+        // the extractor and resolve its requests against the same address book —
+        // without paying for a second retrieval after the turn. A distinct field:
+        // envelope.mechanics is the Director's pending-requests payload.
+        normalized.mechanicsSnapshot = snapshot.mechanics;
         if (token.aborted) return abandonPass(token, 'normalized');
         // Set BEFORE the call, not after: from here the performer has been
         // asked, so the turn is live even if generation then fails. The
@@ -2006,7 +2011,17 @@ async function extractStateFromProse(run) {
     const prose = acceptedProse(run);
     if (!prose) return;
     const currentState = buildNarratorArchivistSections(run.timelineId, run.sceneId);
-    const prompt = buildExtractionPrompt({ prose, reasoning: run.envelope?.reasoning || '', currentState });
+    // Advertise the Variables/Goals this turn already surfaced, so the extractor
+    // can record numeric/goal consequences too — reusing the Director's snapshot
+    // and address book rather than retrieving again.
+    let mechanicsSkill = '';
+    const mechanics = run.envelope?.mechanicsSnapshot || null;
+    if (mechanics && getMechanicsProfile().enabled) {
+        try {
+            mechanicsSkill = buildDirectionSources({ mechanics }, { mechanicsEnabled: true }).mechanicsSkill || '';
+        } catch { mechanicsSkill = ''; }
+    }
+    const prompt = buildExtractionPrompt({ prose, reasoning: run.envelope?.reasoning || '', currentState, mechanicsSkill });
     let raw = '';
     try {
         if (testAdapters?.extractState) {
@@ -2031,8 +2046,19 @@ async function extractStateFromProse(run) {
         return;
     }
     try {
-        const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests }, { timelineId: run.timelineId, sceneId: run.sceneId });
-        journal('extract', { directionId: run.directionId, requestCount: requests.length, ok: result.ok, receipts: result.receipts?.length || 0 }, { correlationId: run.directionId, summary: 'Archivist recorded state from the narration' });
+        // executeDirectionRequests resolves Variable/Goal names against the
+        // address book (archivist requests carry no refs and pass straight
+        // through), so one call records both narrative and mechanical state.
+        const result = executeDirectionRequests(requests, {
+            scene: { id: run.sceneId, timelineId: run.timelineId },
+            directionId: run.directionId,
+            messageId: run.messageId,
+            addressBook: run.addressBook,
+            variableRefs: run.variableRefs,
+            goalRefs: run.goalRefs,
+            authorizedGoalIds: run.authorizedGoalIds,
+        });
+        journal('extract', { directionId: run.directionId, requestCount: requests.length, ok: result.ok, receipts: result.receipts?.length || 0, unresolved: result.unresolvedReasons?.length || 0 }, { correlationId: run.directionId, summary: 'Archivist recorded state from the narration' });
     } catch (error) {
         journal('extract.failed', { directionId: run.directionId, phase: 'apply', error: String(error?.message || error) }, { severity: 'warn', correlationId: run.directionId });
     }

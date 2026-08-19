@@ -32,3 +32,12 @@ test('reasoning and current state are optional', () => {
     expect(messages).toHaveLength(2);
     expect(messages[1].content).toContain('The rain stopped.');
 });
+
+test('a mechanics skill block invites variable/goal consequences; without it, only narrative', () => {
+    const withMechanics = buildExtractionPrompt({ prose: 'Wren bled.', mechanicsSkill: "- Wren's HP: 12" }).find((m) => m.role === 'system').content;
+    expect(withMechanics).toContain("Wren's HP");
+    expect(withMechanics).toMatch(/Variables and Goals/i);
+
+    const withoutMechanics = buildExtractionPrompt({ prose: 'Wren bled.' }).find((m) => m.role === 'system').content;
+    expect(withoutMechanics).not.toMatch(/advertised below/i);
+});
