@@ -34,7 +34,7 @@ import { getMechanicsProfile, listMechanicsTransactions } from './variables-stor
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
 import { StructuredReplyError } from './structured-reply.js';
 import { streamChatPrompt } from './story-stream.js';
-import { buildNarratorArchivistSections } from './narrator-prompt.js';
+import { buildNarratorArchivistSections, buildDirectionInjection } from './narrator-prompt.js';
 import { buildExtractionPrompt } from './narrator-extract.js';
 import { updateScene } from './timeline-state.js';
 import { recordDebugEvent } from './debug-console.js';
@@ -1726,7 +1726,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     const directorDirection = reasoningBridge || formatDirectorNotesPrompt(scene);
     hooks.setNativePromptContent(
         'directorNotes',
-        [archivistState, directorDirection].filter((part) => String(part || '').trim()).join('\n\n'),
+        buildDirectionInjection({ archivistState, directorDirection }),
     );
     journal('notes.bridge', {
         directionId: envelope.directionId,

@@ -11,6 +11,28 @@ export const NARRATOR_HISTORY_MAX_MESSAGES = 40;
 // only move forward, so it never restates what is already on the page.
 export const CAMERA_CONSTRAINT = 'You are a camera. You can only move forward. You see the current scene, you hear the director\'s instruction, and you write what happens next. You never cut away, never rewind, and never restate what is already on the page.';
 
+// The anti-rewriting instruction injected with every directed turn. The
+// Narrator generates natively and therefore sees the real chat history, so
+// append-only is enforced by instruction + the "already happened" ledger, not
+// by starving it of context.
+export const APPEND_ONLY_DIRECTIVE = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next.';
+
+/**
+ * Assemble the direction injected into the native Narrator prompt (the roleplay
+ * recipe's Director's Notes slot): the append-only directive first, then the
+ * archivist's structured state, then any Director direction. The directive is
+ * always present, even when there is no state yet.
+ *
+ * @param {{archivistState?: string, directorDirection?: string}} input
+ * @returns {string}
+ */
+export function buildDirectionInjection({ archivistState = '', directorDirection = '' } = {}) {
+    return [APPEND_ONLY_DIRECTIVE, archivistState, directorDirection]
+        .map((part) => String(part || '').trim())
+        .filter(Boolean)
+        .join('\n\n');
+}
+
 /**
  * Render the archivist's Narrator-visible state as labelled sections.
  *

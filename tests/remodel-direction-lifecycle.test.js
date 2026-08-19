@@ -1385,7 +1385,8 @@ test('a turn whose notes nothing will carry says so instead of generating in sil
 
     // The turn ran and stored its entries…
     expect(notebook()).toHaveLength(1);
-    expect(performerPrompt()).toBe('');
+    // …the Director's scene content reached no one (no block routes it)…
+    expect(performerPrompt()).not.toContain('Nobody will ever read this');
     // …and said, once, that they reach no one.
     const [warning] = journalEntries('notes.unrouted');
     expect(warning).toBeTruthy();
@@ -1418,8 +1419,8 @@ test('switching the notes block off is a choice, not a warning repeated every tu
     await requestNextDirection(scene);
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
-    // Delivered to no one, exactly as the user asked…
-    expect(performerPrompt()).toBe('');
+    // The Director's scene content was delivered to no one, exactly as asked…
+    expect(performerPrompt()).not.toContain('Deliberately unread');
     // …and silently, because they asked.
     expect(journalEntries('notes.unrouted')).toHaveLength(0);
 });

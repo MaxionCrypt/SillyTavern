@@ -1,4 +1,4 @@
-import { compileNarratorPrompt, CAMERA_CONSTRAINT, narratorStreamBlock } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/narrator-prompt.js';
+import { compileNarratorPrompt, CAMERA_CONSTRAINT, narratorStreamBlock, buildDirectionInjection, APPEND_ONLY_DIRECTIVE } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/narrator-prompt.js';
 import { __setContextOverrides } from './util/st-context-stub.js';
 
 function baseInput(overrides = {}) {
@@ -50,6 +50,27 @@ test('empty optional inputs still yield a valid system message', () => {
     const system = messages.find((m) => m.role === 'system');
     expect(system).toBeTruthy();
     expect(system.content).toContain(CAMERA_CONSTRAINT);
+});
+
+describe('buildDirectionInjection', () => {
+    test('always carries the append-only directive, even with no state', () => {
+        const injection = buildDirectionInjection({});
+        expect(injection).toContain(APPEND_ONLY_DIRECTIVE);
+        expect(injection).toMatch(/only what happens next/i);
+    });
+    test('includes archivist state and director direction when present', () => {
+        const injection = buildDirectionInjection({
+            archivistState: '## What has happened\n- Marcus drew his knife',
+            directorDirection: 'Escalate the standoff.',
+        });
+        expect(injection).toContain(APPEND_ONLY_DIRECTIVE);
+        expect(injection).toContain('Marcus drew his knife');
+        expect(injection).toContain('Escalate the standoff.');
+    });
+    test('the directive comes first, before the state', () => {
+        const injection = buildDirectionInjection({ archivistState: '## Scene\n- location: rooftop' });
+        expect(injection.indexOf(APPEND_ONLY_DIRECTIVE)).toBeLessThan(injection.indexOf('rooftop'));
+    });
 });
 
 describe('narratorStreamBlock', () => {
