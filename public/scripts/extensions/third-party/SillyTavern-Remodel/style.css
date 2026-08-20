@@ -1685,6 +1685,14 @@ body.remodel-roleplay-workspace-active .remodel-live-pacing-row {
   height:24px !important;
   margin:0 !important;
 }
+body.remodel-roleplay-workspace-active .remodel-live-reasoning-warning {
+  font-size:11px !important;
+  line-height:1.3 !important;
+  color:#e6b23a !important;
+  text-align:right !important;
+  margin:2px 0 0 !important;
+  opacity:.9 !important;
+}
 body.remodel-roleplay-workspace-active .remodel-live-pacing {
   display:inline-flex !important;
   align-items:center !important;
@@ -7037,6 +7045,89 @@ body.remodel-storydoc-active .remodel-storydoc-check input {
 .remodel-prompt-editor-empty i { color:#aa9f00; font-size:26px; }
 .remodel-prompt-editor-empty h2 { margin:13px 0 4px; color:#e7e0d2; font:20px var(--remodel-serif,Georgia); }
 .remodel-prompt-editor-empty p { margin:0; font-size:11px; }
+
+/* ── Prompt Log view ────────────────────────────────────────────────── */
+.remodel-prompt-log-view {
+  padding:20px 28px 30px;
+  overflow-y:auto;
+  height:100%;
+}
+.remodel-prompt-log-head { margin-bottom:18px; }
+.remodel-prompt-log-head h2 { margin:0; color:#e7e0d2; font:20px var(--remodel-serif,Georgia); }
+.remodel-prompt-log-head p { margin:4px 0 0; font-size:11px; color:#77747d; }
+.remodel-prompt-log-section {
+  margin-bottom:14px;
+  border:1px solid rgba(215,200,0,.15);
+  border-radius:6px;
+  background:rgba(20,18,14,.45);
+}
+.remodel-prompt-log-section > summary,
+.remodel-prompt-log-section > h3 {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:10px 14px;
+  margin:0;
+  font:600 13px/1.3 var(--remodel-sans,system-ui);
+  color:#e7e0d2;
+  cursor:pointer;
+  user-select:none;
+}
+.remodel-prompt-log-section > summary small,
+.remodel-prompt-log-section > h3 small {
+  margin-left:auto;
+  font-weight:400;
+  font-size:11px;
+  color:#77747d;
+}
+.remodel-prompt-log-section > summary i,
+.remodel-prompt-log-section > h3 i { color:#aa9f00; font-size:12px; width:16px; text-align:center; }
+.remodel-prompt-log-empty { padding:8px 14px 12px; font-size:11px; color:#77747d; margin:0; }
+.remodel-prompt-log-block {
+  border-top:1px solid rgba(215,200,0,.08);
+  padding:8px 14px 10px;
+}
+.remodel-prompt-log-block-head {
+  display:flex;
+  align-items:center;
+  gap:6px;
+  margin-bottom:5px;
+}
+.remodel-prompt-log-role {
+  display:inline-block;
+  padding:1px 6px;
+  border-radius:3px;
+  font:600 10px/1.4 var(--remodel-sans,system-ui);
+  text-transform:uppercase;
+  letter-spacing:.04em;
+  color:#14120e;
+  background:#aa9f00;
+}
+.remodel-prompt-log-block.role-user .remodel-prompt-log-role { background:#5b9bd5; }
+.remodel-prompt-log-block.role-assistant .remodel-prompt-log-role { background:#70ad47; }
+.remodel-prompt-log-label {
+  font:500 11px/1.3 var(--remodel-sans,system-ui);
+  color:#bfb99a;
+  display:flex;
+  align-items:center;
+  gap:4px;
+}
+.remodel-prompt-log-kind { font-size:9px; color:#77747d; }
+.remodel-prompt-log-marker { font-size:11px; color:#77747d; }
+.remodel-prompt-log-pre {
+  margin:0;
+  padding:8px 10px;
+  background:rgba(10,9,7,.5);
+  border:1px solid rgba(215,200,0,.08);
+  border-radius:4px;
+  font:11px/1.5 var(--remodel-mono,'Cascadia Mono',monospace);
+  color:#d4cebe;
+  white-space:pre-wrap;
+  word-break:break-word;
+  max-height:240px;
+  overflow-y:auto;
+}
+.remodel-prompt-icon-button.is-active { color:#aa9f00 !important; }
 
 @media (max-width:900px) {
   .remodel-prompt-studio {

@@ -8531,6 +8531,7 @@ function renderRoleplayComposer(root) {
                 </select>
             </label>
         </div>
+        ${directionUi.reasoningWarning ? `<div class="remodel-live-reasoning-warning" role="status" title="Solo mode records what changed from the Narrator's reasoning. This model returned none, so state was inferred from the prose alone.">⚠ No reasoning from this model — enable thinking or use a reasoning-capable model for accurate state tracking.</div>` : ''}
 
         <div class="remodel-rp-composer">
             <button type="button" class="remodel-rp-as-chip" data-remodel-rp-persona-menu title="Speak as… — click to switch persona">
