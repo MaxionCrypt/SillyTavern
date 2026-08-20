@@ -56,6 +56,7 @@ import {
 } from './story-world-info.js';
 import {
     applyPromptStudioRuntimeRecipe,
+    capturePromptLog,
     capturePromptStudioRuntimeSettings,
     compilePromptRecipe,
     formatPromptStudioPreview,
@@ -117,6 +118,7 @@ import {
     sendWithoutLiveDirection,
     setLiveDirectionEnabled,
     setLiveDirectionPacing,
+    setLiveDirectionMode,
     setNextPerformerOverride,
     stopLiveDirection,
     submitDirectedRoleplay,
@@ -8523,6 +8525,11 @@ function renderRoleplayComposer(root) {
                     ${['slow', 'natural', 'fast', 'instant'].map((value) => `<option value="${value}"${directionUi.pacing === value ? ' selected' : ''}>${value[0].toUpperCase() + value.slice(1)}</option>`).join('')}
                 </select>
             </label>
+            <label class="remodel-live-pacing">Engine
+                <select data-remodel-live-mode aria-label="Roleplay engine">
+                    ${[['director', 'Director'], ['solo', 'Solo']].map(([value, label]) => `<option value="${value}"${(directionUi.mode || 'director') === value ? ' selected' : ''}>${label}</option>`).join('')}
+                </select>
+            </label>
         </div>
 
         <div class="remodel-rp-composer">
@@ -10051,6 +10058,8 @@ function bindRoleplayComposerEvents() {
         if (!isRealRoleplayWorkspaceActive()) return;
         const pacing = event.target instanceof Element ? event.target.closest('[data-remodel-live-pacing]') : null;
         if (pacing instanceof HTMLSelectElement) setLiveDirectionPacing(getActiveScene(), pacing.value);
+        const mode = event.target instanceof Element ? event.target.closest('[data-remodel-live-mode]') : null;
+        if (mode instanceof HTMLSelectElement) setLiveDirectionMode(getActiveScene(), mode.value);
     });
 }
 
@@ -10069,6 +10078,7 @@ function bindRoleplayGenerationFeedback() {
         if (!isRealRoleplayWorkspaceActive() || dryRun || !STORY_GENERATION_TYPES.has(type)) {
             return;
         }
+        if (!ownsLiveDirectionGeneration()) capturePromptLog('chat');
         setRoleplayGenerating(true);
         showRoleplayTypingIndicator();
     });
