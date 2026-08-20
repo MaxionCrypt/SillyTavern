@@ -359,14 +359,28 @@ git commit -m "feat(remodel): per-scene Director/Solo mode toggle"
 
 ---
 
-## Part E — Remaining work AFTER solo mode lands (separate plans)
+## Part E — Remaining work (STATUS UPDATE 2026-08-19)
 
-These complete the archivist plan. Each is its own plan; do not fold them into the tasks above.
+**Shipped since Part D was written** (all committed, green): solo mode is live and default-able, the Engine toggle is in the toolbar, and **Stop = cut off is done** (solo-gated flush in `interruptLiveDirection`). Solo lifecycle coverage expanded (happy path, Continue advances, empty-response reported). Current: 424/424.
 
-1. **Stop = cut off (solo mode).** Today `interruptLiveDirection` discards the unrevealed buffer and deletes the message when nothing was revealed → "everything vanishes on Stop." Fix: on interrupt, flush `rawBufferedText.slice(rawOffset)` into `acceptedVisibleText` so all generated prose is kept; only delete a truly-empty run. The stashed WIP already contains this flush edit — reuse it. **7 lifecycle tests encode the old delete/remainder semantics**; they only need updating once solo is the context (or gate the flush to solo mode to avoid touching Director tests).
-2. **Notebook removal.** Once solo mode is validated and the Director is retired, delete `director-notes-store.js` and its readers; secrets → archivist secret records. Not before — Director mode still uses it.
-3. **Direction cards from the archivist.** The roleplay-stream cards (in `timeline-spine.js`) read the notebook. In solo mode, re-source them to show the archivist's current beat + recent state changes.
-4. **Reframe the spec.** Update `2026-08-19-single-agent-narrator-design.md`: "remove the Director" → "Director is a fallback mode; solo is the archivist-native path." Record the three connection points.
+### The Director *code* deletion — DO THIS AS ITS OWN FOCUSED PASS
+
+An attempt to make solo the sole route (remove the mode branch so `beginDirection` always calls `soloEnvelope`, ungate extraction) was **reverted** because it cascades wider than first mapped. Making the Director unreachable through a turn breaks **more than the lifecycle suite** — every test that builds the Director prompt/notes *through a turn* returns empty:
+
+- `remodel-direction-lifecycle.test.js` (46 tests — fundamentally a Director suite: `directorReply()`, `streamDirector()`, notebook assertions)
+- `remodel-director-history-depth.test.js`, `remodel-director-notes-source.test.js`, `remodel-director-preview-parity.test.js`, `remodel-narrator-history.test.js` (test the Director-via-turn flow)
+
+`remodel-director-*.test.js` files that test COMPONENTS directly (`director-reply`, `director-cast`, `director-macros`, `director-recipe`, `director-notes-store`) still pass because their code exists — but they die too once that code is deleted.
+
+**Do it in this order, on its own branch, green after each step:**
+1. **Retire the Director-via-turn tests.** Delete `remodel-direction-lifecycle.test.js`. Port only the SHARED machinery it covered — interruption, retry, autonomous sequencing, empty-response recovery, completion — into `remodel-solo-lifecycle.test.js` (three are already there). For `narrator-history`, keep coverage: `filterNarratorHistory` is used by solo's native generation too — test it directly, not through a Director turn.
+2. **Remove the branch:** `beginDirection` always `soloEnvelope`; ungate extraction (`await extractStateFromProse(run)` unconditional); ungate the Stop flush. Delete `directorEnvelope`.
+3. **Delete the Director code:** `requestDirection`, `compileDirectorPrompt`, `buildDirectionEnvelope`, `frameDirectorReasoning`, `formatDirectorNotesPrompt`, `buildDirectorNotesSource`, the Director recipe path, and `director-notes-store.js`. Remove the now-dead `remodel-director-*` unit tests as their targets go. Secrets already live in the archivist.
+4. **Direction cards from the archivist** (`timeline-spine.js`): they read the notebook today; re-source to the archivist's current beat + recent state changes.
+5. **Remove the mode plumbing** once there is one mode: `isSoloMode`/`soloEnvelope` collapse into `beginDirection`, drop the Engine toggle and `setLiveDirectionMode`, drop `mode` from `normalizeLiveDirection`.
+6. **Reframe the spec** `2026-08-19-single-agent-narrator-design.md`: "remove the Director" → this is now the record of how it was removed.
+
+**Why it was deferred, honestly:** this is a multi-file test retirement + large dead-code removal. Rushed at the end of a long build it ships regressions in the interruption/retry/autonomous machinery. Solo mode already WORKS as the default; deleting the Director is cleanup, not a feature — worth its own careful, green-after-each-step pass.
 
 ---
 
