@@ -123,6 +123,7 @@ import {
     stopLiveDirection,
     submitDirectedRoleplay,
 } from './live-direction.js';
+import { listExtractionProfiles, getExtractionProfileId, setExtractionProfileId } from './extraction-config.js';
 import { sanitizeDirectionText } from './live-direction-markers.js';
 import { resolveDirectionChromeMode } from './direction-chrome.js';
 import {
@@ -8530,6 +8531,11 @@ function renderRoleplayComposer(root) {
                     ${[['director', 'Director'], ['solo', 'Solo']].map(([value, label]) => `<option value="${value}"${(directionUi.mode || 'director') === value ? ' selected' : ''}>${label}</option>`).join('')}
                 </select>
             </label>
+            ${directionUi.mode === 'solo' ? `<label class="remodel-live-pacing">Extractor
+                <select data-remodel-live-extractor aria-label="Extraction model" title="Which model records what changed after each turn. Pick a reasoning-capable profile to pair with a non-reasoning narrator.">
+                    ${[{ id: '', name: 'Same as narrator' }, ...listExtractionProfiles()].map((p) => `<option value="${escapeHtml(p.id)}"${p.id === getExtractionProfileId() ? ' selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
+                </select>
+            </label>` : ''}
         </div>
         ${directionUi.reasoningWarning ? `<div class="remodel-live-reasoning-warning" role="status" title="Solo mode records what changed from the Narrator's reasoning. This model returned none, so state was inferred from the prose alone.">⚠ No reasoning from this model — enable thinking or use a reasoning-capable model for accurate state tracking.</div>` : ''}
 
@@ -10061,6 +10067,8 @@ function bindRoleplayComposerEvents() {
         if (pacing instanceof HTMLSelectElement) setLiveDirectionPacing(getActiveScene(), pacing.value);
         const mode = event.target instanceof Element ? event.target.closest('[data-remodel-live-mode]') : null;
         if (mode instanceof HTMLSelectElement) setLiveDirectionMode(getActiveScene(), mode.value);
+        const extractor = event.target instanceof Element ? event.target.closest('[data-remodel-live-extractor]') : null;
+        if (extractor instanceof HTMLSelectElement) setExtractionProfileId(extractor.value);
     });
 }
 
