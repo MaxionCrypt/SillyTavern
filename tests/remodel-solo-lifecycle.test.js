@@ -90,3 +90,31 @@ test('a solo turn skips the Director and extraction records the prose', async ()
     expect(listEvents(scene.timelineId, scene.id).map((e) => e.summary)).toEqual(['Wren took the blade on her forearm']);
     expect(listSceneFacts(scene.timelineId, scene.id).map((f) => `${f.key}=${f.value}`)).toEqual(['mood=tense']);
 });
+
+test('a completed solo turn waits for the user and Continue advances the next one', async () => {
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    expect(__getChat().length).toBe(1);
+    // Continue directs another moment from accepted history.
+    await requestNextDirection(scene);
+    expect(await until(() => __getChat().length === 2)).toBe(true);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+});
+
+test('an empty performer response is reported, not silently accepted as a turn', async () => {
+    setLiveDirectionTestAdapters({
+        requestDirection: async () => { throw new Error('Director must not run in solo mode'); },
+        // Pushes an empty row, the way a provider that returns nothing does.
+        generatePerformer: async () => {
+            const chat = __getChat();
+            chat.push({ name: 'Wren', is_user: false, mes: '', extra: {} });
+            await __emit('MESSAGE_RECEIVED', chat.length - 1);
+        },
+        extractState: async () => '',
+    });
+    await requestNextDirection(scene);
+    // The empty run never becomes a finished turn: it does not reach the
+    // waiting state with a kept message, and the empty row is not left behind.
+    expect(await until(() => getLiveDirectionRun() === null || getLiveDirectionRun()?.state !== 'Speaking', 3000)).toBe(true);
+    expect(listEvents(scene.timelineId, scene.id)).toEqual([]);
+});
