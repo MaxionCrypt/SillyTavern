@@ -2322,8 +2322,17 @@ async function interruptLiveDirection({ preserveForIntervention }) {
         getContext().stopGeneration?.();
         await waitFor(() => run.generationSettled, 2200);
     }
-    // A completed API call can still have an unseen suffix buffered. It no
-    // longer owns a native generation, but it is equally discardable.
+    // Solo mode: Stop CUTS OFF, it does not delete. The reveal lags the buffer
+    // for pacing, so at the moment of a Stop most of what the model generated
+    // sits unrevealed in rawBufferedText — flush it into the accepted text so
+    // every generated word is kept (losing it was the "everything vanishes on
+    // Stop" bug). A run that generated nothing still has an empty buffer here,
+    // so finalizeRunMessage still deletes the truly-empty case. Director mode
+    // keeps its original discard-the-unrevealed-tail behaviour (and its tests).
+    if (isSoloMode(hooks.getActiveScene()) && run.rawBufferedText.length > run.rawOffset) {
+        run.acceptedVisibleText += run.rawBufferedText.slice(run.rawOffset);
+        run.rawOffset = run.rawBufferedText.length;
+    }
     await finalizeRunMessage(run, { state: preserveForIntervention ? 'interrupted' : 'stopped' });
     activeRun = null;
     notifyState();
