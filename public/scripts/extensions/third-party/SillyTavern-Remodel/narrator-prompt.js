@@ -15,7 +15,7 @@ export const CAMERA_CONSTRAINT = 'You are a camera. You can only move forward. Y
 // Narrator generates natively and therefore sees the real chat history, so
 // append-only is enforced by instruction + the "already happened" ledger, not
 // by starving it of context.
-export const APPEND_ONLY_DIRECTIVE = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next.';
+export const APPEND_ONLY_DIRECTIVE = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 
 /**
  * Assemble the direction injected into the native Narrator prompt (the roleplay

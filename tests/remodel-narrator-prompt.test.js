@@ -58,6 +58,12 @@ describe('buildDirectionInjection', () => {
         expect(injection).toContain(APPEND_ONLY_DIRECTIVE);
         expect(injection).toMatch(/only what happens next/i);
     });
+    test('forbids echoing instructions into the prose', () => {
+        // A live model (DeepSeek, 2026-08-19) restated its card instructions at
+        // the top of the prose — which then showed to the reader AND got
+        // extracted as a junk "event". The directive must forbid the echo.
+        expect(APPEND_ONLY_DIRECTIVE).toMatch(/never (restate|repeat|quote|acknowledge)[^.]*instruction/i);
+    });
     test('includes archivist state and director direction when present', () => {
         const injection = buildDirectionInjection({
             archivistState: '## What has happened\n- Marcus drew his knife',
