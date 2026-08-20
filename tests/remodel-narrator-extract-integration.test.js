@@ -7,6 +7,7 @@ import {
     setLiveDirectionTestAdapters,
     requestNextDirection,
     getLiveDirectionRun,
+    getLiveDirectionUiState,
     stopLiveDirection,
     clearLiveDirectionFailure,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
@@ -120,4 +121,6 @@ test("the narrator's own reasoning (message.extra.reasoning) reaches the extract
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     const promptText = (capturedExtractionPrompt || []).map((m) => m.content).join('\n');
     expect(promptText).toContain(NARRATOR_REASONING);
+    // Reasoning was present, so the gate does not warn.
+    expect(getLiveDirectionUiState(scene).reasoningWarning).toBe(false);
 });

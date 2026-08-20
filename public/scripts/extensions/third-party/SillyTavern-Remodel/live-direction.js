@@ -77,6 +77,9 @@ let activeRun = null;
 let revealTimer = null;
 let persistTimer = null;
 let pendingFailure = null;
+// Per-scene: did the last turn's Narrator return no reasoning? Surfaced by
+// getLiveDirectionUiState so the toolbar can warn that extraction ran prose-only.
+const reasoningAbsentByScene = new Map();
 let performerOverride = null;
 let ownedGenerationDepth = 0;
 let pendingSubmission = null;
@@ -288,6 +291,10 @@ export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
         canSend: !directing,
         canStop: directing || Boolean(activeRun && !['Ready', 'Complete'].includes(activeRun.state)),
         performerLabel: activeRun?.performer?.label || '',
+        // True when the last turn's Narrator produced no reasoning — extraction
+        // ran on prose alone, which is less accurate. The toolbar surfaces this
+        // as a prompt to enable thinking or switch to a reasoning-capable model.
+        reasoningWarning: reasoningAbsentByScene.get(String(scene.id)) === true,
     };
 }
 
@@ -2034,7 +2041,9 @@ async function extractStateFromProse(run) {
     // the narrating mind DECIDED changed, rather than inferring it from prose.
     // An empty reasoning channel means a non-reasoning model (or thinking off) —
     // extraction still runs on prose alone, but less accurately, and the user
-    // should be told to enable thinking or switch models.
+    // should be told to enable thinking or switch models. Recorded per scene so
+    // getLiveDirectionUiState can surface a warning in the toolbar.
+    reasoningAbsentByScene.set(String(run.sceneId), !reasoning);
     if (!reasoning) {
         journal('reasoning.absent', {
             directionId: run.directionId,

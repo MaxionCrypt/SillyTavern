@@ -6,6 +6,7 @@ import {
     setLiveDirectionTestAdapters,
     requestNextDirection,
     getLiveDirectionRun,
+    getLiveDirectionUiState,
     stopLiveDirection,
     clearLiveDirectionFailure,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
@@ -89,6 +90,13 @@ test('a solo turn skips the Director and extraction records the prose', async ()
     // …and extraction filled the archivist from the delivered prose.
     expect(listEvents(scene.timelineId, scene.id).map((e) => e.summary)).toEqual(['Wren took the blade on her forearm']);
     expect(listSceneFacts(scene.timelineId, scene.id).map((f) => `${f.key}=${f.value}`)).toEqual(['mood=tense']);
+});
+
+test('a Narrator that returns no reasoning raises the reasoning warning on the UI state', async () => {
+    // speak() pushes a message with no extra.reasoning — the non-reasoning case.
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    expect(getLiveDirectionUiState(scene).reasoningWarning).toBe(true);
 });
 
 test('a completed solo turn waits for the user and Continue advances the next one', async () => {
