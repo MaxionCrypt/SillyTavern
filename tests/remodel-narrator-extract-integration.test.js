@@ -29,9 +29,12 @@ const scene = {
 const cast = [{ ref: { kind: 'character', id: 'char-narrator', label: 'Wren' }, label: 'Wren', characterId: 0 }];
 const RESPONSE = 'Wren steps between them. The blade catches her forearm.';
 
+const NARRATOR_REASONING = 'Wren is protecting the boy; taking the blade should cost her HP.';
+
 async function speak() {
     const chat = __getChat();
-    chat.push({ name: 'Wren', is_user: false, mes: RESPONSE, extra: {} });
+    // Native generation records the model's thinking on message.extra.reasoning.
+    chat.push({ name: 'Wren', is_user: false, mes: RESPONSE, extra: { reasoning: NARRATOR_REASONING } });
     await __emit('MESSAGE_RECEIVED', chat.length - 1);
 }
 
@@ -82,12 +85,18 @@ beforeEach(() => {
         onFailure: () => {},
         setNativePromptContent: () => {},
     });
+    capturedExtractionPrompt = null;
     setLiveDirectionTestAdapters({
         requestDirection: async () => '[note] The rooftop is tense.',
         generatePerformer: speak,
-        extractState: async () => ['```state', extractionFence, '```'].join('\n'),
+        extractState: async ({ prompt }) => {
+            capturedExtractionPrompt = prompt;
+            return ['```state', extractionFence, '```'].join('\n');
+        },
     });
 });
+
+let capturedExtractionPrompt = null;
 
 afterEach(async () => {
     await stopLiveDirection();
@@ -104,4 +113,11 @@ test('extraction records the narration into the archivist after the turn complet
     // v2: extraction also authored the numeric consequence, resolved against the
     // run's address book — Wren's HP fell from 12 to 8.
     expect(Number(getVariableValue(variableId, scene.timelineId)?.value)).toBe(8);
+});
+
+test("the narrator's own reasoning (message.extra.reasoning) reaches the extractor", async () => {
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    const promptText = (capturedExtractionPrompt || []).map((m) => m.content).join('\n');
+    expect(promptText).toContain(NARRATOR_REASONING);
 });

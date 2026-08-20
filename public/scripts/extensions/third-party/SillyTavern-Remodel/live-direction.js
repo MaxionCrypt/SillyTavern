@@ -2009,14 +2009,38 @@ function executeDirectionRequests(requests, context) {
 }
 
 /**
- * Pass 2 — the Archivist. Read the prose the Narrator just delivered (plus the
- * Director's reasoning, the intent channel) and record what happened as archivist
+ * The Narrator's own thinking for this turn — the intent channel Pass 2 reads.
+ * Native generation records a reasoning model's hidden thinking on
+ * message.extra.reasoning; the Director's envelope reasoning is the legacy
+ * fallback (empty in solo mode). Empty here means the model produced no
+ * reasoning at all, which the reasoning gate reports.
+ */
+function narratorReasoning(run) {
+    const message = getContext().chat?.[run.messageId];
+    return String(message?.extra?.reasoning || run.envelope?.reasoning || '').trim();
+}
+
+/**
+ * Pass 2 — the Archivist. Read the prose the Narrator just delivered plus its
+ * own reasoning (the intent channel) and record what happened as archivist
  * state, so the next turn's injection is grounded in it. Diagnostics only — a
  * failure here never touches the turn the user already read.
  */
 async function extractStateFromProse(run) {
     const prose = acceptedProse(run);
     if (!prose) return;
+    const reasoning = narratorReasoning(run);
+    // The reasoning gate: card-authored reasoning is how extraction knows what
+    // the narrating mind DECIDED changed, rather than inferring it from prose.
+    // An empty reasoning channel means a non-reasoning model (or thinking off) —
+    // extraction still runs on prose alone, but less accurately, and the user
+    // should be told to enable thinking or switch models.
+    if (!reasoning) {
+        journal('reasoning.absent', {
+            directionId: run.directionId,
+            remedy: 'The model returned no reasoning; extraction is running on prose alone (less accurate). Enable the connection\'s thinking/reasoning, or use a reasoning-capable model.',
+        }, { correlationId: run.directionId, severity: 'warn', summary: 'direction.reasoning: none returned — extraction degraded to prose-only' });
+    }
     const currentState = buildNarratorArchivistSections(run.timelineId, run.sceneId);
     // Advertise the Variables/Goals this turn already surfaced, so the extractor
     // can record numeric/goal consequences too — reusing the Director's snapshot
@@ -2028,7 +2052,7 @@ async function extractStateFromProse(run) {
             mechanicsSkill = buildDirectionSources({ mechanics }, { mechanicsEnabled: true }).mechanicsSkill || '';
         } catch { mechanicsSkill = ''; }
     }
-    const prompt = buildExtractionPrompt({ prose, reasoning: run.envelope?.reasoning || '', currentState, mechanicsSkill });
+    const prompt = buildExtractionPrompt({ prose, reasoning, currentState, mechanicsSkill });
     let raw = '';
     try {
         if (testAdapters?.extractState) {
