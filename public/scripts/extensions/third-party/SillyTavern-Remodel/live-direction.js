@@ -35,7 +35,7 @@ import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from
 import { StructuredReplyError } from './structured-reply.js';
 import { streamChatPrompt } from './story-stream.js';
 import { buildNarratorArchivistSections, buildDirectionInjection } from './narrator-prompt.js';
-import { buildExtractionPrompt } from './narrator-extract.js';
+import { buildExtractionPrompt, buildArchivistPrompt } from './narrator-extract.js';
 import { runExtraction } from './extraction-config.js';
 import { isSoloMode, soloEnvelope } from './solo-direction.js';
 import { updateScene } from './timeline-state.js';
@@ -978,6 +978,11 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             ? soloEnvelope(scene, snapshot, turn)
             : await directorEnvelope(scene, snapshot, turn, token);
         if (storedTurnValue) storedTurn = storedTurnValue;
+        // Archivist-first (solo): before the narrator writes, record the previous
+        // narration's results and resolve the mechanics THIS action triggers, so
+        // the narrator narrates an already-updated state — dice with teeth. Runs
+        // between the snapshot and the narrator; a failure never blocks the turn.
+        if (isSoloMode(scene)) await runArchivistPass(scene, snapshot, action, token, authorizedGoalIds);
         // The Director round-trip is the long window. Anything that happened
         // during it — Stop, a user intervention outranking an autonomous pass —
         // lands here, before a single native token is spent.
@@ -2047,6 +2052,79 @@ function narratorReasoning(run) {
     return String(message?.extra?.reasoning || run.envelope?.reasoning || '').trim();
 }
 
+/** The most recent non-user message (the previous narration) — its prose and
+ *  stored reasoning — read by the archivist-first pass. Null on the first turn. */
+function lastNarratorMessage() {
+    const chat = getContext().chat || [];
+    for (let i = chat.length - 1; i >= 0; i--) {
+        const message = chat[i];
+        if (message && !message.is_user && String(message.mes || '').trim()) {
+            return { prose: String(message.mes || ''), reasoning: String(message.extra?.reasoning || '') };
+        }
+    }
+    return null;
+}
+
+/**
+ * Phase 1 — the Archivist, run BEFORE the narrator (archivist-first turn order).
+ * Reads the user's new action and the previous narration, records what that
+ * narration established, and resolves the mechanics the action sets in motion
+ * (goal.reach — dice code-rolled — and variable changes). Decides only facts and
+ * numbers, never story. Diagnostics only: a failure never blocks the narrator.
+ */
+async function runArchivistPass(scene, snapshot, action, token, authorizedGoalIds = []) {
+    const prior = lastNarratorMessage();
+    const currentState = buildNarratorArchivistSections(scene.timelineId, scene.id);
+    let mechanicsSkill = '';
+    if (snapshot.mechanics && getMechanicsProfile().enabled) {
+        try {
+            mechanicsSkill = buildDirectionSources({ mechanics: snapshot.mechanics }, { mechanicsEnabled: true }).mechanicsSkill || '';
+        } catch { mechanicsSkill = ''; }
+    }
+    const prompt = buildArchivistPrompt({
+        action: String(action || ''),
+        priorProse: prior?.prose || '',
+        priorReasoning: prior?.reasoning || '',
+        currentState,
+        mechanicsSkill,
+    });
+    let raw = '';
+    try {
+        if (testAdapters?.archivistPass) {
+            raw = String(await testAdapters.archivistPass({ scene, action, prompt }) || '');
+        } else if (testAdapters) {
+            // Opt-in for tests: a test that cares provides archivistPass, so the
+            // real transport never fires here (and cannot pollute other captures).
+            return;
+        } else {
+            const result = await streamChatPrompt({ prompt, signal: token?.controller?.signal });
+            raw = String(result?.text || '');
+        }
+    } catch (error) {
+        if (token?.aborted) return;
+        journal('archivist.failed', { passId: token?.id, phase: 'generate', error: String(error?.message || error) }, { severity: 'warn', correlationId: token?.id });
+        return;
+    }
+    const reply = parseDirectorReply(String(raw || '').trim());
+    const requests = reply?.state?.requests || [];
+    if (!requests.length) {
+        journal('archivist.empty', { passId: token?.id }, { correlationId: token?.id });
+        return;
+    }
+    try {
+        const result = executeDirectionRequests(requests, {
+            scene: { id: scene.id, timelineId: scene.timelineId },
+            addressBook: snapshot.mechanics?.addressBook,
+            variableRefs: snapshot.mechanics?.variableRefs,
+            goalRefs: snapshot.mechanics?.goalRefs,
+            authorizedGoalIds,
+        });
+        journal('archivist', { passId: token?.id, requestCount: requests.length, ok: result.ok, receipts: result.receipts?.length || 0, unresolved: result.unresolvedReasons?.length || 0 }, { correlationId: token?.id, summary: 'Archivist-first: recorded prior narration + resolved the action\'s mechanics' });
+    } catch (error) {
+        journal('archivist.failed', { passId: token?.id, phase: 'apply', error: String(error?.message || error) }, { severity: 'warn', correlationId: token?.id });
+    }
+}
+
 /**
  * Pass 2 — the Archivist. Read the prose the Narrator just delivered plus its
  * own reasoning (the intent channel) and record what happened as archivist
@@ -2149,7 +2227,17 @@ async function completeVisibleRun(run) {
     // record what happened into the archivist, so next turn's injection is
     // grounded in it. Solo mode only — in Director mode the Director authors
     // mechanics, and running both would double-author. Never breaks the turn.
-    if (isSoloMode(hooks.getActiveScene())) await extractStateFromProse(run);
+    // Archivist-first: the narration is archived at the START of the NEXT turn
+    // (runArchivistPass reads the previous narration), NOT here. The final
+    // narration of a session is archived by a scene-close flush (see below).
+    // extractStateFromProse is retained for that flush.
+    //
+    // The reasoning gate is still checked here, though — it is about THIS
+    // narrator's output, which only exists now: an empty reasoning channel means
+    // a non-reasoning model, surfaced as a warning on the UI state.
+    if (isSoloMode(hooks.getActiveScene())) {
+        reasoningAbsentByScene.set(String(run.sceneId), !narratorReasoning(run));
+    }
     run.autonomousSequence += 1;
     // A response landed, so any failure notice still on screen is describing a
     // turn that has since recovered. The empty-response retries are the case

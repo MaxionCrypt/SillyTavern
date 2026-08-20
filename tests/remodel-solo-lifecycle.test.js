@@ -71,7 +71,8 @@ beforeEach(() => {
     setLiveDirectionTestAdapters({
         requestDirection: async () => { throw new Error('Director must not run in solo mode'); },
         generatePerformer: speak,
-        extractState: async () => ['```state', extractionFence, '```'].join('\n'),
+        // Archivist-first: the archivist pass runs BEFORE the narrator.
+        archivistPass: async () => ['```state', extractionFence, '```'].join('\n'),
     });
 });
 
@@ -81,13 +82,14 @@ afterEach(async () => {
     setLiveDirectionTestAdapters(null);
 });
 
-test('a solo turn skips the Director and extraction records the prose', async () => {
+test('a solo turn skips the Director; the archivist pass fills state before the narrator', async () => {
     expect(listEvents(scene.timelineId, scene.id)).toEqual([]);
     await requestNextDirection(scene);
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     // The Narrator spoke (Director never ran — its adapter would have thrown)…
     expect(__getChat().at(-1).mes).toBe(RESPONSE);
-    // …and extraction filled the archivist from the delivered prose.
+    // …and the archivist-first pass (which ran BEFORE the narrator) applied its
+    // fence to the store.
     expect(listEvents(scene.timelineId, scene.id).map((e) => e.summary)).toEqual(['Wren took the blade on her forearm']);
     expect(listSceneFacts(scene.timelineId, scene.id).map((f) => `${f.key}=${f.value}`)).toEqual(['mood=tense']);
 });

@@ -1,6 +1,6 @@
-// Pass 2 end to end: after the Narrator's prose is finalized, the extraction
-// adapter returns a state fence and the archivist records it — so the next
-// turn's injection is grounded in what actually happened.
+// Archivist-first end to end: BEFORE the narrator writes, the archivist pass
+// reads the user's action + the previous narration, applies its state fence,
+// and resolves the mechanics — so the narrator narrates an already-updated state.
 import { test, expect, beforeEach, afterEach } from '@jest/globals';
 import {
     initLiveDirection,
@@ -28,18 +28,21 @@ const scene = {
     liveDirection: { enabled: true, mode: 'solo', directorRef: null, narratorRef: null, pacing: 'instant', autoplay: false },
 };
 const cast = [{ ref: { kind: 'character', id: 'char-narrator', label: 'Wren' }, label: 'Wren', characterId: 0 }];
-const RESPONSE = 'Wren steps between them. The blade catches her forearm.';
 
-const NARRATOR_REASONING = 'Wren is protecting the boy; taking the blade should cost her HP.';
+// The PREVIOUS narration, already on the page when this turn begins — this is
+// what the archivist-first pass reads and records.
+const PRIOR_NARRATION = 'Wren steps between them. The blade catches her forearm.';
+const PRIOR_REASONING = 'Wren is protecting the boy; taking the blade should cost her HP.';
+// This turn's narrator output (not archived until the NEXT turn).
+const THIS_NARRATION = 'She grits her teeth and keeps her feet.';
 
 async function speak() {
     const chat = __getChat();
-    // Native generation records the model's thinking on message.extra.reasoning.
-    chat.push({ name: 'Wren', is_user: false, mes: RESPONSE, extra: { reasoning: NARRATOR_REASONING } });
+    chat.push({ name: 'Wren', is_user: false, mes: THIS_NARRATION, extra: { reasoning: 'She is hurt but standing.' } });
     await __emit('MESSAGE_RECEIVED', chat.length - 1);
 }
 
-const extractionFence = JSON.stringify({
+const archivistFence = JSON.stringify({
     requests: [
         { id: 'e1', capability: 'event.record', arguments: { summary: 'Wren took the blade on her forearm' }, reason: 'She stepped between them.' },
         { id: 'e2', capability: 'scene.set', arguments: { key: 'mood', value: 'tense' }, reason: 'Violence just broke out.' },
@@ -49,6 +52,7 @@ const extractionFence = JSON.stringify({
 });
 
 let variableId = '';
+let capturedArchivistPrompt = null;
 
 async function until(predicate, timeoutMs = 3000) {
     const deadline = Date.now() + timeoutMs;
@@ -73,6 +77,10 @@ beforeEach(() => {
         authority: 'world',
         retrieval: { mode: 'always' },
     }).id;
+    // Seed the previous narration onto the page.
+    const chat = __getChat();
+    chat.length = 0;
+    chat.push({ name: 'Wren', is_user: false, mes: PRIOR_NARRATION, extra: { reasoning: PRIOR_REASONING } });
     initLiveDirection({
         getActiveScene: () => scene,
         getCast: () => cast,
@@ -86,18 +94,15 @@ beforeEach(() => {
         onFailure: () => {},
         setNativePromptContent: () => {},
     });
-    capturedExtractionPrompt = null;
+    capturedArchivistPrompt = null;
     setLiveDirectionTestAdapters({
-        requestDirection: async () => '[note] The rooftop is tense.',
         generatePerformer: speak,
-        extractState: async ({ prompt }) => {
-            capturedExtractionPrompt = prompt;
-            return ['```state', extractionFence, '```'].join('\n');
+        archivistPass: async ({ prompt }) => {
+            capturedArchivistPrompt = prompt;
+            return ['```state', archivistFence, '```'].join('\n');
         },
     });
 });
-
-let capturedExtractionPrompt = null;
 
 afterEach(async () => {
     await stopLiveDirection();
@@ -105,22 +110,22 @@ afterEach(async () => {
     setLiveDirectionTestAdapters(null);
 });
 
-test('extraction records the narration into the archivist after the turn completes', async () => {
+test('the archivist-first pass records + resolves state before the narrator writes', async () => {
     expect(listEvents(scene.timelineId, scene.id)).toEqual([]);
     await requestNextDirection(scene);
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     expect(listEvents(scene.timelineId, scene.id).map((e) => e.summary)).toEqual(['Wren took the blade on her forearm']);
-    expect(listSceneFacts(scene.timelineId, scene.id)).toEqual([{ key: 'mood', value: 'tense', establishedMsgId: 0 }]);
-    // v2: extraction also authored the numeric consequence, resolved against the
-    // run's address book — Wren's HP fell from 12 to 8.
+    expect(listSceneFacts(scene.timelineId, scene.id)).toEqual([{ key: 'mood', value: 'tense', establishedMsgId: null }]);
+    // Mechanics resolved against the run's address book — Wren's HP fell 12 → 8.
     expect(Number(getVariableValue(variableId, scene.timelineId)?.value)).toBe(8);
 });
 
-test("the narrator's own reasoning (message.extra.reasoning) reaches the extractor", async () => {
+test('the previous narration and its reasoning reach the archivist pass', async () => {
     await requestNextDirection(scene);
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
-    const promptText = (capturedExtractionPrompt || []).map((m) => m.content).join('\n');
-    expect(promptText).toContain(NARRATOR_REASONING);
-    // Reasoning was present, so the gate does not warn.
+    const promptText = (capturedArchivistPrompt || []).map((m) => m.content).join('\n');
+    expect(promptText).toContain(PRIOR_NARRATION);
+    expect(promptText).toContain(PRIOR_REASONING);
+    // This turn's narrator produced reasoning, so the gate does not warn.
     expect(getLiveDirectionUiState(scene).reasoningWarning).toBe(false);
 });
