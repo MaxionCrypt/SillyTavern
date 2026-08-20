@@ -18,6 +18,20 @@ test('the case from the owner\'s log', () => {
     expect(stripEchoedScaffolding(raw, NARRATOR)).toBe('The page flipped.');
 });
 
+test('a mid-prose speaker label the model re-inserts is stripped, boundary kept', () => {
+    // DeepSeek (2026-08-19) re-tagged its own name partway through the prose:
+    // "…she looked up. The Narrator: Behind the counter…". Strip the performer's
+    // own name+colon wherever it appears, keeping the sentence intact.
+    const raw = 'She looked at it. The Narrator II: Behind the counter, the barista wiped the wand.';
+    expect(stripEchoedScaffolding(raw, NARRATOR)).toBe('She looked at it. Behind the counter, the barista wiped the wand.');
+});
+
+test('an ordinary mention of the label without a colon survives', () => {
+    // MUST survive — only a name FOLLOWED BY A COLON is a speaker tag.
+    const raw = 'The Narrator II watched the door and said nothing.';
+    expect(stripEchoedScaffolding(raw, NARRATOR)).toBe('The Narrator II watched the door and said nothing.');
+});
+
 test('a bare speaker prefix goes', () => {
     expect(stripEchoedScaffolding('The Narrator II: The page flipped.', NARRATOR)).toBe('The page flipped.');
     expect(stripEchoedScaffolding('  the narrator ii :  The page flipped.', NARRATOR)).toBe('The page flipped.');

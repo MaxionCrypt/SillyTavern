@@ -81,6 +81,16 @@ export function stripEchoedScaffolding(source, performerLabel = '') {
         text = rest;
     }
     if (prefix) text = text.replace(prefix, '');
+    // Some models re-tag their own name partway through the prose too — a
+    // speaker-label habit from roleplay transcripts: "…she looked up. The
+    // Narrator: Behind the counter…". Strip the performer's own name+colon
+    // wherever it sits at a boundary, keeping the boundary character so the
+    // surrounding prose stays intact. Only the performer's label, and only when
+    // a colon follows, so ordinary mentions of the name survive untouched.
+    if (label) {
+        const inline = new RegExp(`(^|[\\n\\s])${escapeForRegExp(label)}\\s*:\\s*`, 'gi');
+        text = text.replace(inline, '$1');
+    }
     return text;
 }
 
