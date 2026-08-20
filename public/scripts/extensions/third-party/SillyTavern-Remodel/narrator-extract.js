@@ -57,3 +57,43 @@ export function buildExtractionPrompt({ prose, reasoning = '', currentState = ''
         { role: 'user', content: user },
     ];
 }
+
+/**
+ * The archivist-first (pre-narration) prompt. Runs BEFORE the narrator: reads
+ * the user's new action and the PREVIOUS narration, then (1) records what the
+ * previous narration established and (2) resolves the mechanics the user's
+ * action sets in motion — requesting goal.reach for attempts (dice are
+ * code-rolled) and adjusting Variables the action clearly changes. It decides
+ * only facts and numbers, never story, and never sets a beat.
+ *
+ * @param {{action: string, priorProse?: string, priorReasoning?: string, currentState?: string, mechanicsSkill?: string}} input
+ * @returns {{role: string, content: string}[]}
+ */
+export function buildArchivistPrompt({ action, priorProse = '', priorReasoning = '', currentState = '', mechanicsSkill = '' }) {
+    const hasMechanics = Boolean(String(mechanicsSkill || '').trim());
+    const hasPrior = Boolean(String(priorProse || '').trim());
+    const system = [
+        'You are the Archivist. You run BEFORE the narrator. You decide only facts and numbers — never story, and never what happens next.',
+        hasPrior ? 'First, record what the PREVIOUS narration established: each distinct event with event.record, changed scene facts with scene.set, character state with char_state.set, and information the reader should not yet see with secret.set. Never invent anything it did not establish.' : '',
+        hasMechanics ? 'Then resolve the mechanics the USER\'S ACTION sets in motion: if it attempts a Goal, request goal.reach for that Goal by its exact advertised name — the dice are rolled by code, not by you — and adjust any Variable the action clearly changes. Do NOT resolve mechanics the action does not actually attempt.' : '',
+        'Do NOT set beats or decide what happens next — that is the narrator\'s job alone.',
+        'Reply with ONLY a fenced state block and nothing else:',
+        '```state',
+        '{"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"}],"flow":{"continue":false}}',
+        '```',
+        '',
+        'Narrative capabilities:',
+        archivistCapabilityGuide(),
+        hasMechanics ? `\nAdvertised Variables and Goals (with the capabilities that change them):\n${mechanicsSkill}` : '',
+        String(currentState || '').trim() ? `\nAlready recorded (do NOT record these again):\n${currentState}` : '',
+    ].filter(Boolean).join('\n');
+    const user = [
+        `The user is about to attempt:\n${action}`,
+        hasPrior ? `\nThe previous narration (record what it established):\n${priorProse}` : '',
+        String(priorReasoning || '').trim() ? `\nThe narrator's private reasoning for that passage:\n${priorReasoning}` : '',
+    ].filter(Boolean).join('\n');
+    return [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+    ];
+}

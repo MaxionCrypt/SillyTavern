@@ -1,5 +1,5 @@
 import { __setExtensionSettings } from './util/st-context-stub.js';
-import { buildExtractionPrompt, archivistCapabilityGuide } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/narrator-extract.js';
+import { buildExtractionPrompt, archivistCapabilityGuide, buildArchivistPrompt } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/narrator-extract.js';
 
 beforeEach(() => __setExtensionSettings({ remodel: {} }));
 
@@ -31,6 +31,31 @@ test('reasoning and current state are optional', () => {
     const messages = buildExtractionPrompt({ prose: 'The rain stopped.' });
     expect(messages).toHaveLength(2);
     expect(messages[1].content).toContain('The rain stopped.');
+});
+
+test('the archivist-first prompt carries the action + prior narration and resolves mechanics, not beats', () => {
+    const messages = buildArchivistPrompt({
+        action: 'I try to seduce the cheerleader.',
+        priorProse: 'Marissa sat by the window, sipping tea.',
+        priorReasoning: 'She is guarded.',
+        currentState: '## Scene\n- location: cafe',
+        mechanicsSkill: '- Goal "Seduce Marissa" (30%)',
+    });
+    const system = messages.find((m) => m.role === 'system').content;
+    const user = messages.find((m) => m.role === 'user').content;
+    expect(system).toContain('```state');
+    expect(system).toMatch(/goal\.reach/i);          // resolves attempts as rolls
+    expect(system).toMatch(/not set beats|never .*what happens next/i);
+    expect(system).toContain('Seduce Marissa');       // advertised mechanics
+    expect(user).toContain('I try to seduce the cheerleader.');  // the action
+    expect(user).toContain('Marissa sat by the window');         // prior narration
+    expect(user).toContain('She is guarded.');                   // prior reasoning
+});
+
+test('the archivist-first prompt works with no prior narration (first turn)', () => {
+    const messages = buildArchivistPrompt({ action: 'I open the journal.' });
+    expect(messages[1].content).toContain('I open the journal.');
+    expect(messages[1].content).not.toMatch(/previous narration/i);
 });
 
 test('a mechanics skill block invites variable/goal consequences; without it, only narrative', () => {
