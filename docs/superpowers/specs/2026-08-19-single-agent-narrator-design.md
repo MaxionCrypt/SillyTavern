@@ -1,3 +1,5 @@
+> **SUPERSEDED (2026-08-19)** by `2026-08-19-solo-roleplay-design.md`, which is the definitive design (adds the Story Loom card model, Omniscient/Ensemble modes, card-authored reasoning, the reasoning-model gate, and the creation-flow changes). This document is kept for history; read the solo-roleplay design for current intent.
+
 # Single-Agent Narrator with Archivist Memory
 
 **Status:** Design — **supersedes** `2026-08-19-archivist-narrator-layer2-design.md` (the two-agent, stripped-context Narrator). Keeps `2026-08-19-archivist-narrator-design.md`'s Layer 1 (archivist store + capabilities) as the foundation.
