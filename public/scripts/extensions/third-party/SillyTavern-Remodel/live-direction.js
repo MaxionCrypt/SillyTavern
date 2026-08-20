@@ -36,6 +36,7 @@ import { StructuredReplyError } from './structured-reply.js';
 import { streamChatPrompt } from './story-stream.js';
 import { buildNarratorArchivistSections, buildDirectionInjection } from './narrator-prompt.js';
 import { buildExtractionPrompt } from './narrator-extract.js';
+import { isSoloMode, soloEnvelope } from './solo-direction.js';
 import { updateScene } from './timeline-state.js';
 import { recordDebugEvent } from './debug-console.js';
 
@@ -771,6 +772,74 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     return generateDirectedPerformer({ scene, envelope, performer, autonomousSequence: Number(saved.autonomousSequence) || 0 });
 }
 
+/**
+ * Director mode's direction step: run the two-agent Director call, store its
+ * notebook entries, and build the envelope from its reply. Extracted verbatim
+ * from beginDirection so solo mode can be switched in beside it (connection
+ * point 1). Returns the envelope plus the turn number if entries were stored
+ * (so beginDirection's finally can tell the pass produced a record).
+ *
+ * @returns {Promise<{ envelope: object, storedTurn: number|null }>}
+ */
+async function directorEnvelope(scene, snapshot, turn, token) {
+    const startedAt = Date.now();
+    const reply = await requestDirection(scene, snapshot, {
+        signal: token.controller.signal,
+        onChunk: (update) => {
+            // Forwarded on EVERY chunk so the direction card fills live; the
+            // journal entry below stays once-per-pass.
+            hooks.onDirectorChunk(update);
+            if (token.firstChunkAt) return;
+            token.firstChunkAt = Date.now();
+            journal('stream.first-chunk', { passId: token.id, afterMs: token.firstChunkAt - startedAt, chars: update.text.length }, { correlationId: token.id });
+        },
+    });
+    // The notebook is written whatever happens next, including for an
+    // interrupted Director: what it managed to say is a record of this turn. A
+    // cancelled take is stamped `abandoned`; its trailing entry `incomplete`.
+    const stored = appendDirectorEntries(scene.timelineId, {
+        sceneId: scene.id,
+        turn,
+        entries: markSeveredEntry(reply.entries, reply.interrupted),
+        reasoning: reply.reasoning,
+    });
+    // Stored entries but no block to carry them = a scene about to generate with
+    // no direction at all, while every other symptom looks healthy. Only when
+    // the block is MISSING — a user who toggled it off chose that.
+    const routing = describeDirectorNotesRouting();
+    if (stored.length && !routing.block && !routing.present) {
+        journal('notes.unrouted', {
+            passId: token.id,
+            turn,
+            entryCount: stored.length,
+            remedy: 'The active Roleplay · Chat recipe has no "Director\'s Notes" block, so this turn\'s direction reaches no one. Add it in Prompt Studio (Add context → Director\'s Notes).',
+        }, { correlationId: token.id, severity: 'warn', summary: 'direction.notes: stored, but no block carries them to the Narrator' });
+    }
+    const envelope = buildDirectionEnvelope(reply, turn);
+    journal('notebook', {
+        passId: token.id,
+        turn,
+        directionId: envelope.directionId,
+        durationMs: Date.now() - startedAt,
+        firstChunkMs: token.firstChunkAt ? token.firstChunkAt - startedAt : null,
+        streamed: reply.streamed,
+        interrupted: reply.interrupted,
+        replyChars: reply.raw.length,
+        reasoningLength: reply.reasoning.length,
+        entryCount: stored.length,
+        entryTypes: stored.map((entry) => entry.type),
+        tailFound: reply.tailFound,
+        requestCount: reply.state.requests.length,
+        continueAfter: reply.state.flow.continue,
+    }, { correlationId: token.id });
+    // Design §3: a missing or unparseable tail is never an error — the turn
+    // proceeds with no state changes, and this is the only notice of it.
+    if (reply.tailError) {
+        journal('tail.unparseable', { passId: token.id, turn, error: reply.tailError }, { correlationId: token.id, severity: 'warn', summary: 'direction.tail: unparseable, no state changed' });
+    }
+    return { envelope, storedTurn: stored.length ? turn : null };
+}
+
 async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, postedMessage = null } = {}) {
     // Checked before the Director call, not after: the Director costs a real
     // request and ~17s, and there is no point spending either when the
@@ -882,87 +951,17 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             receiptCount: snapshot.recentReceipts.length,
         }, { correlationId: token.id });
         if (token.aborted) return abandonPass(token, 'snapshot');
-        const startedAt = Date.now();
-        const reply = await requestDirection(scene, snapshot, {
-            signal: token.controller.signal,
-            onChunk: (update) => {
-                // Forwarded on EVERY chunk, unconditionally — this is the one
-                // line that makes the direction card fill live rather than
-                // only appear at the start. The journal entry below stays
-                // once-per-pass; the UI hook does not.
-                hooks.onDirectorChunk(update);
-                if (token.firstChunkAt) return;
-                token.firstChunkAt = Date.now();
-                // Time-to-first-token is the number the whole "the wait is
-                // opaque" complaint is about, and it is invisible in a total
-                // duration. Recorded once, not per chunk.
-                journal('stream.first-chunk', { passId: token.id, afterMs: token.firstChunkAt - startedAt, chars: update.text.length }, { correlationId: token.id });
-            },
-        });
-        // The notebook is written whatever happens next, including for a
-        // Director the user interrupted: what it managed to say is a record of
-        // this turn, and discarding it silently would be the one failure this
-        // rework cannot afford. A cancelled take is stamped `abandoned` so it
-        // never binds a later turn, and its trailing entry `incomplete` so the
-        // owner's own record says where the cut landed.
-        //
-        // `notebookTurn` is supplied only by regenerate, which frees the
-        // superseded take's turn and needs the retake to occupy that same
-        // number — recomputing max+1 would file a retake of the earliest
-        // moment as the newest turn and hand the Narrator the fiction out of
-        // order.
+        // Connection point 1 — how the turn's direction is produced. Director
+        // mode runs the two-agent Director call (directorEnvelope, unchanged);
+        // solo mode builds a Director-free envelope (no LLM call, no notebook).
+        // Everything downstream — performer, reveal, finalize, extraction — is
+        // shared. `notebookTurn` is supplied only by regenerate, which reuses a
+        // freed turn number rather than allocating a new one.
         const turn = toTurnNumber(notebookTurn) ?? nextNotebookTurn(scene);
-        const stored = appendDirectorEntries(scene.timelineId, {
-            sceneId: scene.id,
-            turn,
-            entries: markSeveredEntry(reply.entries, reply.interrupted),
-            reasoning: reply.reasoning,
-        });
-        if (stored.length) storedTurn = turn;
-        // The one place that knows both facts: this pass stored entries, and
-        // nothing is configured to carry them. Since the depth-0 injection was
-        // removed, that combination is a scene about to generate with no
-        // direction at all — and every other symptom looks healthy.
-        //
-        // Only when the block is MISSING. A user who switched it off with the
-        // per-block eye toggle chose this, and a warning repeated every turn
-        // for a choice they just made is noise that teaches them to skip the
-        // one case this exists for.
-        const routing = describeDirectorNotesRouting();
-        if (stored.length && !routing.block && !routing.present) {
-            journal('notes.unrouted', {
-                passId: token.id,
-                turn,
-                entryCount: stored.length,
-                remedy: 'The active Roleplay · Chat recipe has no "Director\'s Notes" block, so this turn\'s direction reaches no one. Add it in Prompt Studio (Add context → Director\'s Notes).',
-            }, { correlationId: token.id, severity: 'warn', summary: 'direction.notes: stored, but no block carries them to the Narrator' });
-        }
-        const envelope = buildDirectionEnvelope(reply, turn);
-        journal('notebook', {
-            passId: token.id,
-            turn,
-            // Kept, as the old `envelope` event carried it: correlationId joins
-            // records by pass, but this is what joins this record to
-            // generation.start/end, which are keyed by directionId.
-            directionId: envelope.directionId,
-            durationMs: Date.now() - startedAt,
-            firstChunkMs: token.firstChunkAt ? token.firstChunkAt - startedAt : null,
-            streamed: reply.streamed,
-            interrupted: reply.interrupted,
-            replyChars: reply.raw.length,
-            reasoningLength: reply.reasoning.length,
-            entryCount: stored.length,
-            entryTypes: stored.map((entry) => entry.type),
-            tailFound: reply.tailFound,
-            requestCount: reply.state.requests.length,
-            continueAfter: reply.state.flow.continue,
-        }, { correlationId: token.id });
-        // Design §3: a missing or unparseable tail is never an error. The turn
-        // proceeds with no state changes — and this journal entry, which is the
-        // only way a user ever finds out their recipe lost the fence.
-        if (reply.tailError) {
-            journal('tail.unparseable', { passId: token.id, turn, error: reply.tailError }, { correlationId: token.id, severity: 'warn', summary: 'direction.tail: unparseable, no state changed' });
-        }
+        const { envelope, storedTurn: storedTurnValue } = isSoloMode(scene)
+            ? soloEnvelope(scene, snapshot, turn)
+            : await directorEnvelope(scene, snapshot, turn, token);
+        if (storedTurnValue) storedTurn = storedTurnValue;
         // The Director round-trip is the long window. Anything that happened
         // during it — Stop, a user intervention outranking an autonomous pass —
         // lands here, before a single native token is spent.
@@ -2083,11 +2082,11 @@ async function completeVisibleRun(run) {
     }
     await finalizeRunMessage(run, { state: 'complete' });
     run.acceptedComplete = true;
-    // Pass 2: read the prose the user just received and record what happened
-    // into the archivist, so next turn's injection is grounded in it. Never
-    // allowed to break the turn — a failed extraction just leaves the state as
-    // it was.
-    await extractStateFromProse(run);
+    // Pass 2 (connection point 2): read the prose the user just received and
+    // record what happened into the archivist, so next turn's injection is
+    // grounded in it. Solo mode only — in Director mode the Director authors
+    // mechanics, and running both would double-author. Never breaks the turn.
+    if (isSoloMode(hooks.getActiveScene())) await extractStateFromProse(run);
     run.autonomousSequence += 1;
     // A response landed, so any failure notice still on screen is describing a
     // turn that has since recovered. The empty-response retries are the case

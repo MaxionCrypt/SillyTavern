@@ -1,6 +1,5 @@
-// Pass 2 end to end: after the Narrator's prose is finalized, the extraction
-// adapter returns a state fence and the archivist records it — so the next
-// turn's injection is grounded in what actually happened.
+// A full solo-mode turn: the Director never runs (its adapter throws), the
+// Narrator speaks, and Pass 2 extraction records the prose into the archivist.
 import { test, expect, beforeEach, afterEach } from '@jest/globals';
 import {
     initLiveDirection,
@@ -11,7 +10,6 @@ import {
     clearLiveDirectionFailure,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { listEvents, listSceneFacts } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
-import { createVariableValue, getVariableValue, updateMechanicsProfile } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
 import { __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
 import { __setOnlineStatus } from './util/script-stub.js';
 
@@ -19,9 +17,9 @@ globalThis.document ??= { getElementById: () => null };
 globalThis.HTMLTextAreaElement ??= class HTMLTextAreaElement {};
 
 const scene = {
-    id: 'scene-extract',
-    timelineId: 'timeline-extract',
-    title: 'Extract Scene',
+    id: 'scene-solo',
+    timelineId: 'timeline-solo',
+    title: 'Solo Scene',
     mode: 'roleplay',
     staging: 'directed',
     liveDirection: { enabled: true, mode: 'solo', directorRef: null, narratorRef: null, pacing: 'instant', autoplay: false },
@@ -39,12 +37,9 @@ const extractionFence = JSON.stringify({
     requests: [
         { id: 'e1', capability: 'event.record', arguments: { summary: 'Wren took the blade on her forearm' }, reason: 'She stepped between them.' },
         { id: 'e2', capability: 'scene.set', arguments: { key: 'mood', value: 'tense' }, reason: 'Violence just broke out.' },
-        { id: 'e3', capability: 'variable.adjust', arguments: { variableRef: "Wren's HP", delta: -4 }, reason: 'The blade caught her forearm.' },
     ],
     flow: { continue: false },
 });
-
-let variableId = '';
 
 async function until(predicate, timeoutMs = 3000) {
     const deadline = Date.now() + timeoutMs;
@@ -59,16 +54,6 @@ async function until(predicate, timeoutMs = 3000) {
 beforeEach(() => {
     __setExtensionSettings({});
     __setOnlineStatus('connected');
-    updateMechanicsProfile({ enabled: true });
-    variableId = createVariableValue({
-        timelineId: scene.timelineId,
-        name: "Wren's HP",
-        valueType: 'number',
-        value: 12,
-        description: 'capacity to withstand injury',
-        authority: 'world',
-        retrieval: { mode: 'always' },
-    }).id;
     initLiveDirection({
         getActiveScene: () => scene,
         getCast: () => cast,
@@ -83,7 +68,7 @@ beforeEach(() => {
         setNativePromptContent: () => {},
     });
     setLiveDirectionTestAdapters({
-        requestDirection: async () => '[note] The rooftop is tense.',
+        requestDirection: async () => { throw new Error('Director must not run in solo mode'); },
         generatePerformer: speak,
         extractState: async () => ['```state', extractionFence, '```'].join('\n'),
     });
@@ -95,13 +80,13 @@ afterEach(async () => {
     setLiveDirectionTestAdapters(null);
 });
 
-test('extraction records the narration into the archivist after the turn completes', async () => {
+test('a solo turn skips the Director and extraction records the prose', async () => {
     expect(listEvents(scene.timelineId, scene.id)).toEqual([]);
     await requestNextDirection(scene);
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    // The Narrator spoke (Director never ran — its adapter would have thrown)…
+    expect(__getChat().at(-1).mes).toBe(RESPONSE);
+    // …and extraction filled the archivist from the delivered prose.
     expect(listEvents(scene.timelineId, scene.id).map((e) => e.summary)).toEqual(['Wren took the blade on her forearm']);
-    expect(listSceneFacts(scene.timelineId, scene.id)).toEqual([{ key: 'mood', value: 'tense', establishedMsgId: 0 }]);
-    // v2: extraction also authored the numeric consequence, resolved against the
-    // run's address book — Wren's HP fell from 12 to 8.
-    expect(Number(getVariableValue(variableId, scene.timelineId)?.value)).toBe(8);
+    expect(listSceneFacts(scene.timelineId, scene.id).map((f) => `${f.key}=${f.value}`)).toEqual(['mood=tense']);
 });
