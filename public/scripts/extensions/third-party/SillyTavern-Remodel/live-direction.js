@@ -36,6 +36,7 @@ import { StructuredReplyError } from './structured-reply.js';
 import { streamChatPrompt } from './story-stream.js';
 import { buildNarratorArchivistSections, buildDirectionInjection } from './narrator-prompt.js';
 import { buildExtractionPrompt } from './narrator-extract.js';
+import { runExtraction } from './extraction-config.js';
 import { isSoloMode, soloEnvelope } from './solo-direction.js';
 import { updateScene } from './timeline-state.js';
 import { recordDebugEvent } from './debug-console.js';
@@ -2072,8 +2073,10 @@ async function extractStateFromProse(run) {
             // transport here — it would pollute Director-prompt captures.
             return;
         } else {
-            const result = await streamChatPrompt({ prompt });
-            raw = String(result?.text || '');
+            // Pass 2 runs on the configured extraction profile when set (so a
+            // non-reasoning narrator can pair with a reasoning-capable
+            // extractor), else the active connection. See extraction-config.js.
+            raw = await runExtraction(prompt);
         }
     } catch (error) {
         journal('extract.failed', { directionId: run.directionId, phase: 'generate', error: String(error?.message || error) }, { severity: 'warn', correlationId: run.directionId });
