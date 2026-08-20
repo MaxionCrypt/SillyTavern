@@ -552,6 +552,9 @@ function normalizeLiveDirection(value = {}, legacyRoles = []) {
         .slice(-60);
     return {
         enabled: value?.enabled !== false,
+        // Which roleplay engine runs the turn: 'director' (two-agent, default)
+        // or 'solo' (single-agent, archivist-native). Anything else falls back.
+        mode: value?.mode === 'solo' ? 'solo' : 'director',
         pacing,
         autoplay: value?.autoplay !== false,
         autonomousResponseLimit: limit,

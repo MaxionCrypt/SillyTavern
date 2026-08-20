@@ -302,6 +302,13 @@ export function setLiveDirectionPacing(scene, pacing) {
     return true;
 }
 
+export function setLiveDirectionMode(scene, mode) {
+    if (!scene || (mode !== 'director' && mode !== 'solo')) return false;
+    updateScene(scene.id, { liveDirection: { ...scene.liveDirection, mode } });
+    notifyState();
+    return true;
+}
+
 export function setLiveDirectionEnabled(scene, enabled) {
     if (!scene) return false;
     updateScene(scene.id, { staging: enabled ? 'directed' : 'free', liveDirection: { ...scene.liveDirection, enabled: Boolean(enabled) } });

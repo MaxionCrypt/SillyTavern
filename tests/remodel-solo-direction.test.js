@@ -1,5 +1,7 @@
 import { __setExtensionSettings } from './util/st-context-stub.js';
 import { isSoloMode, soloEnvelope } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/solo-direction.js';
+import { setLiveDirectionMode } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
+import { createArc, createScene, createTimeline, getScene } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/timeline-state.js';
 
 beforeEach(() => __setExtensionSettings({ remodel: {} }));
 
@@ -21,4 +23,19 @@ test('soloEnvelope builds a Director-free envelope that pauses after the turn', 
     expect(envelope.mechanicsSnapshot).toBe(snapshot.mechanics);
     expect(typeof envelope.directionId).toBe('string');
     expect(envelope.directionId.length).toBeGreaterThan(0);
+});
+
+test('setLiveDirectionMode persists the chosen mode and rejects an invalid one', () => {
+    const timeline = createTimeline('Mode Timeline');
+    const arc = createArc(timeline.id, 'Mode Arc');
+    const scene = createScene(arc.id, 'roleplay', 'Mode Scene');
+
+    expect(setLiveDirectionMode(scene, 'solo')).toBe(true);
+    expect(getScene(scene.id).liveDirection.mode).toBe('solo');
+
+    expect(setLiveDirectionMode(scene, 'director')).toBe(true);
+    expect(getScene(scene.id).liveDirection.mode).toBe('director');
+
+    expect(setLiveDirectionMode(scene, 'bogus')).toBe(false);
+    expect(getScene(scene.id).liveDirection.mode).toBe('director');
 });
