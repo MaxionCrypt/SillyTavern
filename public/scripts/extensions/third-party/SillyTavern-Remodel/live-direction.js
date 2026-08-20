@@ -1744,13 +1744,32 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     const archivistState = buildNarratorArchivistSections(scene.timelineId, scene.id);
     const reasoningBridge = frameDirectorReasoning(envelope.reasoning);
     const directorDirection = reasoningBridge || formatDirectorNotesPrompt(scene);
-    hooks.setNativePromptContent(
-        'directorNotes',
-        buildDirectionInjection({ archivistState, directorDirection }),
-    );
+    const injection = buildDirectionInjection({ archivistState, directorDirection });
+    const injectionContext = getContext();
+    const setExt = typeof injectionContext.setExtensionPrompt === 'function' ? injectionContext.setExtensionPrompt.bind(injectionContext) : null;
+    let injectionRouted;
+    if (isSoloMode(scene)) {
+        // Solo mode's grounding (append-only + anti-echo + archivist state) MUST
+        // reach the Narrator regardless of the recipe. setNativePromptContent
+        // silently drops the injection when the roleplay recipe has no enabled
+        // "Director's Notes" block (setRemodelNativePromptContent returns false),
+        // which left Solo turns running on the raw card alone — the model echoed
+        // its card instructions and had no archivist grounding. Inject through
+        // the guaranteed core extension-prompt API instead: a SYSTEM note
+        // in-chat at a shallow depth (extension_prompt_types.IN_CHAT = 1,
+        // extension_prompt_roles.SYSTEM = 0), close to the generation point.
+        if (setExt) setExt('REMODEL_SOLO_DIRECTION', injection, 1, 1, false, 0);
+        hooks.setNativePromptContent('directorNotes', '');
+        injectionRouted = setExt ? 'extension-prompt' : 'unavailable';
+    } else {
+        if (setExt) setExt('REMODEL_SOLO_DIRECTION', '', 1, 1, false, 0);
+        injectionRouted = hooks.setNativePromptContent('directorNotes', injection) ? 'recipe-block' : 'unrouted';
+    }
     journal('notes.bridge', {
         directionId: envelope.directionId,
         path: reasoningBridge ? 'reasoning' : 'notebook',
+        routed: injectionRouted,
+        injectionChars: injection.length,
         hasArchivist: Boolean(String(archivistState || '').trim()),
         reasoningLength: (envelope.reasoning || '').length,
     }, { correlationId: envelope.directionId });
