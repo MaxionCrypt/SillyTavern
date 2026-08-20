@@ -76,6 +76,7 @@ export function buildArchivistPrompt({ action, priorProse = '', priorReasoning =
         'You are the Archivist. You run BEFORE the narrator. You decide only facts and numbers — never story, and never what happens next.',
         hasPrior ? 'First, record what the PREVIOUS narration established: each distinct event with event.record, changed scene facts with scene.set, character state with char_state.set, and information the reader should not yet see with secret.set. Never invent anything it did not establish.' : '',
         hasMechanics ? 'Then resolve the mechanics the USER\'S ACTION sets in motion: if it attempts a Goal, request goal.reach for that Goal by its exact advertised name — the dice are rolled by code, not by you — and adjust any Variable the action clearly changes. Do NOT resolve mechanics the action does not actually attempt.' : '',
+        'Record ONLY things that happened inside the fiction. NEVER record your own acknowledgements, the user\'s instructions, your role, or any meta-commentary as an event or fact. If nothing in the fiction happened and no mechanic is triggered, return an empty requests array: {"requests":[],"flow":{"continue":false}}.',
         'Do NOT set beats or decide what happens next — that is the narrator\'s job alone.',
         'Reply with ONLY a fenced state block and nothing else:',
         '```state',

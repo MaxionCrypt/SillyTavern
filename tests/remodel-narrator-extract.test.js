@@ -58,6 +58,15 @@ test('the archivist-first prompt works with no prior narration (first turn)', ()
     expect(messages[1].content).not.toMatch(/previous narration/i);
 });
 
+test('the archivist prompt forbids meta-commentary and allows an empty result', () => {
+    // DeepSeek (2026-08-19) recorded "The Archivist acknowledges the user's
+    // instruction to continue…" as an event. The prompt must forbid meta and
+    // explicitly allow returning nothing.
+    const system = buildArchivistPrompt({ action: 'Continue.' }).find((m) => m.role === 'system').content;
+    expect(system).toMatch(/never record.*(acknowledg|instruction|meta)/i);
+    expect(system).toMatch(/"requests":\[\]/);
+});
+
 test('a mechanics skill block invites variable/goal consequences; without it, only narrative', () => {
     const withMechanics = buildExtractionPrompt({ prose: 'Wren bled.', mechanicsSkill: "- Wren's HP: 12" }).find((m) => m.role === 'system').content;
     expect(withMechanics).toContain("Wren's HP");

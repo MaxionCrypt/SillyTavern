@@ -9465,10 +9465,13 @@ function ensureDirectionStreamCard(root) {
     const live = document.createElement('article');
     live.className = 'remodel-rp-msg remodel-rp-direction-stream-card is-live';
     live.dataset.remodelDirectionLive = 'true';
+    // Solo mode's pre-narrator phase is the Archivist (mechanical), not the
+    // Director — label it so, so the brief card reads truthfully.
+    const preNarratorLabel = getLiveDirectionUiState(getActiveScene())?.mode === 'solo' ? 'Archivist' : 'Roleplay Director';
     live.innerHTML = `
         <div class="remodel-rp-direction-stream-inner">
             <header>
-                <span class="remodel-rp-direction-badge"><i class="fa-solid fa-clapperboard"></i> Roleplay Director</span>
+                <span class="remodel-rp-direction-badge"><i class="fa-solid fa-clapperboard"></i> ${preNarratorLabel}</span>
                 <span class="remodel-rp-direction-live-dots"><i></i><i></i><i></i></span>
             </header>
             <div class="remodel-rp-direction-live-text" data-remodel-direction-live-text></div>
