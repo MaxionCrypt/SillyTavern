@@ -34,7 +34,8 @@ import { getMechanicsProfile, listMechanicsTransactions } from './variables-stor
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
 import { StructuredReplyError } from './structured-reply.js';
 import { streamChatPrompt } from './story-stream.js';
-import { buildNarratorArchivistSections, buildDirectionInjection } from './narrator-prompt.js';
+import { buildNarratorArchivistSections, buildDirectionInjection, buildGoalObjectives } from './narrator-prompt.js';
+import { isEditorMode, buildDirectorEditorPrompt, parseEditorReply } from './director-editor.js';
 import { buildExtractionPrompt } from './narrator-extract.js';
 import { runExtraction } from './extraction-config.js';
 import { isSoloMode, soloEnvelope } from './solo-direction.js';
@@ -2033,6 +2034,67 @@ function executeDirectionRequests(requests, context) {
         allowUserGoalCreate: false,
     });
     return { ...result, unresolvedReasons };
+}
+
+/**
+ * The mechanics snapshot (advertised Variables/Goals + address book) the editor
+ * resolves its requests against, without running a full turn. Exported for
+ * editor-mode wiring and tests.
+ */
+export async function __buildEditorSnapshot(scene) {
+    const mechanics = await buildMechanicalSnapshot(scene, '', [], null, [], {});
+    return { mechanics };
+}
+
+/**
+ * Editor mode — run the Director-editor pass over the narrator's DRAFT: build
+ * the editor prompt (draft + reasoning + readable narrative state + the
+ * mechanical board WITH numbers), transport it, parse the committed prose +
+ * state fence, and execute the requests against the address book. Returns the
+ * committed prose to post. Never throws — a failure falls back to the draft
+ * unchanged. Dice inside goal.reach are code-rolled by the mechanics layer.
+ */
+export async function runDirectorEdit({ scene, snapshot, draft, draftReasoning = '', token = null }) {
+    const narrativeState = [
+        buildNarratorArchivistSections(scene.timelineId, scene.id),
+        buildGoalObjectives(scene.id),
+    ].filter((part) => String(part || '').trim()).join('\n\n');
+    let mechanicsSkill = '';
+    if (snapshot?.mechanics && getMechanicsProfile().enabled) {
+        try { mechanicsSkill = buildDirectionSources({ mechanics: snapshot.mechanics }, { mechanicsEnabled: true }).mechanicsSkill || ''; } catch { mechanicsSkill = ''; }
+    }
+    const prompt = buildDirectorEditorPrompt({ draft, draftReasoning, narrativeState, mechanicsSkill });
+    let raw = '';
+    try {
+        if (testAdapters?.directorEdit) {
+            raw = String(await testAdapters.directorEdit({ scene, draft, prompt }) || '');
+        } else if (testAdapters) {
+            return { committedProse: draft, result: null }; // opt-in for tests
+        } else {
+            const out = await streamChatPrompt({ prompt, signal: token?.controller?.signal });
+            raw = String(out?.text || '');
+        }
+    } catch (error) {
+        journal('editor.failed', { phase: 'generate', error: String(error?.message || error) }, { severity: 'warn' });
+        return { committedProse: draft, result: null };
+    }
+    const { prose, requests } = parseEditorReply(raw);
+    const committedProse = prose || draft;
+    if (!requests.length) return { committedProse, result: null };
+    try {
+        const result = executeDirectionRequests(requests, {
+            scene: { id: scene.id, timelineId: scene.timelineId },
+            addressBook: snapshot?.mechanics?.addressBook,
+            variableRefs: snapshot?.mechanics?.variableRefs,
+            goalRefs: snapshot?.mechanics?.goalRefs,
+            authorizedGoalIds: [],
+        });
+        journal('editor', { requestCount: requests.length, ok: result.ok, patched: committedProse !== draft }, { summary: 'Director-editor committed + recorded' });
+        return { committedProse, result };
+    } catch (error) {
+        journal('editor.failed', { phase: 'apply', error: String(error?.message || error) }, { severity: 'warn' });
+        return { committedProse, result: null };
+    }
 }
 
 /**
