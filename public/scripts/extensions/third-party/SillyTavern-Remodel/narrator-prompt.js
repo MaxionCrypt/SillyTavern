@@ -1,5 +1,21 @@
 import { listSceneFacts, listCharStates, listEvents, getBeat } from './archivist-store.js';
+import { getSceneGoals } from './story-goals-store.js';
 import { canStreamStory } from './story-stream.js';
+
+/**
+ * The scene's active goals as narrative OBJECTIVES for the narrator view — what
+ * characters are trying to do, never the odds behind it. The odds and status
+ * numbers stay the Director's private board (editor mode). Empty when none.
+ */
+export function buildGoalObjectives(sceneId) {
+    const goals = getSceneGoals(sceneId, { includeResolved: false, states: ['active', 'background'] });
+    if (!goals.length) return '';
+    const lines = goals.map((goal) => {
+        const desc = String(goal.description || '').trim();
+        return `- ${goal.title}${desc ? `: ${desc}` : ''}`;
+    });
+    return `## Objectives\n${lines.join('\n')}`;
+}
 
 // The Narrator's grounding window: the most recent chat lines, newest last,
 // bounded so the prompt stays affordable. Long-range memory is the archivist's
