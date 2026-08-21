@@ -975,7 +975,11 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // shared. `notebookTurn` is supplied only by regenerate, which reuses a
         // freed turn number rather than allocating a new one.
         const turn = toTurnNumber(notebookTurn) ?? nextNotebookTurn(scene);
-        const { envelope, storedTurn: storedTurnValue } = isSoloMode(scene)
+        // Solo and editor modes both skip the Director pre-call: the narrator
+        // drafts first, and (editor mode) the Director-editor reconciles the
+        // draft at completeVisibleRun. Only classic 'director' mode runs the
+        // two-agent Director here.
+        const { envelope, storedTurn: storedTurnValue } = (isSoloMode(scene) || isEditorMode(scene))
             ? soloEnvelope(scene, snapshot, turn)
             : await directorEnvelope(scene, snapshot, turn, token);
         if (storedTurnValue) storedTurn = storedTurnValue;
@@ -2204,6 +2208,18 @@ async function completeVisibleRun(run) {
     if (!acceptedProse(run)) {
         await failEmptyVisibleRun(run);
         return;
+    }
+    // Editor mode: the accepted narrator text is a DRAFT. Run the Director-editor
+    // over it and commit its reconciled version instead — the draft is never
+    // stored (the reveal-hold that keeps the draft off screen is Task 7).
+    if (isEditorMode(hooks.getActiveScene())) {
+        const draft = acceptedProse(run);
+        const snapshot = await __buildEditorSnapshot({ id: run.sceneId, timelineId: run.timelineId });
+        const { committedProse } = await runDirectorEdit({
+            scene: { id: run.sceneId, timelineId: run.timelineId },
+            snapshot, draft, draftReasoning: narratorReasoning(run),
+        });
+        run.acceptedVisibleText = committedProse;
     }
     await finalizeRunMessage(run, { state: 'complete' });
     run.acceptedComplete = true;
