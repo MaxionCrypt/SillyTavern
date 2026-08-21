@@ -276,7 +276,7 @@ export function getLiveDirectionRun() {
 }
 
 export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
-    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: scene?.liveDirection?.mode === 'solo' ? 'solo' : 'director' };
+    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: ['solo', 'editor'].includes(scene?.liveDirection?.mode) ? scene.liveDirection.mode : 'director' };
     // A hidden Director pass is a busy pipeline with no visible run yet. It used
     // to report 'Ready' with Stop disabled, which is what invited the second
     // send that produced a second bubble — notifyTransient('Directing') is a
@@ -287,7 +287,7 @@ export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
         active: true,
         state: activeRun?.state || (directing ? 'Directing' : 'Ready'),
         pacing: scene.liveDirection?.pacing || 'natural',
-        mode: scene.liveDirection?.mode === 'solo' ? 'solo' : 'director',
+        mode: ['solo', 'editor'].includes(scene.liveDirection?.mode) ? scene.liveDirection.mode : 'director',
         openingLabel: activeRun?.openingLabel || '',
         canContinue: activeRun?.state === 'Waiting for you',
         canSend: !directing,

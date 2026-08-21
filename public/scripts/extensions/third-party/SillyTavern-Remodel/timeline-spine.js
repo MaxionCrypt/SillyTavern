@@ -8528,7 +8528,7 @@ function renderRoleplayComposer(root) {
             </label>
             <label class="remodel-live-pacing">Engine
                 <select data-remodel-live-mode aria-label="Roleplay engine">
-                    ${[['director', 'Director'], ['solo', 'Solo']].map(([value, label]) => `<option value="${value}"${(directionUi.mode || 'director') === value ? ' selected' : ''}>${label}</option>`).join('')}
+                    ${[['director', 'Director'], ['solo', 'Solo'], ['editor', 'Editor']].map(([value, label]) => `<option value="${value}"${(directionUi.mode || 'director') === value ? ' selected' : ''}>${label}</option>`).join('')}
                 </select>
             </label>
             ${directionUi.mode === 'solo' ? `<label class="remodel-live-pacing">Extractor
@@ -9343,7 +9343,14 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
     renderRoleplayDirectionFeed(root, getActiveScene());
     ensureLiveDirectionCardInStream(root, run);
     const body = root.querySelector('[data-remodel-rp-typing-body]');
-    if (body && run?.acceptedVisibleText != null) body.textContent = run.acceptedVisibleText;
+    if (body && run?.acceptedVisibleText != null) {
+        // Editor mode is hold-then-show: the narrator's draft must not appear.
+        // Until the run commits (the Director-editor has reconciled it), show a
+        // reviewing placeholder instead of the streaming draft; then reveal the
+        // committed prose.
+        const reviewing = getLiveDirectionUiState(getActiveScene())?.mode === 'editor' && !run.acceptedComplete;
+        body.textContent = reviewing ? 'The Director is reviewing the scene…' : run.acceptedVisibleText;
+    }
     const zone = root.querySelector('[data-remodel-rp-composer]');
     const flow = zone?.querySelector('[data-remodel-live-flow]');
     if (flow) {
