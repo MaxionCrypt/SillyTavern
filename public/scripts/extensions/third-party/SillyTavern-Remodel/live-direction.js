@@ -25,7 +25,6 @@ import { ENTRY_TYPES, parseDirectorReply } from './director-reply.js';
 import { filterNarratorHistory } from './narrator-history.js';
 import {
     abandonDirectorTurn,
-    appendDirectorEntries,
     deleteDirectorEntry,
     readAllEntriesForOwner,
     readNarratorEntries,
@@ -35,7 +34,7 @@ import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from
 import { StructuredReplyError } from './structured-reply.js';
 import { streamChatPrompt } from './story-stream.js';
 import { buildNarratorArchivistSections, buildDirectionInjection, buildGoalObjectives } from './narrator-prompt.js';
-import { isEditorMode, buildDirectorEditorPrompt, parseEditorReply } from './director-editor.js';
+import { isEditorMode, buildDirectorEditorPrompt, parseEditorReply, applySwaps } from './director-editor.js';
 import { buildExtractionPrompt } from './narrator-extract.js';
 import { runExtraction } from './extraction-config.js';
 import { isSoloMode, soloEnvelope } from './solo-direction.js';
@@ -276,7 +275,7 @@ export function getLiveDirectionRun() {
 }
 
 export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
-    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: ['solo', 'editor'].includes(scene?.liveDirection?.mode) ? scene.liveDirection.mode : 'director' };
+    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: 'editor' };
     // A hidden Director pass is a busy pipeline with no visible run yet. It used
     // to report 'Ready' with Stop disabled, which is what invited the second
     // send that produced a second bubble — notifyTransient('Directing') is a
@@ -287,7 +286,7 @@ export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
         active: true,
         state: activeRun?.state || (directing ? 'Directing' : 'Ready'),
         pacing: scene.liveDirection?.pacing || 'natural',
-        mode: ['solo', 'editor'].includes(scene.liveDirection?.mode) ? scene.liveDirection.mode : 'director',
+        mode: 'editor',
         openingLabel: activeRun?.openingLabel || '',
         canContinue: activeRun?.state === 'Waiting for you',
         canSend: !directing,
@@ -313,7 +312,9 @@ export function setLiveDirectionPacing(scene, pacing) {
 }
 
 export function setLiveDirectionMode(scene, mode) {
-    if (!scene || (mode !== 'director' && mode !== 'solo' && mode !== 'editor')) return false;
+    // 'editor' is the only engine; the two-agent 'director' and 'solo' engines
+    // have been removed.
+    if (!scene || mode !== 'editor') return false;
     updateScene(scene.id, { liveDirection: { ...scene.liveDirection, mode } });
     notifyState();
     return true;
@@ -789,74 +790,6 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     return generateDirectedPerformer({ scene, envelope, performer, autonomousSequence: Number(saved.autonomousSequence) || 0 });
 }
 
-/**
- * Director mode's direction step: run the two-agent Director call, store its
- * notebook entries, and build the envelope from its reply. Extracted verbatim
- * from beginDirection so solo mode can be switched in beside it (connection
- * point 1). Returns the envelope plus the turn number if entries were stored
- * (so beginDirection's finally can tell the pass produced a record).
- *
- * @returns {Promise<{ envelope: object, storedTurn: number|null }>}
- */
-async function directorEnvelope(scene, snapshot, turn, token) {
-    const startedAt = Date.now();
-    const reply = await requestDirection(scene, snapshot, {
-        signal: token.controller.signal,
-        onChunk: (update) => {
-            // Forwarded on EVERY chunk so the direction card fills live; the
-            // journal entry below stays once-per-pass.
-            hooks.onDirectorChunk(update);
-            if (token.firstChunkAt) return;
-            token.firstChunkAt = Date.now();
-            journal('stream.first-chunk', { passId: token.id, afterMs: token.firstChunkAt - startedAt, chars: update.text.length }, { correlationId: token.id });
-        },
-    });
-    // The notebook is written whatever happens next, including for an
-    // interrupted Director: what it managed to say is a record of this turn. A
-    // cancelled take is stamped `abandoned`; its trailing entry `incomplete`.
-    const stored = appendDirectorEntries(scene.timelineId, {
-        sceneId: scene.id,
-        turn,
-        entries: markSeveredEntry(reply.entries, reply.interrupted),
-        reasoning: reply.reasoning,
-    });
-    // Stored entries but no block to carry them = a scene about to generate with
-    // no direction at all, while every other symptom looks healthy. Only when
-    // the block is MISSING — a user who toggled it off chose that.
-    const routing = describeDirectorNotesRouting();
-    if (stored.length && !routing.block && !routing.present) {
-        journal('notes.unrouted', {
-            passId: token.id,
-            turn,
-            entryCount: stored.length,
-            remedy: 'The active Roleplay · Chat recipe has no "Director\'s Notes" block, so this turn\'s direction reaches no one. Add it in Prompt Studio (Add context → Director\'s Notes).',
-        }, { correlationId: token.id, severity: 'warn', summary: 'direction.notes: stored, but no block carries them to the Narrator' });
-    }
-    const envelope = buildDirectionEnvelope(reply, turn);
-    journal('notebook', {
-        passId: token.id,
-        turn,
-        directionId: envelope.directionId,
-        durationMs: Date.now() - startedAt,
-        firstChunkMs: token.firstChunkAt ? token.firstChunkAt - startedAt : null,
-        streamed: reply.streamed,
-        interrupted: reply.interrupted,
-        replyChars: reply.raw.length,
-        reasoningLength: reply.reasoning.length,
-        entryCount: stored.length,
-        entryTypes: stored.map((entry) => entry.type),
-        tailFound: reply.tailFound,
-        requestCount: reply.state.requests.length,
-        continueAfter: reply.state.flow.continue,
-    }, { correlationId: token.id });
-    // Design §3: a missing or unparseable tail is never an error — the turn
-    // proceeds with no state changes, and this is the only notice of it.
-    if (reply.tailError) {
-        journal('tail.unparseable', { passId: token.id, turn, error: reply.tailError }, { correlationId: token.id, severity: 'warn', summary: 'direction.tail: unparseable, no state changed' });
-    }
-    return { envelope, storedTurn: stored.length ? turn : null };
-}
-
 async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, postedMessage = null } = {}) {
     // Checked before the Director call, not after: the Director costs a real
     // request and ~17s, and there is no point spending either when the
@@ -968,25 +901,16 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             receiptCount: snapshot.recentReceipts.length,
         }, { correlationId: token.id });
         if (token.aborted) return abandonPass(token, 'snapshot');
-        // Connection point 1 — how the turn's direction is produced. Director
-        // mode runs the two-agent Director call (directorEnvelope, unchanged);
-        // solo mode builds a Director-free envelope (no LLM call, no notebook).
-        // Everything downstream — performer, reveal, finalize, extraction — is
-        // shared. `notebookTurn` is supplied only by regenerate, which reuses a
-        // freed turn number rather than allocating a new one.
+        // Connection point 1 — the turn's direction. The narrator drafts first
+        // (no pre-call, no LLM round-trip here); the Loom reconciles that draft
+        // against the dice at completeVisibleRun. Everything downstream —
+        // performer, reveal, finalize, editor pass — is shared. `notebookTurn`
+        // is supplied only by regenerate, which reuses a freed turn number
+        // rather than allocating a new one.
         const turn = toTurnNumber(notebookTurn) ?? nextNotebookTurn(scene);
-        // Solo and editor modes both skip the Director pre-call: the narrator
-        // drafts first, and (editor mode) the Director-editor reconciles the
-        // draft at completeVisibleRun. Only classic 'director' mode runs the
-        // two-agent Director here.
-        const { envelope, storedTurn: storedTurnValue } = (isSoloMode(scene) || isEditorMode(scene))
-            ? soloEnvelope(scene, snapshot, turn)
-            : await directorEnvelope(scene, snapshot, turn, token);
+        const { envelope, storedTurn: storedTurnValue } = soloEnvelope(scene, snapshot, turn);
         if (storedTurnValue) storedTurn = storedTurnValue;
-        // The Director round-trip is the long window. Anything that happened
-        // during it — Stop, a user intervention outranking an autonomous pass —
-        // lands here, before a single native token is spent.
-        if (token.aborted) return abandonPass(token, 'director');
+        if (token.aborted) return abandonPass(token, 'envelope');
         // Performer selection is no longer the Director's to make — whoever
         // holds the Scene's Narrator badge speaks. A manual "speak next"
         // override still outranks it when one is armed.
@@ -1457,121 +1381,6 @@ export async function previewDirectorPrompt(scene) {
     return { prompt, recipe, snapshot, usedFallback, trace, contractOk, hasTags, hasFence };
 }
 
-/**
- * Ask the Director for this turn's notebook, streaming.
- *
- * WHY STREAMING, AND WHY NO SCHEMA: core decides streaming in one line
- * (`openai.js`, `createGenerationParameters`) — `settings.stream_openai && type
- * !== 'quiet'` — and generateRaw/generateRawData hard-code the type to 'quiet'.
- * A schema-enforced call is therefore structurally unstreamable, and worse,
- * generateRawData returns `extractJsonFromData(...)` when a jsonSchema is
- * supplied and throws the provider's response object away — the only place
- * reasoning lives. Dropping the schema is what buys both back at once: the
- * Director's text arrives as it is written, and `state.reasoning` comes with
- * it instead of having to be stolen off the wire.
- *
- * Measured, which is why this is not a preference: one recorded pass spent
- * 101s producing 11,795 characters of reasoning and a 100-character
- * instruction, because reasoning and the envelope shared one token allowance.
- * The reply is free-form now; only the trailing state fence is machine-read.
- *
- * @returns {Promise<{entries: Array<{type: string, text: string}>,
- *   state: {requests: object[], flow: {continue: boolean}}, reasoning: string,
- *   raw: string, tailFound: boolean, tailError: string, interrupted: boolean,
- *   streamed: boolean}>}
- */
-async function requestDirection(scene, snapshot, { onChunk, signal } = {}) {
-    const profile = getMechanicsProfile();
-    const { recipe, prompt, usedFallback, compiledCount, trace: trail } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled, trace: true });
-    captureDirectorPromptLog(recipe?.name, trail);
-    if (usedFallback) {
-        journal('recipe.fallback', { hadRecipe: Boolean(recipe), messages: compiledCount }, { severity: 'warn' });
-    }
-    // Held outside the try so an abort mid-reply keeps whatever arrived: the
-    // transport may either return early having seen the signal, or throw from
-    // the open fetch, and only one of those hands the text back.
-    let raw = '';
-    let reasoning = '';
-    let streamed = false;
-    const collect = (update) => {
-        raw = update.text;
-        reasoning = update.reasoning;
-        onChunk?.(update);
-    };
-    if (testAdapters?.requestDirection) {
-        const answer = await testAdapters.requestDirection({ scene, snapshot, prompt });
-        raw = String(typeof answer === 'string' ? answer : answer?.text || '');
-        reasoning = String(answer?.reasoning || '');
-    } else {
-        try {
-            const result = await streamChatPrompt({ prompt, onChunk: collect, signal });
-            raw = result.text;
-            reasoning = result.reasoning;
-            streamed = result.streamed;
-        } catch (error) {
-            // A cancelled request is not a failure to report — the user
-            // cancelled it. Anything else still is.
-            if (!signal?.aborted) throw error;
-        }
-    }
-    lastDirectorReasoning = String(reasoning || '').trim();
-    const interrupted = Boolean(signal?.aborted);
-    raw = String(raw || '').trim();
-    if (!raw && !interrupted) {
-        throw new StructuredReplyError(
-            'empty',
-            'The Game Director returned nothing at all. This is almost always the token budget: reasoning is paid for out of the same allowance as the reply, so a thinking model can exhaust it before writing a single character. Reduce the model\'s reasoning effort, or raise its response length on this connection.',
-        );
-    }
-    const reply = parseDirectorReply(raw);
-    return {
-        entries: reply.entries,
-        // An interrupted reply is never read for state. Its tail either never
-        // arrived or arrived half-written, and a fence that happens to parse
-        // out of a severed reply would apply changes the Director had not
-        // finished deciding.
-        state: interrupted ? { requests: [], flow: { continue: false } } : reply.state,
-        tailFound: interrupted ? false : reply.tailFound,
-        tailError: interrupted ? '' : reply.tailError,
-        reasoning: lastDirectorReasoning,
-        raw,
-        interrupted,
-        streamed,
-    };
-}
-
-/**
- * The envelope the rest of the pass runs on, built by code from what the
- * Director actually said.
- *
- * Everything here that is not the Director's judgment is Remodel's: the
- * protocol string is a local constant, and the direction id is generated. Both
- * used to be schema fields the model filled in, and both were observed being
- * filled in wrongly — one provider returned the literal `"dir-001"` for every
- * pass in a session, which made persistDirectionRecord's id-keyed log replace
- * its single record over and over and let one run's completion guards match
- * another run's id.
- *
- * `flow` is the one place the shapes differ. The reply carries a single
- * `continue`; the pipeline downstream reads `continueAfter`/`hardPauseAfter`.
- * Not continuing IS the scene waiting for the user, so the second field is
- * derived rather than invented — and with no tail at all both land on "wait",
- * which is the direction design §3 chose to fail in.
- */
-function buildDirectionEnvelope(reply, turn) {
-    const requests = getMechanicsProfile().enabled ? usableRequests(reply.state.requests) : [];
-    return {
-        protocol: DIRECTION_PROTOCOL,
-        directionId: createId('direction'),
-        notebookTurn: turn,
-        reasoning: reply.reasoning || '',
-        flow: {
-            continueAfter: reply.state.flow.continue === true,
-            hardPauseAfter: reply.state.flow.continue !== true,
-        },
-        requests,
-    };
-}
 
 /**
  * Requests the mechanics layer can at least read.
@@ -1633,23 +1442,6 @@ function discardNotebookTurn(scene, turn) {
     return entries.length;
 }
 
-/**
- * Mark where an interrupted reply was cut: the LAST entry, and only that one.
- * Every earlier entry was closed by a newline the Director did write.
- *
- * This is the owner's record of what was severed, and nothing else. Whether
- * the TAKE counts — whether the Narrator ever sees any of it — is a separate
- * question with a separate answer, decided by beginDirection's `finally` on
- * what the pass actually produced rather than on how it ended. An interrupted
- * pass is one way to produce nothing; a pass that stored entries and then
- * threw is another, and keying the withholding here would only have caught
- * the first.
- */
-function markSeveredEntry(entries, interrupted) {
-    const list = Array.isArray(entries) ? entries : [];
-    if (!interrupted || !list.length) return list;
-    return list.map((entry, index) => (index === list.length - 1 ? { ...entry, incomplete: true } : entry));
-}
 
 /**
  * How many times a performer that renders nothing is asked again before the
@@ -2082,8 +1874,10 @@ export async function runDirectorEdit({ scene, snapshot, draft, draftReasoning =
         journal('editor.failed', { phase: 'generate', error: String(error?.message || error) }, { severity: 'warn' });
         return { committedProse: draft, result: null };
     }
-    const { prose, requests } = parseEditorReply(raw);
-    const committedProse = prose || draft;
+    // Preserve-and-patch: the draft is canonical. The Director only names the
+    // exact span(s) a roll changed; code applies them. No swaps → draft stands.
+    const { swaps, requests } = parseEditorReply(raw);
+    const { prose: committedProse } = applySwaps(draft, swaps);
     if (!requests.length) return { committedProse, result: null };
     try {
         const result = executeDirectionRequests(requests, {

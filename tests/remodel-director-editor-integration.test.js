@@ -28,8 +28,9 @@ beforeEach(() => {
 });
 afterEach(() => setLiveDirectionTestAdapters(null));
 
-test('runDirectorEdit commits the patched prose and records the state', async () => {
+test('runDirectorEdit applies the swap to the draft and records the state', async () => {
     const fence = JSON.stringify({
+        swaps: [{ find: 'Marissa melts into him', replace: 'Marissa turns her cheek' }],
         requests: [
             { id: 'r1', capability: 'event.record', arguments: { summary: 'Eli tried to kiss Marissa; she pulled back' }, reason: 'roll failed' },
             { id: 'r2', capability: 'variable.adjust', arguments: { variableRef: "Marissa's Trust", delta: -2 }, reason: 'he overstepped' },
@@ -37,7 +38,7 @@ test('runDirectorEdit commits the patched prose and records the state', async ()
         flow: { continue: false },
     });
     setLiveDirectionTestAdapters({
-        directorEdit: async () => ['Eli leans in, but Marissa turns her cheek.', '', '```state', fence, '```'].join('\n'),
+        directorEdit: async () => ['```state', fence, '```'].join('\n'),
     });
     const snapshot = await __buildEditorSnapshot(scene);
     const { committedProse } = await runDirectorEdit({
@@ -45,19 +46,20 @@ test('runDirectorEdit commits the patched prose and records the state', async ()
         draft: 'Eli leans in and Marissa melts into him.',
         draftReasoning: 'goes for the kiss',
     });
-    // Preserve-and-patch: the committed prose is the Director's reconciled version.
-    expect(committedProse).toBe('Eli leans in, but Marissa turns her cheek.');
+    // Preserve-and-patch: the draft is kept; only the swapped span changes.
+    expect(committedProse).toBe('Eli leans in and Marissa turns her cheek.');
     // The state fence was recorded to the archivist…
     expect(listEvents(scene.timelineId, scene.id).map((e) => e.summary)).toEqual(['Eli tried to kiss Marissa; she pulled back']);
     // …and the mechanics resolved against the address book — Trust 20 → 18.
     expect(Number(getVariableValue(trustId, 'tl-ed')?.value)).toBe(18);
 });
 
-test('with no state fence, runDirectorEdit commits the prose and records nothing', async () => {
+test('with no swaps and no requests, runDirectorEdit keeps the draft verbatim and records nothing', async () => {
+    // The model leaks prose but no fence — it is ignored; the draft is canonical.
     setLiveDirectionTestAdapters({ directorEdit: async () => 'Eli leans in and she meets him halfway.' });
     const snapshot = await __buildEditorSnapshot(scene);
-    const { committedProse, result } = await runDirectorEdit({ scene, snapshot, draft: 'the draft' });
-    expect(committedProse).toBe('Eli leans in and she meets him halfway.');
+    const { committedProse, result } = await runDirectorEdit({ scene, snapshot, draft: 'the draft stands' });
+    expect(committedProse).toBe('the draft stands');
     expect(result).toBe(null);
     expect(listEvents(scene.timelineId, scene.id)).toEqual([]);
 });

@@ -22,6 +22,7 @@ const cast = [{ ref: { kind: 'character', id: 'char-n', label: 'Narrator' }, lab
 const DRAFT = 'Eli leans in and Marissa melts into him.';
 const COMMITTED = 'Eli leans in, but Marissa turns her cheek at the last second.';
 const fence = JSON.stringify({
+    swaps: [{ find: DRAFT, replace: COMMITTED }],
     requests: [{ id: 'r1', capability: 'event.record', arguments: { summary: 'Eli tried to kiss Marissa; she pulled back' }, reason: 'roll failed' }],
     flow: { continue: false },
 });

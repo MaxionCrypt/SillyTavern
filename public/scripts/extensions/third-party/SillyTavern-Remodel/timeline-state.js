@@ -552,10 +552,11 @@ function normalizeLiveDirection(value = {}, legacyRoles = []) {
         .slice(-60);
     return {
         enabled: value?.enabled !== false,
-        // Which roleplay engine runs the turn: 'director' (two-agent, default),
-        // 'solo' (single-agent, archivist-native), or 'editor' (narrator drafts,
-        // Director reconciles). Anything else falls back to 'director'.
-        mode: ['solo', 'editor'].includes(value?.mode) ? value.mode : 'director',
+        // The roleplay engine is 'editor': the Narrator drafts freely, then the
+        // Loom reconciles the draft with the dice and records what happened. The
+        // legacy 'director' (two-agent) and 'solo' engines have been removed, so
+        // every scene resolves to 'editor'.
+        mode: 'editor',
         pacing,
         autoplay: value?.autoplay !== false,
         autonomousResponseLimit: limit,

@@ -12,6 +12,7 @@ import {
     setVariableField,
     restoreVariableStore,
     snapshotVariableStore,
+    snapshotVariableStoreForUndo,
     transitionVariableValue,
 } from './variables-store.js';
 import {
@@ -204,7 +205,7 @@ export function validateMechanicsRequest(value) {
 export function executeMechanicsRequest(envelope, context = {}) {
     const validation = validateMechanicsRequest(envelope);
     if (!validation.valid) return rejectedTransaction(envelope, context, validation.errors);
-    const variableSnapshot = snapshotVariableStore();
+    const variableSnapshot = snapshotVariableStoreForUndo();
     const goalSnapshot = snapshotStoryGoalsStore();
     const archivistSnapshot = snapshotArchivistStore();
     const transactionId = createId('mechanics-tx');
