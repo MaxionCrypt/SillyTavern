@@ -312,7 +312,7 @@ export function setLiveDirectionPacing(scene, pacing) {
 }
 
 export function setLiveDirectionMode(scene, mode) {
-    if (!scene || (mode !== 'director' && mode !== 'solo')) return false;
+    if (!scene || (mode !== 'director' && mode !== 'solo' && mode !== 'editor')) return false;
     updateScene(scene.id, { liveDirection: { ...scene.liveDirection, mode } });
     notifyState();
     return true;
