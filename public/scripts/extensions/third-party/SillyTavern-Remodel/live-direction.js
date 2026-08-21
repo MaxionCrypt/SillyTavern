@@ -21,7 +21,7 @@ import { clearStandingDirection, readStandingDirection, saveStandingDirection } 
 import { deriveBeats } from './direction-beats.js';
 import { compilePromptRecipe, captureDirectorPromptLog, capturePromptLog, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
 import { PROMPT_SOURCE_DEFINITIONS } from './prompt-studio-store.js';
-import { ENTRY_TYPES, parseDirectorReply } from './director-reply.js';
+import { ENTRY_TYPES } from './director-reply.js';
 import { filterNarratorHistory } from './narrator-history.js';
 import {
     abandonDirectorTurn,
@@ -35,8 +35,6 @@ import { StructuredReplyError } from './structured-reply.js';
 import { streamChatPrompt } from './story-stream.js';
 import { buildNarratorArchivistSections, buildDirectionInjection, buildGoalObjectives } from './narrator-prompt.js';
 import { isEditorMode, buildDirectorEditorPrompt, parseEditorReply, applySwaps } from './director-editor.js';
-import { buildExtractionPrompt } from './narrator-extract.js';
-import { runExtraction } from './extraction-config.js';
 import { isSoloMode, soloEnvelope } from './solo-direction.js';
 import { updateScene } from './timeline-state.js';
 import { recordDebugEvent } from './debug-console.js';
@@ -1907,85 +1905,6 @@ function narratorReasoning(run) {
     return String(message?.extra?.reasoning || run.envelope?.reasoning || '').trim();
 }
 
-/**
- * Pass 2 — the Archivist. Read the prose the Narrator just delivered plus its
- * own reasoning (the intent channel) and record what happened as archivist
- * state, so the next turn's injection is grounded in it. Diagnostics only — a
- * failure here never touches the turn the user already read.
- */
-async function extractStateFromProse(run) {
-    const prose = acceptedProse(run);
-    if (!prose) return;
-    const reasoning = narratorReasoning(run);
-    // The reasoning gate: card-authored reasoning is how extraction knows what
-    // the narrating mind DECIDED changed, rather than inferring it from prose.
-    // An empty reasoning channel means a non-reasoning model (or thinking off) —
-    // extraction still runs on prose alone, but less accurately, and the user
-    // should be told to enable thinking or switch models. Recorded per scene so
-    // getLiveDirectionUiState can surface a warning in the toolbar.
-    reasoningAbsentByScene.set(String(run.sceneId), !reasoning);
-    if (!reasoning) {
-        journal('reasoning.absent', {
-            directionId: run.directionId,
-            remedy: 'The model returned no reasoning; extraction is running on prose alone (less accurate). Enable the connection\'s thinking/reasoning, or use a reasoning-capable model.',
-        }, { correlationId: run.directionId, severity: 'warn', summary: 'direction.reasoning: none returned — extraction degraded to prose-only' });
-    }
-    const currentState = buildNarratorArchivistSections(run.timelineId, run.sceneId);
-    // Advertise the Variables/Goals this turn already surfaced, so the extractor
-    // can record numeric/goal consequences too — reusing the Director's snapshot
-    // and address book rather than retrieving again.
-    let mechanicsSkill = '';
-    const mechanics = run.envelope?.mechanicsSnapshot || null;
-    if (mechanics && getMechanicsProfile().enabled) {
-        try {
-            mechanicsSkill = buildDirectionSources({ mechanics }, { mechanicsEnabled: true }).mechanicsSkill || '';
-        } catch { mechanicsSkill = ''; }
-    }
-    const prompt = buildExtractionPrompt({ prose, reasoning, currentState, mechanicsSkill });
-    let raw = '';
-    try {
-        if (testAdapters?.extractState) {
-            raw = String(await testAdapters.extractState({ run, prose, prompt }) || '');
-        } else if (testAdapters) {
-            // Test mode with no extraction stub: extraction is opt-in for tests
-            // (a test that cares provides extractState), so never fire the real
-            // transport here — it would pollute Director-prompt captures.
-            return;
-        } else {
-            // Pass 2 runs on the configured extraction profile when set (so a
-            // non-reasoning narrator can pair with a reasoning-capable
-            // extractor), else the active connection. See extraction-config.js.
-            raw = await runExtraction(prompt);
-        }
-    } catch (error) {
-        journal('extract.failed', { directionId: run.directionId, phase: 'generate', error: String(error?.message || error) }, { severity: 'warn', correlationId: run.directionId });
-        return;
-    }
-    const reply = parseDirectorReply(String(raw || '').trim());
-    const requests = reply?.state?.requests || [];
-    if (!requests.length) {
-        journal('extract.empty', { directionId: run.directionId }, { correlationId: run.directionId });
-        return;
-    }
-    try {
-        // executeDirectionRequests resolves Variable/Goal names against the
-        // address book (archivist requests carry no refs and pass straight
-        // through), so one call records both narrative and mechanical state.
-        const result = executeDirectionRequests(requests, {
-            scene: { id: run.sceneId, timelineId: run.timelineId },
-            directionId: run.directionId,
-            messageId: run.messageId,
-            addressBook: run.addressBook,
-            variableRefs: run.variableRefs,
-            goalRefs: run.goalRefs,
-            authorizedGoalIds: run.authorizedGoalIds,
-        });
-        journal('extract', { directionId: run.directionId, requestCount: requests.length, ok: result.ok, receipts: result.receipts?.length || 0, unresolved: result.unresolvedReasons?.length || 0 }, { correlationId: run.directionId, summary: 'Archivist recorded state from the narration' });
-    } catch (error) {
-        journal('extract.failed', { directionId: run.directionId, phase: 'apply', error: String(error?.message || error) }, { severity: 'warn', correlationId: run.directionId });
-    }
-}
-
 async function completeVisibleRun(run) {
     if (activeRun !== run) return;
     // revealStep is async and nulls revealTimer before it awaits, so a
@@ -2017,11 +1936,8 @@ async function completeVisibleRun(run) {
     }
     await finalizeRunMessage(run, { state: 'complete' });
     run.acceptedComplete = true;
-    // Pass 2 (connection point 2): read the prose the user just received and
-    // record what happened into the archivist, so next turn's injection is
-    // grounded in it. Solo mode only — in Director mode the Director authors
-    // mechanics, and running both would double-author. Never breaks the turn.
-    if (isSoloMode(hooks.getActiveScene())) await extractStateFromProse(run);
+    // State recording is the Loom's job now (runDirectorEdit above, in editor
+    // mode). The old solo Pass-2 extraction has been removed.
     run.autonomousSequence += 1;
     // A response landed, so any failure notice still on screen is describing a
     // turn that has since recovered. The empty-response retries are the case

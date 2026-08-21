@@ -129,12 +129,10 @@ import {
     sendWithoutLiveDirection,
     setLiveDirectionEnabled,
     setLiveDirectionPacing,
-    setLiveDirectionMode,
     setNextPerformerOverride,
     stopLiveDirection,
     submitDirectedRoleplay,
 } from './live-direction.js';
-import { listExtractionProfiles, getExtractionProfileId, setExtractionProfileId } from './extraction-config.js';
 import { sanitizeDirectionText } from './live-direction-markers.js';
 import { resolveDirectionChromeMode } from './direction-chrome.js';
 import {
@@ -10026,10 +10024,6 @@ function bindRoleplayComposerEvents() {
         if (!isRealRoleplayWorkspaceActive()) return;
         const pacing = event.target instanceof Element ? event.target.closest('[data-remodel-live-pacing]') : null;
         if (pacing instanceof HTMLSelectElement) setLiveDirectionPacing(getActiveScene(), pacing.value);
-        const mode = event.target instanceof Element ? event.target.closest('[data-remodel-live-mode]') : null;
-        if (mode instanceof HTMLSelectElement) setLiveDirectionMode(getActiveScene(), mode.value);
-        const extractor = event.target instanceof Element ? event.target.closest('[data-remodel-live-extractor]') : null;
-        if (extractor instanceof HTMLSelectElement) setExtractionProfileId(extractor.value);
     });
 }
 
