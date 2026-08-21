@@ -257,7 +257,7 @@ afterEach(async () => {
     setLiveDirectionTestAdapters(null);
 });
 
-test("the Narrator's own native request keeps its own prior line and the Director's notes, and drops the user's and another cast member's lines", async () => {
+test("the Narrator's own native request keeps its own prior line and the injected notes, and drops the user's and another cast member's lines", async () => {
     // Seeded so the fixture proves discrimination rather than passing on an
     // empty history either way (the same trap a reviewer already found once
     // in this file's neighbour, remodel-direction-lifecycle.test.js).
@@ -267,7 +267,6 @@ test("the Narrator's own native request keeps its own prior line and the Directo
     let capturedNotes = null;
     let capturedChat = null;
     setLiveDirectionTestAdapters({
-        requestDirection: async () => directorReply(),
         // Stands in for core's native generate(): by this point
         // generateDirectedPerformer has already called setNativePromptContent
         // for this turn's notes (mirrors production ordering — see the
@@ -297,11 +296,10 @@ test("the Narrator's own native request keeps its own prior line and the Directo
     await requestNextDirection(scene);
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
+    // A real notes block (the append-only + archivist injection this turn
+    // produced), not an empty string — so the assertions below are about the
+    // actual system entry that reaches the Narrator.
     expect(capturedNotes).toBeTruthy();
-    // Sanity: this is a real, turn-specific notes block, not an empty string
-    // or a stand-in — so the assertions below are about the actual notes
-    // this turn produced.
-    expect(capturedNotes).toContain('The room holds its breath.');
     expect(capturedChat).toBeTruthy();
 
     // The user's line is gone — unconditionally, by role, under every
@@ -315,9 +313,8 @@ test("the Narrator's own native request keeps its own prior line and the Directo
     expect(capturedChat.some((m) => m.name === 'Someone Else')).toBe(false);
     // ...the Narrator's OWN prior line survives...
     expect(capturedChat).toContainEqual({ role: 'assistant', name: 'The Narrator', content: 'The lantern is lit.' });
-    // ...and the Director's notes — the only channel left for what the user
-    // did this turn, now that the Narrator is blind to the chat history
-    // carrying it — are present verbatim, not merely "some system entry".
+    // ...and the injected notes system entry is present verbatim, not merely
+    // "some system entry".
     expect(capturedChat).toContainEqual({ role: 'system', content: capturedNotes });
     expect(capturedChat).toHaveLength(3); // world info, the Narrator's own line, the notes
 });
