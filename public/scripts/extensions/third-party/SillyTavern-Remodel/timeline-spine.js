@@ -297,6 +297,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindRoleplayGenerationFeedback();
     bindRoleplayCastPickerEvents();
     bindRoleplayNarratorPickerEvents();
+    bindRoleplayConnectionPickerEvents();
     bindRoleplayCastDragEvents();
     registerSceneMacros();
     registerCharacterFieldMacro();
@@ -5260,6 +5261,7 @@ async function reorderRoleplayCast(movedAvatar, targetAvatar) {
 
 const ROLEPLAY_PICKER_ID = 'remodel-rp-cast-picker';
 const ROLEPLAY_NARRATOR_PICKER_ID = 'remodel-rp-narrator-picker';
+const ROLEPLAY_CONNECTION_PICKER_ID = 'remodel-rp-connection-picker';
 
 /**
  * Chooses the sole model-facing role in an editor turn. The Loom is pipeline
@@ -5367,8 +5369,7 @@ function renderRoleplayNarratorPicker(overlay) {
     if (search instanceof HTMLInputElement && search.value.trim()) filterRoleplayNarratorGrid(overlay, search.value);
 }
 
-function renderRoleplayGenerationRoutes(overlay, context = getContext()) {
-    const state = overlay._remodelNarrator;
+function renderRoleplayGenerationRoutes(overlay, context = getContext(), state = overlay._remodelNarrator) {
     const profiles = (context.extensionSettings?.connectionManager?.profiles || [])
         .filter((profile) => {
             const boundary = context.CONNECT_API_MAP?.[profile?.api]?.selected;
@@ -5383,15 +5384,123 @@ function renderRoleplayGenerationRoutes(overlay, context = getContext()) {
         }),
     ].join('');
 
-    for (const [selector, value] of [
-        ['[data-remodel-rp-narrator-profile]', state.narratorProfileId],
-        ['[data-remodel-rp-loom-profile]', state.loomProfileId],
+    for (const [selector, stateKey] of [
+        ['[data-remodel-rp-narrator-profile]', 'narratorProfileId'],
+        ['[data-remodel-rp-loom-profile]', 'loomProfileId'],
     ]) {
         const select = overlay.querySelector(selector);
         if (!(select instanceof HTMLSelectElement)) continue;
         select.innerHTML = options;
+        const value = state[stateKey];
         select.value = profiles.some((profile) => profile.id === value) ? value : '';
+        // Keep the staged value identical to what the user can see. This also
+        // clears references to profiles that were deleted or became invalid.
+        state[stateKey] = select.value;
     }
+}
+
+/** Open the in-scene router for the two model-facing jobs. */
+function openRoleplayConnectionPicker() {
+    document.getElementById(ROLEPLAY_CONNECTION_PICKER_ID)?.remove();
+    const scene = getActiveScene();
+    if (!scene || scene.mode !== 'roleplay') return;
+
+    const overlay = document.createElement('div');
+    overlay.id = ROLEPLAY_CONNECTION_PICKER_ID;
+    overlay.className = 'remodel-rp-picker-scrim';
+    overlay._remodelConnections = {
+        sceneId: scene.id,
+        narratorProfileId: scene.generationProfileIds?.narrator || '',
+        loomProfileId: scene.generationProfileIds?.loom || '',
+    };
+    overlay.innerHTML = `
+        <div class="remodel-rp-picker remodel-rp-connection-picker" role="dialog" aria-modal="true" aria-labelledby="remodel-rp-connection-title" data-remodel-rp-picker-stop>
+            <div class="remodel-rp-picker-head">
+                <div>
+                    <div class="remodel-rp-picker-kicker">Scene connections</div>
+                    <div class="remodel-rp-picker-title" id="remodel-rp-connection-title">Narrator &amp; Loom</div>
+                    <div class="remodel-rp-picker-hint">Choose the Connection Profile used by each part of this scene. A profile carries its API, model, endpoint, preset, and credentials together.</div>
+                </div>
+                <button type="button" class="remodel-rp-picker-x" data-remodel-rp-connection-cancel aria-label="Close"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+            </div>
+            <div class="remodel-rp-generation-routes">
+                <div class="remodel-rp-generation-routes-copy">
+                    <span class="remodel-rp-generation-routes-title">Generation routes</span>
+                    <span class="remodel-rp-generation-routes-hint">Changes take effect on the next request for that job. A turn already running keeps the route it started with.</span>
+                </div>
+                <div class="remodel-rp-generation-route-grid">
+                    <label class="remodel-rp-generation-route">
+                        <span class="remodel-rp-generation-route-label"><i class="fa-solid fa-feather-pointed" aria-hidden="true"></i> Narrator</span>
+                        <select data-remodel-rp-narrator-profile aria-label="Narrator connection profile"></select>
+                        <span class="remodel-rp-generation-route-note">Private native draft · full character prompt</span>
+                    </label>
+                    <label class="remodel-rp-generation-route">
+                        <span class="remodel-rp-generation-route-label"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Loom</span>
+                        <select data-remodel-rp-loom-profile aria-label="Loom connection profile"></select>
+                        <span class="remodel-rp-generation-route-note">Visible reconciliation · mechanics · Archive</span>
+                    </label>
+                </div>
+            </div>
+            <div class="remodel-rp-picker-foot">
+                <span class="remodel-rp-picker-count">Saved to this scene only</span>
+                <div class="remodel-rp-picker-actions">
+                    <button type="button" class="remodel-rp-picker-btn" data-remodel-rp-connection-cancel>Cancel</button>
+                    <button type="button" class="remodel-rp-picker-btn remodel-rp-picker-go" data-remodel-rp-connection-apply>Apply connections <i class="fa-solid fa-plug-circle-check" aria-hidden="true"></i></button>
+                </div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    renderRoleplayGenerationRoutes(overlay, getContext(), overlay._remodelConnections);
+    requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
+}
+
+function closeRoleplayConnectionPicker() {
+    const overlay = document.getElementById(ROLEPLAY_CONNECTION_PICKER_ID);
+    if (!overlay) return;
+    overlay.classList.remove('remodel-rp-picker-in');
+    setTimeout(() => overlay.remove(), 200);
+}
+
+function bindRoleplayConnectionPickerEvents() {
+    document.addEventListener('click', (event) => {
+        const overlay = document.getElementById(ROLEPLAY_CONNECTION_PICKER_ID);
+        if (!overlay) return;
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target) return;
+        if (target === overlay || target.closest('[data-remodel-rp-connection-cancel]')) {
+            closeRoleplayConnectionPicker();
+            return;
+        }
+        if (!target.closest('[data-remodel-rp-connection-apply]')) return;
+        const state = overlay._remodelConnections;
+        const scene = getScene(state.sceneId);
+        if (!scene) {
+            closeRoleplayConnectionPicker();
+            return;
+        }
+        updateScene(scene.id, {
+            generationProfileIds: {
+                narrator: state.narratorProfileId || null,
+                loom: state.loomProfileId || null,
+            },
+        });
+        closeRoleplayConnectionPicker();
+        renderRoleplayScene();
+        showRoleplayToast('Narrator and Loom connections updated for this scene.');
+    });
+
+    document.addEventListener('change', (event) => {
+        const overlay = document.getElementById(ROLEPLAY_CONNECTION_PICKER_ID);
+        if (!overlay) return;
+        const target = event.target;
+        if (!(target instanceof HTMLSelectElement)) return;
+        if (target.matches('[data-remodel-rp-narrator-profile]')) {
+            overlay._remodelConnections.narratorProfileId = target.value;
+        } else if (target.matches('[data-remodel-rp-loom-profile]')) {
+            overlay._remodelConnections.loomProfileId = target.value;
+        }
+    });
 }
 
 function filterRoleplayNarratorGrid(overlay, query) {
@@ -8352,6 +8461,9 @@ function renderRoleplayComposer(root) {
             <button type="button" class="remodel-rp-command remodel-rp-act" data-remodel-rp-action="preview" title="Preview the final prompt">
                 <span class="remodel-rp-command-icon"><i class="fa-solid fa-eye" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Preview</span>
             </button>
+            <button type="button" class="remodel-rp-command remodel-rp-act" data-remodel-rp-action="connections" title="Choose Narrator and Loom API connections">
+                <span class="remodel-rp-command-icon"><i class="fa-solid fa-plug" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Connections</span>
+            </button>
             <span class="remodel-rp-command-prompt">${renderScenePromptChoice(getActiveScene(), true, 'roleplay')}</span>
             <span class="remodel-live-flow-actions">
                 <button type="button" data-remodel-live-continue${directionUi.canContinue ? '' : ' hidden'}><i class="fa-solid fa-play"></i> Continue</button>
@@ -9257,6 +9369,10 @@ function handleRoleplayAction(action) {
         }
         case 'preview': {
             openRoleplayPromptPreview();
+            break;
+        }
+        case 'connections': {
+            openRoleplayConnectionPicker();
             break;
         }
         case 'add-cast': {
