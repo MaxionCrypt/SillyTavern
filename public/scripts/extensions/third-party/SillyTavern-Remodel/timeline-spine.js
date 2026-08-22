@@ -118,7 +118,6 @@ import {
     describeNativeGenerationBlock,
     isDirectedLiveScene,
     ownsLiveDirectionGeneration,
-    previewDirectorPrompt,
     regenerateLastDirectedResponse,
     requestNextDirection,
     retryLiveStep,
@@ -8825,24 +8824,12 @@ async function triggerRoleplaySpeaker(name) {
 // Narrator tab: reuses the same dry-run + formatter the Story workspace's
 // preview uses. Honest "here's what the model will actually see," including
 // whatever's typed in the composer.
-//
-// Director tab: compiles through the exact path a real direction pass takes
-// (previewDirectorPrompt → compileDirectorPrompt in live-direction.js — same
-// recipe resolution, same buildDirectionSources, same compilePromptRecipe) so
-// the compile mechanism can never drift from what actually gets sent. The one
-// piece that cannot be made exact is Variables/Goals retrieval, which is
-// scored against a message the user has not sent yet — see the note rendered
-// in the Director panel below and previewDirectorPrompt's own doc comment.
 const ROLEPLAY_PREVIEW_ID = 'remodel-rp-preview-modal';
-
-const previewTab = (id, label, active) =>
-    `<button type="button" data-remodel-rp-preview-tab="${id}" class="${active === id ? 'is-active' : ''}">${label}</button>`;
 
 // The hint under the title used to describe both prompts at once, which is
 // never what is on screen — only one tab is ever visible. One line per tab,
 // swapped by setRoleplayPreviewTab.
 const PREVIEW_TAB_HINTS = Object.freeze({
-    director: 'What the hidden Director will receive on the next turn — nothing is sent.',
     narrator: 'What the Narrator will receive on the next turn — nothing is sent.',
 });
 
@@ -8866,11 +8853,6 @@ const previewPanel = (id, activeTab, lead = '') => `
                 ${lead}${PREVIEW_VIEWS_MARKUP}
             </div>`;
 
-// Informational, not a fault: the compile path is exact and only the retrieval
-// scoring can move, so this gets the neutral callout. The red warn box in the
-// same panel stays reserved for usedFallback, which genuinely is a fault.
-const DIRECTOR_RETRIEVAL_NOTE = '<p class="remodel-rp-preview-note">Everything here compiles exactly like a real request, except Variables/Goals retrieval — it is scored against your current history and this composer draft, and can select differently once you actually send.</p>';
-
 async function openRoleplayPromptPreview() {
     // Build the modal shell immediately with a loading state so the click is
     // acknowledged, then fill it once the dry runs resolve.
@@ -8879,7 +8861,7 @@ async function openRoleplayPromptPreview() {
     const directed = isDirectedLiveScene(activeScene);
     // Free play never calls the Director, so default to whichever tab this
     // Scene will actually use on its next turn.
-    const defaultTab = directed ? 'director' : 'narrator';
+    const defaultTab = 'narrator';
     const overlay = document.createElement('div');
     overlay.id = ROLEPLAY_PREVIEW_ID;
     overlay.className = 'remodel-rp-picker-scrim';
@@ -8892,11 +8874,6 @@ async function openRoleplayPromptPreview() {
                 </div>
                 <button type="button" class="remodel-rp-picker-x" data-remodel-rp-preview-close aria-label="Close">×</button>
             </div>
-            <div class="remodel-rp-preview-tabs" data-remodel-rp-preview-tabs>
-                ${previewTab('director', 'Director', defaultTab)}
-                ${previewTab('narrator', 'Narrator', defaultTab)}
-            </div>
-            ${previewPanel('director', defaultTab, directed ? DIRECTOR_RETRIEVAL_NOTE : '')}
             ${previewPanel('narrator', defaultTab)}
         </div>
     `;
@@ -8907,7 +8884,6 @@ async function openRoleplayPromptPreview() {
     // view toggle, so every lookup has to be scoped to its own panel — an
     // overlay-wide querySelector would find whichever panel comes first.
     const narratorPanel = overlay.querySelector('[data-remodel-rp-preview-panel="narrator"]');
-    fillDirectorPreviewPanel(overlay.querySelector('[data-remodel-rp-preview-panel="director"]'), activeScene, directed);
 
     try {
         const { generateData, warnings } = await runPromptPreviewDryRun('normal');
@@ -8949,56 +8925,6 @@ async function openRoleplayPromptPreview() {
     }
 }
 
-// Fills the Director tab by compiling the active Director recipe against a
-// snapshot built for the current Scene — the same compile path
-// requestDirection uses for a real direction pass (see
-// previewDirectorPrompt/compileDirectorPrompt in live-direction.js) — so the
-// two can never drift apart. Runs independently of the Narrator dry run above
-// so one tab's failure never blocks the other from filling in.
-async function fillDirectorPreviewPanel(panel, scene, directed) {
-    const bodyEl = panel?.querySelector('[data-remodel-rp-preview-body]');
-    const warnEl = panel?.querySelector('[data-remodel-rp-preview-warn]');
-    if (!bodyEl) return;
-    if (!directed) {
-        bodyEl.textContent = '(This Scene is on Free play — no Director request is made on its next turn. Turn Live Direction on to preview it.)';
-        return;
-    }
-    try {
-        const { prompt, usedFallback, trace, contractOk, hasTags, hasFence } = await previewDirectorPrompt(scene);
-        bodyEl.textContent = formatPromptStudioPreview({ apiType: 'chat', messages: prompt });
-        // Keyed on usedFallback, not on "no recipe": compileDirectorPrompt also
-        // falls back when a recipe exists but compiles to nothing or lost its
-        // protocol block — exactly the user who most needs to be told they are
-        // looking at the built-in prompt, not their own recipe's output.
-        if (usedFallback && warnEl) {
-            warnEl.textContent = '⚠ No usable Director recipe — showing the built-in fallback prompt.';
-            warnEl.hidden = false;
-        } else if (!contractOk && warnEl) {
-            // The recipe compiles and will be sent exactly as shown. What it
-            // no longer carries is the part the REPLY PARSER depends on, and
-            // the symptom of that is silent: a Director writes prose, nothing
-            // tags it, and the whole reply is stored as one untagged note with
-            // any secret inside it. Said here because this panel is where an
-            // owner rewriting the protocol is standing.
-            const missing = [!hasTags && 'the notebook tags ({{director::notebook.tags}})', !hasFence && 'the state fence ({{director::state.fence}})'].filter(Boolean).join(' and ');
-            warnEl.textContent = `⚠ This prompt is missing ${missing}. It will be sent as shown, but the Director's reply cannot be parsed into typed entries — everything it writes lands as a single untagged note, secrets included, and no Goal or Variable request can be read.`;
-            warnEl.hidden = false;
-        }
-        // No trace on the fallback path: the cards would be captioning the
-        // user's recipe blocks over a prompt those blocks did not produce.
-        // That case keeps the raw dump and the red box that explains it.
-        const sourcesEl = panel.querySelector('[data-remodel-rp-preview-sources]');
-        const viewsEl = panel.querySelector('[data-remodel-rp-preview-views]');
-        if (Array.isArray(trace) && trace.length && sourcesEl && viewsEl) {
-            sourcesEl.innerHTML = await renderPromptTraceSections(trace, prompt);
-            sourcesEl.hidden = false;
-            viewsEl.hidden = false;
-            bodyEl.hidden = true;
-        }
-    } catch (err) {
-        bodyEl.textContent = `Could not assemble a Director preview.\n\n${String(err)}`;
-    }
-}
 
 /**
  * Sizes a list of prompt texts, and says what unit it managed to size them in.

@@ -14,14 +14,12 @@ import {
     undoMechanicsTransaction,
 } from './mechanics-capabilities.js';
 import { buildMechanicalSnapshot, previewMechanicalContext } from './mechanics-runtime.js';
-import { buildDirectionSources, buildDirectorMacros, describeAllLore } from './direction-sources.js';
+import { buildDirectionSources } from './direction-sources.js';
 import { resolveByName } from './direction-address.js';
 import { resolveDirectionActions } from './direction-chrome.js';
 import { clearStandingDirection, readStandingDirection, saveStandingDirection } from './standing-direction-store.js';
 import { deriveBeats } from './direction-beats.js';
-import { compilePromptRecipe, captureDirectorPromptLog, capturePromptLog, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
-import { PROMPT_SOURCE_DEFINITIONS } from './prompt-studio-store.js';
-import { ENTRY_TYPES } from './director-reply.js';
+import { capturePromptLog, getCurrentPromptStudioRecipe } from './prompt-studio.js';
 import { filterNarratorHistory } from './narrator-history.js';
 import {
     abandonDirectorTurn,
@@ -1067,7 +1065,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     // only sliced when it is actually positive, which is what keeps a depth
     // of 0 meaning zero messages rather than silently reverting to
     // "everything".
-    const historyDepth = resolveDirectorSnapshotHistoryDepth();
+    const historyDepth = 12; // messages of accepted history carried in the snapshot (was the director recipe's snapshot default)
     const sliceCount = Math.min(Math.max(historyDepth, 0), effectiveChat.length);
     const recentChat = sliceCount > 0 ? effectiveChat.slice(-sliceCount) : [];
     const history = recentChat.map((message, index) => ({
@@ -1196,189 +1194,6 @@ function scrubReceipt(receipt) {
             !['requestId', 'capability', 'status', 'approvalStatus', 'reason', 'rejectionReason'].includes(key)))),
     };
 }
-
-/**
- * Compiles the Director's prompt from a snapshot: resolve the active director
- * recipe, build its sources, compile it. The SAME steps a real request takes
- * (requestDirection below) and the ONLY place they run — the Prompt
- * Studio preview calls this too (see previewDirectorPrompt), so the preview
- * can never drift from what actually gets sent. A recipe that compiles to
- * nothing (emptied, or missing its protocol block) falls back to a minimal
- * built-in prompt rather than silently producing an unusable request.
- */
-function compileDirectorPrompt(snapshot, { mechanicsEnabled = false, trace = false } = {}) {
-    const recipe = resolveDirectorRecipe();
-    const sources = buildDirectionSources(snapshot, { mechanicsEnabled });
-    let prompt;
-    // Per-block provenance for the preview panel. Asking for it cannot change
-    // `messages` (see compilePromptRecipe's own note), so the real send path
-    // below is compiling the identical prompt whether or not this is on.
-    let trail = [];
-    if (recipe) {
-        // The Director's macros travel as outlets: resolvePromptOutlets reads
-        // one map under both {{outlet::x}} and {{director::x}}. This is what
-        // lets an owner rewrite the protocol's prose while the tags, the state
-        // fence and the capability list keep expanding from the code.
-        const compiled = compilePromptRecipe(recipe, sources, {
-            trace,
-            outlets: buildDirectorMacros(snapshot, { mechanicsEnabled }),
-        });
-        prompt = compiled.messages;
-        trail = compiled.trace || [];
-    }
-    // Captured before any fallback swap: this is what the user's OWN recipe
-    // compiled to, which is the number a diagnostic needs — after the swap
-    // below, prompt.length would only ever report the fallback's own size.
-    const compiledCount = prompt?.length || 0;
-    // WHAT COUNTS AS A USABLE PROMPT CHANGED WITH THE PROTOCOL BLOCK.
-    //
-    // This used to ask whether the compiled text still contained the first 40
-    // characters of the built-in protocol. That was a fair proxy while the
-    // protocol was a locked source producing one fixed string; it is wrong now
-    // that it is an editable message, because an owner rewriting its opening
-    // sentence — the entire point of making it editable — would have silently
-    // been switched onto the built-in fallback and never told.
-    //
-    // The real question is whether the contract the PARSER depends on survived
-    // the owner's edits: the four tags director-reply.js matches, and the
-    // state fence. Prose is theirs; those are not negotiable, and a prompt
-    // missing them produces a Director whose reply this codebase cannot read.
-    const compiledText = (prompt || []).map((message) => message.content).join('\n');
-    const hasTags = ENTRY_TYPES.every((type) => compiledText.includes(`[${type}]`));
-    const hasFence = compiledText.includes('```state');
-    const usedFallback = !prompt?.length;
-    if (!usedFallback && !(hasTags && hasFence)) {
-        // Warn and send, rather than refuse. It is the owner's recipe and they
-        // may be deliberately running a Director that never writes state — but
-        // a notebook silently collapsing into one untagged blob is the exact
-        // failure this codebase already shipped once, so it says so loudly in
-        // the journal and the preview rather than only in the result.
-        journal('recipe.contract-missing', {
-            missingTags: !hasTags,
-            missingFence: !hasFence,
-        }, {
-            severity: 'warn',
-            summary: `direction.recipe: the compiled prompt is missing ${[!hasTags && 'the notebook tags', !hasFence && 'the state fence'].filter(Boolean).join(' and ')}`,
-        });
-    }
-    if (usedFallback) {
-        // The notebook is resolved at the DECLARED default depth here, read
-        // from the source definition rather than written out again — the
-        // fallback has no recipe and therefore no block settings to consult,
-        // and a second copy of the number would be one more place for the
-        // vocabulary to drift. A Director whose recipe is broken still gets
-        // its memory; losing that as well as the user's style block would
-        // make the fallback worse than it needs to be.
-        const notebook = sources.directorNotebook({ depth: declaredDirectorNotebookDepth() });
-        // World Info as one block here, not four. The fallback exists for a
-        // recipe that compiled to nothing, so it has no block order to honour
-        // — but it still must not be the path where the Director quietly
-        // loses its world information, which is exactly what would happen if
-        // this list kept reading only the sources it read before the split.
-        const lore = describeAllLore(snapshot?.lore);
-        prompt = [
-            { role: 'system', content: sources.directionProtocol },
-            ...(lore ? [{ role: 'system', content: lore }] : []),
-            ...(sources.directorCard ? [{ role: 'system', content: sources.directorCard }] : []),
-            ...(sources.mechanicsSkill ? [{ role: 'system', content: sources.mechanicsSkill }] : []),
-            ...(notebook ? [{ role: 'system', content: notebook }] : []),
-            { role: 'user', content: sources.directorSnapshot },
-        ];
-        // The trace describes the user's recipe, and the recipe is no longer
-        // what is being sent. Dropping it is what keeps the by-source panel
-        // from captioning the built-in fallback with the blocks it replaced.
-        trail = [];
-    }
-    return { recipe, sources, prompt, usedFallback, compiledCount, trace: trail, contractOk: hasTags && hasFence, hasTags, hasFence };
-}
-
-/** The `directorNotebook` source's own declared default depth — one place. */
-function declaredDirectorNotebookDepth() {
-    return PROMPT_SOURCE_DEFINITIONS.director
-        .find((source) => source.key === 'directorNotebook')?.settings?.depth?.default;
-}
-
-/**
- * How many of the most recent chat messages `buildDirectionSnapshot` slices
- * into the Director's own snapshot — the resolved `history` setting on the
- * active director recipe's `directorSnapshot` block.
- *
- * Resolved HERE, not read out of a compiled recipe: buildDirectionSnapshot
- * runs BEFORE compileDirectorPrompt/compilePromptRecipe — the snapshot this
- * function feeds is the very input buildDirectionSources renders into
- * `sources`, which is what the compile then reads — so by the time a recipe's
- * blocks are normally consulted for a per-block setting, the slice this one
- * governs has already happened. This is the one place in the pass that CAN
- * read it.
- *
- * No active director recipe, no `directorSnapshot` block on it, and a block
- * switched off are all the same case for this function: the setting is not in
- * effect for this pass. All three fall back to the source definition's own
- * declared default — never to the old hardcoded 40 — and the whole function is
- * wrapped so a lookup failure (a corrupt or mid-migration recipe store) can
- * never throw out of a direction pass; it degrades to the same default.
- *
- * `normalizeBlock` (prompt-studio-store.js) has already coerced, clamped and
- * defaulted this value into `block.settings.history` by the time any recipe
- * reaches here — see `coerceSettingValue`'s own comment on the
- * `Number(null) === 0` trap it exists to close — so this is a lookup, not a
- * second coercion site. Checked with `Number.isFinite`, not truthiness: a
- * user-set depth of 0 is a real value this must hand back as 0, not treat as
- * absent and fall through to the default because 0 is falsy.
- *
- * `recipe` defaults to the live lookup so the real call site
- * (buildDirectionSnapshot) never has to pass it — but it is still a real
- * parameter, not a hardcoded read, so a test can hand this an explicit `null`
- * or a hand-built recipe shape to exercise every fallback branch (no recipe,
- * no block, a disabled block) directly, without needing to contort the actual
- * prompt-studio store into an unreachable state to prove they hold.
- */
-export function resolveDirectorSnapshotHistoryDepth(recipe = resolveDirectorRecipe()) {
-    const declaredDefault = PROMPT_SOURCE_DEFINITIONS.director
-        .find((source) => source.key === 'directorSnapshot')?.settings?.history?.default ?? 12;
-    try {
-        const block = recipe?.blocks?.find((entry) => entry.kind === 'source' && entry.sourceKey === 'directorSnapshot');
-        if (!block || block.enabled === false) return declaredDefault;
-        const value = block.settings?.history;
-        return Number.isFinite(value) ? value : declaredDefault;
-    } catch {
-        return declaredDefault;
-    }
-}
-
-/**
- * Preview-only: compiles the Director's prompt for the current Scene without
- * sending a request, rolling, or mutating anything (see buildDirectionSnapshot's
- * `preview` flag). Shares compileDirectorPrompt with the real request path, so
- * the recipe resolution, buildDirectionSources call, and compilePromptRecipe
- * call are the exact same code a real direction pass runs — that part cannot
- * drift.
- *
- * One input cannot be made exact: Variables/Goals retrieval
- * (resolveVariableContext, inside buildMechanicalSnapshot) is scored against
- * the message the user has not sent yet. This passes the real accepted
- * history, the real activated lore entries, and the current composer draft as
- * the action — the best available stand-in — but the retrieved set can still
- * differ from a real pass once the user's actual next action is known.
- *
- * Also returns `trace`: one record per enabled recipe block, saying which of
- * the compiled messages it merged into. Requesting it cannot change `prompt`
- * — see compilePromptRecipe — which is what lets the preview show the merge
- * without spending the parity that makes the preview worth showing. Empty when
- * `usedFallback`, because then the recipe's blocks are not what is being sent.
- */
-export async function previewDirectorPrompt(scene) {
-    if (!scene) return { prompt: [], recipe: null, snapshot: null, usedFallback: false, trace: [] };
-    const action = hooks.getComposerDraft() || '[preview only: retrieve state; do not mutate or roll]';
-    const snapshot = await buildDirectionSnapshot(scene, action, [], { preview: true });
-    const profile = getMechanicsProfile();
-    const { recipe, prompt, usedFallback, trace, contractOk, hasTags, hasFence } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled, trace: true });
-    // contractOk/hasTags/hasFence travel to the preview so the panel can say
-    // "your recipe compiles, but the Director's reply will not parse" — the
-    // one thing an owner rewriting the protocol most needs to be told.
-    return { prompt, recipe, snapshot, usedFallback, trace, contractOk, hasTags, hasFence };
-}
-
 
 /**
  * Requests the mechanics layer can at least read.
