@@ -68,4 +68,3 @@ The Prompt Log for a directed Narrator request should show, in recipe order:
 - one `Narrator Grounding` source containing only Narrator-visible Archive sections;
 - the current unsent composer message in Preview, or the submitted user message in a live request;
 - no `REMODEL_NARRATOR_CONTEXT`, `Director Notes`, or `Loom Context` source.
-
