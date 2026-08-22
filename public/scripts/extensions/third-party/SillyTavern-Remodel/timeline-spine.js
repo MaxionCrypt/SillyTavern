@@ -126,6 +126,7 @@ import {
     submitDirectedRoleplay,
 } from './live-direction.js';
 import { sanitizeDirectionText } from './live-direction-markers.js';
+import { resolveRoleplayMessageIds } from './roleplay-message-list.js';
 import { resolveDirectionChromeMode } from './turn-chrome.js';
 import {
     handleDebugConsoleChange,
@@ -5801,9 +5802,7 @@ function syncStoryWorkspaceClass(scene) {
     }
 
     if (enteringRoleplay) {
-        // Keep core's Chat Options and Extensions controls in their native
-        // homes. The roleplay workspace owns a deliberately small rail.
-        restoreNativeButtonsToOriginalHomes();
+        relocateRoleplayNativeButtons();
     } else if (enteringStoryDoc) {
         relocateStoryDocNativeButtons();
     } else {
@@ -9440,6 +9439,18 @@ function bindRoleplayComposerEvents() {
             return;
         }
 
+        // The floating rail is a sibling of the roleplay root under #sheld.
+        // Its action buttons therefore have to be handled before the root
+        // containment guard below; otherwise Cast & Group Controls is visible
+        // but every click is silently discarded.
+        const railAction = target.closest('#remodel-rp-panelgroup [data-remodel-rp-action]');
+        if (railAction) {
+            event.preventDefault();
+            flashRoleplayButton(railAction);
+            handleRoleplayAction(railAction.getAttribute('data-remodel-rp-action'));
+            return;
+        }
+
         const root = getRealRoleplayRoot();
         if (!root || !root.contains(target)) {
             return;
@@ -10270,7 +10281,6 @@ function renderRoleplayScene() {
         return;
     }
 
-    const chatEl = getRealChatElement();
     const context = getContext();
     const activeRoleplayScene = getActiveScene();
     // Written onto the native prompt rather than injected at a chat depth, so
@@ -10288,32 +10298,30 @@ function renderRoleplayScene() {
     stream.textContent = '';
     const liveRun = getLiveDirectionRun();
 
-    const firstUserIndex = (context.chat || []).findIndex((message) => message?.is_user);
-    const greetingBoundary = firstUserIndex < 0 ? context.chat.length : firstUserIndex;
-    const mesEls = Array.from(chatEl?.querySelectorAll(':scope > .mes') ?? []).filter((mesEl) => {
-        const mesId = Number(mesEl.getAttribute('mesid'));
-        const message = context.chat[mesId];
-        return !(isDirectedLiveScene(activeRoleplayScene)
-            && mesId >= 0 && mesId < greetingBoundary
-            && isLeakedNativeRoleplayGreeting(message));
+    // context.chat is the canonical message list. Core briefly tears down and
+    // rebuilds its hidden #chat rows while a generation settles; using those
+    // transient DOM rows as our index cleared the entire roleplay stream at
+    // exactly the moment a completed Loom message was committed.
+    const messageIds = resolveRoleplayMessageIds(context.chat, {
+        directed: isDirectedLiveScene(activeRoleplayScene),
+        isLeakedGreeting: isLeakedNativeRoleplayGreeting,
     });
 
-    if (mesEls.length === 0) {
+    if (messageIds.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'remodel-rp-empty';
         empty.textContent = 'The scene is set. Write the first line below to begin.';
         stream.appendChild(empty);
     } else {
-        mesEls.forEach((mesEl, index) => {
-            const mesId = Number(mesEl.getAttribute('mesid'));
+        messageIds.forEach((mesId, index) => {
             const message = context.chat[mesId];
-            if (!Number.isFinite(mesId) || !message) {
+            if (!message) {
                 return;
             }
             // Distance from the newest message — used to fade old dice cards
             // (a roll from many turns back is stale context, not something
             // that should keep taking up visual weight forever).
-            const messagesSince = mesEls.length - 1 - index;
+            const messagesSince = messageIds.length - 1 - index;
             const isHiddenLiveMessage = liveRun && !liveRun.acceptedComplete && !message.is_user && mesId === liveRun.messageId;
             if (!isHiddenLiveMessage) stream.appendChild(buildRoleplayMessage(mesId, message, { messagesSince }));
         });
@@ -10359,6 +10367,7 @@ function ensureRoleplayPanels() {
     ensureRoleplayPanelGroup();
     ensureRoleplayRulesPanel();
     ensureRoleplayDicePanel();
+    ensureRoleplayPriorTextPanel();
     ensureRoleplayStatePanel();
 }
 
@@ -10509,8 +10518,18 @@ function ensureRoleplayPanelGroup() {
         <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="state" title="Timeline State" aria-label="Timeline State">
             <i class="fa-solid fa-chart-simple" aria-hidden="true"></i>
         </button>
+        <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="priortext" title="Prior Scene Text" aria-label="Prior Scene Text">
+            <i class="fa-solid fa-book-open" aria-hidden="true"></i>
+        </button>
+        <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-action="add-cast" title="Cast & Group Controls" aria-label="Cast & Group Controls">
+            <i class="fa-solid fa-users" aria-hidden="true"></i>
+        </button>
+        <div class="remodel-rp-panel-icon remodel-rp-native-slot" data-remodel-rp-native-slot="options_button" title="Chat Options"></div>
+        <div class="remodel-rp-panel-icon remodel-rp-native-slot" data-remodel-rp-native-slot="extensionsMenuButton" title="Extensions"></div>
     `;
     getRealSheld()?.appendChild(group);
+    // The rail may be created after the roleplay class is already active.
+    relocateRoleplayNativeButtons();
 }
 
 // Rules / Mechanics panel: a free-text scratchpad for the table's house
