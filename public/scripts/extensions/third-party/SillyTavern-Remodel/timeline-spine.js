@@ -81,7 +81,18 @@ import {
 } from './story-goals.js';
 import { getSceneGoals, updateSceneGoalState } from './story-goals-store.js';
 import { clearMechanicsReceiptInjection } from './mechanics-runtime.js';
-import { listVariablesForLoreRef } from './variables-store.js';
+import { listVariablesForLoreRef, listVariableValues } from './variables-store.js';
+import {
+    listEvents as archiveListEvents,
+    listSceneFacts as archiveListSceneFacts,
+    listCharStates as archiveListCharStates,
+    listSecrets as archiveListSecrets,
+    setSceneFact as archiveSetSceneFact,
+    clearSceneFact as archiveClearSceneFact,
+    setSecret as archiveSetSecret,
+    clearSecret as archiveClearSecret,
+    clearCharStateFacet as archiveClearCharStateFacet,
+} from './archivist-store.js';
 import {
     buildVariableStateBodyMarkup,
     handleVariablesUiChange,
@@ -107,7 +118,6 @@ import {
     describeNativeGenerationBlock,
     isDirectedLiveScene,
     ownsLiveDirectionGeneration,
-    previewDirectorPrompt,
     regenerateLastDirectedResponse,
     requestNextDirection,
     retryLiveStep,
@@ -118,21 +128,16 @@ import {
     sendWithoutLiveDirection,
     setLiveDirectionEnabled,
     setLiveDirectionPacing,
-    setLiveDirectionMode,
     setNextPerformerOverride,
     stopLiveDirection,
     submitDirectedRoleplay,
 } from './live-direction.js';
-import { listExtractionProfiles, getExtractionProfileId, setExtractionProfileId } from './extraction-config.js';
 import { sanitizeDirectionText } from './live-direction-markers.js';
 import { resolveDirectionChromeMode } from './direction-chrome.js';
 import {
-    deleteDirectorEntry,
     readAllEntriesForOwner,
     readTurnReasoning,
-    updateDirectorEntry,
 } from './director-notes-store.js';
-import { ENTRY_TYPES } from './director-reply.js';
 import {
     handleDebugConsoleChange,
     handleDebugConsoleClick,
@@ -194,35 +199,34 @@ const LEGACY_OUTLET_ID = 'remodel-tavern-legacy-outlet';
 const timelineChromeStages = new Map();
 const timelineScrollIntent = new Map();
 
-// View state for the Director's Notebook panel (a Timeline-focus surface,
-// same family as codexOpen in session-state.js, but kept local here rather
-// than added to that shared module: this task's file scope is
-// timeline-spine.js and style.css, and nothing outside this file needs it.
-// Not chat-scoped and not persisted, matching every other view-only flag in
-// this file (storyGenerating, timelineChromeStages, etc.).
-const directorNotebook = {
+// View state for the Loom's Archive panel (a Timeline-focus surface, same
+// family as codexOpen in session-state.js, but kept local here rather than
+// added to that shared module: nothing outside this file needs it). Not
+// chat-scoped and not persisted, matching every other view-only flag in this
+// file (storyGenerating, timelineChromeStages, etc.).
+const loomArchive = {
     open: false,
-    // Which Scene's notebook is showing. Null selects the Timeline's own
+    // Which Scene's Archive is showing. Null selects the Timeline's own
     // activeSceneId (or the first eligible Scene) at render time, so the
     // picker doesn't have to be primed before the panel can open.
     sceneId: null,
-    filter: 'all', // 'all' | one of ENTRY_TYPES
-    // The one entry currently showing an edit textarea instead of read-only
-    // text, or '' when none. Deliberately NOT mirrored into a re-rendered-
-    // on-every-keystroke state field (unlike characterSearchQuery): this
-    // workspace replaces its whole body innerHTML on every queueRender(),
-    // which would steal focus and cursor position out of a textarea on the
-    // first keystroke. The textarea is read directly from the DOM at Save
-    // time instead (same as chooseTimelineLorebook reads its <select> and
-    // handleRoleplaySend reads its composer).
+    // Whose view of the Archive: 'loom' sees everything (secrets, odds,
+    // variable values); 'narrator' sees the filtered view (no secrets, goals
+    // as objectives without numbers, no variables).
+    view: 'loom', // 'loom' | 'narrator'
+    // The one record currently showing an inline edit field instead of
+    // read-only text, or '' when none. Deliberately NOT mirrored into a
+    // re-rendered-on-every-keystroke state field: this workspace replaces its
+    // whole body innerHTML on every queueRender(), which would steal focus and
+    // cursor position. The field is read directly from the DOM at Save time.
     editingId: '',
 };
 
-function resetDirectorNotebookView() {
-    directorNotebook.open = false;
-    directorNotebook.sceneId = null;
-    directorNotebook.filter = 'all';
-    directorNotebook.editingId = '';
+function resetLoomArchiveView() {
+    loomArchive.open = false;
+    loomArchive.sceneId = null;
+    loomArchive.view = 'loom';
+    loomArchive.editingId = '';
 }
 
 const TIMELINE_SCROLL_RESISTANCE = 160;
@@ -3099,13 +3103,13 @@ async function handleAction(element) {
             setActiveTimeline(element.dataset.timelineId);
             timelineChromeStages.delete(element.dataset.timelineId);
             timelineScrollIntent.delete(element.dataset.timelineId);
-            resetDirectorNotebookView();
+            resetLoomArchiveView();
             setFocusedTimelineId(element.dataset.timelineId);
             break;
         case 'close-timeline':
             timelineChromeStages.delete(focusedTimelineId);
             timelineScrollIntent.delete(focusedTimelineId);
-            resetDirectorNotebookView();
+            resetLoomArchiveView();
             setFocusedTimelineId(null);
             break;
         case 'delete-timeline':
@@ -3131,68 +3135,37 @@ async function handleAction(element) {
             // Entry names and the attach browser come from an async read.
             if (getSessionState().codexOpen) refreshVariableLore().then(queueRender);
             break;
-        case 'toggle-notebook':
-            directorNotebook.open = !directorNotebook.open;
-            directorNotebook.editingId = '';
+        case 'toggle-archive':
+            loomArchive.open = !loomArchive.open;
+            loomArchive.editingId = '';
             break;
-        case 'notebook-filter':
-            directorNotebook.filter = element.dataset.filter || 'all';
+        case 'archive-view':
+            loomArchive.view = element.dataset.view === 'narrator' ? 'narrator' : 'loom';
+            loomArchive.editingId = '';
             break;
-        case 'notebook-edit-start':
-            directorNotebook.editingId = element.dataset.entryId || '';
+        case 'archive-edit-start':
+            loomArchive.editingId = element.dataset.recordId || '';
             break;
-        case 'notebook-edit-cancel':
-            directorNotebook.editingId = '';
+        case 'archive-edit-cancel':
+            loomArchive.editingId = '';
             break;
-        case 'notebook-edit-save': {
-            const timelineId = element.dataset.timelineId;
-            const entryId = element.dataset.entryId;
-            // Read straight off the DOM rather than tracked state — see the
-            // directorNotebook.editingId comment above for why.
-            const draft = element.closest('.remodel-notebook-entry-edit')?.querySelector('[data-remodel-notebook-draft]');
-            if (timelineId && entryId && draft instanceof HTMLTextAreaElement) {
-                updateDirectorEntry(timelineId, entryId, { text: draft.value });
+        case 'archive-edit-save': {
+            const { timelineId, sceneId, recordId } = element.dataset;
+            // Read straight off the DOM rather than tracked state — the panel
+            // re-renders on every keystroke, which would steal the caret.
+            const draft = element.closest('.remodel-archive-item')?.querySelector('[data-remodel-archive-draft]');
+            if (timelineId && sceneId && recordId && draft instanceof HTMLInputElement) {
+                applyArchiveEdit(timelineId, sceneId, recordId, draft.value);
             }
-            directorNotebook.editingId = '';
+            loomArchive.editingId = '';
             break;
         }
-        case 'notebook-delete': {
-            const timelineId = element.dataset.timelineId;
-            const entryId = element.dataset.entryId;
-            if (timelineId && entryId && confirm('Delete this Director entry? This cannot be undone.')) {
-                deleteDirectorEntry(timelineId, entryId);
-                if (directorNotebook.editingId === entryId) directorNotebook.editingId = '';
+        case 'archive-delete': {
+            const { timelineId, sceneId, recordId } = element.dataset;
+            if (timelineId && sceneId && recordId && confirm('Remove this from the Loom\'s memory? This cannot be undone.')) {
+                applyArchiveDelete(timelineId, sceneId, recordId);
+                if (loomArchive.editingId === recordId) loomArchive.editingId = '';
             }
-            break;
-        }
-        case 'notebook-turn-delete': {
-            const { timelineId, sceneId, turn } = element.dataset;
-            const entries = notebookTurnEntriesForOwner(timelineId, sceneId, turn);
-            if (!entries.length) break;
-            if (!confirm(`Delete all ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} in turn ${turn}? This cannot be undone.`)) break;
-            for (const entry of entries) {
-                deleteDirectorEntry(timelineId, entry.id);
-                if (directorNotebook.editingId === entry.id) directorNotebook.editingId = '';
-            }
-            // A standing direction whose entries are gone says nothing, and
-            // Continue must stop offering to speak it. live-direction drops it
-            // on its own next read, but clearing here means the button updates
-            // with this click rather than on whatever refresh comes later.
-            forgetStandingDirection(getActiveScene());
-            break;
-        }
-        case 'notebook-turn-rerun': {
-            const { timelineId, sceneId, turn } = element.dataset;
-            const entries = notebookTurnEntriesForOwner(timelineId, sceneId, turn);
-            if (!confirm(`Direct turn ${turn} again? Its ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} will be discarded and the Director asked for a new take.`)) break;
-            for (const entry of entries) deleteDirectorEntry(timelineId, entry.id);
-            directorNotebook.editingId = '';
-            forgetStandingDirection(getActiveScene());
-            // Filed under the SAME turn number, not a fresh one: this is a
-            // retake of that moment. `nextNotebookTurn` is max+1, so letting
-            // it recompute would file the retake as a new turn and hand the
-            // Narrator this Scene's fiction out of order.
-            requestNextDirection(getActiveScene(), { notebookTurn: Number(turn) });
             break;
         }
         case 'create-arc': {
@@ -3398,9 +3371,9 @@ async function handleFieldChange(field) {
         case 'arc-summary':
             updateArc(field.dataset.arcId, { summary: value });
             break;
-        case 'notebook-scene':
-            directorNotebook.sceneId = value || null;
-            directorNotebook.editingId = '';
+        case 'archive-scene':
+            loomArchive.sceneId = value || null;
+            loomArchive.editingId = '';
             break;
         default:
             break;
@@ -3486,10 +3459,10 @@ function renderTimelinePanel() {
         }
     }
 
-    if (directorNotebook.editingId) {
-        const draft = body.querySelector('[data-remodel-notebook-draft]');
+    if (loomArchive.editingId) {
+        const draft = body.querySelector('[data-remodel-archive-draft]');
 
-        if (draft instanceof HTMLTextAreaElement) {
+        if (draft instanceof HTMLInputElement) {
             draft.focus();
             draft.setSelectionRange(draft.value.length, draft.value.length);
         }
@@ -3983,14 +3956,14 @@ function renderTimelineFocus(timeline, store) {
                     </button>
                     <button
                         type="button"
-                        class="remodel-route-round-button ${directorNotebook.open ? 'is-open' : ''}"
-                        title="${directorNotebook.open ? 'Back to Scenes' : "Director's Notebook"}"
-                        aria-label="Director's Notebook"
-                        aria-pressed="${directorNotebook.open ? 'true' : 'false'}"
-                        data-remodel-timeline-action="toggle-notebook"
+                        class="remodel-route-round-button ${loomArchive.open ? 'is-open' : ''}"
+                        title="${loomArchive.open ? 'Back to Scenes' : "Loom's Archive"}"
+                        aria-label="Loom's Archive"
+                        aria-pressed="${loomArchive.open ? 'true' : 'false'}"
+                        data-remodel-timeline-action="toggle-archive"
                         data-timeline-id="${escapeAttribute(timeline.id)}"
                     >
-                        <i class="fa-solid fa-note-sticky" aria-hidden="true"></i>
+                        <i class="fa-solid fa-box-archive" aria-hidden="true"></i>
                     </button>
                     <label class="remodel-route-round-button" title="Change timeline cover">
                         <input type="file" accept="image/*" data-remodel-timeline-photo-input data-timeline-id="${escapeAttribute(timeline.id)}" hidden>
@@ -4001,7 +3974,7 @@ function renderTimelineFocus(timeline, store) {
                     </button>
                 </div>
             </header>
-            ${getSessionState().codexOpen ? `<div class="remodel-route-layout is-codex">${renderVariableCodex()}</div>` : directorNotebook.open ? `<div class="remodel-route-layout is-notebook">${renderDirectorNotebook(timeline, store)}</div>` : `
+            ${getSessionState().codexOpen ? `<div class="remodel-route-layout is-codex">${renderVariableCodex()}</div>` : loomArchive.open ? `<div class="remodel-route-layout is-archive">${renderLoomArchive(timeline, store)}</div>` : `
             <div class="remodel-route-layout">
                 <aside class="remodel-route-side">
                     <label class="remodel-timeline-card remodel-route-cover-card" title="Change timeline cover">
@@ -4059,25 +4032,20 @@ function renderTimelineFocus(timeline, store) {
     `;
 }
 
-// --- Director's Notebook (Timeline focus surface) ---------------------------
+// --- Loom's Archive (Timeline focus surface) --------------------------------
 //
-// The owner-facing view onto director-notes-store.js: every entry the
-// Director has written for this Timeline's directed Roleplay Scenes,
-// including `secret` ones, grouped by turn, filterable by type, editable
-// (text only — type is not, matching updateDirectorEntry's own refusal) and
-// individually deletable. Reached from the same toolbar as the Variables
-// Codex (toggle-notebook / toggle-codex are siblings) and replaces the same
-// arc-stage layout while open.
-//
-// readAllEntriesForOwner is the deliberately-named owner-facing read (see its
-// own doc comment in director-notes-store.js) — never readNarratorEntries,
-// which silently drops secrets and cancelled takes. That distinction is the
-// whole point of this panel: it is where a user goes to see what the
-// Narrator does NOT see.
+// The owner-facing view onto the Loom's memory of a Scene: its own store
+// (events, scene facts, character states, secrets) plus the Goals and
+// Variables it posts to. Reached from the same toolbar as the Variables Codex
+// (toggle-archive / toggle-codex are siblings) and replaces the same arc-stage
+// layout while open. A view toggle switches between the Loom's full view
+// (everything, including secrets and the numbers) and the Narrator's filtered
+// view (no secrets, goals as objectives without odds, no variables) — so the
+// owner can see exactly what each side of the turn is allowed to know.
 
-/** Roleplay Scenes in this Timeline, in Arc/Scene order — the only mode that
- * writes Director entries. */
-function listNotebookScenes(timeline, store) {
+/** Roleplay Scenes in this Timeline, in Arc/Scene order — the ones the Loom
+ * keeps an Archive for. */
+function listArchiveScenes(timeline, store) {
     return timeline.arcIds
         .flatMap((arcId) => store.arcs[arcId]?.sceneIds || [])
         .map((sceneId) => store.scenes[sceneId])
@@ -4085,195 +4053,188 @@ function listNotebookScenes(timeline, store) {
         .map((scene) => ({ id: scene.id, title: scene.title || 'Untitled Scene' }));
 }
 
-const NOTEBOOK_TYPE_META = {
-    note: { label: 'Note', icon: 'fa-comment' },
-    ruling: { label: 'Ruling', icon: 'fa-gavel' },
-    result: { label: 'Result', icon: 'fa-check' },
-    secret: { label: 'Secret', icon: 'fa-lock' },
-};
-
-function notebookTypeLabel(type) {
-    return NOTEBOOK_TYPE_META[type]?.label || type;
-}
-
-function notebookTypeIcon(type) {
-    return NOTEBOOK_TYPE_META[type]?.icon || 'fa-note-sticky';
+/** One Archive section: a titled, counted list of items (each already HTML),
+ * or an empty line when there is nothing to show. */
+function renderArchiveSection(title, icon, items, emptyText, { tone = '' } = {}) {
+    return `<section class="remodel-archive-section ${tone}">
+        <header class="remodel-archive-section-head">
+            <i class="fa-solid ${icon}" aria-hidden="true"></i>
+            <span>${escapeHtml(title)}</span>
+            <span class="remodel-archive-count">${items.length}</span>
+        </header>
+        ${items.length
+        ? `<ul class="remodel-archive-list">${items.join('')}</ul>`
+        : `<p class="remodel-archive-empty-line">${escapeHtml(emptyText)}</p>`}
+    </section>`;
 }
 
 /**
- * Entries grouped by turn, newest first, with the active filter already
- * applied to each group's `visible` list — turns left with nothing visible
- * are dropped entirely rather than rendered empty. `entries` (the
- * unfiltered list) rides along so a turn can still report "was this whole
- * take cancelled?" even when the filter hides every entry that says so.
+ * A keyed item: an optional key/label on the left, its value text on the
+ * right, and an optional trailing badge (odds / a number). When `recordId` is
+ * given and the item is editable/deletable, it also carries the Loom-only edit
+ * (inline text field) and delete controls that correct the Loom's memory. The
+ * whole item collapses to an inline editor while `loomArchive.editingId`
+ * matches its `recordId`.
  */
-function groupNotebookEntriesByTurn(entries, filter) {
-    const byTurn = new Map();
-    for (const entry of entries) {
-        if (!byTurn.has(entry.turn)) byTurn.set(entry.turn, []);
-        byTurn.get(entry.turn).push(entry);
+function renderArchiveItem(key, text, {
+    badge = '', recordId = '', editable = false, deletable = false, editValue = '', timelineId = '', sceneId = '',
+} = {}) {
+    const editing = recordId && loomArchive.editingId === recordId;
+    const attrs = `data-record-id="${escapeAttribute(recordId)}" data-timeline-id="${escapeAttribute(timelineId)}" data-scene-id="${escapeAttribute(sceneId)}"`;
+
+    if (editing) {
+        return `<li class="remodel-archive-item is-editing">
+            ${key ? `<span class="remodel-archive-key">${escapeHtml(key)}</span>` : ''}
+            <span class="remodel-archive-edit">
+                <input type="text" data-remodel-archive-draft value="${escapeAttribute(editValue)}">
+                <button type="button" data-remodel-timeline-action="archive-edit-save" ${attrs}>Save</button>
+                <button type="button" data-remodel-timeline-action="archive-edit-cancel">Cancel</button>
+            </span>
+        </li>`;
     }
-    return [...byTurn.entries()]
-        .sort((a, b) => b[0] - a[0])
-        .map(([turn, all]) => ({
-            turn,
-            entries: all,
-            visible: filter === 'all' ? all : all.filter((entry) => entry.type === filter),
-        }))
-        .filter((group) => group.visible.length);
+
+    const actions = recordId && (editable || deletable)
+        ? `<span class="remodel-archive-item-actions">
+            ${editable ? `<button type="button" title="Edit" aria-label="Edit" data-remodel-timeline-action="archive-edit-start" ${attrs}><i class="fa-solid fa-pen" aria-hidden="true"></i></button>` : ''}
+            ${deletable ? `<button type="button" class="danger" title="Remove from the Loom's memory" aria-label="Remove" data-remodel-timeline-action="archive-delete" ${attrs}><i class="fa-solid fa-trash-can" aria-hidden="true"></i></button>` : ''}
+        </span>`
+        : '';
+
+    return `<li class="remodel-archive-item">
+        ${key ? `<span class="remodel-archive-key">${escapeHtml(key)}</span>` : ''}
+        <span class="remodel-archive-item-text">${text}</span>
+        ${badge ? `<span class="remodel-archive-badge">${escapeHtml(badge)}</span>` : ''}
+        ${actions}
+    </li>`;
 }
 
-function renderNotebookFilterButton(value, label) {
-    return `<button
-        type="button"
-        class="${directorNotebook.filter === value ? 'is-active' : ''}"
-        aria-pressed="${directorNotebook.filter === value ? 'true' : 'false'}"
-        data-remodel-timeline-action="notebook-filter"
-        data-filter="${escapeAttribute(value)}"
-    >${escapeHtml(label)}</button>`;
+/** Apply an inline edit from the Archive: the recordId is `<type>:<key>`. Only
+ * the Loom's own key/value records (facts, secrets) are editable. */
+function applyArchiveEdit(timelineId, sceneId, recordId, value) {
+    const separator = recordId.indexOf(':');
+    const type = recordId.slice(0, separator);
+    const key = recordId.slice(separator + 1);
+    if (type === 'fact') archiveSetSceneFact(timelineId, sceneId, key, value);
+    else if (type === 'secret') archiveSetSecret(timelineId, sceneId, key, value);
 }
 
-function renderDirectorNotebook(timeline, store) {
-    const closeButton = `<button type="button" class="remodel-notebook-close" data-remodel-timeline-action="toggle-notebook">
+/** Delete a record from the Loom's memory. Facts and secrets clear directly; a
+ * character record is removed by clearing every facet it holds. */
+function applyArchiveDelete(timelineId, sceneId, recordId) {
+    const separator = recordId.indexOf(':');
+    const type = recordId.slice(0, separator);
+    const key = recordId.slice(separator + 1);
+    if (type === 'fact') archiveClearSceneFact(timelineId, sceneId, key);
+    else if (type === 'secret') archiveClearSecret(timelineId, sceneId, key);
+    else if (type === 'char') {
+        const record = archiveListCharStates(timelineId, sceneId).find((char) => char.charId === key);
+        for (const facet of Object.keys(record?.facets || {})) archiveClearCharStateFacet(timelineId, sceneId, key, facet);
+    }
+}
+
+function renderArchiveViewToggle() {
+    const isNarrator = loomArchive.view === 'narrator';
+    return `<div class="remodel-archive-viewtoggle" role="group" aria-label="Whose view of the Archive">
+        <button type="button" class="${isNarrator ? '' : 'is-active'}" aria-pressed="${isNarrator ? 'false' : 'true'}" data-remodel-timeline-action="archive-view" data-view="loom"><i class="fa-solid fa-eye" aria-hidden="true"></i> Loom's view</button>
+        <button type="button" class="${isNarrator ? 'is-active' : ''}" aria-pressed="${isNarrator ? 'true' : 'false'}" data-remodel-timeline-action="archive-view" data-view="narrator"><i class="fa-solid fa-feather-pointed" aria-hidden="true"></i> Narrator's view</button>
+    </div>`;
+}
+
+function renderLoomArchive(timeline, store) {
+    const isNarrator = loomArchive.view === 'narrator';
+    const closeButton = `<button type="button" class="remodel-notebook-close" data-remodel-timeline-action="toggle-archive">
         <i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back to Scenes
     </button>`;
     const head = `<header class="remodel-notebook-head">
         <div>
-            <span>Director's Notebook</span>
+            <span>Loom's Archive</span>
             <strong>${escapeHtml(timeline.title)}</strong>
         </div>
-        <p>Everything the Director has written for a Scene, including what it marked secret. Note, ruling and result entries can reach the Narrator, inside its notebook depth; secret entries and a cancelled take's entries never do.</p>
+        <p>${isNarrator
+        ? 'The Narrator\'s view: readable state and objectives only — no odds, no variables, no secrets.'
+        : 'The Loom\'s full memory of this Scene — what happened, the facts and characters it tracks, its secrets, and the numbers behind Goals and Variables.'}</p>
     </header>`;
 
-    const scenes = listNotebookScenes(timeline, store);
+    const scenes = listArchiveScenes(timeline, store);
     if (!scenes.length) {
-        return `<section class="remodel-notebook" aria-label="Director's Notebook">
+        return `<section class="remodel-notebook remodel-archive" aria-label="Loom's Archive">
             ${closeButton}
             ${head}
             <div class="remodel-notebook-empty">
-                <i class="fa-solid fa-note-sticky" aria-hidden="true"></i>
-                <p>This Timeline has no Roleplay Scenes yet, so its Director has written nothing.</p>
+                <i class="fa-solid fa-box-archive" aria-hidden="true"></i>
+                <p>This Timeline has no Roleplay Scenes yet, so the Loom has no Archive.</p>
             </div>
         </section>`;
     }
 
-    const activeSceneId = scenes.some((scene) => scene.id === directorNotebook.sceneId)
-        ? directorNotebook.sceneId
+    const activeSceneId = scenes.some((scene) => scene.id === loomArchive.sceneId)
+        ? loomArchive.sceneId
         : (scenes.find((scene) => scene.id === timeline.activeSceneId)?.id || scenes[0].id);
-    const entries = readAllEntriesForOwner(timeline.id, { sceneId: activeSceneId });
-    const turns = groupNotebookEntriesByTurn(entries, directorNotebook.filter);
 
-    return `<section class="remodel-notebook" aria-label="Director's Notebook">
+    const events = archiveListEvents(timeline.id, activeSceneId);
+    const facts = archiveListSceneFacts(timeline.id, activeSceneId);
+    const chars = archiveListCharStates(timeline.id, activeSceneId);
+    const secrets = archiveListSecrets(timeline.id, activeSceneId);
+    const goals = getSceneGoals(activeSceneId, { includeResolved: true, states: ['active', 'background'] });
+    const variables = listVariableValues({ timelineId: timeline.id });
+
+    // Edit/delete correct the Loom's own memory — offered only in the Loom's
+    // view (the Narrator's view is a read-only preview of what it may see).
+    const editable = !isNarrator;
+    const scope = { timelineId: timeline.id, sceneId: activeSceneId };
+
+    // What happened — newest first, so the latest beat is at the top. Events
+    // are an append-only record, so they are never edited or deleted here.
+    const eventItems = events.slice().reverse()
+        .map((event) => renderArchiveItem('', escapeHtml(event.summary || '')));
+    const factItems = facts.map((fact) => renderArchiveItem(fact.key, escapeHtml(String(fact.value)), {
+        recordId: `fact:${fact.key}`, editable, deletable: editable, editValue: String(fact.value), ...scope,
+    }));
+    const charItems = chars.map((char) => renderArchiveItem(
+        char.charId,
+        escapeHtml(Object.entries(char.facets || {}).map(([facet, value]) => `${facet}: ${value}`).join(' · ')),
+        { recordId: `char:${char.charId}`, deletable: editable, ...scope },
+    ));
+    const goalItems = goals.map((goal) => renderArchiveItem(
+        '',
+        `<strong>${escapeHtml(goal.title || 'Untitled goal')}</strong>${goal.description ? ` — ${escapeHtml(goal.description)}` : ''}`,
+        // The odds are the Loom's alone; the Narrator sees an objective, not a bet.
+        { badge: isNarrator ? '' : `${Number(goal.successRate)}%` },
+    ));
+    const variableItems = variables.map((variable) => renderArchiveItem(
+        variable.name,
+        escapeHtml(String(variable.value)),
+    ));
+    const secretItems = secrets.map((secret) => renderArchiveItem(secret.key, escapeHtml(String(secret.value)), {
+        recordId: `secret:${secret.key}`, editable, deletable: editable, editValue: String(secret.value), ...scope,
+    }));
+
+    const sections = [
+        renderArchiveSection('What happened', 'fa-clock-rotate-left', eventItems, 'Nothing recorded yet.'),
+        renderArchiveSection('Scene', 'fa-map-pin', factItems, 'No scene facts yet.'),
+        renderArchiveSection('Characters', 'fa-users', charItems, 'No character states yet.'),
+        renderArchiveSection(isNarrator ? 'Objectives' : 'Goals', 'fa-bullseye', goalItems, 'No goals yet.'),
+        // Loom-only sections — the numbers and the hidden truths.
+        ...(isNarrator ? [] : [renderArchiveSection('Variables', 'fa-sliders', variableItems, 'No variables yet.')]),
+        ...(isNarrator ? [] : [renderArchiveSection('Secrets', 'fa-lock', secretItems, 'No secrets kept.', { tone: 'is-secret' })]),
+    ].join('');
+
+    return `<section class="remodel-notebook remodel-archive" aria-label="Loom's Archive">
         ${closeButton}
         ${head}
         <div class="remodel-notebook-controls">
             <label class="remodel-notebook-scene-picker">
                 <span>Scene</span>
-                <select data-remodel-timeline-field="notebook-scene" data-timeline-id="${escapeAttribute(timeline.id)}">
+                <select data-remodel-timeline-field="archive-scene" data-timeline-id="${escapeAttribute(timeline.id)}">
                     ${scenes.map((scene) => `<option value="${escapeAttribute(scene.id)}" ${scene.id === activeSceneId ? 'selected' : ''}>${escapeHtml(scene.title)}</option>`).join('')}
                 </select>
             </label>
-            <div class="remodel-notebook-filters" role="group" aria-label="Filter entries by type">
-                ${renderNotebookFilterButton('all', 'All')}
-                ${ENTRY_TYPES.map((type) => renderNotebookFilterButton(type, notebookTypeLabel(type))).join('')}
-            </div>
+            ${renderArchiveViewToggle()}
         </div>
-        <div class="remodel-notebook-turns">
-            ${turns.length
-        ? turns.map((group) => renderNotebookTurn(timeline, group, {
-            sceneId: activeSceneId,
-            // Newest turn of the Scene the app is actually on, and only when
-            // that Scene is directed. `turns` is filtered, so "newest" is read
-            // from the unfiltered entries — otherwise filtering to `secret`
-            // would make whatever secret turn happened to be last look like
-            // the newest turn in the Scene.
-            rerunnable: group.turn === newestNotebookTurn(entries)
-                && activeSceneId === getActiveScene()?.id
-                && isDirectedLiveScene(getActiveScene()),
-        })).join('')
-        : `<div class="remodel-notebook-empty">
-                <i class="fa-solid fa-note-sticky" aria-hidden="true"></i>
-                <p>${entries.length ? 'No entries match this filter.' : 'No Director entries yet for this Scene.'}</p>
-            </div>`}
+        <div class="remodel-archive-sections">
+            ${sections}
         </div>
     </section>`;
-}
-
-/**
- * @param {object} timeline
- * @param {object} group one turn's entries
- * @param {{sceneId: string, rerunnable: boolean}} context `rerunnable` is true
- *        only for the newest turn of the Scene the app is actually on. A
- *        rerun of an older turn would direct a moment the story has already
- *        narrated past, producing a direction for a scene that no longer
- *        exists — so it is not offered rather than offered and refused.
- */
-function renderNotebookTurn(timeline, group, context) {
-    const allWithheld = group.entries.length > 0 && group.entries.every((entry) => entry.abandoned);
-    const turnAttrs = `data-timeline-id="${escapeAttribute(timeline.id)}" data-scene-id="${escapeAttribute(context.sceneId)}" data-turn="${escapeAttribute(String(group.turn))}"`;
-    return `<section class="remodel-notebook-turn">
-        <header>
-            <span>Turn ${group.turn}</span>
-            ${allWithheld ? '<span class="remodel-notebook-turn-flag"><i class="fa-solid fa-ban" aria-hidden="true"></i> Cancelled take — withheld from the Narrator</span>' : ''}
-            <span class="remodel-notebook-turn-actions">
-                ${context.rerunnable
-        ? `<button type="button" title="Direct this moment again — discards these entries and asks the Director for a new take" data-remodel-timeline-action="notebook-turn-rerun" ${turnAttrs}><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Rerun</button>`
-        : ''}
-                <button type="button" class="danger" title="Delete every entry in this turn" data-remodel-timeline-action="notebook-turn-delete" ${turnAttrs}><i class="fa-solid fa-trash-can" aria-hidden="true"></i> Delete turn</button>
-            </span>
-        </header>
-        <ul class="remodel-notebook-entries">
-            ${group.visible.map((entry) => renderNotebookEntry(timeline, entry)).join('')}
-        </ul>
-    </section>`;
-}
-
-/** The highest turn number present, or null when there are no entries. */
-function newestNotebookTurn(entries) {
-    const turns = (entries || []).map((entry) => Number(entry.turn)).filter(Number.isFinite);
-    return turns.length ? Math.max(...turns) : null;
-}
-
-/** One turn's entries, read fresh from the store at the moment of the click. */
-function notebookTurnEntriesForOwner(timelineId, sceneId, turn) {
-    const wanted = Number(turn);
-    if (!timelineId || !Number.isFinite(wanted)) return [];
-    return readAllEntriesForOwner(timelineId, { sceneId: sceneId || '' })
-        .filter((entry) => Number(entry.turn) === wanted);
-}
-
-function renderNotebookEntry(timeline, entry) {
-    // What "withheld" means differs by cause, and both are worth naming: a
-    // secret is withheld by the Director's own choice of type; an abandoned
-    // entry is withheld because the take it belongs to never happened. Both
-    // answer the one question this panel exists to answer at a glance —
-    // "can the Narrator see this?" — so both get the same visible marker.
-    const withheldReason = entry.type === 'secret'
-        ? 'marked secret'
-        : (entry.abandoned ? 'take was cancelled' : '');
-    const editing = directorNotebook.editingId === entry.id;
-    return `<li class="remodel-notebook-entry" data-type="${escapeAttribute(entry.type)}">
-        <div class="remodel-notebook-entry-head">
-            <span class="remodel-notebook-type-badge" data-type="${escapeAttribute(entry.type)}">
-                <i class="fa-solid ${notebookTypeIcon(entry.type)}" aria-hidden="true"></i> ${escapeHtml(notebookTypeLabel(entry.type))}
-            </span>
-            ${withheldReason ? `<span class="remodel-notebook-withheld"><i class="fa-solid fa-eye-slash" aria-hidden="true"></i> Withheld from Narrator — ${escapeHtml(withheldReason)}</span>` : ''}
-            ${entry.incomplete ? '<span class="remodel-notebook-flag">Cut off mid-reply</span>' : ''}
-            <span class="remodel-notebook-entry-actions">
-                <button type="button" title="Edit text" aria-label="Edit text" data-remodel-timeline-action="notebook-edit-start" data-entry-id="${escapeAttribute(entry.id)}"><i class="fa-solid fa-pen" aria-hidden="true"></i></button>
-                <button type="button" title="Delete entry" aria-label="Delete entry" class="danger" data-remodel-timeline-action="notebook-delete" data-entry-id="${escapeAttribute(entry.id)}" data-timeline-id="${escapeAttribute(timeline.id)}"><i class="fa-solid fa-trash-can" aria-hidden="true"></i></button>
-            </span>
-        </div>
-        ${editing
-        ? `<div class="remodel-notebook-entry-edit">
-                <textarea data-remodel-notebook-draft data-entry-id="${escapeAttribute(entry.id)}">${escapeHtml(entry.text)}</textarea>
-                <div class="remodel-notebook-entry-edit-actions">
-                    <button type="button" data-remodel-timeline-action="notebook-edit-save" data-entry-id="${escapeAttribute(entry.id)}" data-timeline-id="${escapeAttribute(timeline.id)}">Save</button>
-                    <button type="button" data-remodel-timeline-action="notebook-edit-cancel">Cancel</button>
-                </div>
-            </div>`
-        : `<p class="remodel-notebook-entry-text">${escapeHtml(entry.text)}</p>`}
-    </li>`;
 }
 
 function renderArcIndex(timeline, store, activeArc) {
@@ -8526,16 +8487,6 @@ function renderRoleplayComposer(root) {
                     ${['slow', 'natural', 'fast', 'instant'].map((value) => `<option value="${value}"${directionUi.pacing === value ? ' selected' : ''}>${value[0].toUpperCase() + value.slice(1)}</option>`).join('')}
                 </select>
             </label>
-            <label class="remodel-live-pacing">Engine
-                <select data-remodel-live-mode aria-label="Roleplay engine">
-                    ${[['director', 'Director'], ['solo', 'Solo']].map(([value, label]) => `<option value="${value}"${(directionUi.mode || 'director') === value ? ' selected' : ''}>${label}</option>`).join('')}
-                </select>
-            </label>
-            ${directionUi.mode === 'solo' ? `<label class="remodel-live-pacing">Extractor
-                <select data-remodel-live-extractor aria-label="Extraction model" title="Which model records what changed after each turn. Pick a reasoning-capable profile to pair with a non-reasoning narrator.">
-                    ${[{ id: '', name: 'Same as narrator' }, ...listExtractionProfiles()].map((p) => `<option value="${escapeHtml(p.id)}"${p.id === getExtractionProfileId() ? ' selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
-                </select>
-            </label>` : ''}
         </div>
         ${directionUi.reasoningWarning ? `<div class="remodel-live-reasoning-warning" role="status" title="Solo mode records what changed from the Narrator's reasoning. This model returned none, so state was inferred from the prose alone.">⚠ No reasoning from this model — enable thinking or use a reasoning-capable model for accurate state tracking.</div>` : ''}
 
@@ -8873,24 +8824,12 @@ async function triggerRoleplaySpeaker(name) {
 // Narrator tab: reuses the same dry-run + formatter the Story workspace's
 // preview uses. Honest "here's what the model will actually see," including
 // whatever's typed in the composer.
-//
-// Director tab: compiles through the exact path a real direction pass takes
-// (previewDirectorPrompt → compileDirectorPrompt in live-direction.js — same
-// recipe resolution, same buildDirectionSources, same compilePromptRecipe) so
-// the compile mechanism can never drift from what actually gets sent. The one
-// piece that cannot be made exact is Variables/Goals retrieval, which is
-// scored against a message the user has not sent yet — see the note rendered
-// in the Director panel below and previewDirectorPrompt's own doc comment.
 const ROLEPLAY_PREVIEW_ID = 'remodel-rp-preview-modal';
-
-const previewTab = (id, label, active) =>
-    `<button type="button" data-remodel-rp-preview-tab="${id}" class="${active === id ? 'is-active' : ''}">${label}</button>`;
 
 // The hint under the title used to describe both prompts at once, which is
 // never what is on screen — only one tab is ever visible. One line per tab,
 // swapped by setRoleplayPreviewTab.
 const PREVIEW_TAB_HINTS = Object.freeze({
-    director: 'What the hidden Director will receive on the next turn — nothing is sent.',
     narrator: 'What the Narrator will receive on the next turn — nothing is sent.',
 });
 
@@ -8914,11 +8853,6 @@ const previewPanel = (id, activeTab, lead = '') => `
                 ${lead}${PREVIEW_VIEWS_MARKUP}
             </div>`;
 
-// Informational, not a fault: the compile path is exact and only the retrieval
-// scoring can move, so this gets the neutral callout. The red warn box in the
-// same panel stays reserved for usedFallback, which genuinely is a fault.
-const DIRECTOR_RETRIEVAL_NOTE = '<p class="remodel-rp-preview-note">Everything here compiles exactly like a real request, except Variables/Goals retrieval — it is scored against your current history and this composer draft, and can select differently once you actually send.</p>';
-
 async function openRoleplayPromptPreview() {
     // Build the modal shell immediately with a loading state so the click is
     // acknowledged, then fill it once the dry runs resolve.
@@ -8927,7 +8861,7 @@ async function openRoleplayPromptPreview() {
     const directed = isDirectedLiveScene(activeScene);
     // Free play never calls the Director, so default to whichever tab this
     // Scene will actually use on its next turn.
-    const defaultTab = directed ? 'director' : 'narrator';
+    const defaultTab = 'narrator';
     const overlay = document.createElement('div');
     overlay.id = ROLEPLAY_PREVIEW_ID;
     overlay.className = 'remodel-rp-picker-scrim';
@@ -8940,11 +8874,6 @@ async function openRoleplayPromptPreview() {
                 </div>
                 <button type="button" class="remodel-rp-picker-x" data-remodel-rp-preview-close aria-label="Close">×</button>
             </div>
-            <div class="remodel-rp-preview-tabs" data-remodel-rp-preview-tabs>
-                ${previewTab('director', 'Director', defaultTab)}
-                ${previewTab('narrator', 'Narrator', defaultTab)}
-            </div>
-            ${previewPanel('director', defaultTab, directed ? DIRECTOR_RETRIEVAL_NOTE : '')}
             ${previewPanel('narrator', defaultTab)}
         </div>
     `;
@@ -8955,7 +8884,6 @@ async function openRoleplayPromptPreview() {
     // view toggle, so every lookup has to be scoped to its own panel — an
     // overlay-wide querySelector would find whichever panel comes first.
     const narratorPanel = overlay.querySelector('[data-remodel-rp-preview-panel="narrator"]');
-    fillDirectorPreviewPanel(overlay.querySelector('[data-remodel-rp-preview-panel="director"]'), activeScene, directed);
 
     try {
         const { generateData, warnings } = await runPromptPreviewDryRun('normal');
@@ -8997,56 +8925,6 @@ async function openRoleplayPromptPreview() {
     }
 }
 
-// Fills the Director tab by compiling the active Director recipe against a
-// snapshot built for the current Scene — the same compile path
-// requestDirection uses for a real direction pass (see
-// previewDirectorPrompt/compileDirectorPrompt in live-direction.js) — so the
-// two can never drift apart. Runs independently of the Narrator dry run above
-// so one tab's failure never blocks the other from filling in.
-async function fillDirectorPreviewPanel(panel, scene, directed) {
-    const bodyEl = panel?.querySelector('[data-remodel-rp-preview-body]');
-    const warnEl = panel?.querySelector('[data-remodel-rp-preview-warn]');
-    if (!bodyEl) return;
-    if (!directed) {
-        bodyEl.textContent = '(This Scene is on Free play — no Director request is made on its next turn. Turn Live Direction on to preview it.)';
-        return;
-    }
-    try {
-        const { prompt, usedFallback, trace, contractOk, hasTags, hasFence } = await previewDirectorPrompt(scene);
-        bodyEl.textContent = formatPromptStudioPreview({ apiType: 'chat', messages: prompt });
-        // Keyed on usedFallback, not on "no recipe": compileDirectorPrompt also
-        // falls back when a recipe exists but compiles to nothing or lost its
-        // protocol block — exactly the user who most needs to be told they are
-        // looking at the built-in prompt, not their own recipe's output.
-        if (usedFallback && warnEl) {
-            warnEl.textContent = '⚠ No usable Director recipe — showing the built-in fallback prompt.';
-            warnEl.hidden = false;
-        } else if (!contractOk && warnEl) {
-            // The recipe compiles and will be sent exactly as shown. What it
-            // no longer carries is the part the REPLY PARSER depends on, and
-            // the symptom of that is silent: a Director writes prose, nothing
-            // tags it, and the whole reply is stored as one untagged note with
-            // any secret inside it. Said here because this panel is where an
-            // owner rewriting the protocol is standing.
-            const missing = [!hasTags && 'the notebook tags ({{director::notebook.tags}})', !hasFence && 'the state fence ({{director::state.fence}})'].filter(Boolean).join(' and ');
-            warnEl.textContent = `⚠ This prompt is missing ${missing}. It will be sent as shown, but the Director's reply cannot be parsed into typed entries — everything it writes lands as a single untagged note, secrets included, and no Goal or Variable request can be read.`;
-            warnEl.hidden = false;
-        }
-        // No trace on the fallback path: the cards would be captioning the
-        // user's recipe blocks over a prompt those blocks did not produce.
-        // That case keeps the raw dump and the red box that explains it.
-        const sourcesEl = panel.querySelector('[data-remodel-rp-preview-sources]');
-        const viewsEl = panel.querySelector('[data-remodel-rp-preview-views]');
-        if (Array.isArray(trace) && trace.length && sourcesEl && viewsEl) {
-            sourcesEl.innerHTML = await renderPromptTraceSections(trace, prompt);
-            sourcesEl.hidden = false;
-            viewsEl.hidden = false;
-            bodyEl.hidden = true;
-        }
-    } catch (err) {
-        bodyEl.textContent = `Could not assemble a Director preview.\n\n${String(err)}`;
-    }
-}
 
 /**
  * Sizes a list of prompt texts, and says what unit it managed to size them in.
@@ -9343,7 +9221,14 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
     renderRoleplayDirectionFeed(root, getActiveScene());
     ensureLiveDirectionCardInStream(root, run);
     const body = root.querySelector('[data-remodel-rp-typing-body]');
-    if (body && run?.acceptedVisibleText != null) body.textContent = run.acceptedVisibleText;
+    if (body && run?.acceptedVisibleText != null) {
+        // Editor mode is hold-then-show: the narrator's draft must not appear.
+        // Until the run commits (the Director-editor has reconciled it), show a
+        // reviewing placeholder instead of the streaming draft; then reveal the
+        // committed prose.
+        const reviewing = getLiveDirectionUiState(getActiveScene())?.mode === 'editor' && !run.acceptedComplete;
+        body.textContent = reviewing ? 'The Director is reviewing the scene…' : run.acceptedVisibleText;
+    }
     const zone = root.querySelector('[data-remodel-rp-composer]');
     const flow = zone?.querySelector('[data-remodel-live-flow]');
     if (flow) {
@@ -10065,10 +9950,6 @@ function bindRoleplayComposerEvents() {
         if (!isRealRoleplayWorkspaceActive()) return;
         const pacing = event.target instanceof Element ? event.target.closest('[data-remodel-live-pacing]') : null;
         if (pacing instanceof HTMLSelectElement) setLiveDirectionPacing(getActiveScene(), pacing.value);
-        const mode = event.target instanceof Element ? event.target.closest('[data-remodel-live-mode]') : null;
-        if (mode instanceof HTMLSelectElement) setLiveDirectionMode(getActiveScene(), mode.value);
-        const extractor = event.target instanceof Element ? event.target.closest('[data-remodel-live-extractor]') : null;
-        if (extractor instanceof HTMLSelectElement) setExtractionProfileId(extractor.value);
     });
 }
 

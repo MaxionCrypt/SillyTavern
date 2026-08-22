@@ -25,17 +25,19 @@ test('soloEnvelope builds a Director-free envelope that pauses after the turn', 
     expect(envelope.directionId.length).toBeGreaterThan(0);
 });
 
-test('setLiveDirectionMode persists the chosen mode and rejects an invalid one', () => {
+test('setLiveDirectionMode accepts only the editor engine', () => {
     const timeline = createTimeline('Mode Timeline');
     const arc = createArc(timeline.id, 'Mode Arc');
     const scene = createScene(arc.id, 'roleplay', 'Mode Scene');
 
-    expect(setLiveDirectionMode(scene, 'solo')).toBe(true);
-    expect(getScene(scene.id).liveDirection.mode).toBe('solo');
+    // Every scene resolves to 'editor' — the only engine.
+    expect(getScene(scene.id).liveDirection.mode).toBe('editor');
+    expect(setLiveDirectionMode(scene, 'editor')).toBe(true);
+    expect(getScene(scene.id).liveDirection.mode).toBe('editor');
 
-    expect(setLiveDirectionMode(scene, 'director')).toBe(true);
-    expect(getScene(scene.id).liveDirection.mode).toBe('director');
-
+    // The removed legacy engines and anything else are rejected.
+    expect(setLiveDirectionMode(scene, 'solo')).toBe(false);
+    expect(setLiveDirectionMode(scene, 'director')).toBe(false);
     expect(setLiveDirectionMode(scene, 'bogus')).toBe(false);
-    expect(getScene(scene.id).liveDirection.mode).toBe('director');
+    expect(getScene(scene.id).liveDirection.mode).toBe('editor');
 });

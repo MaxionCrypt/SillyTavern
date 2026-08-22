@@ -14,18 +14,15 @@ import {
     undoMechanicsTransaction,
 } from './mechanics-capabilities.js';
 import { buildMechanicalSnapshot, previewMechanicalContext } from './mechanics-runtime.js';
-import { buildDirectionSources, buildDirectorMacros, describeAllLore } from './direction-sources.js';
+import { buildDirectionSources } from './direction-sources.js';
 import { resolveByName } from './direction-address.js';
 import { resolveDirectionActions } from './direction-chrome.js';
 import { clearStandingDirection, readStandingDirection, saveStandingDirection } from './standing-direction-store.js';
 import { deriveBeats } from './direction-beats.js';
-import { compilePromptRecipe, captureDirectorPromptLog, capturePromptLog, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
-import { PROMPT_SOURCE_DEFINITIONS } from './prompt-studio-store.js';
-import { ENTRY_TYPES, parseDirectorReply } from './director-reply.js';
+import { capturePromptLog, getCurrentPromptStudioRecipe } from './prompt-studio.js';
 import { filterNarratorHistory } from './narrator-history.js';
 import {
     abandonDirectorTurn,
-    appendDirectorEntries,
     deleteDirectorEntry,
     readAllEntriesForOwner,
     readNarratorEntries,
@@ -34,9 +31,8 @@ import { getMechanicsProfile, listMechanicsTransactions } from './variables-stor
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
 import { StructuredReplyError } from './structured-reply.js';
 import { streamChatPrompt } from './story-stream.js';
-import { buildNarratorArchivistSections, buildDirectionInjection } from './narrator-prompt.js';
-import { buildExtractionPrompt } from './narrator-extract.js';
-import { runExtraction } from './extraction-config.js';
+import { buildNarratorArchivistSections, buildDirectionInjection, buildGoalObjectives } from './narrator-prompt.js';
+import { isEditorMode, buildDirectorEditorPrompt, parseEditorReply, applySwaps } from './director-editor.js';
 import { isSoloMode, soloEnvelope } from './solo-direction.js';
 import { updateScene } from './timeline-state.js';
 import { recordDebugEvent } from './debug-console.js';
@@ -275,7 +271,7 @@ export function getLiveDirectionRun() {
 }
 
 export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
-    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: scene?.liveDirection?.mode === 'solo' ? 'solo' : 'director' };
+    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: 'editor' };
     // A hidden Director pass is a busy pipeline with no visible run yet. It used
     // to report 'Ready' with Stop disabled, which is what invited the second
     // send that produced a second bubble — notifyTransient('Directing') is a
@@ -286,7 +282,7 @@ export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
         active: true,
         state: activeRun?.state || (directing ? 'Directing' : 'Ready'),
         pacing: scene.liveDirection?.pacing || 'natural',
-        mode: scene.liveDirection?.mode === 'solo' ? 'solo' : 'director',
+        mode: 'editor',
         openingLabel: activeRun?.openingLabel || '',
         canContinue: activeRun?.state === 'Waiting for you',
         canSend: !directing,
@@ -312,7 +308,9 @@ export function setLiveDirectionPacing(scene, pacing) {
 }
 
 export function setLiveDirectionMode(scene, mode) {
-    if (!scene || (mode !== 'director' && mode !== 'solo')) return false;
+    // 'editor' is the only engine; the two-agent 'director' and 'solo' engines
+    // have been removed.
+    if (!scene || mode !== 'editor') return false;
     updateScene(scene.id, { liveDirection: { ...scene.liveDirection, mode } });
     notifyState();
     return true;
@@ -788,74 +786,6 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     return generateDirectedPerformer({ scene, envelope, performer, autonomousSequence: Number(saved.autonomousSequence) || 0 });
 }
 
-/**
- * Director mode's direction step: run the two-agent Director call, store its
- * notebook entries, and build the envelope from its reply. Extracted verbatim
- * from beginDirection so solo mode can be switched in beside it (connection
- * point 1). Returns the envelope plus the turn number if entries were stored
- * (so beginDirection's finally can tell the pass produced a record).
- *
- * @returns {Promise<{ envelope: object, storedTurn: number|null }>}
- */
-async function directorEnvelope(scene, snapshot, turn, token) {
-    const startedAt = Date.now();
-    const reply = await requestDirection(scene, snapshot, {
-        signal: token.controller.signal,
-        onChunk: (update) => {
-            // Forwarded on EVERY chunk so the direction card fills live; the
-            // journal entry below stays once-per-pass.
-            hooks.onDirectorChunk(update);
-            if (token.firstChunkAt) return;
-            token.firstChunkAt = Date.now();
-            journal('stream.first-chunk', { passId: token.id, afterMs: token.firstChunkAt - startedAt, chars: update.text.length }, { correlationId: token.id });
-        },
-    });
-    // The notebook is written whatever happens next, including for an
-    // interrupted Director: what it managed to say is a record of this turn. A
-    // cancelled take is stamped `abandoned`; its trailing entry `incomplete`.
-    const stored = appendDirectorEntries(scene.timelineId, {
-        sceneId: scene.id,
-        turn,
-        entries: markSeveredEntry(reply.entries, reply.interrupted),
-        reasoning: reply.reasoning,
-    });
-    // Stored entries but no block to carry them = a scene about to generate with
-    // no direction at all, while every other symptom looks healthy. Only when
-    // the block is MISSING — a user who toggled it off chose that.
-    const routing = describeDirectorNotesRouting();
-    if (stored.length && !routing.block && !routing.present) {
-        journal('notes.unrouted', {
-            passId: token.id,
-            turn,
-            entryCount: stored.length,
-            remedy: 'The active Roleplay · Chat recipe has no "Director\'s Notes" block, so this turn\'s direction reaches no one. Add it in Prompt Studio (Add context → Director\'s Notes).',
-        }, { correlationId: token.id, severity: 'warn', summary: 'direction.notes: stored, but no block carries them to the Narrator' });
-    }
-    const envelope = buildDirectionEnvelope(reply, turn);
-    journal('notebook', {
-        passId: token.id,
-        turn,
-        directionId: envelope.directionId,
-        durationMs: Date.now() - startedAt,
-        firstChunkMs: token.firstChunkAt ? token.firstChunkAt - startedAt : null,
-        streamed: reply.streamed,
-        interrupted: reply.interrupted,
-        replyChars: reply.raw.length,
-        reasoningLength: reply.reasoning.length,
-        entryCount: stored.length,
-        entryTypes: stored.map((entry) => entry.type),
-        tailFound: reply.tailFound,
-        requestCount: reply.state.requests.length,
-        continueAfter: reply.state.flow.continue,
-    }, { correlationId: token.id });
-    // Design §3: a missing or unparseable tail is never an error — the turn
-    // proceeds with no state changes, and this is the only notice of it.
-    if (reply.tailError) {
-        journal('tail.unparseable', { passId: token.id, turn, error: reply.tailError }, { correlationId: token.id, severity: 'warn', summary: 'direction.tail: unparseable, no state changed' });
-    }
-    return { envelope, storedTurn: stored.length ? turn : null };
-}
-
 async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, postedMessage = null } = {}) {
     // Checked before the Director call, not after: the Director costs a real
     // request and ~17s, and there is no point spending either when the
@@ -967,21 +897,16 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             receiptCount: snapshot.recentReceipts.length,
         }, { correlationId: token.id });
         if (token.aborted) return abandonPass(token, 'snapshot');
-        // Connection point 1 — how the turn's direction is produced. Director
-        // mode runs the two-agent Director call (directorEnvelope, unchanged);
-        // solo mode builds a Director-free envelope (no LLM call, no notebook).
-        // Everything downstream — performer, reveal, finalize, extraction — is
-        // shared. `notebookTurn` is supplied only by regenerate, which reuses a
-        // freed turn number rather than allocating a new one.
+        // Connection point 1 — the turn's direction. The narrator drafts first
+        // (no pre-call, no LLM round-trip here); the Loom reconciles that draft
+        // against the dice at completeVisibleRun. Everything downstream —
+        // performer, reveal, finalize, editor pass — is shared. `notebookTurn`
+        // is supplied only by regenerate, which reuses a freed turn number
+        // rather than allocating a new one.
         const turn = toTurnNumber(notebookTurn) ?? nextNotebookTurn(scene);
-        const { envelope, storedTurn: storedTurnValue } = isSoloMode(scene)
-            ? soloEnvelope(scene, snapshot, turn)
-            : await directorEnvelope(scene, snapshot, turn, token);
+        const { envelope, storedTurn: storedTurnValue } = soloEnvelope(scene, snapshot, turn);
         if (storedTurnValue) storedTurn = storedTurnValue;
-        // The Director round-trip is the long window. Anything that happened
-        // during it — Stop, a user intervention outranking an autonomous pass —
-        // lands here, before a single native token is spent.
-        if (token.aborted) return abandonPass(token, 'director');
+        if (token.aborted) return abandonPass(token, 'envelope');
         // Performer selection is no longer the Director's to make — whoever
         // holds the Scene's Narrator badge speaks. A manual "speak next"
         // override still outranks it when one is armed.
@@ -1140,7 +1065,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     // only sliced when it is actually positive, which is what keeps a depth
     // of 0 meaning zero messages rather than silently reverting to
     // "everything".
-    const historyDepth = resolveDirectorSnapshotHistoryDepth();
+    const historyDepth = 12; // messages of accepted history carried in the snapshot (was the director recipe's snapshot default)
     const sliceCount = Math.min(Math.max(historyDepth, 0), effectiveChat.length);
     const recentChat = sliceCount > 0 ? effectiveChat.slice(-sliceCount) : [];
     const history = recentChat.map((message, index) => ({
@@ -1271,304 +1196,6 @@ function scrubReceipt(receipt) {
 }
 
 /**
- * Compiles the Director's prompt from a snapshot: resolve the active director
- * recipe, build its sources, compile it. The SAME steps a real request takes
- * (requestDirection below) and the ONLY place they run — the Prompt
- * Studio preview calls this too (see previewDirectorPrompt), so the preview
- * can never drift from what actually gets sent. A recipe that compiles to
- * nothing (emptied, or missing its protocol block) falls back to a minimal
- * built-in prompt rather than silently producing an unusable request.
- */
-function compileDirectorPrompt(snapshot, { mechanicsEnabled = false, trace = false } = {}) {
-    const recipe = resolveDirectorRecipe();
-    const sources = buildDirectionSources(snapshot, { mechanicsEnabled });
-    let prompt;
-    // Per-block provenance for the preview panel. Asking for it cannot change
-    // `messages` (see compilePromptRecipe's own note), so the real send path
-    // below is compiling the identical prompt whether or not this is on.
-    let trail = [];
-    if (recipe) {
-        // The Director's macros travel as outlets: resolvePromptOutlets reads
-        // one map under both {{outlet::x}} and {{director::x}}. This is what
-        // lets an owner rewrite the protocol's prose while the tags, the state
-        // fence and the capability list keep expanding from the code.
-        const compiled = compilePromptRecipe(recipe, sources, {
-            trace,
-            outlets: buildDirectorMacros(snapshot, { mechanicsEnabled }),
-        });
-        prompt = compiled.messages;
-        trail = compiled.trace || [];
-    }
-    // Captured before any fallback swap: this is what the user's OWN recipe
-    // compiled to, which is the number a diagnostic needs — after the swap
-    // below, prompt.length would only ever report the fallback's own size.
-    const compiledCount = prompt?.length || 0;
-    // WHAT COUNTS AS A USABLE PROMPT CHANGED WITH THE PROTOCOL BLOCK.
-    //
-    // This used to ask whether the compiled text still contained the first 40
-    // characters of the built-in protocol. That was a fair proxy while the
-    // protocol was a locked source producing one fixed string; it is wrong now
-    // that it is an editable message, because an owner rewriting its opening
-    // sentence — the entire point of making it editable — would have silently
-    // been switched onto the built-in fallback and never told.
-    //
-    // The real question is whether the contract the PARSER depends on survived
-    // the owner's edits: the four tags director-reply.js matches, and the
-    // state fence. Prose is theirs; those are not negotiable, and a prompt
-    // missing them produces a Director whose reply this codebase cannot read.
-    const compiledText = (prompt || []).map((message) => message.content).join('\n');
-    const hasTags = ENTRY_TYPES.every((type) => compiledText.includes(`[${type}]`));
-    const hasFence = compiledText.includes('```state');
-    const usedFallback = !prompt?.length;
-    if (!usedFallback && !(hasTags && hasFence)) {
-        // Warn and send, rather than refuse. It is the owner's recipe and they
-        // may be deliberately running a Director that never writes state — but
-        // a notebook silently collapsing into one untagged blob is the exact
-        // failure this codebase already shipped once, so it says so loudly in
-        // the journal and the preview rather than only in the result.
-        journal('recipe.contract-missing', {
-            missingTags: !hasTags,
-            missingFence: !hasFence,
-        }, {
-            severity: 'warn',
-            summary: `direction.recipe: the compiled prompt is missing ${[!hasTags && 'the notebook tags', !hasFence && 'the state fence'].filter(Boolean).join(' and ')}`,
-        });
-    }
-    if (usedFallback) {
-        // The notebook is resolved at the DECLARED default depth here, read
-        // from the source definition rather than written out again — the
-        // fallback has no recipe and therefore no block settings to consult,
-        // and a second copy of the number would be one more place for the
-        // vocabulary to drift. A Director whose recipe is broken still gets
-        // its memory; losing that as well as the user's style block would
-        // make the fallback worse than it needs to be.
-        const notebook = sources.directorNotebook({ depth: declaredDirectorNotebookDepth() });
-        // World Info as one block here, not four. The fallback exists for a
-        // recipe that compiled to nothing, so it has no block order to honour
-        // — but it still must not be the path where the Director quietly
-        // loses its world information, which is exactly what would happen if
-        // this list kept reading only the sources it read before the split.
-        const lore = describeAllLore(snapshot?.lore);
-        prompt = [
-            { role: 'system', content: sources.directionProtocol },
-            ...(lore ? [{ role: 'system', content: lore }] : []),
-            ...(sources.directorCard ? [{ role: 'system', content: sources.directorCard }] : []),
-            ...(sources.mechanicsSkill ? [{ role: 'system', content: sources.mechanicsSkill }] : []),
-            ...(notebook ? [{ role: 'system', content: notebook }] : []),
-            { role: 'user', content: sources.directorSnapshot },
-        ];
-        // The trace describes the user's recipe, and the recipe is no longer
-        // what is being sent. Dropping it is what keeps the by-source panel
-        // from captioning the built-in fallback with the blocks it replaced.
-        trail = [];
-    }
-    return { recipe, sources, prompt, usedFallback, compiledCount, trace: trail, contractOk: hasTags && hasFence, hasTags, hasFence };
-}
-
-/** The `directorNotebook` source's own declared default depth — one place. */
-function declaredDirectorNotebookDepth() {
-    return PROMPT_SOURCE_DEFINITIONS.director
-        .find((source) => source.key === 'directorNotebook')?.settings?.depth?.default;
-}
-
-/**
- * How many of the most recent chat messages `buildDirectionSnapshot` slices
- * into the Director's own snapshot — the resolved `history` setting on the
- * active director recipe's `directorSnapshot` block.
- *
- * Resolved HERE, not read out of a compiled recipe: buildDirectionSnapshot
- * runs BEFORE compileDirectorPrompt/compilePromptRecipe — the snapshot this
- * function feeds is the very input buildDirectionSources renders into
- * `sources`, which is what the compile then reads — so by the time a recipe's
- * blocks are normally consulted for a per-block setting, the slice this one
- * governs has already happened. This is the one place in the pass that CAN
- * read it.
- *
- * No active director recipe, no `directorSnapshot` block on it, and a block
- * switched off are all the same case for this function: the setting is not in
- * effect for this pass. All three fall back to the source definition's own
- * declared default — never to the old hardcoded 40 — and the whole function is
- * wrapped so a lookup failure (a corrupt or mid-migration recipe store) can
- * never throw out of a direction pass; it degrades to the same default.
- *
- * `normalizeBlock` (prompt-studio-store.js) has already coerced, clamped and
- * defaulted this value into `block.settings.history` by the time any recipe
- * reaches here — see `coerceSettingValue`'s own comment on the
- * `Number(null) === 0` trap it exists to close — so this is a lookup, not a
- * second coercion site. Checked with `Number.isFinite`, not truthiness: a
- * user-set depth of 0 is a real value this must hand back as 0, not treat as
- * absent and fall through to the default because 0 is falsy.
- *
- * `recipe` defaults to the live lookup so the real call site
- * (buildDirectionSnapshot) never has to pass it — but it is still a real
- * parameter, not a hardcoded read, so a test can hand this an explicit `null`
- * or a hand-built recipe shape to exercise every fallback branch (no recipe,
- * no block, a disabled block) directly, without needing to contort the actual
- * prompt-studio store into an unreachable state to prove they hold.
- */
-export function resolveDirectorSnapshotHistoryDepth(recipe = resolveDirectorRecipe()) {
-    const declaredDefault = PROMPT_SOURCE_DEFINITIONS.director
-        .find((source) => source.key === 'directorSnapshot')?.settings?.history?.default ?? 12;
-    try {
-        const block = recipe?.blocks?.find((entry) => entry.kind === 'source' && entry.sourceKey === 'directorSnapshot');
-        if (!block || block.enabled === false) return declaredDefault;
-        const value = block.settings?.history;
-        return Number.isFinite(value) ? value : declaredDefault;
-    } catch {
-        return declaredDefault;
-    }
-}
-
-/**
- * Preview-only: compiles the Director's prompt for the current Scene without
- * sending a request, rolling, or mutating anything (see buildDirectionSnapshot's
- * `preview` flag). Shares compileDirectorPrompt with the real request path, so
- * the recipe resolution, buildDirectionSources call, and compilePromptRecipe
- * call are the exact same code a real direction pass runs — that part cannot
- * drift.
- *
- * One input cannot be made exact: Variables/Goals retrieval
- * (resolveVariableContext, inside buildMechanicalSnapshot) is scored against
- * the message the user has not sent yet. This passes the real accepted
- * history, the real activated lore entries, and the current composer draft as
- * the action — the best available stand-in — but the retrieved set can still
- * differ from a real pass once the user's actual next action is known.
- *
- * Also returns `trace`: one record per enabled recipe block, saying which of
- * the compiled messages it merged into. Requesting it cannot change `prompt`
- * — see compilePromptRecipe — which is what lets the preview show the merge
- * without spending the parity that makes the preview worth showing. Empty when
- * `usedFallback`, because then the recipe's blocks are not what is being sent.
- */
-export async function previewDirectorPrompt(scene) {
-    if (!scene) return { prompt: [], recipe: null, snapshot: null, usedFallback: false, trace: [] };
-    const action = hooks.getComposerDraft() || '[preview only: retrieve state; do not mutate or roll]';
-    const snapshot = await buildDirectionSnapshot(scene, action, [], { preview: true });
-    const profile = getMechanicsProfile();
-    const { recipe, prompt, usedFallback, trace, contractOk, hasTags, hasFence } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled, trace: true });
-    // contractOk/hasTags/hasFence travel to the preview so the panel can say
-    // "your recipe compiles, but the Director's reply will not parse" — the
-    // one thing an owner rewriting the protocol most needs to be told.
-    return { prompt, recipe, snapshot, usedFallback, trace, contractOk, hasTags, hasFence };
-}
-
-/**
- * Ask the Director for this turn's notebook, streaming.
- *
- * WHY STREAMING, AND WHY NO SCHEMA: core decides streaming in one line
- * (`openai.js`, `createGenerationParameters`) — `settings.stream_openai && type
- * !== 'quiet'` — and generateRaw/generateRawData hard-code the type to 'quiet'.
- * A schema-enforced call is therefore structurally unstreamable, and worse,
- * generateRawData returns `extractJsonFromData(...)` when a jsonSchema is
- * supplied and throws the provider's response object away — the only place
- * reasoning lives. Dropping the schema is what buys both back at once: the
- * Director's text arrives as it is written, and `state.reasoning` comes with
- * it instead of having to be stolen off the wire.
- *
- * Measured, which is why this is not a preference: one recorded pass spent
- * 101s producing 11,795 characters of reasoning and a 100-character
- * instruction, because reasoning and the envelope shared one token allowance.
- * The reply is free-form now; only the trailing state fence is machine-read.
- *
- * @returns {Promise<{entries: Array<{type: string, text: string}>,
- *   state: {requests: object[], flow: {continue: boolean}}, reasoning: string,
- *   raw: string, tailFound: boolean, tailError: string, interrupted: boolean,
- *   streamed: boolean}>}
- */
-async function requestDirection(scene, snapshot, { onChunk, signal } = {}) {
-    const profile = getMechanicsProfile();
-    const { recipe, prompt, usedFallback, compiledCount, trace: trail } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled, trace: true });
-    captureDirectorPromptLog(recipe?.name, trail);
-    if (usedFallback) {
-        journal('recipe.fallback', { hadRecipe: Boolean(recipe), messages: compiledCount }, { severity: 'warn' });
-    }
-    // Held outside the try so an abort mid-reply keeps whatever arrived: the
-    // transport may either return early having seen the signal, or throw from
-    // the open fetch, and only one of those hands the text back.
-    let raw = '';
-    let reasoning = '';
-    let streamed = false;
-    const collect = (update) => {
-        raw = update.text;
-        reasoning = update.reasoning;
-        onChunk?.(update);
-    };
-    if (testAdapters?.requestDirection) {
-        const answer = await testAdapters.requestDirection({ scene, snapshot, prompt });
-        raw = String(typeof answer === 'string' ? answer : answer?.text || '');
-        reasoning = String(answer?.reasoning || '');
-    } else {
-        try {
-            const result = await streamChatPrompt({ prompt, onChunk: collect, signal });
-            raw = result.text;
-            reasoning = result.reasoning;
-            streamed = result.streamed;
-        } catch (error) {
-            // A cancelled request is not a failure to report — the user
-            // cancelled it. Anything else still is.
-            if (!signal?.aborted) throw error;
-        }
-    }
-    lastDirectorReasoning = String(reasoning || '').trim();
-    const interrupted = Boolean(signal?.aborted);
-    raw = String(raw || '').trim();
-    if (!raw && !interrupted) {
-        throw new StructuredReplyError(
-            'empty',
-            'The Game Director returned nothing at all. This is almost always the token budget: reasoning is paid for out of the same allowance as the reply, so a thinking model can exhaust it before writing a single character. Reduce the model\'s reasoning effort, or raise its response length on this connection.',
-        );
-    }
-    const reply = parseDirectorReply(raw);
-    return {
-        entries: reply.entries,
-        // An interrupted reply is never read for state. Its tail either never
-        // arrived or arrived half-written, and a fence that happens to parse
-        // out of a severed reply would apply changes the Director had not
-        // finished deciding.
-        state: interrupted ? { requests: [], flow: { continue: false } } : reply.state,
-        tailFound: interrupted ? false : reply.tailFound,
-        tailError: interrupted ? '' : reply.tailError,
-        reasoning: lastDirectorReasoning,
-        raw,
-        interrupted,
-        streamed,
-    };
-}
-
-/**
- * The envelope the rest of the pass runs on, built by code from what the
- * Director actually said.
- *
- * Everything here that is not the Director's judgment is Remodel's: the
- * protocol string is a local constant, and the direction id is generated. Both
- * used to be schema fields the model filled in, and both were observed being
- * filled in wrongly — one provider returned the literal `"dir-001"` for every
- * pass in a session, which made persistDirectionRecord's id-keyed log replace
- * its single record over and over and let one run's completion guards match
- * another run's id.
- *
- * `flow` is the one place the shapes differ. The reply carries a single
- * `continue`; the pipeline downstream reads `continueAfter`/`hardPauseAfter`.
- * Not continuing IS the scene waiting for the user, so the second field is
- * derived rather than invented — and with no tail at all both land on "wait",
- * which is the direction design §3 chose to fail in.
- */
-function buildDirectionEnvelope(reply, turn) {
-    const requests = getMechanicsProfile().enabled ? usableRequests(reply.state.requests) : [];
-    return {
-        protocol: DIRECTION_PROTOCOL,
-        directionId: createId('direction'),
-        notebookTurn: turn,
-        reasoning: reply.reasoning || '',
-        flow: {
-            continueAfter: reply.state.flow.continue === true,
-            hardPauseAfter: reply.state.flow.continue !== true,
-        },
-        requests,
-    };
-}
-
-/**
  * Requests the mechanics layer can at least read.
  *
  * `parseDirectorReply` keeps anything object-typed, which includes arrays —
@@ -1628,23 +1255,6 @@ function discardNotebookTurn(scene, turn) {
     return entries.length;
 }
 
-/**
- * Mark where an interrupted reply was cut: the LAST entry, and only that one.
- * Every earlier entry was closed by a newline the Director did write.
- *
- * This is the owner's record of what was severed, and nothing else. Whether
- * the TAKE counts — whether the Narrator ever sees any of it — is a separate
- * question with a separate answer, decided by beginDirection's `finally` on
- * what the pass actually produced rather than on how it ended. An interrupted
- * pass is one way to produce nothing; a pass that stored entries and then
- * threw is another, and keying the withholding here would only have caught
- * the first.
- */
-function markSeveredEntry(entries, interrupted) {
-    const list = Array.isArray(entries) ? entries : [];
-    if (!interrupted || !list.length) return list;
-    return list.map((entry, index) => (index === list.length - 1 ? { ...entry, incomplete: true } : entry));
-}
 
 /**
  * How many times a performer that renders nothing is asked again before the
@@ -2036,6 +1646,69 @@ function executeDirectionRequests(requests, context) {
 }
 
 /**
+ * The mechanics snapshot (advertised Variables/Goals + address book) the editor
+ * resolves its requests against, without running a full turn. Exported for
+ * editor-mode wiring and tests.
+ */
+export async function __buildEditorSnapshot(scene) {
+    const mechanics = await buildMechanicalSnapshot(scene, '', [], null, [], {});
+    return { mechanics };
+}
+
+/**
+ * Editor mode — run the Director-editor pass over the narrator's DRAFT: build
+ * the editor prompt (draft + reasoning + readable narrative state + the
+ * mechanical board WITH numbers), transport it, parse the committed prose +
+ * state fence, and execute the requests against the address book. Returns the
+ * committed prose to post. Never throws — a failure falls back to the draft
+ * unchanged. Dice inside goal.reach are code-rolled by the mechanics layer.
+ */
+export async function runDirectorEdit({ scene, snapshot, draft, draftReasoning = '', token = null }) {
+    const narrativeState = [
+        buildNarratorArchivistSections(scene.timelineId, scene.id),
+        buildGoalObjectives(scene.id),
+    ].filter((part) => String(part || '').trim()).join('\n\n');
+    let mechanicsSkill = '';
+    if (snapshot?.mechanics && getMechanicsProfile().enabled) {
+        try { mechanicsSkill = buildDirectionSources({ mechanics: snapshot.mechanics }, { mechanicsEnabled: true }).mechanicsSkill || ''; } catch { mechanicsSkill = ''; }
+    }
+    const prompt = buildDirectorEditorPrompt({ draft, draftReasoning, narrativeState, mechanicsSkill });
+    let raw = '';
+    try {
+        if (testAdapters?.directorEdit) {
+            raw = String(await testAdapters.directorEdit({ scene, draft, prompt }) || '');
+        } else if (testAdapters) {
+            return { committedProse: draft, result: null }; // opt-in for tests
+        } else {
+            const out = await streamChatPrompt({ prompt, signal: token?.controller?.signal });
+            raw = String(out?.text || '');
+        }
+    } catch (error) {
+        journal('editor.failed', { phase: 'generate', error: String(error?.message || error) }, { severity: 'warn' });
+        return { committedProse: draft, result: null };
+    }
+    // Preserve-and-patch: the draft is canonical. The Director only names the
+    // exact span(s) a roll changed; code applies them. No swaps → draft stands.
+    const { swaps, requests } = parseEditorReply(raw);
+    const { prose: committedProse } = applySwaps(draft, swaps);
+    if (!requests.length) return { committedProse, result: null };
+    try {
+        const result = executeDirectionRequests(requests, {
+            scene: { id: scene.id, timelineId: scene.timelineId },
+            addressBook: snapshot?.mechanics?.addressBook,
+            variableRefs: snapshot?.mechanics?.variableRefs,
+            goalRefs: snapshot?.mechanics?.goalRefs,
+            authorizedGoalIds: [],
+        });
+        journal('editor', { requestCount: requests.length, ok: result.ok, patched: committedProse !== draft }, { summary: 'Director-editor committed + recorded' });
+        return { committedProse, result };
+    } catch (error) {
+        journal('editor.failed', { phase: 'apply', error: String(error?.message || error) }, { severity: 'warn' });
+        return { committedProse, result: null };
+    }
+}
+
+/**
  * The Narrator's own thinking for this turn — the intent channel Pass 2 reads.
  * Native generation records a reasoning model's hidden thinking on
  * message.extra.reasoning; the Director's envelope reasoning is the legacy
@@ -2045,85 +1718,6 @@ function executeDirectionRequests(requests, context) {
 function narratorReasoning(run) {
     const message = getContext().chat?.[run.messageId];
     return String(message?.extra?.reasoning || run.envelope?.reasoning || '').trim();
-}
-
-/**
- * Pass 2 — the Archivist. Read the prose the Narrator just delivered plus its
- * own reasoning (the intent channel) and record what happened as archivist
- * state, so the next turn's injection is grounded in it. Diagnostics only — a
- * failure here never touches the turn the user already read.
- */
-async function extractStateFromProse(run) {
-    const prose = acceptedProse(run);
-    if (!prose) return;
-    const reasoning = narratorReasoning(run);
-    // The reasoning gate: card-authored reasoning is how extraction knows what
-    // the narrating mind DECIDED changed, rather than inferring it from prose.
-    // An empty reasoning channel means a non-reasoning model (or thinking off) —
-    // extraction still runs on prose alone, but less accurately, and the user
-    // should be told to enable thinking or switch models. Recorded per scene so
-    // getLiveDirectionUiState can surface a warning in the toolbar.
-    reasoningAbsentByScene.set(String(run.sceneId), !reasoning);
-    if (!reasoning) {
-        journal('reasoning.absent', {
-            directionId: run.directionId,
-            remedy: 'The model returned no reasoning; extraction is running on prose alone (less accurate). Enable the connection\'s thinking/reasoning, or use a reasoning-capable model.',
-        }, { correlationId: run.directionId, severity: 'warn', summary: 'direction.reasoning: none returned — extraction degraded to prose-only' });
-    }
-    const currentState = buildNarratorArchivistSections(run.timelineId, run.sceneId);
-    // Advertise the Variables/Goals this turn already surfaced, so the extractor
-    // can record numeric/goal consequences too — reusing the Director's snapshot
-    // and address book rather than retrieving again.
-    let mechanicsSkill = '';
-    const mechanics = run.envelope?.mechanicsSnapshot || null;
-    if (mechanics && getMechanicsProfile().enabled) {
-        try {
-            mechanicsSkill = buildDirectionSources({ mechanics }, { mechanicsEnabled: true }).mechanicsSkill || '';
-        } catch { mechanicsSkill = ''; }
-    }
-    const prompt = buildExtractionPrompt({ prose, reasoning, currentState, mechanicsSkill });
-    let raw = '';
-    try {
-        if (testAdapters?.extractState) {
-            raw = String(await testAdapters.extractState({ run, prose, prompt }) || '');
-        } else if (testAdapters) {
-            // Test mode with no extraction stub: extraction is opt-in for tests
-            // (a test that cares provides extractState), so never fire the real
-            // transport here — it would pollute Director-prompt captures.
-            return;
-        } else {
-            // Pass 2 runs on the configured extraction profile when set (so a
-            // non-reasoning narrator can pair with a reasoning-capable
-            // extractor), else the active connection. See extraction-config.js.
-            raw = await runExtraction(prompt);
-        }
-    } catch (error) {
-        journal('extract.failed', { directionId: run.directionId, phase: 'generate', error: String(error?.message || error) }, { severity: 'warn', correlationId: run.directionId });
-        return;
-    }
-    const reply = parseDirectorReply(String(raw || '').trim());
-    const requests = reply?.state?.requests || [];
-    if (!requests.length) {
-        journal('extract.empty', { directionId: run.directionId }, { correlationId: run.directionId });
-        return;
-    }
-    try {
-        // executeDirectionRequests resolves Variable/Goal names against the
-        // address book (archivist requests carry no refs and pass straight
-        // through), so one call records both narrative and mechanical state.
-        const result = executeDirectionRequests(requests, {
-            scene: { id: run.sceneId, timelineId: run.timelineId },
-            directionId: run.directionId,
-            messageId: run.messageId,
-            addressBook: run.addressBook,
-            variableRefs: run.variableRefs,
-            goalRefs: run.goalRefs,
-            authorizedGoalIds: run.authorizedGoalIds,
-        });
-        journal('extract', { directionId: run.directionId, requestCount: requests.length, ok: result.ok, receipts: result.receipts?.length || 0, unresolved: result.unresolvedReasons?.length || 0 }, { correlationId: run.directionId, summary: 'Archivist recorded state from the narration' });
-    } catch (error) {
-        journal('extract.failed', { directionId: run.directionId, phase: 'apply', error: String(error?.message || error) }, { severity: 'warn', correlationId: run.directionId });
-    }
 }
 
 async function completeVisibleRun(run) {
@@ -2143,13 +1737,22 @@ async function completeVisibleRun(run) {
         await failEmptyVisibleRun(run);
         return;
     }
+    // Editor mode: the accepted narrator text is a DRAFT. Run the Director-editor
+    // over it and commit its reconciled version instead — the draft is never
+    // stored (the reveal-hold that keeps the draft off screen is Task 7).
+    if (isEditorMode(hooks.getActiveScene())) {
+        const draft = acceptedProse(run);
+        const snapshot = await __buildEditorSnapshot({ id: run.sceneId, timelineId: run.timelineId });
+        const { committedProse } = await runDirectorEdit({
+            scene: { id: run.sceneId, timelineId: run.timelineId },
+            snapshot, draft, draftReasoning: narratorReasoning(run),
+        });
+        run.acceptedVisibleText = committedProse;
+    }
     await finalizeRunMessage(run, { state: 'complete' });
     run.acceptedComplete = true;
-    // Pass 2 (connection point 2): read the prose the user just received and
-    // record what happened into the archivist, so next turn's injection is
-    // grounded in it. Solo mode only — in Director mode the Director authors
-    // mechanics, and running both would double-author. Never breaks the turn.
-    if (isSoloMode(hooks.getActiveScene())) await extractStateFromProse(run);
+    // State recording is the Loom's job now (runDirectorEdit above, in editor
+    // mode). The old solo Pass-2 extraction has been removed.
     run.autonomousSequence += 1;
     // A response landed, so any failure notice still on screen is describing a
     // turn that has since recovered. The empty-response retries are the case
