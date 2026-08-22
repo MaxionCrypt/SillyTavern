@@ -1162,7 +1162,7 @@ function applyRecipeToNative(recipe) {
  * These are the two that must not be markers. Everything else in a roleplay
  * recipe names something core already knows how to fill.
  */
-const REMODEL_RENDERED_SOURCES = new Set(['loomContext', 'storyGoals']);
+const REMODEL_RENDERED_SOURCES = new Set(['narratorGrounding', 'storyGoals']);
 
 /**
  * Put fresh text into one of our own native prompts, at whatever position the
@@ -1312,6 +1312,11 @@ export function getPromptLog() {
 function applyRoleplayChatRecipe(recipe) {
     oai_settings.prompts ??= [];
     oai_settings.prompt_order ??= [];
+    // Hard cleanup of the two superseded hidden-injection prompt objects. They
+    // are not part of the v14 recipe and keeping them around makes native
+    // preset capture resurrect obsolete names and identifiers.
+    oai_settings.prompts = oai_settings.prompts.filter((prompt) =>
+        !['remodel_loom_context', 'remodel_director_notes'].includes(prompt?.identifier));
     const promptMap = new Map(oai_settings.prompts.filter(Boolean).map((prompt) => [prompt.identifier, prompt]));
     const order = [];
     for (const recipeBlock of recipe.blocks || []) {
@@ -1559,7 +1564,7 @@ function sourceDescription(recipe, key) {
         scenario: 'The Scenario field from the character card bound to the active Roleplay scene.',
         dialogueExamples: 'Example Dialogue from the bound character card, formatted by SillyTavern at generation time.',
         storyGoals: 'The active Scene’s public goals plus private NPC instructions and the latest resolved Goal events.',
-        loomContext: 'The Loom’s readable scene continuity supplied to the native Narrator request.',
+        narratorGrounding: 'The current Narrator-visible Loom Archive, resolved when the native Narrator request is assembled.',
         chatHistory: 'The token-budgeted messages from the active Roleplay conversation, including the newest user turn.',
         currentInput: 'The newest user message, carried through SillyTavern’s native Chat History marker.',
         generationNudge: 'The generation-specific quiet prompt or nudge supplied by SillyTavern for the current request.',

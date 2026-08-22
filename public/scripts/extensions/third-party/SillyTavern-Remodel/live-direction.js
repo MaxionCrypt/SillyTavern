@@ -1,11 +1,4 @@
-import {
-    extension_prompt_roles,
-    extension_prompt_types,
-    main_api,
-    online_status,
-    sendMessageAsUser,
-    setExtensionPrompt,
-} from '../../../../script.js';
+import { main_api, online_status, sendMessageAsUser } from '../../../../script.js';
 import { getContext } from '../../../st-context.js';
 import { generateGroupWrapper, is_group_generating } from '../../../group-chats.js';
 import {
@@ -24,7 +17,7 @@ import { filterNarratorHistory, repairDirectedNarratorRoles } from './narrator-h
 import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
 import { streamChatPrompt } from './story-stream.js';
-import { buildNarratorArchivistSections, buildDirectionInjection, buildGoalObjectives } from './narrator-prompt.js';
+import { buildNarratorArchivistSections, buildGoalObjectives } from './narrator-prompt.js';
 import { applySwaps, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
 import { createLoomTurnEnvelope } from './loom-turn.js';
 import { updateScene } from './timeline-state.js';
@@ -179,9 +172,6 @@ export function initLiveDirection(options = {}) {
     if (initialized) return;
     initialized = true;
     const context = getContext();
-    // Repair a prompt left behind by an older build or a browser interruption.
-    // Directed grounding is request-scoped; it must never bleed into free play.
-    context.setExtensionPrompt?.('REMODEL_NARRATOR_CONTEXT', '', 1, 1, false, 0);
     context.eventSource.on(context.eventTypes.STREAM_TOKEN_RECEIVED, (text) => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
         const messageId = Number(context.streamingProcessor?.messageId);
@@ -1060,33 +1050,16 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     // be able to submit over a revealing response.
     releaseDirectionLock(token);
     notifyState();
-    // The Loom's reasoning — its raw thinking tokens — is the primary
-    // creative bridge to the Narrator. When reasoning is available, it replaces
-    // notebook entries as the Narrator's creative channel: richer, unfiltered,
     // The Narrator generates natively — its full configured prompt (system
     // prompt, card, persona, world info, author's notes, examples, history) —
-    // with the Loom's readable Archive state injected here into the roleplay
-    // recipe's Loom Context slot, so it rides the real prompt rather than a
-    // stripped hand-built one.
+    // with the Loom's readable Archive state resolved into the recipe-owned
+    // Narrator Grounding macro. Placement and policy remain user-authored.
     const archivistState = buildNarratorArchivistSections(scene.timelineId, scene.id);
-    const injection = buildDirectionInjection({ archivistState });
-    const injectionContext = getContext();
-    const setExt = typeof injectionContext.setExtensionPrompt === 'function' ? injectionContext.setExtensionPrompt.bind(injectionContext) : null;
-    // The Narrator's grounding (append-only + anti-echo + the Loom's Archive
-    // state) MUST reach it regardless of the recipe. setNativePromptContent
-    // silently drops the injection when the roleplay recipe has no enabled
-    // "Loom Context" block, which would leave a turn running on the raw card
-    // alone — the model echoing its card instructions with no grounding. Inject
-    // through the guaranteed core extension-prompt API: a SYSTEM note in-chat at
-    // a shallow depth (extension_prompt_types.IN_CHAT = 1,
-    // extension_prompt_roles.SYSTEM = 0), close to the generation point.
-    if (setExt) setExt('REMODEL_NARRATOR_CONTEXT', injection, 1, 1, false, 0);
-    hooks.setNativePromptContent('loomContext', '');
-    const injectionRouted = setExt ? 'extension-prompt' : 'unavailable';
+    const groundingRouted = hooks.setNativePromptContent('narratorGrounding', archivistState);
     journal('notes.bridge', {
         directionId: envelope.directionId,
-        routed: injectionRouted,
-        injectionChars: injection.length,
+        routed: groundingRouted ? 'recipe-macro' : 'recipe-macro-disabled',
+        groundingChars: archivistState.length,
         hasArchivist: Boolean(String(archivistState || '').trim()),
     }, { correlationId: envelope.directionId });
     // The user message was inserted explicitly above. Native normal
@@ -1171,10 +1144,10 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         }
     } finally {
         ownedGenerationDepth = Math.max(0, ownedGenerationDepth - 1);
-        // setExtensionPrompt is persistent global state, not request-local.
-        // The Loom does not use this native injection, and leaving it populated
-        // would feed directed-only grounding into the next free-play request.
-        if (setExt) setExt('REMODEL_NARRATOR_CONTEXT', '', 1, 1, false, 0);
+        // Dynamic macro content is request-scoped even though its native prompt
+        // object persists with the recipe. Clear the resolved Archive after
+        // assembly so a later free-play request cannot inherit it.
+        hooks.setNativePromptContent('narratorGrounding', '');
         journal('generation.end', {
             directionId: envelope.directionId,
             durationMs: Date.now() - generationStartedAt,

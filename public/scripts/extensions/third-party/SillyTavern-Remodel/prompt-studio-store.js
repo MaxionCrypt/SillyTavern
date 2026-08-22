@@ -3,7 +3,12 @@ import { LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT, LOOM_POLICY_V12 } fr
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 13;
+const STORE_VERSION = 14;
+
+export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
+const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
+const NARRATOR_GROUNDING_WARNING = 'This macro supplies the Narrator-visible Loom Archive. Removing or disabling it makes the Narrator rely on chat history alone.';
+const CURATED_NARRATOR_RECIPE_NAME = 'Narrator · Archive-Grounded';
 
 export const PROMPT_MODES = ['story', 'roleplay', 'loom'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
@@ -31,7 +36,7 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         template('worldInfoAfter', 'World Info (after)', 'system', 'world.info.after', { nativeIdentifier: 'worldInfoAfter' }),
         template('dialogueExamples', 'Dialogue Examples', 'user', 'character.examples', { nativeIdentifier: 'dialogueExamples' }),
         template('storyGoals', 'Story Goals', 'system', 'story.goals', { nativeIdentifier: 'remodel_story_goals' }),
-        // Rendered by Remodel as the Narrator's Loom Context bridge,
+        // Rendered by Remodel as the Narrator's dynamic Archive grounding,
         // same as storyGoals above — not resolved from a card or lorebook.
         // `nativeIdentifier` is required, not decorative: a roleplay recipe is
         // mirrored into SillyTavern's native Prompt Manager (applyRoleplayChatRecipe),
@@ -39,7 +44,11 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         // into the real Narrator generation. A source with no native identifier
         // renders in the editor, accepts a depth setting, and reaches nothing —
         // this is the storyGoals precedent, followed exactly.
-        template('loomContext', 'Loom Context', 'system', 'loom.context', { nativeIdentifier: 'remodel_loom_context' }),
+        template('narratorGrounding', 'Narrator Grounding', 'system', 'narrator.grounding', {
+            nativeIdentifier: 'remodel_narrator_grounding',
+            description: 'The current Narrator-visible Loom Archive, resolved when the request is assembled.',
+            advancedWarning: NARRATOR_GROUNDING_WARNING,
+        }),
         template('chatHistory', 'Chat History', 'user', 'chat.history', { nativeIdentifier: 'chatHistory', structured: true }),
         // Native Chat Completion keeps the latest input inside chatHistory;
         // exposing it as an alias preserves that real marker boundary.
@@ -73,7 +82,10 @@ const nativeMarkerToSource = Object.freeze({
     dialogueExamples: 'dialogueExamples',
     chatHistory: 'chatHistory',
     remodel_story_goals: 'storyGoals',
-    remodel_loom_context: 'loomContext',
+    remodel_narrator_grounding: 'narratorGrounding',
+    // Read-only migration aliases. New recipes always use the canonical name.
+    remodel_loom_context: 'narratorGrounding',
+    remodel_director_notes: 'narratorGrounding',
     quietPrompt: 'generationNudge',
 });
 
@@ -212,6 +224,7 @@ export function createPromptBlockFromTemplate(mode, templateKey) {
         enabled: true,
         locked: Boolean(definition.locked),
         nativeIdentifier: definition.nativeIdentifier || '',
+        advancedWarning: definition.advancedWarning || '',
         mode,
     });
 }
@@ -245,7 +258,7 @@ export function createBlocksFromNativeChat(prompts, promptOrder) {
  * to blocks that already carry them changes nothing.
  */
 export function withRemodelSources(blocks) {
-    return withLoomContextSource(withStoryGoalsSource(blocks));
+    return withNarratorRecipeSources(withStoryGoalsSource(blocks));
 }
 
 function getNamespace() {
@@ -291,11 +304,20 @@ function createSeededStore(seed) {
         },
         {
             id: createId('prompt'),
+            name: CURATED_NARRATOR_RECIPE_NAME,
+            description: 'A clean native Narrator stack with editable anti-echo policy and recipe-owned Loom Archive grounding.',
+            mode: 'roleplay',
+            apiType: 'chat',
+            blocks: defaultBlocksFor('roleplay', 'chat'),
+            transport: null,
+        },
+        {
+            id: createId('prompt'),
             name: 'Current Roleplay · Chat',
             description: 'Imported from the native Chat Completion prompt manager.',
             mode: 'roleplay',
             apiType: 'chat',
-            blocks: withLoomContextSource(withStoryGoalsSource(blocksFromNativeChat(seed.chatPrompts || [], seed.chatPromptOrder || []))),
+            blocks: withRemodelSources(blocksFromNativeChat(seed.chatPrompts || [], seed.chatPromptOrder || [])),
             transport: null,
         },
         {
@@ -372,11 +394,20 @@ function defaultBlocksFor(mode, apiType) {
     if (apiType === 'text') {
         return [createPromptBlockFromTemplate('roleplay', 'nativeContext')];
     }
-    // roleplay/chat. Remodel's own sources are seeded here rather than only by
-    // the version migrations, which are version-gated and so never run again:
-    // a recipe created after the upgrade would otherwise start without the
-    // Loom Context bridge the native Narrator uses for continuity grounding.
-    return withRemodelSources([createPromptBlock({ kind: 'message', role: 'instruction', content: '' })]);
+    // A clean native Narrator stack for recipes created inside Prompt Studio.
+    // The imported "Current Roleplay" recipe still mirrors the owner's actual
+    // native preset; this default is the efficient, macro-first starting point.
+    return withRemodelSources([
+        createPromptBlockFromTemplate('roleplay', 'worldInfoBefore'),
+        createPromptBlockFromTemplate('roleplay', 'personaDescription'),
+        createPromptBlockFromTemplate('roleplay', 'charDescription'),
+        createPromptBlockFromTemplate('roleplay', 'charPersonality'),
+        createPromptBlockFromTemplate('roleplay', 'scenario'),
+        createPromptBlockFromTemplate('roleplay', 'worldInfoAfter'),
+        createPromptBlockFromTemplate('roleplay', 'dialogueExamples'),
+        createPromptBlockFromTemplate('roleplay', 'chatHistory'),
+        createPromptBlockFromTemplate('roleplay', 'generationNudge'),
+    ]);
 }
 
 function blocksFromNativeChat(prompts, promptOrder) {
@@ -394,7 +425,8 @@ function blocksFromNativeChat(prompts, promptOrder) {
                 content: definition?.content || `{{native.prompt id="${entry.identifier}"}}`,
                 enabled: entry.enabled !== false,
                 locked: Boolean(prompt.system_prompt),
-                nativeIdentifier: entry.identifier,
+                nativeIdentifier: definition?.nativeIdentifier || entry.identifier,
+                advancedWarning: definition?.advancedWarning || '',
             });
         }
         return createPromptBlock({
@@ -440,11 +472,12 @@ function normalizeStore(store, seed) {
         }
         if (recipe.mode === 'roleplay' && recipe.apiType === 'chat') {
             for (const block of recipe.blocks) {
-                if (block.kind !== 'source' || block.sourceKey !== 'directorNotes') continue;
-                block.sourceKey = 'loomContext';
-                block.nativeIdentifier = 'remodel_loom_context';
-                block.settings = {};
-                changed = true;
+                if (block.kind === 'source' && ['directorNotes', 'loomContext'].includes(block.sourceKey)) {
+                    block.sourceKey = 'narratorGrounding';
+                    block.nativeIdentifier = 'remodel_narrator_grounding';
+                    block.settings = {};
+                    changed = true;
+                }
             }
             if (previousVersion < 3 && ensureStoryGoalsSource(recipe.blocks)) changed = true;
         }
@@ -478,9 +511,43 @@ function normalizeStore(store, seed) {
                 }
             }
         }
+        // Version 14 makes the Narrator recipe authoritative. The old Loom
+        // Context block was visually editable but its content was cleared and
+        // replaced by a hidden extension-prompt injection. Migrate that macro
+        // in place, add the editable default policy once, and keep every
+        // scene-specific recipe id intact.
+        if (previousVersion < 14 && recipe.mode === 'roleplay' && recipe.apiType === 'chat') {
+            for (const block of recipe.blocks) {
+                const migrated = String(block.content || '')
+                    .replace(/\{\{\s*loom\.context\b/gi, '{{narrator.grounding')
+                    .replace(/\{\{\s*director\.notes\b/gi, '{{narrator.grounding');
+                if (migrated !== block.content) {
+                    block.content = migrated;
+                    changed = true;
+                }
+                if (['remodel_loom_context', 'remodel_director_notes'].includes(block.nativeIdentifier)) {
+                    block.nativeIdentifier = 'remodel_narrator_grounding';
+                    changed = true;
+                }
+            }
+            if (ensureNarratorGroundingSource(recipe.blocks)) changed = true;
+            if (ensureNarratorPolicy(recipe.blocks)) changed = true;
+        }
         if (previousVersion < 2 && recipe.mode === 'story' && migrateStoryWorldInfoSources(recipe)) changed = true;
         recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
         store.recipes[id] = recipe;
+    }
+
+    if (previousVersion < 14 && !store.recipeIds.some((id) => store.recipes[id]?.name === CURATED_NARRATOR_RECIPE_NAME)) {
+        createPromptRecipeWithoutSave(store, {
+            name: CURATED_NARRATOR_RECIPE_NAME,
+            description: 'A clean native Narrator stack with editable anti-echo policy and recipe-owned Loom Archive grounding.',
+            mode: 'roleplay',
+            apiType: 'chat',
+            blocks: defaultBlocksFor('roleplay', 'chat'),
+            transport: null,
+        });
+        changed = true;
     }
 
     store.active = store.active && typeof store.active === 'object' ? store.active : {};
@@ -525,19 +592,31 @@ function withStoryGoalsSource(blocks) {
     return blocks;
 }
 
-/** Same shape as ensureStoryGoalsSource: Loom Context is a second
- *  Remodel-owned native source mirrored into the native Prompt Manager.
- *  It is inserted before chatHistory/currentInput and after Story Goals. */
-function ensureLoomContextSource(blocks) {
-    if (!Array.isArray(blocks) || blocks.some((block) => block.content?.includes('{{loom.context}}'))) return false;
-    const source = createPromptBlockFromTemplate('roleplay', 'loomContext');
+/** The dynamic Archive macro belongs immediately before native chat history. */
+function ensureNarratorGroundingSource(blocks) {
+    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*narrator\.grounding\b/i.test(block.content || ''))) return false;
+    const source = createPromptBlockFromTemplate('roleplay', 'narratorGrounding');
     const historyIndex = blocks.findIndex((block) => /{{chat\.(history|input)\b/i.test(block.content || ''));
     blocks.splice(historyIndex >= 0 ? historyIndex : blocks.length, 0, source);
     return true;
 }
 
-function withLoomContextSource(blocks) {
-    ensureLoomContextSource(blocks);
+/** Seed one editable anti-echo/append-only policy before the Archive macro. */
+function ensureNarratorPolicy(blocks) {
+    if (!Array.isArray(blocks) || blocks.some((block) => block.content === NARRATOR_POLICY_DEFAULT)) return false;
+    const groundingIndex = blocks.findIndex((block) => /\{\{\s*narrator\.grounding\b/i.test(block.content || ''));
+    blocks.splice(groundingIndex >= 0 ? groundingIndex : blocks.length, 0, createPromptBlock({
+        kind: 'message',
+        role: 'instruction',
+        content: NARRATOR_POLICY_DEFAULT,
+        advancedWarning: NARRATOR_POLICY_WARNING,
+    }));
+    return true;
+}
+
+function withNarratorRecipeSources(blocks) {
+    ensureNarratorGroundingSource(blocks);
+    ensureNarratorPolicy(blocks);
     return blocks;
 }
 
@@ -605,7 +684,8 @@ function normalizeBlocks(value, mode, apiType) {
 
 function sourceBlockToMacroMessage(mode, value) {
     if (!value || value.kind !== 'source') return value;
-    const migratedKey = value.sourceKey === 'directorNotes' ? 'loomContext' : value.sourceKey;
+    const legacyGrounding = ['directorNotes', 'loomContext'].includes(value.sourceKey);
+    const migratedKey = legacyGrounding ? 'narratorGrounding' : value.sourceKey;
     const definition = PROMPT_TEMPLATE_DEFINITIONS[mode]?.find((item) => item.key === migratedKey);
     if (!definition) return { ...value, kind: 'message', content: `{{source key="${String(value.sourceKey || '')}"}}` };
     const args = Object.entries(value.settings || {})
@@ -616,7 +696,7 @@ function sourceBlockToMacroMessage(mode, value) {
         kind: 'message',
         content: `{{${definition.macro}${args ? ` ${args}` : ''}}}`,
         sourceKey: '',
-        nativeIdentifier: value.nativeIdentifier || definition.nativeIdentifier || '',
+        nativeIdentifier: legacyGrounding ? definition.nativeIdentifier : (value.nativeIdentifier || definition.nativeIdentifier || ''),
         advancedWarning: value.advancedWarning || '',
     };
 }
