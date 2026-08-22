@@ -10,6 +10,7 @@ import { getContext } from '../../../st-context.js';
 import { generateGroupWrapper, is_group_generating } from '../../../group-chats.js';
 import {
     executeMechanicsRequest,
+    getCapabilityDictionary,
     MECHANICS_PROTOCOL,
     undoMechanicsTransaction,
 } from './mechanics-capabilities.js';
@@ -36,6 +37,12 @@ const PACING = Object.freeze({
     fast: { cps: 75, wordMs: 12, min: 150, max: 650, opening: 350 },
     instant: { cps: Infinity, wordMs: 0, min: 0, max: 0, opening: 0 },
 });
+const ARCHIVE_CAPABILITIES = new Set([
+    'scene.set', 'scene.clear', 'event.record',
+    'char_state.set', 'char_state.clear', 'beat.set',
+    'secret.set', 'secret.clear',
+]);
+const archiveCatchups = new Map();
 
 const hooks = {
     getActiveScene: () => null,
@@ -1021,6 +1028,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         phase: 'narrator',
         narratorDraft: '',
         narratorGenerationFinished: false,
+        loomProfileId: scene.generationProfileIds?.loom || '',
         loomController: null,
         rawBufferedText: '',
         acceptedVisibleText: '',
@@ -1255,6 +1263,12 @@ async function beginLoomVisibleStream(run, scene) {
     }
     notifyState();
 
+    // An interrupted previous turn is archived from only the prefix the user
+    // accepted. Let the Narrator draft concurrently, then join that catch-up
+    // here so this Loom request reads fully current state.
+    await waitForArchiveCatchup(run.sceneId);
+    if (activeRun !== run || run.loomController.signal.aborted) return false;
+
     const snapshot = await __buildLoomSnapshot({ id: run.sceneId, timelineId: run.timelineId });
     const token = { controller: run.loomController };
     const result = await runLoomReconciliation({
@@ -1453,10 +1467,7 @@ export async function runLoomReconciliation({
         buildNarratorArchivistSections(scene.timelineId, scene.id),
         buildGoalObjectives(scene.id),
     ].filter((part) => String(part || '').trim()).join('\n\n');
-    let mechanicsSkill = '';
-    if (snapshot?.mechanics && getMechanicsProfile().enabled) {
-        try { mechanicsSkill = buildLoomContext({ mechanics: snapshot.mechanics }, { mechanicsEnabled: true }).mechanicsSkill || ''; } catch { mechanicsSkill = ''; }
-    }
+    const mechanicsSkill = buildLoomSkill(snapshot?.mechanics);
     const sources = buildLoomRecipeSources({ draft, draftReasoning, narrativeState, mechanicsSkill });
     const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
     const compiled = compilePromptRecipe(recipe, sources, { trace: true });
@@ -1551,9 +1562,11 @@ async function completeVisibleRun(run) {
     // over it and commit its reconciled version instead — the draft is never
     // stored (the reveal-hold that keeps the draft off screen is Task 7).
     await finalizeRunMessage(run, { state: 'complete' });
+    if (!run.archiveRequestsApplied) queueArchiveCatchup(run, 'no-archive-requests');
     run.acceptedComplete = true;
-    // State recording is the Loom's job now (runLoomReconciliation above, in editor
-    // mode). The old solo Pass-2 extraction has been removed.
+    // The main Loom fence normally records state. If it omitted every Archive
+    // operation, the queued same-recipe catch-up above repairs that omission
+    // without holding the visible turn open.
     run.autonomousSequence += 1;
     // A response landed, so any failure notice still on screen is describing a
     // turn that has since recovered. The empty-response retries are the case
@@ -1783,6 +1796,12 @@ async function interruptLiveDirection({ preserveForIntervention }) {
         getContext().stopGeneration?.();
         await waitFor(() => run.narratorGenerationFinished, 2200);
     }
+    // The Loom's completed fence can describe prose still sitting in the
+    // unrevealed tail. Once the user cuts that tail off, none of its requests
+    // may become canon. Archive the accepted prefix afresh below instead.
+    run.envelope.mechanics.pendingRequests = [];
+    run.archiveRequestsApplied = false;
+
     // Loom mode: Stop CUTS OFF, it does not delete. The reveal lags the buffer
     // for pacing, so at the moment of a Stop most of what the model generated
     // sits unrevealed in rawBufferedText — flush it into the accepted text so
@@ -1791,6 +1810,7 @@ async function interruptLiveDirection({ preserveForIntervention }) {
     // so finalizeRunMessage still deletes the truly-empty case. Loom mode
     // keeps its original discard-the-unrevealed-tail behaviour (and its tests).
     await finalizeRunMessage(run, { state: preserveForIntervention ? 'interrupted' : 'stopped' });
+    queueArchiveCatchup(run, preserveForIntervention ? 'user-interruption' : 'stopped');
     activeRun = null;
     notifyState();
     hooks.onSettled();
@@ -1875,6 +1895,7 @@ function applyPendingRequests(run) {
     run.pendingRequestsApplied = true;
     const pending = run.envelope.mechanics.pendingRequests;
     if (!pending?.length) return;
+    const archiveRequestCount = pending.filter((request) => ARCHIVE_CAPABILITIES.has(request?.capability)).length;
     const scene = hooks.getActiveScene();
     if (!scene || scene.id !== run.sceneId) {
         journal('mechanics.accepted.skipped', {
@@ -1897,6 +1918,7 @@ function applyPendingRequests(run) {
         transactionId: result.transaction?.id || null,
     }, { correlationId: run.directionId, severity: result.ok ? 'info' : 'error' });
     if (result.transaction?.id) run.checkpointTransactionIds.push(result.transaction.id);
+    if (result.ok && archiveRequestCount) run.archiveRequestsApplied = true;
     // unresolvedReasons carries the specific reason (unknown vs. duplicated
     // name) that addressRequestsByName already worked out; folded in even on
     // an otherwise-ok result, since one request can name an unresolvable
@@ -1908,6 +1930,112 @@ function applyPendingRequests(run) {
             ...(result.unresolvedReasons || []),
         ];
     }
+}
+
+/**
+ * Reconcile accepted prose into the Archive when the visible Loom pass could
+ * not supply a trustworthy state fence (most importantly, an interruption).
+ * This deliberately reuses the selected Loom recipe and connection profile;
+ * its returned prose is ignored and only narrative Archive requests apply.
+ */
+async function catchUpArchive(run, reason) {
+    const prose = acceptedProse(run);
+    if (!prose) return;
+    if (testAdapters && !testAdapters.archiveCatchup) return;
+
+    const scene = { id: run.sceneId, timelineId: run.timelineId };
+    const mechanics = run.envelope?.mechanicsSnapshot || null;
+    const mechanicsSkill = buildLoomSkill(mechanics);
+    const narrativeState = [
+        buildNarratorArchivistSections(run.timelineId, run.sceneId),
+        buildGoalObjectives(run.sceneId),
+    ].filter((part) => String(part || '').trim()).join('\n\n');
+    const sources = buildLoomRecipeSources({
+        draft: prose,
+        draftReasoning: narratorReasoning(run),
+        narrativeState,
+        mechanicsSkill,
+    });
+    const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
+    const compiled = compilePromptRecipe(recipe, sources, { trace: true });
+    const prompt = compiled.messages.length
+        ? compiled.messages
+        : buildLoomPrompt({ draft: prose, draftReasoning: narratorReasoning(run), narrativeState, mechanicsSkill });
+    if (compiled.messages.length) captureLoomPromptLog(recipe?.name, compiled.messages);
+
+    let raw = '';
+    try {
+        if (testAdapters?.archiveCatchup) {
+            raw = String(await testAdapters.archiveCatchup({ run, prose, prompt, reason }) || '');
+        } else {
+            const out = await streamChatPrompt({
+                prompt,
+                profileId: run.loomProfileId || undefined,
+            });
+            raw = String(out?.text || '');
+        }
+    } catch (error) {
+        journal('archive.catchup.failed', { directionId: run.directionId, reason, phase: 'generate', error: String(error?.message || error) }, { correlationId: run.directionId, severity: 'warn' });
+        return;
+    }
+
+    const requests = parseLoomReply(raw).requests.filter((request) => ARCHIVE_CAPABILITIES.has(request?.capability));
+    if (!requests.length) {
+        journal('archive.catchup.empty', { directionId: run.directionId, reason }, { correlationId: run.directionId, severity: 'warn' });
+        return;
+    }
+    try {
+        const result = executeDirectionRequests(requests, {
+            scene,
+            directionId: `${run.directionId}:archive`,
+            messageId: run.messageId,
+            addressBook: run.addressBook,
+            variableRefs: run.variableRefs,
+            goalRefs: run.goalRefs,
+            authorizedGoalIds: [],
+        });
+        journal('archive.catchup', {
+            directionId: run.directionId,
+            reason,
+            requestCount: requests.length,
+            ok: result.ok,
+            errors: result.errors || [],
+        }, { correlationId: run.directionId, severity: result.ok ? 'info' : 'warn', summary: 'Loom caught the Archive up to accepted prose' });
+    } catch (error) {
+        journal('archive.catchup.failed', { directionId: run.directionId, reason, phase: 'apply', error: String(error?.message || error) }, { correlationId: run.directionId, severity: 'warn' });
+    }
+}
+
+function queueArchiveCatchup(run, reason) {
+    const key = String(run?.sceneId || '');
+    if (!key || !acceptedProse(run)) return Promise.resolve();
+    const prior = archiveCatchups.get(key) || Promise.resolve();
+    const task = prior.catch(() => {}).then(() => catchUpArchive(run, reason));
+    archiveCatchups.set(key, task);
+    task.finally(() => {
+        if (archiveCatchups.get(key) === task) archiveCatchups.delete(key);
+    });
+    return task;
+}
+
+async function waitForArchiveCatchup(sceneId) {
+    const pending = archiveCatchups.get(String(sceneId || ''));
+    if (pending) await pending.catch(() => {});
+}
+
+function buildLoomSkill(mechanics) {
+    if (mechanics && getMechanicsProfile().enabled) {
+        try { return buildLoomContext({ mechanics }, { mechanicsEnabled: true }).mechanicsSkill || ''; } catch { /* use the Archive-only guide below */ }
+    }
+    const guide = getCapabilityDictionary()
+        .filter((capability) => ARCHIVE_CAPABILITIES.has(capability.name))
+        .map((capability) => {
+            const required = (capability.requiredArguments || [])
+                .map((argument) => `${argument.key} — ${argument.hint}`).join('; ');
+            return `- ${capability.name}: ${capability.description}${required ? `\n    arguments: ${required}` : ''}`;
+        })
+        .join('\n');
+    return `[ARCHIVE OPERATIONS — always available]\n${guide}`;
 }
 
 function persistRun(run, immediate) {

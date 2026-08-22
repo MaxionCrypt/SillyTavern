@@ -1,9 +1,9 @@
 import { getContext } from '../../../st-context.js';
-import { LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT } from './loom-reconciliation.js';
+import { LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT, LOOM_POLICY_V12 } from './loom-reconciliation.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 12;
+const STORE_VERSION = 13;
 
 export const PROMPT_MODES = ['story', 'roleplay', 'loom'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
@@ -49,7 +49,7 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
     ]),
     loom: Object.freeze([
         template('archiveState', 'Archive & Objectives', 'system', 'loom.archive', { description: 'The Loom-readable scene facts, character state, recorded events, next beat, and active objectives.' }),
-        template('mechanicsBoard', 'Goals & Variables', 'system', 'loom.mechanics', { description: 'The current mechanical board and the capabilities the Loom may request.' }),
+        template('mechanicsBoard', 'Archive Operations & Mechanics', 'system', 'loom.mechanics', { description: 'The Archive operations always available to the Loom, plus the current Goals and Variables board when mechanics are enabled.' }),
         template('narratorDraft', 'Narrator Draft', 'user', 'narrator.draft', { description: 'The held Narrator prose being reconciled before it becomes visible.' }),
         template('narratorReasoning', 'Narrator Reasoning', 'user', 'narrator.reasoning', { description: 'The Narrator model\'s private reasoning for this draft, when the provider supplies it.' }),
     ]),
@@ -463,6 +463,17 @@ function normalizeStore(store, seed) {
                 }
                 if (String(block.content || '').startsWith('Write no narration and no commentary. Output only this state fence')) {
                     block.content = LOOM_OUTPUT_CONTRACT_DEFAULT;
+                    changed = true;
+                }
+            }
+        }
+        // Version 13 makes Archive upkeep explicit and duplicate-safe. Only
+        // replace the untouched v12 policy; an owner-edited Loom remains
+        // exactly as authored.
+        if (previousVersion < 13 && recipe.mode === 'loom') {
+            for (const block of recipe.blocks) {
+                if (block.content === LOOM_POLICY_V12) {
+                    block.content = LOOM_POLICY_DEFAULT;
                     changed = true;
                 }
             }

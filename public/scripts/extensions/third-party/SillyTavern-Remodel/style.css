@@ -2920,8 +2920,7 @@ body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-i
   opacity:1 !important;
 }
 body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-act[data-remodel-rp-action="regenerate"],
-body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-act[data-remodel-rp-action="next"],
-body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-act[data-remodel-rp-action="impersonate"] {
+body.remodel-roleplay-workspace-active.remodel-roleplay-generating .remodel-rp-act[data-remodel-rp-action="next"] {
   opacity: 0.4 !important;
   pointer-events: none !important;
 }

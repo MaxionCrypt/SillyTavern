@@ -63,3 +63,22 @@ test('with final prose and no requests, runLoomReconciliation keeps the Loom ver
     expect(result).toBe(null);
     expect(listEvents(scene.timelineId, scene.id)).toEqual([]);
 });
+
+test('Archive operations remain available when optional Goals and Variables mechanics are disabled', async () => {
+    updateMechanicsProfile({ enabled: false });
+    let sentPrompt = '';
+    setLiveDirectionTestAdapters({
+        loomReconciliation: async ({ prompt }) => {
+            sentPrompt = prompt.map((message) => message.content).join('\n');
+            return 'The draft stands.\n```state\n{"requests":[],"flow":{"continue":false}}\n```';
+        },
+    });
+    const snapshot = await __buildLoomSnapshot(scene);
+    await runLoomReconciliation({ scene, snapshot, draft: 'The draft stands.' });
+
+    expect(sentPrompt).toContain('[ARCHIVE OPERATIONS — always available]');
+    expect(sentPrompt).toContain('event.record');
+    expect(sentPrompt).toContain('scene.set');
+    expect(sentPrompt).toContain('beat.set');
+    expect(sentPrompt).not.toContain('Mechanical automation is unavailable this turn');
+});

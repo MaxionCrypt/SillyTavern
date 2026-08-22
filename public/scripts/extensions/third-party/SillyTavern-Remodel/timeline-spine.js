@@ -8324,9 +8324,6 @@ function renderRoleplayComposer(root) {
     const nextSpeakerAttrs = inGroup
         ? 'data-remodel-rp-nextspeaker-menu'
         : 'data-remodel-rp-act-disabled="Next speaker is only available in group scenes"';
-    const triggerAttrs = inGroup
-        ? 'data-remodel-rp-action="trigger"'
-        : 'data-remodel-rp-act-disabled="Only in group scenes — there\'s just one character here"';
 
     // What Retry and Continue would do from where the loop currently stands.
     // Read once here and used for the label, the tooltip AND the enabled state,
@@ -8352,16 +8349,10 @@ function renderRoleplayComposer(root) {
             <button type="button" class="remodel-rp-command remodel-rp-act" ${stepAttrs(step.continue, 'next')} title="${escapeAttribute(step.continue.reason)}">
                 <span class="remodel-rp-command-icon"><i class="fa-solid fa-forward-step" aria-hidden="true"></i></span><span class="remodel-rp-command-label">${escapeHtml(stepLabel('Continue', step.continue))}</span>
             </button>
-            <button type="button" class="remodel-rp-command remodel-rp-act" ${triggerAttrs} title="Trigger a group member">
-                <span class="remodel-rp-command-icon"><i class="fa-solid fa-bolt" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Trigger&hellip;</span>
-            </button>
-            <button type="button" class="remodel-rp-command remodel-rp-act" data-remodel-rp-action="impersonate" title="Write for me">
-                <span class="remodel-rp-command-icon"><i class="fa-solid fa-pen-nib" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Write for me</span>
-            </button>
             <button type="button" class="remodel-rp-command remodel-rp-act" data-remodel-rp-action="preview" title="Preview the final prompt">
                 <span class="remodel-rp-command-icon"><i class="fa-solid fa-eye" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Preview</span>
             </button>
-            <span class="remodel-rp-command-prompt">${renderScenePromptChoice(getActiveScene(), true, 'roleplay')}${renderScenePromptChoice(getActiveScene(), true, 'loom')}</span>
+            <span class="remodel-rp-command-prompt">${renderScenePromptChoice(getActiveScene(), true, 'roleplay')}</span>
             <span class="remodel-live-flow-actions">
                 <button type="button" data-remodel-live-continue${directionUi.canContinue ? '' : ' hidden'}><i class="fa-solid fa-play"></i> Continue</button>
                 <button type="button" data-remodel-live-stop${directionUi.canStop ? '' : ' hidden'}><i class="fa-solid fa-stop"></i> Stop</button>
@@ -9262,23 +9253,6 @@ function handleRoleplayAction(action) {
             setRoleplayGenerating(true);
             showRoleplayTypingIndicator();
             document.getElementById('option_continue')?.click();
-            break;
-        }
-        case 'trigger': {
-            // Pick a specific cast member to speak next (same menu as the
-            // "Next speaker" pill). Anchored to the Trigger button.
-            const btn = getRealRoleplayRoot()?.querySelector('[data-remodel-rp-action="trigger"]');
-            openRoleplayNextSpeakerMenu(btn);
-            break;
-        }
-        case 'impersonate': {
-            // "Write for me" — impersonate generation isn't in
-            // STORY_GENERATION_TYPES (it's a quiet-adjacent type, not a story
-            // turn), so GENERATION_STARTED won't flip remodel-roleplay-
-            // generating for it. Set it directly so the group-panel
-            // suppression above still applies.
-            setRoleplayGenerating(true);
-            document.getElementById('option_impersonate')?.click();
             break;
         }
         case 'preview': {

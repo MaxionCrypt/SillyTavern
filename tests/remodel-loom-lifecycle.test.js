@@ -113,6 +113,7 @@ test('an intervention stores only the visible Loom prefix and never the private 
     const visible = 'The guard reaches for the alarm—';
     const full = `${visible}and presses it before Wren can move.`;
     let pushTail = () => {};
+    let archivePrompt = '';
     setLiveDirectionTestAdapters({
         generatePerformer: speak,
         loomReconciliation: ({ onChunk, signal }) => new Promise((resolve) => {
@@ -120,6 +121,10 @@ test('an intervention stores only the visible Loom prefix and never the private 
             pushTail = () => onChunk(full);
             signal.addEventListener('abort', () => resolve(`${full}\n\n\`\`\`state\n{"requests":[],"flow":{"continue":false}}\n\`\`\``), { once: true });
         }),
+        archiveCatchup: async ({ prompt }) => {
+            archivePrompt = prompt.map((message) => message.content).join('\n');
+            return `${visible}\n\n\`\`\`state\n{"requests":[{"id":"archive-1","capability":"event.record","arguments":{"summary":"The guard reached for the alarm"},"reason":"This is the accepted interrupted prefix."}],"flow":{"continue":false}}\n\`\`\``;
+        },
     });
 
     const pending = requestNextDirection(scene);
@@ -133,4 +138,9 @@ test('an intervention stores only the visible Loom prefix and never the private 
     expect(__getChat().at(-1).mes).toBe(visible);
     expect(__getChat().at(-1).mes).not.toContain('presses it');
     expect(__getChat().at(-1).mes).not.toBe(RESPONSE);
+    expect(await until(() => listEvents(scene.timelineId, scene.id).length === 1)).toBe(true);
+    expect(listEvents(scene.timelineId, scene.id)[0].summary).toBe('The guard reached for the alarm');
+    expect(archivePrompt).toContain(visible);
+    expect(archivePrompt).not.toContain('presses it');
+    expect(archivePrompt).not.toContain(RESPONSE);
 });
