@@ -2,7 +2,6 @@ import { getContext } from '../../../st-context.js';
 import { detachStoryGoalsFromScene, deleteStoryGoalsForTimeline } from './story-goals-store.js';
 import { deleteVariablesForTimeline } from './variables-store.js';
 import { clearRetrievalRecall } from './retrieval-recall.js';
-import { clearStandingDirection, clearStandingDirectionsForTimeline } from './standing-direction-store.js';
 
 export const CHAT_METADATA_KEY = 'remodelScene';
 
@@ -126,7 +125,6 @@ export function deleteTimeline(timelineId) {
     deleteStoryGoalsForTimeline(timelineId);
     deleteVariablesForTimeline(timelineId);
     clearRetrievalRecall(timelineId);
-    clearStandingDirectionsForTimeline(timelineId);
     store.timelineIds = store.timelineIds.filter((id) => id !== timelineId);
     store.activeTimelineId = store.activeTimelineId === timelineId ? store.timelineIds[0] || null : store.activeTimelineId;
     saveTimelineStore();
@@ -215,31 +213,22 @@ export function createScene(arcId, mode = 'roleplay', title = 'New Scene') {
         storyDocId: null,
         // Optional per-Scene Prompt Studio overrides. Null means inherit the
         // account-wide default for this Scene mode and API boundary.
-        promptRecipeIds: { chat: null, text: null },
+        promptRecipeIds: { chat: null, text: null, loom: null },
+        // Connection Manager routes for the two model-facing jobs in a
+        // roleplay turn. The Narrator still runs through native generation;
+        // the Loom is a separate, profile-scoped hidden request. Null means
+        // inherit the currently selected SillyTavern connection.
+        generationProfileIds: { narrator: null, loom: null },
         // How the Scene is staged — who speaks, and in what order.
         //   'free'     : today's behaviour. The group's own activation strategy
         //                decides; no pipeline, no injections.
         //   'directed' : the bound roles run in order each turn.
         // Defaults to 'free' so nothing about an ordinary Scene changes.
         staging: 'free',
-        // Ordered job -> cast-member bindings for a directed Scene, e.g.
-        // [{ job: 'director', characterId: 3 }, { job: 'narrator', characterId: 1 }].
-        // Bound explicitly by the user; never matched by character name.
-        roles: [],
-        // How the Scene's cast is shaped.
-        //   'open' : any number of cards; the Director seat is assigned after
-        //            the fact from whoever is in the group. Every Scene created
-        //            before the two-seat model is this, and keeps behaving
-        //            exactly as it did.
-        //   'duet' : exactly two bound cards, chosen when the Scene is cast —
-        //            one Director, one Narrator. The cast is not editable from
-        //            the Scene, because the two seats ARE the Scene.
-        // Set at creation; normalizeStore never upgrades an existing Scene.
-        ensemble: 'open',
-        // Continuous direction state. A native character card may occupy the
-        // non-speaking Roleplay Director seat while narratorRef points at a
-        // stable visible performer identity. Direction records are extension
-        // UI state only; they are never native chat messages.
+        // The Narrator is the only character-card seat. The Loom is selected
+        // by recipe and connection profile, never from the cast.
+
+        // Continuous Narrator -> Loom turn state.
         liveDirection: normalizeLiveDirection(),
         status: 'unbound',
         summary: '',
@@ -286,7 +275,6 @@ export function deleteScene(sceneId) {
 
     delete store.scenes[sceneId];
     detachStoryGoalsFromScene(sceneId);
-    clearStandingDirection(sceneId);
     arc.sceneIds = arc.sceneIds.filter((id) => id !== sceneId);
     timeline.activeSceneId = timeline.activeSceneId === sceneId ? arc.sceneIds[0] || null : timeline.activeSceneId;
     arc.updatedAt = now();
@@ -402,17 +390,11 @@ function normalizeStore(store) {
         // StoryDoc instead of a chat.
         scene.storyDocId ??= null;
         scene.promptRecipeIds = normalizePromptRecipeIds(scene.promptRecipeIds);
-        // Backward-compat for scenes saved before staging existed. Every one of
-        // them must keep behaving exactly as it did, so they default to 'free'.
+        scene.generationProfileIds = normalizeGenerationProfileIds(scene.generationProfileIds);
         scene.staging = normalizeStaging(scene.staging);
-        // Absent means the Scene predates the two-seat model, so it stays
-        // 'open'. Deliberately not inferred from member count: a two-card
-        // Scene cast under the old flow is still an open cast the user may
-        // add to, and silently locking it would take that away.
-        scene.ensemble = normalizeEnsemble(scene.ensemble);
-        scene.roles = normalizeSceneRoles(scene.roles);
-        scene.liveDirection = normalizeLiveDirection(scene.liveDirection, scene.roles);
-        scene.roles = scene.roles.filter((binding) => binding.job === 'narrator');
+        scene.liveDirection = normalizeLiveDirection(scene.liveDirection);
+        delete scene.ensemble;
+        delete scene.roles;
     }
 }
 
@@ -444,9 +426,8 @@ function sanitizeScenePatch(patch) {
         // mode) instead of a chat file; roleplay scenes keep linkedChat.
         ...(patch.storyDocId !== undefined ? { storyDocId: patch.storyDocId || null } : {}),
         ...(patch.promptRecipeIds !== undefined ? { promptRecipeIds: normalizePromptRecipeIds(patch.promptRecipeIds) } : {}),
+        ...(patch.generationProfileIds !== undefined ? { generationProfileIds: normalizeGenerationProfileIds(patch.generationProfileIds) } : {}),
         ...(patch.staging !== undefined ? { staging: normalizeStaging(patch.staging) } : {}),
-        ...(patch.ensemble !== undefined ? { ensemble: normalizeEnsemble(patch.ensemble) } : {}),
-        ...(patch.roles !== undefined ? { roles: normalizeSceneRoles(patch.roles) } : {}),
         ...(patch.liveDirection !== undefined ? { liveDirection: normalizeLiveDirection(patch.liveDirection) } : {}),
     };
 }
@@ -455,161 +436,35 @@ function normalizePromptRecipeIds(value) {
     return {
         chat: value?.chat ? String(value.chat) : null,
         text: value?.text ? String(value.text) : null,
+        loom: value?.loom ? String(value.loom) : null,
     };
 }
 
-/** The jobs a bound cast member can hold in a directed Scene. */
+function normalizeGenerationProfileIds(value) {
+    return {
+        narrator: value?.narrator ? String(value.narrator) : null,
+        loom: value?.loom ? String(value.loom) : null,
+    };
+}
+
 export const SCENE_STAGINGS = Object.freeze(['free', 'directed']);
-export const SCENE_ROLE_JOBS = Object.freeze(['director', 'narrator']);
-export const SCENE_ENSEMBLES = Object.freeze(['open', 'duet']);
 
 function normalizeStaging(value) {
     return SCENE_STAGINGS.includes(value) ? value : 'free';
 }
 
-function normalizeEnsemble(value) {
-    return SCENE_ENSEMBLES.includes(value) ? value : 'open';
-}
-
-/** A Scene cast as one Director and one Narrator, with both seats filled. */
-export function isDuetScene(scene) {
-    return Boolean(
-        scene?.mode === 'roleplay'
-        && scene.ensemble === 'duet'
-        && scene.liveDirection?.directorRef?.id
-        && scene.liveDirection?.narratorRef?.id,
-    );
-}
-
-/**
- * Binds both seats of a two-seat Scene in one write.
- *
- * Separate from setSceneRoleplayDirector because that function exists to
- * assign a Director seat over an already-cast open Scene. Here the two seats
- * and the staging are established together, at creation, as one decision.
- */
-export function setSceneDuetSeats(sceneId, { directorRef, narratorRef } = {}) {
-    const scene = getTimelineStore().scenes[sceneId];
-    if (!scene || scene.mode !== 'roleplay') return null;
-    const director = normalizeDirectionPerformerRef(directorRef);
-    const narrator = normalizeDirectionPerformerRef(narratorRef);
-    if (!director || !narrator || director.id === narrator.id) return null;
-    return updateScene(sceneId, {
-        ensemble: 'duet',
-        staging: 'directed',
-        liveDirection: {
-            ...scene.liveDirection,
-            enabled: true,
-            directorRef: director,
-            narratorRef: { ...narrator, kind: 'narrator' },
-        },
-    });
-}
-
-/**
- * Role bindings are an ordered list, one entry per job at most. A binding with
- * no resolvable cast member is kept (the character may simply not be loaded
- * yet) but carries a null characterId, and the pipeline skips it.
- */
-function normalizeSceneRoles(value) {
-    if (!Array.isArray(value)) {
-        return [];
-    }
-    const seen = new Set();
-    const roles = [];
-    for (const entry of value) {
-        const job = SCENE_ROLE_JOBS.includes(entry?.job) ? entry.job : null;
-        if (!job || seen.has(job)) {
-            continue;
-        }
-        seen.add(job);
-        const characterId = entry?.characterId == null || entry.characterId === ''
-            ? null
-            : Number(entry.characterId);
-        roles.push({ job, characterId: Number.isInteger(characterId) ? characterId : null });
-    }
-    return roles;
-}
-
 export const LIVE_DIRECTION_PACING = Object.freeze(['slow', 'natural', 'fast', 'instant']);
 
-function normalizeLiveDirection(value = {}, legacyRoles = []) {
+function normalizeLiveDirection(value = {}) {
     const pacing = LIVE_DIRECTION_PACING.includes(value?.pacing) ? value.pacing : 'natural';
     const limit = Math.max(1, Math.min(10, Math.round(Number(value?.autonomousResponseLimit) || 3)));
-    let narratorRef = normalizeDirectionPerformerRef(value?.narratorRef);
-    if (!narratorRef) {
-        const legacy = legacyRoles.find((binding) => binding.job === 'narrator' && Number.isInteger(binding.characterId));
-        if (legacy) narratorRef = { kind: 'legacy-character-index', id: String(legacy.characterId), label: 'Narrator' };
-    }
-    let directorRef = normalizeDirectionPerformerRef(value?.directorRef);
-    if (!directorRef) {
-        const legacy = legacyRoles.find((binding) => binding.job === 'director' && Number.isInteger(binding.characterId));
-        if (legacy) directorRef = { kind: 'legacy-character-index', id: String(legacy.characterId), label: 'Roleplay Director' };
-    }
-    const directionLog = (Array.isArray(value?.directionLog) ? value.directionLog : [])
-        .map(normalizeDirectionRecord)
-        .filter(Boolean)
-        .slice(-60);
     return {
         enabled: value?.enabled !== false,
-        // Which roleplay engine runs the turn: 'director' (two-agent, default)
-        // or 'solo' (single-agent, archivist-native). Anything else falls back.
-        mode: value?.mode === 'solo' ? 'solo' : 'director',
+        mode: 'loom',
         pacing,
         autoplay: value?.autoplay !== false,
         autonomousResponseLimit: limit,
-        narratorRef,
-        directorRef,
-        directionLog,
-    };
-}
-
-function normalizeDirectionRecord(value) {
-    if (!value || typeof value !== 'object') return null;
-    const id = String(value.id || '').trim();
-    const objective = String(value.objective || '').trim();
-    if (!id || !objective) return null;
-    return {
-        id,
-        createdAt: String(value.createdAt || new Date().toISOString()),
-        directorRef: normalizeDirectionPerformerRef(value.directorRef),
-        directorLabel: String(value.directorLabel || 'Game Director').trim() || 'Game Director',
-        performerRef: normalizeDirectionPerformerRef(value.performerRef),
-        performerLabel: String(value.performerLabel || 'Performer').trim() || 'Performer',
-        objective,
-        // LEGACY ONLY — nothing writes these any more. The director rework
-        // deleted decision traces, constraints, openings, and the immediate/
-        // checkpoint split; persistDirectionRecord emits none of them, so for
-        // every new record they normalize to empty and the roleplay stream's
-        // corresponding sections simply do not render. They are still read
-        // back so records saved before the rework keep displaying what they
-        // captured. Delete this block once those records no longer matter.
-        decisionTrace: {
-            observations: (Array.isArray(value.decisionTrace?.observations) ? value.decisionTrace.observations : []).map(String).filter(Boolean).slice(0, 8),
-            intent: String(value.decisionTrace?.intent || '').trim(),
-            performerReason: String(value.decisionTrace?.performerReason || '').trim(),
-        },
-        constraints: (Array.isArray(value.constraints) ? value.constraints : []).map(String).filter(Boolean).slice(0, 20),
-        openings: (Array.isArray(value.openings) ? value.openings : []).map((item) => ({
-            id: String(item?.id || ''),
-            label: String(item?.label || ''),
-        })).filter((item) => item.id && item.label).slice(0, 20),
-        immediateCount: Math.max(0, Math.round(Number(value.immediateCount) || 0)),
-        checkpointCount: Math.max(0, Math.round(Number(value.checkpointCount) || 0)),
-        // `kind` is deliberately not defaulted. Every operation now applies at
-        // the same point — when the response is accepted — so defaulting a
-        // missing kind to 'immediate' invented a distinction that no longer
-        // exists, and nothing reads it.
-        operations: (Array.isArray(value.operations) ? value.operations : []).map((item) => ({
-            ...(item?.kind === 'checkpoint' || item?.kind === 'immediate' ? { kind: item.kind } : {}),
-            capability: String(item?.capability || '').trim(),
-            reason: String(item?.reason || '').trim(),
-        })).filter((item) => item.capability).slice(0, 40),
-        // Reasoning is stored per Scene and can be long, so it is capped:
-        // sixty of these live in the log at once and they all ride in settings.
-        reasoning: String(value.reasoning || '').slice(0, 4000),
-        continueAfter: Boolean(value.continueAfter),
-        hardPauseAfter: Boolean(value.hardPauseAfter),
+        narratorRef: normalizeDirectionPerformerRef(value?.narratorRef),
     };
 }
 
@@ -619,23 +474,6 @@ function normalizeDirectionPerformerRef(value) {
     const id = String(value.id || '').trim();
     if (!kind || !id) return null;
     return { kind, id, label: String(value.label || 'Narrator').trim() || 'Narrator' };
-}
-
-/**
- * Assigns (or clears) the extension-only Roleplay Director seat. The card
- * remains a native group member; no native chat role or character data moves.
- */
-export function setSceneRoleplayDirector(sceneId, directorRef) {
-    const scene = getTimelineStore().scenes[sceneId];
-    if (!scene || scene.mode !== 'roleplay') return null;
-    const normalized = directorRef ? normalizeDirectionPerformerRef(directorRef) : null;
-    return updateScene(sceneId, {
-        // Assigning the explicit Director seat means the user is opting into
-        // Live Direction. Clearing the seat does not silently change their
-        // chosen staging mode.
-        ...(normalized ? { staging: 'directed' } : {}),
-        liveDirection: { ...scene.liveDirection, ...(normalized ? { enabled: true } : {}), directorRef: normalized },
-    });
 }
 
 function touchTimeline(timelineId) {

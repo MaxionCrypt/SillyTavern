@@ -424,6 +424,50 @@ async function applyConnectionProfile(profile) {
 }
 
 /**
+ * Selects and applies a saved profile from extension code without simulating a
+ * click on Connection Manager's settings UI. Native generation reads the
+ * active SillyTavern connection, so consumers that promise a named profile
+ * must cross this boundary before handing control to Generate().
+ * @param {string} profileId Connection profile id
+ * @returns {Promise<ConnectionProfile>}
+ */
+export async function activateConnectionProfile(profileId) {
+    const profile = extension_settings.connectionManager?.profiles?.find((item) => item.id === profileId);
+    if (!profile) {
+        throw new Error(`Connection profile not found (ID: ${profileId})`);
+    }
+
+    // A directed Roleplay turn asks for its Narrator profile on every pass.
+    // Reapplying an already-active profile is not harmless: `secret-id`
+    // deliberately drops `online_status` while core reconnects, so repeatedly
+    // applying the same profile can detach an otherwise healthy connection
+    // immediately before native Generate() checks it. The selected id is the
+    // Connection Manager's own record of what was last applied; when it is
+    // still online there is nothing to do.
+    if (extension_settings.connectionManager.selectedProfile === profile.id && online_status !== 'no_connection') {
+        return profile;
+    }
+
+    extension_settings.connectionManager.selectedProfile = profile.id;
+    saveSettingsDebounced();
+    await applyConnectionProfile(profile);
+
+    // Several profile commands (most notably `secret-id`) start connection
+    // work asynchronously. `applyConnectionProfile` only means the settings
+    // were applied; native generation is safe only after core reports the
+    // connection online. This mirrors `/profile await=true` instead of racing
+    // Generate() against the reconnect it just triggered.
+    await waitUntilCondition(() => online_status !== 'no_connection', 10000, 100, { rejectOnTimeout: true });
+
+    const select = document.getElementById('connection_profiles');
+    if (select instanceof HTMLSelectElement) {
+        select.value = profile.id;
+    }
+    await eventSource.emit(event_types.CONNECTION_PROFILE_LOADED, profile.name);
+    return profile;
+}
+
+/**
  * Updates the selected connection profile.
  * @param {ConnectionProfile} profile Connection profile
  * @returns {Promise<void>}

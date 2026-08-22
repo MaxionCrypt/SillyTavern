@@ -10,7 +10,7 @@ import { getTimelineStore } from './timeline-state.js';
 // address has no target: a Variable is now identified by its own name within a
 // Timeline, and its meaning lives in the lorebook entries it links to. The
 // address is therefore one part — a slug of the name, from the same
-// `variableHandle` the Director's address book uses, so what you type in a
+// `variableHandle` the Loom's address book uses, so what you type in a
 // prompt and what the model is shown agree.
 //
 // Macro handlers are synchronous, so linked entry prose is served from a cache

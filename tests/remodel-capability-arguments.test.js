@@ -1,14 +1,14 @@
 import { getCapabilityDictionary, REQUIRED_ARGUMENTS } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/mechanics-capabilities.js';
-import { buildDirectionSources } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/direction-sources.js';
+import { buildLoomContext } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-context.js';
 
-// Every write the Director attempted was refused for a missing required
+// Every write the Loom attempted was refused for a missing required
 // argument — `valueType is required`, `holderRefs is required`, four turns
 // running — while those words appeared NOWHERE in the prompt it was refusing.
 // The validator and the prompt now read one table, so they cannot disagree
 // about what a capability needs.
 
 function mechanicsSkillFor(capabilities) {
-    const { mechanicsSkill } = buildDirectionSources(
+    const { mechanicsSkill } = buildLoomContext(
         { mechanics: { capabilities, goals: [], serializedVariables: '', retrieval: {} } },
         { mechanicsEnabled: true },
     );

@@ -1,9 +1,9 @@
 import * as math from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-math.js';
 
-// The module is the oracle the Director calls: it owns the die and the
+// The module is the oracle the Loom calls: it owns the die and the
 // arithmetic, and nothing else. The rate vocabulary — what counts as a
 // favourable chance, how far a meaningful shift moves — lives in the
-// Director's editable prompt, not in a lookup table here.
+// Loom's editable prompt, not in a lookup table here.
 
 test('the module exposes only the oracle and its bounds', () => {
     expect(Object.keys(math).sort()).toEqual([
@@ -51,7 +51,7 @@ test('resolveReach freezes its inputs and reports them beside the outcome', () =
 });
 
 test('resolveReach reports a miss without inventing a penalty for it', () => {
-    // Miss-depth penalties are deleted: how badly a miss went is the Director's
+    // Miss-depth penalties are deleted: how badly a miss went is the Loom's
     // to judge in the fiction, not code's to charge automatically.
     const result = math.resolveReach({ rate: 20, modifier: 0, roll: 90 });
     expect(result.hit).toBe(false);

@@ -1,10 +1,10 @@
 // Narrows a Narrator's own generation prompt to its own prose.
 //
 // Design: the Narrator is a passive voice. It renders what the hidden
-// Director has decided, informed by its own PRIOR PROSE — never by what the
+// Loom has decided, informed by its own PRIOR PROSE — never by what the
 // user typed, and never by what any other cast member wrote. Everything the
-// user did this turn reaches the Narrator only through the Director's notes
-// (a separate, already-filtered injection — see director-notes-store.js's
+// user did this turn reaches the Narrator only through the Loom's notes
+// (a separate, already-filtered injection — see loom-notes-store.js's
 // readNarratorEntries), so this filter's one job is to remove the user's and
 // other cast members' chat-history lines from the compiled prompt without
 // ever touching anything that is not chat history.
@@ -51,7 +51,7 @@ function sanitizedNameKey(value) {
  * @returns {object[]} a NEW array (the input is never mutated): every
  *        `role: 'user'` entry removed, every `role: 'assistant'` entry whose
  *        `name` is present and does not match `narratorName` removed, and
- *        everything else — system prompts, the Director's notes injection,
+ *        everything else — system prompts, the Loom's notes injection,
  *        tool messages, nameless entries — left exactly where it was. Entries
  *        that are not objects at all are dropped, since there is nothing in
  *        them to identify and nothing core could have compiled them from.
@@ -91,7 +91,7 @@ export function filterNarratorHistory(messages, { narratorName } = {}) {
         // entirely for a solo, non-group chat).
         if (role === 'user') return false;
         // Anything that is not chat history — world info, the jailbreak, the
-        // main prompt, and the Director's own notes all arrive as
+        // main prompt, and the Loom's own notes all arrive as
         // `role: 'system'` entries — is never chat history and is never
         // filtered.
         if (role !== 'assistant') return true;

@@ -12,6 +12,7 @@ import {
     setVariableField,
     restoreVariableStore,
     snapshotVariableStore,
+    snapshotVariableStoreForUndo,
     transitionVariableValue,
 } from './variables-store.js';
 import {
@@ -204,7 +205,7 @@ export function validateMechanicsRequest(value) {
 export function executeMechanicsRequest(envelope, context = {}) {
     const validation = validateMechanicsRequest(envelope);
     if (!validation.valid) return rejectedTransaction(envelope, context, validation.errors);
-    const variableSnapshot = snapshotVariableStore();
+    const variableSnapshot = snapshotVariableStoreForUndo();
     const goalSnapshot = snapshotStoryGoalsStore();
     const archivistSnapshot = snapshotArchivistStore();
     const transactionId = createId('mechanics-tx');
@@ -369,7 +370,7 @@ function applySecretClear(request, args, runtime) {
 }
 
 /**
- * Let the Director author a Variable the owner never wrote.
+ * Let the Loom author a Variable the owner never wrote.
  *
  * WHY: with nothing authored, the mechanics layer has nothing to advertise and
  * can never do anything — every pass journalled `retrieval.skipped :: "This
@@ -384,7 +385,7 @@ function applySecretClear(request, args, runtime) {
  * comparison: trimmed and case-insensitive, so "Morale" and "morale " collide.
  *
  * **Retrieval mode `always`.** A Variable surfaces through its lore links plus
- * semantic evidence, and a Variable the Director invented has no lorebook entry
+ * semantic evidence, and a Variable the Loom invented has no lorebook entry
  * to hang off — it is not describing prose the owner wrote. Under the default
  * `corroborated` mode it could never be corroborated, so it would be created
  * and then never retrieved again: write-only. `always` is the one mode in
@@ -444,7 +445,7 @@ function createStates(request, args, valueType) {
 
 /**
  * Bounds in the exact shape the Codex editor writes (variables-ui.js
- * `saveFromForm`), so a Director-created Variable and an owner-created one are
+ * `saveFromForm`), so a Loom-created Variable and an owner-created one are
  * one record type rather than two that merely look alike.
  */
 function createBounds(request, args, valueType) {
@@ -553,7 +554,7 @@ function createGoal(request, args, runtime) {
     const holderRefs = requireOwners(args.holderRefs);
     const targetRefs = requireOwners(args.targetRefs || [], true);
     if (holderRefs.some((owner) => !isAuthorizedOwner(owner, runtime)) && !runtime.allowUserGoalCreate) return defer(request, runtime, 'A user-owned Goal proposal requires review.');
-    // The Director states a number, informed by the rate guidance in its
+    // The Loom states a number, informed by the rate guidance in its
     // prompt. `?? 30` is the record's own default for a Goal created without a
     // stated rate — clampRate returns null rather than reading an absent value
     // as zero, which would have made such a Goal nearly impossible.
@@ -569,7 +570,7 @@ function editGoal(request, args, runtime) {
     if (!isAuthorizedGoal(goal, runtime)) return deferGoal(request, runtime, { [String(args.goalRef ?? args.goalId)]: goal.id }, `Changing the user-owned Goal \u201c${goal.title}\u201d requires review.`);
     const patch = {};
     if (args.successRate !== undefined) {
-        // A number the Director chose. The four magnitudes used to be welded to
+        // A number the Loom chose. The four magnitudes used to be welded to
         // 3/7/12/20 here and the schema told the model "never state a percentage
         // yourself", so it could not say how far a Goal had actually moved. The
         // reference points now live in its prompt; the clamp stays code's.
@@ -629,7 +630,7 @@ function reachGoal(request, args, runtime) {
     const frozen = { successRate: goal.successRate, modifierVariableId: modifierInstance?.id || '', modifier };
     const result = resolveReach({ rate: frozen.successRate, modifier });
     // A hit achieves the Goal; a miss changes nothing. How badly a miss went is
-    // the Director's to judge in the fiction and to request as its own change
+    // the Loom's to judge in the fiction and to request as its own change
     // with its own reason — code used to dock 2/5/10/18 points by depth band.
     const goalAfter = result.hit
         ? updateStoryGoal(goal.id, { status: 'achieved' }, { ...txContext(runtime, request), type: 'goal.reach.hit' })
@@ -639,18 +640,18 @@ function reachGoal(request, args, runtime) {
 
 /**
  * The arguments each capability cannot run without, and a one-line shape for
- * each so the Director can supply them.
+ * each so the Loom can supply them.
  *
  * ONE TABLE, read by BOTH the validator and the prompt. They used to be
  * separate, and the result was the defect the owner spent three sessions
  * hitting: `validateArguments` demanded `valueType`, `holderRefs` and
- * `enumValues`, and NONE of those words appeared anywhere in the Director's
+ * `enumValues`, and NONE of those words appeared anywhere in the Loom's
  * prompt. The full per-argument schema exists further up this file, but it was
  * only ever consumed by the structured-output path that was deleted with the
- * envelope — the Director now writes a free-form state fence and is handed
+ * envelope — the Loom now writes a free-form state fence and is handed
  * only `describeCapabilities`, which printed a name and a sentence.
  *
- * So the Director guessed its arguments from the single example in the
+ * So the Loom guessed its arguments from the single example in the
  * protocol block, and every write it attempted was refused:
  * `valueType is required`, `holderRefs is required`, four turns running.
  *
@@ -704,7 +705,7 @@ function validateArguments(request) {
     const missing = (key) => (args[key] == null || args[key] === '') && (!legacy[key] || args[legacy[key]] == null || args[legacy[key]] === '');
     const require = (...keys) => { for (const key of keys) if (missing(key)) throw new MechanicsError(`${request.id}: ${key} is required.`); };
     // Read from the same table the prompt is built from, so a requirement can
-    // never again exist here without the Director being told about it.
+    // never again exist here without the Loom being told about it.
     require(...(REQUIRED_ARGUMENTS[request.capability] || []).map(([key]) => key));
 }
 
@@ -796,7 +797,7 @@ function requireVariable(id, runtime = null) {
  * Fetch an advertised Goal, by default only a live one.
  *
  * `mustBeActive` is false for edit and delete: a Goal that ended is still a
- * record the Director may correct, retitle, or reopen — `goal.edit` offers
+ * record the Loom may correct, retitle, or reopen — `goal.edit` offers
  * `active` precisely so an ended Goal can come back. Only a reach needs the
  * Goal to be live, because reaching a settled Goal is meaningless.
  */

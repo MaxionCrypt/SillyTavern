@@ -41,7 +41,7 @@ const lastByTimeline = new Map();
  * delete. Nothing used to drop it: the owner deleted a Variable, the store
  * updated, and the State drawer kept rendering a pass from twenty-seven minutes
  * earlier that still listed the deleted record. Refusing to answer is the only
- * honest response to "what did the Director last see" once that is no longer
+ * honest response to "what did the Loom last see" once that is no longer
  * knowable; a fresh pass, or the drawer's own Preview button, records a new one.
  *
  * Registered at module scope because the cache is module scope: there is one
@@ -77,7 +77,7 @@ export async function resolveVariableContext({
     // Deliberately no early return, for either a missing Timeline or a Timeline
     // with no Variables. Goals come through this same pass now, and a Timeline
     // can easily have Goals and no Variables — a bail that used to cost nothing
-    // would now silently drop every Goal the Director has. Everything below
+    // would now silently drop every Goal the Loom has. Everything below
     // degrades to empty on its own when there is nothing to read.
     const variables = id ? listVariableValues({ timelineId: id }) : [];
 
@@ -156,7 +156,7 @@ export async function resolveVariableContext({
     }));
 
     // Recorded before the journal write and after the cut, and only for a pass
-    // that will actually reach a Director. A preview retrieves for the owner to
+    // that will actually reach a Loom. A preview retrieves for the owner to
     // look at; letting it write recall would let opening the drawer twice
     // reweight the next real turn.
     if (recordRecall) {
@@ -181,7 +181,7 @@ export async function resolveVariableContext({
         listed, refToId, serialized, diagnostics, goals: selectedGoals,
         // Why a list is empty, not merely that it is. "This Timeline has none
         // yet" and "none of them matched this turn" are different things to
-        // tell a Director, and only this function knows which one is true.
+        // tell a Loom, and only this function knows which one is true.
         emptyCode: !id ? 'no-timeline' : (variables.length ? 'none-matched' : 'none-authored'),
         goalsEmptyCode: !id ? 'no-timeline' : (goals.length ? 'none-matched' : 'none-authored'),
         degraded: !vectors.ok, vectorError: vectors.error || '', query,

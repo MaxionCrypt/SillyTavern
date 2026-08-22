@@ -5,7 +5,7 @@ import {
     REQUIRED_ARGUMENTS,
     undoMechanicsTransaction,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/mechanics-capabilities.js';
-import { buildDirectionSources } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/direction-sources.js';
+import { buildLoomContext } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-context.js';
 import {
     listSceneFacts, listEvents, listCharStates, getBeat, listSecrets,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
@@ -55,8 +55,8 @@ test('a missing required argument is refused, naming the argument', () => {
     expect(listSceneFacts(T, S)).toEqual([]);
 });
 
-test('every archivist required argument is named in the Director prompt', () => {
-    const { mechanicsSkill } = buildDirectionSources(
+test('every archivist required argument is named in the Loom prompt', () => {
+    const { mechanicsSkill } = buildLoomContext(
         { mechanics: { capabilities: getCapabilityDictionary(), goals: [], serializedVariables: '', retrieval: {} } },
         { mechanicsEnabled: true },
     );

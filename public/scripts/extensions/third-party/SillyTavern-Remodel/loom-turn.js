@@ -4,21 +4,20 @@ function createId(prefix) {
     return `${prefix}-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 }
 
-/** True only when the Scene has explicitly opted into single-agent (solo) mode. */
-export function isSoloMode(scene) {
-    return scene?.liveDirection?.mode === 'solo';
+/** True when the Scene uses a native Narrator followed by Loom reconciliation. */
+export function isLoomMode(scene) {
+    return scene?.liveDirection?.mode === 'loom';
 }
 
 /**
- * Solo mode produces a turn with no separate Director call. The Narrator is the
- * one mind; a minimal envelope keeps the shared turn machinery (performer,
- * reveal, finalize, extraction) unchanged. The turn pauses for the user
- * afterward; the mechanics snapshot rides along so Pass 2 extraction can
- * advertise and resolve Variables/Goals against the same address book.
+ * Loom mode starts with one native Narrator generation. A minimal envelope
+ * keeps the shared turn machinery (performer, reveal, reconciliation and
+ * finalize) unchanged, and carries the mechanics snapshot the Loom resolves
+ * against after the draft is complete.
  *
  * @returns {{ envelope: object, storedTurn: null }}
  */
-export function soloEnvelope(scene, snapshot, turn) {
+export function createLoomTurnEnvelope(scene, snapshot, turn) {
     return {
         storedTurn: null,
         envelope: {

@@ -3,13 +3,12 @@ import { getCapabilityDictionary } from './mechanics-capabilities.js';
 import { getSceneGoals, getSceneGoalRelations } from './story-goals-store.js';
 import { getMechanicsProfile } from './variables-store.js';
 import { resolveVariableContext } from './variables-context.js';
-import { readRetrievalNotes } from './director-notes-store.js';
 import { buildAddressBook } from './direction-address.js';
 
-// Retired with the director rework: `runMechanicalPreflight` (a second hidden
-// model call that adjudicated mechanics before the Director existed), and with
+// Retired with the loom rework: `runMechanicalPreflight` (a second hidden
+// model call that adjudicated mechanics before the Loom existed), and with
 // it `mechanicalHandbook` and `formatMechanicalSnapshot`. All three had lost
-// their last caller — the Director's own requests replaced them — and
+// their last caller — the Loom's own requests replaced them — and
 // `mechanicalHandbook` still taught the opposite of what the code now does:
 // "addressing Variables by their temporary v1, v2... references and Goals by
 // their temporary g1, g2... references". Names are the only address now
@@ -63,9 +62,6 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
         timelineId: scene.timelineId, action,
         history: evidence.history || [], cast: subjects,
         activatedEntries: evidence.activatedEntries || [], goals: candidateGoals,
-        // Secrets included — see readRetrievalNotes. This feeds the Director's
-        // own prompt, and the Director owns its own secrets.
-        notebookText: readRetrievalNotes(scene.timelineId, { sceneId: scene.id }),
         // A Goal the user is attempting this turn cannot be the one retrieval
         // drops: the prompt names it under ATTEMPTED THIS TURN and the
         // capability layer will accept a roll against it.
@@ -95,7 +91,7 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
     });
     const refByGoalId = new Map([...goalRefs].map(([ref, id]) => [id, ref]));
 
-    // The address book lets the Director name a Variable or Goal directly —
+    // The address book lets the Loom name a Variable or Goal directly —
     // see direction-address.js. Built only from what this pass actually
     // advertised: the Variables retrieval selected (resolved.listed), not
     // every Variable in the Timeline, and the Goals just listed above.
@@ -116,7 +112,7 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
         // direction-sources.js renders them under its VARIABLES heading.
         serializedVariables: resolved.serialized,
         addressBook,
-        // The operations a Director may request, carried in the snapshot so
+        // The operations a Loom may request, carried in the snapshot so
         // direction-sources.js can render them without importing
         // mechanics-capabilities.js itself — that module pulls in
         // variables-store.js/story-goals-store.js, which import st-context.js,
@@ -145,7 +141,7 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
  * Relations between the Goals that actually travelled.
  *
  * Both ends must resolve to a ref. Retrieval can select one end of a relation
- * and drop the other, and a relation pointing at a Goal the Director was never
+ * and drop the other, and a relation pointing at a Goal the Loom was never
  * shown is worse than no relation at all — it names something the model cannot
  * address and cannot be told anything more about.
  */

@@ -152,7 +152,7 @@ export function createTimelineGoal(timelineId, input = {}, { sceneId = '', actor
 // Scene-oriented adapter retained for callers that create and link in one step.
 export function createSceneGoal(sceneId, input = {}) {
     const scene = getSceneGoalState(sceneId, { timelineId: input.timelineId, create: Boolean(input.timelineId) });
-    return scene ? createTimelineGoal(scene.timelineId, input, { sceneId, actor: input.actor || 'director', reason: input.reason || '' }) : null;
+    return scene ? createTimelineGoal(scene.timelineId, input, { sceneId, actor: input.actor || 'loom', reason: input.reason || '' }) : null;
 }
 
 export function updateStoryGoal(goalId, patch = {}, context = {}) {
@@ -280,7 +280,7 @@ export function createTimelineGoalRelation(timelineId, fromGoalId, toGoalId, typ
 
 export function createSceneGoalRelation(sceneId, fromGoalId, toGoalId, type = 'antagonistic', reason = '') {
     const scene = getSceneGoalState(sceneId, { create: false });
-    return scene ? createTimelineGoalRelation(scene.timelineId, fromGoalId, toGoalId, type, reason, { sceneId, actor: 'director' }) : null;
+    return scene ? createTimelineGoalRelation(scene.timelineId, fromGoalId, toGoalId, type, reason, { sceneId, actor: 'loom' }) : null;
 }
 
 export function deleteStoryGoalRelation(relationId, context = {}) {

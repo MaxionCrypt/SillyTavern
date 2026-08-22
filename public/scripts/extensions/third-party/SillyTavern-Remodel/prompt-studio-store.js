@@ -1,37 +1,37 @@
 import { getContext } from '../../../st-context.js';
-import { PROTOCOL_TEMPLATE } from './direction-sources.js';
+import { LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT } from './loom-reconciliation.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 9;
+const STORE_VERSION = 12;
 
-export const PROMPT_MODES = ['story', 'roleplay', 'director'];
+export const PROMPT_MODES = ['story', 'roleplay', 'loom'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
 export const PROMPT_ROLES = ['system', 'instruction', 'user', 'assistant'];
 
-export const PROMPT_SOURCE_DEFINITIONS = Object.freeze({
+export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
     story: Object.freeze([
-        { key: 'characterCard', label: 'Character Card', role: 'system' },
-        { key: 'persona', label: 'Persona', role: 'system' },
-        { key: 'worldInfoBefore', label: 'World Info (before)', role: 'system' },
-        { key: 'worldInfoAfter', label: 'World Info (after)', role: 'system' },
-        { key: 'worldInfoExamples', label: 'World Info Examples', role: 'system' },
-        { key: 'worldInfoDepth', label: 'World Info at Depth', role: 'system', structured: true },
-        { key: 'authorGuidance', label: 'Author Guidance', role: 'instruction' },
-        { key: 'priorText', label: 'Prior Scene', role: 'system' },
-        { key: 'manuscript', label: 'Manuscript', role: 'user' },
-        { key: 'sceneBeat', label: 'Scene Beat / Continue Request', role: 'user' },
+        template('characterCard', 'Character Card', 'system', 'character.card'),
+        template('persona', 'Persona', 'system', 'user.persona'),
+        template('worldInfoBefore', 'World Info (before)', 'system', 'world.info.before'),
+        template('worldInfoAfter', 'World Info (after)', 'system', 'world.info.after'),
+        template('worldInfoExamples', 'World Info Examples', 'system', 'world.info.examples'),
+        template('worldInfoDepth', 'World Info at Depth', 'system', 'world.info.depth', { structured: true }),
+        template('authorGuidance', 'Author Guidance', 'instruction', 'author.guidance'),
+        template('priorText', 'Prior Scene', 'system', 'scene.prior'),
+        template('manuscript', 'Manuscript', 'user', 'story.manuscript'),
+        template('sceneBeat', 'Scene Beat / Continue Request', 'user', 'scene.beat'),
     ]),
     roleplay: Object.freeze([
-        { key: 'worldInfoBefore', label: 'World Info (before)', role: 'system', nativeIdentifier: 'worldInfoBefore' },
-        { key: 'personaDescription', label: 'Persona Description', role: 'system', nativeIdentifier: 'personaDescription' },
-        { key: 'charDescription', label: 'Character Description', role: 'system', nativeIdentifier: 'charDescription' },
-        { key: 'charPersonality', label: 'Character Personality', role: 'system', nativeIdentifier: 'charPersonality' },
-        { key: 'scenario', label: 'Scenario', role: 'system', nativeIdentifier: 'scenario' },
-        { key: 'worldInfoAfter', label: 'World Info (after)', role: 'system', nativeIdentifier: 'worldInfoAfter' },
-        { key: 'dialogueExamples', label: 'Dialogue Examples', role: 'user', nativeIdentifier: 'dialogueExamples' },
-        { key: 'storyGoals', label: 'Story Goals', role: 'system', nativeIdentifier: 'remodel_story_goals' },
-        // Rendered by Remodel (live-direction.js's buildDirectorNotesSource),
+        template('worldInfoBefore', 'World Info (before)', 'system', 'world.info.before', { nativeIdentifier: 'worldInfoBefore' }),
+        template('personaDescription', 'Persona Description', 'system', 'user.persona', { nativeIdentifier: 'personaDescription' }),
+        template('charDescription', 'Character Description', 'system', 'character.description', { nativeIdentifier: 'charDescription' }),
+        template('charPersonality', 'Character Personality', 'system', 'character.personality', { nativeIdentifier: 'charPersonality' }),
+        template('scenario', 'Scenario', 'system', 'scene.scenario', { nativeIdentifier: 'scenario' }),
+        template('worldInfoAfter', 'World Info (after)', 'system', 'world.info.after', { nativeIdentifier: 'worldInfoAfter' }),
+        template('dialogueExamples', 'Dialogue Examples', 'user', 'character.examples', { nativeIdentifier: 'dialogueExamples' }),
+        template('storyGoals', 'Story Goals', 'system', 'story.goals', { nativeIdentifier: 'remodel_story_goals' }),
+        // Rendered by Remodel as the Narrator's Loom Context bridge,
         // same as storyGoals above — not resolved from a card or lorebook.
         // `nativeIdentifier` is required, not decorative: a roleplay recipe is
         // mirrored into SillyTavern's native Prompt Manager (applyRoleplayChatRecipe),
@@ -39,71 +39,29 @@ export const PROMPT_SOURCE_DEFINITIONS = Object.freeze({
         // into the real Narrator generation. A source with no native identifier
         // renders in the editor, accepts a depth setting, and reaches nothing —
         // this is the storyGoals precedent, followed exactly.
-        { key: 'directorNotes', label: 'Director’s Notes', role: 'system', nativeIdentifier: 'remodel_director_notes', settings: { depth: { type: 'number', label: 'Turns to include', min: 1, max: 20, default: 3 } } },
-        { key: 'chatHistory', label: 'Chat History', role: 'user', nativeIdentifier: 'chatHistory' },
+        template('loomContext', 'Loom Context', 'system', 'loom.context', { nativeIdentifier: 'remodel_loom_context' }),
+        template('chatHistory', 'Chat History', 'user', 'chat.history', { nativeIdentifier: 'chatHistory', structured: true }),
         // Native Chat Completion keeps the latest input inside chatHistory;
         // exposing it as an alias preserves that real marker boundary.
-        { key: 'currentInput', label: 'Current Input (via history)', role: 'user', nativeIdentifier: 'chatHistory' },
-        { key: 'generationNudge', label: 'Generation Nudge', role: 'instruction', nativeIdentifier: 'quietPrompt' },
-        { key: 'nativeContext', label: 'Native Roleplay Context', role: 'system', textOnly: true, locked: true },
+        template('currentInput', 'Current Input (via history)', 'user', 'chat.input', { nativeIdentifier: 'chatHistory', structured: true }),
+        template('generationNudge', 'Generation Nudge', 'instruction', 'generation.nudge', { nativeIdentifier: 'quietPrompt' }),
+        template('nativeContext', 'Native Roleplay Context', 'system', 'roleplay.native', { textOnly: true, locked: true }),
     ]),
-    // Without this entry getSourceDefinitions returned [] for every director
-    // recipe, which disabled "Add context" permanently, made directorCard and
-    // mechanicsSkill deletable with no way to put them back, showed raw
-    // camelCase keys as labels, and fell sourceDescription through to
-    // "Resolved by SillyTavern's native Roleplay prompt manager" — false for
-    // a Director block, and precisely the confusion this rework exists to end.
-    // Director recipes are Chat Completion only, so no textOnly entries.
-    director: Object.freeze([
-        { key: 'directionProtocol', label: 'Direction Protocol', role: 'system' },
-        { key: 'directorCard', label: 'Director Card', role: 'system' },
-        { key: 'mechanicsSkill', label: 'Goals & Variables', role: 'system' },
-        // The same four World Info fields the Roleplay recipe exposes, from
-        // the same scan. They were one LORE section inside the Scene Snapshot,
-        // which is locked — so the Director alone could not reorder its world
-        // information, turn a part of it off, or place it against the notebook.
-        // No `nativeIdentifier`: a director recipe is never mirrored into
-        // SillyTavern's Prompt Manager (isNativeApplicableMode refuses it), so
-        // the compile is the delivery route, exactly as for directorNotebook.
-        { key: 'worldInfoBefore', label: 'World Info (before)', role: 'system' },
-        { key: 'worldInfoAfter', label: 'World Info (after)', role: 'system' },
-        { key: 'worldInfoExamples', label: 'World Info Examples', role: 'system' },
-        { key: 'worldInfoDepth', label: 'World Info at Depth', role: 'system' },
-        // The Director reading its own notebook back. Without this the
-        // notebook was write-only from its author's side: a `[secret]`
-        // reached the Narrator never (by design) and the Director never
-        // (because nothing carried it), so a hidden twist could not survive
-        // one turn. Secrets ARE included — the Director owns them; only the
-        // Narrator is excluded, and that exclusion lives at a different
-        // funnel entirely (readNarratorEntries).
-        //
-        // No `nativeIdentifier`, unlike the roleplay sources: a director
-        // recipe is never mirrored into SillyTavern's native Prompt Manager
-        // (isNativeApplicableMode refuses it). It is compiled by Remodel and
-        // streamed on its own, so the compile IS the delivery route.
-        {
-            key: 'directorNotebook',
-            label: 'Your Notebook',
-            role: 'system',
-            description: 'The Director\'s own entries from earlier turns of this Scene, secrets included — the memory a hidden twist has to survive in. Never reaches the performer.',
-            settings: { depth: { type: 'number', label: 'Turns to include', min: 1, max: 20, default: 3 } },
-        },
-        // `history` governs how many of the most recent chat messages
-        // buildDirectionSnapshot (live-direction.js) slices into this
-        // block's STORY SO FAR section. Defaulted lower than the old
-        // hardcoded 40: the notebook above is now the Director's own
-        // running record of what happened (`[result]` entries), so 40
-        // messages of raw prose on top of it was mostly redundant — 40
-        // messages, not turns, is why this range and the notebook's above
-        // don't share a unit. `min: 0` is a real, supported value (zero
-        // messages, not "unset" — see live-direction.js's
-        // resolveDirectorSnapshotHistoryDepth and toTurnNumber's docstring
-        // for the `Number(null) === 0` coercion trap this codebase keeps
-        // re-discovering), which is why it is declared explicitly rather
-        // than left to default to 1 like every other numeric setting here.
-        { key: 'directorSnapshot', label: 'Scene Snapshot', role: 'user', settings: { history: { type: 'number', label: 'Recent messages', min: 0, max: 40, default: 12 } } },
+    loom: Object.freeze([
+        template('archiveState', 'Archive & Objectives', 'system', 'loom.archive', { description: 'The Loom-readable scene facts, character state, recorded events, next beat, and active objectives.' }),
+        template('mechanicsBoard', 'Goals & Variables', 'system', 'loom.mechanics', { description: 'The current mechanical board and the capabilities the Loom may request.' }),
+        template('narratorDraft', 'Narrator Draft', 'user', 'narrator.draft', { description: 'The held Narrator prose being reconciled before it becomes visible.' }),
+        template('narratorReasoning', 'Narrator Reasoning', 'user', 'narrator.reasoning', { description: 'The Narrator model\'s private reasoning for this draft, when the provider supplies it.' }),
     ]),
 });
+
+// Compatibility export for callers outside Remodel. Recipes themselves no
+// longer persist source blocks; this catalog now describes insertion templates.
+export const PROMPT_SOURCE_DEFINITIONS = PROMPT_TEMPLATE_DEFINITIONS;
+
+function template(key, label, role, macro, extra = {}) {
+    return Object.freeze({ key, label, role, macro, content: `{{${macro}}}`, ...extra });
+}
 
 const nativeMarkerToSource = Object.freeze({
     worldInfoBefore: 'worldInfoBefore',
@@ -115,7 +73,7 @@ const nativeMarkerToSource = Object.freeze({
     dialogueExamples: 'dialogueExamples',
     chatHistory: 'chatHistory',
     remodel_story_goals: 'storyGoals',
-    remodel_director_notes: 'directorNotes',
+    remodel_loom_context: 'loomContext',
     quietPrompt: 'generationNudge',
 });
 
@@ -170,7 +128,7 @@ export function createPromptRecipe({ name = 'Untitled Prompt', description = '',
     const store = getPromptStudioStore();
     const safeMode = PROMPT_MODES.includes(mode) ? mode : 'story';
     const requestedApiType = PROMPT_API_TYPES.includes(apiType) ? apiType : 'chat';
-    const safeApiType = safeMode === 'director' ? 'chat' : requestedApiType;
+    const safeApiType = safeMode === 'loom' ? 'chat' : requestedApiType;
     const timestamp = now();
     const recipe = normalizeRecipe({
         id: createId('prompt'),
@@ -228,7 +186,7 @@ export function isPromptRecipeActive(recipeId) {
     return isRecipeActive(recipeId, getPromptStudioStore());
 }
 
-export function createPromptBlock({ kind = 'message', role = 'instruction', content = '', sourceKey = '', enabled = true, locked = false, nativeIdentifier = '', settings = undefined, mode = null } = {}) {
+export function createPromptBlock({ kind = 'message', role = 'instruction', content = '', sourceKey = '', enabled = true, locked = false, nativeIdentifier = '', settings = undefined, advancedWarning = '', mode = null } = {}) {
     return normalizeBlock({
         id: createId('block'),
         kind,
@@ -239,7 +197,23 @@ export function createPromptBlock({ kind = 'message', role = 'instruction', cont
         locked,
         nativeIdentifier,
         settings,
+        advancedWarning,
     }, mode);
+}
+
+/** Insert an editable ordinary message from the mode's template catalog. */
+export function createPromptBlockFromTemplate(mode, templateKey) {
+    const definition = PROMPT_TEMPLATE_DEFINITIONS[mode]?.find((item) => item.key === templateKey);
+    if (!definition) return null;
+    return createPromptBlock({
+        kind: 'message',
+        role: definition.role,
+        content: definition.content,
+        enabled: true,
+        locked: Boolean(definition.locked),
+        nativeIdentifier: definition.nativeIdentifier || '',
+        mode,
+    });
 }
 
 export function captureTextTransport(powerUser = {}) {
@@ -262,17 +236,16 @@ export function createBlocksFromNativeChat(prompts, promptOrder) {
  * WHY THIS IS EXPORTED: a native re-sync (prompt-studio.js's
  * captureNativeSettingsFor) replaces a roleplay/chat recipe's blocks wholesale
  * from `oai_settings`, and every Chat Completion preset authored before Remodel
- * existed lacks `remodel_director_notes` and `remodel_story_goals` in its
+ * existed lacks Remodel's continuity and Story Goal markers in its
  * prompt order. Without this, loading such a preset silently strips both
- * blocks out of an already-migrated recipe — and since the Director's notebook
- * is now the ONLY route its direction takes to the Narrator, that leaves a
- * scene generating prose against no direction at all.
+ * blocks out of an already-migrated recipe. Without the continuity bridge, a
+ * scene can generate prose without the Archive grounding it depends on.
  *
  * Both helpers are no-ops when the block is already present, so applying this
  * to blocks that already carry them changes nothing.
  */
 export function withRemodelSources(blocks) {
-    return withDirectorNotesSource(withStoryGoalsSource(blocks));
+    return withLoomContextSource(withStoryGoalsSource(blocks));
 }
 
 function getNamespace() {
@@ -289,6 +262,7 @@ function createSeededStore(seed) {
         active: {
             story: { chat: null, text: null },
             roleplay: { chat: null, text: null },
+            loom: { chat: null },
         },
     };
     const timestamp = now();
@@ -321,7 +295,7 @@ function createSeededStore(seed) {
             description: 'Imported from the native Chat Completion prompt manager.',
             mode: 'roleplay',
             apiType: 'chat',
-            blocks: withDirectorNotesSource(withStoryGoalsSource(blocksFromNativeChat(seed.chatPrompts || [], seed.chatPromptOrder || []))),
+            blocks: withLoomContextSource(withStoryGoalsSource(blocksFromNativeChat(seed.chatPrompts || [], seed.chatPromptOrder || []))),
             transport: null,
         },
         {
@@ -330,8 +304,17 @@ function createSeededStore(seed) {
             description: 'Uses SillyTavern’s token-budgeted native roleplay context.',
             mode: 'roleplay',
             apiType: 'text',
-            blocks: [createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'nativeContext', enabled: true, locked: true })],
+            blocks: [createPromptBlockFromTemplate('roleplay', 'nativeContext')],
             transport,
+        },
+        {
+            id: createId('prompt'),
+            name: 'Current Loom · Chat',
+            description: 'Reconciles the Narrator draft with scene state and mechanics before it becomes visible.',
+            mode: 'loom',
+            apiType: 'chat',
+            blocks: defaultLoomBlocks(),
+            transport: null,
         },
     ];
     for (const seedRecipe of seeds) {
@@ -351,117 +334,48 @@ function defaultStoryBlocks() {
             content: 'You are the prose engine inside a fiction manuscript editor. Write only the requested story prose. Continue naturally from the manuscript, preserve continuity and point of view, and do not explain your work.',
             enabled: true,
         }),
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'characterCard' }),
+        createPromptBlockFromTemplate('story', 'characterCard'),
         // No persona block: in a Story the user is the author, not a character
         // in the fiction, so "who the user is playing" is not part of the
         // prompt. Roleplay recipes still carry one.
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoBefore' }),
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoAfter' }),
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoExamples' }),
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoDepth', locked: true }),
-        createPromptBlock({ kind: 'source', role: 'instruction', sourceKey: 'authorGuidance' }),
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'priorText' }),
-        createPromptBlock({ kind: 'source', role: 'user', sourceKey: 'manuscript' }),
-        createPromptBlock({ kind: 'source', role: 'user', sourceKey: 'sceneBeat' }),
+        createPromptBlockFromTemplate('story', 'worldInfoBefore'),
+        createPromptBlockFromTemplate('story', 'worldInfoAfter'),
+        createPromptBlockFromTemplate('story', 'worldInfoExamples'),
+        createPromptBlockFromTemplate('story', 'worldInfoDepth'),
+        createPromptBlockFromTemplate('story', 'authorGuidance'),
+        createPromptBlockFromTemplate('story', 'priorText'),
+        createPromptBlockFromTemplate('story', 'manuscript'),
+        createPromptBlockFromTemplate('story', 'sceneBeat'),
     ];
 }
 
-/**
- * The seeded style block — the only Director-facing authorial text that ships.
- *
- * It says nothing about openings or rhythm any more, because neither exists:
- * `openings` is gone from the schema, the envelope and the reveal loop, and
- * pacing is derived from the finished prose by deriveBeats (design section 4
- * — the Narrator is told nothing about pacing). What remains is the two flow
- * decisions the Director genuinely still makes: whether the scene continues
- * on its own, and whether it must stop. Nothing was invented to replace the
- * deleted instructions — authorial policy belongs to the user's recipe now,
- * which is the point of the rework.
- */
-const DIRECTOR_STYLE_DEFAULT = 'The world may move without waiting for the user, and only ask the scene to stop when the fiction is explicitly waiting on them.';
-
-/**
- * The text seeded before the rework deleted the mechanisms it describes.
- *
- * Matched exactly and replaced once, at the version bump below, so a user who
- * edited their own style block keeps it and a user who never touched it stops
- * reading instructions about openings and rhythm.
- */
-const DIRECTOR_STYLE_LEGACY = 'The world may move without waiting for the user. Keep openings optional — the user may intervene anywhere. Responses may be long; give the performer useful guidance on rhythm, and only ask the scene to stop when the fiction is explicitly waiting on the user.';
-
-/**
- * The Director's default prompt.
- *
- * Only the protocol and the snapshot are locked: remove either and the reply
- * stops being parseable. Everything else — including the autonomy policy that
- * used to be compiled into directionHandbook — is an ordinary editable block.
- */
-function defaultDirectorBlocks() {
+/** The default editable recipe for the post-draft Loom request. */
+function defaultLoomBlocks() {
     return [
-        createPromptBlock({ kind: 'message', role: 'system', enabled: true, locked: false, content: PROTOCOL_TEMPLATE }),
-        // World Info brackets the Director's own material the same way it
-        // brackets the character's in a Roleplay recipe: `before` ahead of the
-        // card, the other three behind the mechanics block and ahead of the
-        // notebook. The names mean nothing unless the default order honours
-        // them, which is why they are not simply parked together.
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoBefore', enabled: true, locked: false }),
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directorCard', enabled: true, locked: false }),
-        createPromptBlock({ kind: 'message', role: 'system', enabled: true, locked: false, content: DIRECTOR_STYLE_DEFAULT }),
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'mechanicsSkill', enabled: true, locked: false }),
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoAfter', enabled: true, locked: false }),
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoExamples', enabled: true, locked: false }),
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoDepth', enabled: true, locked: false }),
-        // The only block in this list that declares settings, so the only one
-        // whose `mode` could matter: `normalizeBlock` derives settings from
-        // its mode's source definitions, and without a mode this would be
-        // `settings: {}` and a source that renders nothing.
-        //
-        // REDUNDANT WITH the recipe-level `normalizeRecipe` every path runs
-        // these blocks through, and stated so on purpose: a mutation showed
-        // removing either one alone leaves the suite green. Both are kept
-        // because this plan has twice shipped a settings-bearing block that
-        // reached production with `settings: {}`, and the covering test
-        // (remodel-director-recipe.test.js) is verified against removing BOTH.
-        createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directorNotebook', enabled: true, locked: false, mode: 'director' }),
-        createPromptBlock({ kind: 'source', role: 'user', sourceKey: 'directorSnapshot', enabled: true, locked: true }),
+        createPromptBlock({ kind: 'message', role: 'system', content: LOOM_POLICY_DEFAULT }),
+        createPromptBlockFromTemplate('loom', 'archiveState'),
+        createPromptBlockFromTemplate('loom', 'mechanicsBoard'),
+        createPromptBlockFromTemplate('loom', 'narratorDraft'),
+        createPromptBlockFromTemplate('loom', 'narratorReasoning'),
+        createPromptBlock({
+            kind: 'message',
+            role: 'system',
+            content: LOOM_OUTPUT_CONTRACT_DEFAULT,
+            advancedWarning: 'Changing the state fence or request schema can prevent the Loom reply from being parsed or applied.',
+        }),
     ];
-}
-
-/** Same shape as ensureDirectorNotesSource, for the Director's own side of the
- *  notebook. Inserted immediately before the Scene Snapshot, so the memory is
- *  read before the moment it is being asked about — and after the mechanics
- *  block, whose names its entries refer to. */
-function ensureDirectorNotebookSource(blocks) {
-    if (!Array.isArray(blocks) || blocks.some((block) => block.kind === 'source' && block.sourceKey === 'directorNotebook')) return false;
-    const source = createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directorNotebook', mode: 'director' });
-    const snapshotIndex = blocks.findIndex((block) => block.kind === 'source' && block.sourceKey === 'directorSnapshot');
-    blocks.splice(snapshotIndex >= 0 ? snapshotIndex : blocks.length, 0, source);
-    return true;
-}
-
-/** One-shot: retire the style block that instructs about deleted machinery. */
-function migrateDirectorStyleBlock(recipe) {
-    let changed = false;
-    for (const block of recipe.blocks || []) {
-        if (block.kind !== 'message' || String(block.content || '').trim() !== DIRECTOR_STYLE_LEGACY) continue;
-        block.content = DIRECTOR_STYLE_DEFAULT;
-        changed = true;
-    }
-    if (changed) recipe.updatedAt = now();
-    return changed;
 }
 
 function defaultBlocksFor(mode, apiType) {
     if (mode === 'story') return defaultStoryBlocks();
-    if (mode === 'director') return defaultDirectorBlocks();
+    if (mode === 'loom') return defaultLoomBlocks();
     if (apiType === 'text') {
-        return [createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'nativeContext', enabled: true, locked: true })];
+        return [createPromptBlockFromTemplate('roleplay', 'nativeContext')];
     }
     // roleplay/chat. Remodel's own sources are seeded here rather than only by
     // the version migrations, which are version-gated and so never run again:
-    // a recipe CREATED after the upgrade would otherwise start life without the
-    // Director's Notes block, and the Narrator would read no direction at all
-    // while the notebook filled normally behind it.
+    // a recipe created after the upgrade would otherwise start without the
+    // Loom Context bridge the native Narrator uses for continuity grounding.
     return withRemodelSources([createPromptBlock({ kind: 'message', role: 'instruction', content: '' })]);
 }
 
@@ -473,10 +387,11 @@ function blocksFromNativeChat(prompts, promptOrder) {
         const prompt = promptMap.get(entry.identifier) || {};
         const sourceKey = nativeMarkerToSource[entry.identifier];
         if (prompt.marker || sourceKey) {
+            const definition = PROMPT_TEMPLATE_DEFINITIONS.roleplay.find((item) => item.key === (sourceKey || ''));
             return createPromptBlock({
-                kind: 'source',
+                kind: 'message',
                 role: prompt.role || sourceRole('roleplay', sourceKey) || 'system',
-                sourceKey: sourceKey || entry.identifier,
+                content: definition?.content || `{{native.prompt id="${entry.identifier}"}}`,
                 enabled: entry.enabled !== false,
                 locked: Boolean(prompt.system_prompt),
                 nativeIdentifier: entry.identifier,
@@ -506,194 +421,90 @@ function normalizeStore(store, seed) {
     store.version = STORE_VERSION;
     store.recipes = store.recipes && typeof store.recipes === 'object' ? store.recipes : {};
     store.recipeIds = Array.isArray(store.recipeIds) ? store.recipeIds.filter((id) => store.recipes[id]) : [];
-    for (const [id, recipe] of Object.entries(store.recipes)) {
-        if (recipe?.purpose === 'goalDirector') {
+
+    // Hard cleanup: obsolete hidden-pass recipes represented a different request
+    // and are deliberately not converted into Loom recipes.
+    for (const [id, value] of Object.entries(store.recipes)) {
+        if (value?.mode === 'director' || value?.purpose === 'goalDirector') {
             delete store.recipes[id];
             store.recipeIds = store.recipeIds.filter((recipeId) => recipeId !== id);
             changed = true;
-        }
-    }
-    if (store.active?.goalDirector) {
-        delete store.active.goalDirector;
-        changed = true;
-    }
-    for (const id of [...store.recipeIds]) {
-        const recipe = normalizeRecipe(store.recipes[id]);
-        if (!recipe) {
-            delete store.recipes[id];
-            store.recipeIds = store.recipeIds.filter((value) => value !== id);
             continue;
         }
-        store.recipes[id] = recipe;
-        // migrateStoryWorldInfoSources splices new blocks straight into this
-        // already-normalized recipe's blocks array, with no normalizeBlocks
-        // pass of its own — so a settings-bearing source it ever migrates in
-        // would land with settings: {} instead of its declared defaults.
-        // Re-normalize afterward to close that gap, same as below.
-        if (previousVersion < 2 && recipe.mode === 'story' && migrateStoryWorldInfoSources(recipe)) {
-            recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
+        const recipe = normalizeRecipe(value);
+        if (!recipe) {
+            delete store.recipes[id];
+            store.recipeIds = store.recipeIds.filter((recipeId) => recipeId !== id);
+            changed = true;
+            continue;
+        }
+        if (recipe.mode === 'roleplay' && recipe.apiType === 'chat') {
+            for (const block of recipe.blocks) {
+                if (block.kind !== 'source' || block.sourceKey !== 'directorNotes') continue;
+                block.sourceKey = 'loomContext';
+                block.nativeIdentifier = 'remodel_loom_context';
+                block.settings = {};
+                changed = true;
+            }
+            if (previousVersion < 3 && ensureStoryGoalsSource(recipe.blocks)) changed = true;
+        }
+        if (previousVersion < 11) {
+            recipe.blocks = recipe.blocks.map((block) => sourceBlockToMacroMessage(recipe.mode, block));
             changed = true;
         }
-    }
-    store.active ??= {};
-    for (const mode of PROMPT_MODES) {
-        store.active[mode] ??= {};
-        // Director recipes are Chat Completion only (Live Direction has no
-        // Text Completion path), so never seed — or even probe for — a
-        // director/text active slot. Doing so would call defaultBlocksFor
-        // with apiType 'text' but mode 'director', and defaultBlocksFor
-        // ignores apiType for director; normalizeRecipe below then forces
-        // the created recipe back to 'chat', so on every subsequent load the
-        // active[mode].text slot would mismatch its own recipe's apiType and
-        // a fresh orphan recipe would be created and persisted forever.
-        const apiTypesForMode = mode === 'director' ? ['chat'] : PROMPT_API_TYPES;
-        for (const apiType of apiTypesForMode) {
-            const current = store.recipes[store.active[mode][apiType]];
-            if (!current || current.mode !== mode || current.apiType !== apiType) {
-                const fallback = store.recipeIds.map((id) => store.recipes[id]).find((recipe) => recipe?.mode === mode && recipe.apiType === apiType);
-                if (fallback) {
-                    store.active[mode][apiType] = fallback.id;
+        // Version 12 makes the Loom's response—not the private Narrator draft—
+        // the streamed and stored fiction. Migrate only the two recognizable
+        // seeded defaults; owner-authored contracts remain owner-authored.
+        if (previousVersion < 12 && recipe.mode === 'loom') {
+            for (const block of recipe.blocks) {
+                if (String(block.content || '').startsWith('You are the Loom: a mechanical referee and continuity keeper, not a writer.')) {
+                    block.content = LOOM_POLICY_DEFAULT;
                     changed = true;
-                } else {
-                    const created = createPromptRecipeWithoutSave(store, {
-                        name: `Current ${capitalize(mode)} · ${capitalize(apiType)}`,
-                        mode,
-                        apiType,
-                        blocks: defaultBlocksFor(mode, apiType),
-                        transport: apiType === 'text' ? clone(seed.textTransport || {}) : null,
-                    });
-                    store.active[mode][apiType] = created.id;
+                }
+                if (String(block.content || '').startsWith('Write no narration and no commentary. Output only this state fence')) {
+                    block.content = LOOM_OUTPUT_CONTRACT_DEFAULT;
                     changed = true;
                 }
             }
         }
+        if (previousVersion < 2 && recipe.mode === 'story' && migrateStoryWorldInfoSources(recipe)) changed = true;
+        recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
+        store.recipes[id] = recipe;
     }
-    if (previousVersion < 3) {
-        for (const recipe of Object.values(store.recipes)) {
-            // Same gap as migrateStoryWorldInfoSources above: this splices
-            // into an already-normalized recipe.blocks with no re-derivation
-            // of settings for the spliced-in block.
-            if (recipe?.mode === 'roleplay' && recipe.apiType === 'chat' && ensureStoryGoalsSource(recipe.blocks)) {
-                recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
-                changed = true;
+
+    store.active = store.active && typeof store.active === 'object' ? store.active : {};
+    if (store.active.director) { delete store.active.director; changed = true; }
+    if (store.active.goalDirector) { delete store.active.goalDirector; changed = true; }
+    for (const mode of PROMPT_MODES) {
+        store.active[mode] ??= {};
+        const apiTypesForMode = mode === 'loom' ? ['chat'] : PROMPT_API_TYPES;
+        for (const apiType of apiTypesForMode) {
+            const current = store.recipes[store.active[mode][apiType]];
+            if (current?.mode === mode && current.apiType === apiType) continue;
+            const fallback = store.recipeIds.map((id) => store.recipes[id])
+                .find((recipe) => recipe?.mode === mode && recipe.apiType === apiType);
+            if (fallback) {
+                store.active[mode][apiType] = fallback.id;
+            } else {
+                const created = createPromptRecipeWithoutSave(store, {
+                    name: `Current ${capitalize(mode)} · ${capitalize(apiType)}`,
+                    mode,
+                    apiType,
+                    blocks: defaultBlocksFor(mode, apiType),
+                    transport: apiType === 'text' ? clone(seed.textTransport || {}) : null,
+                });
+                store.active[mode][apiType] = created.id;
             }
-        }
-    }
-    // Runs after the active-slot loop above, so a director recipe seeded on
-    // this very load already carries the new text and matches nothing here.
-    if (previousVersion < 5) {
-        for (const recipe of Object.values(store.recipes)) {
-            if (recipe?.mode === 'director') changed = migrateDirectorStyleBlock(recipe) || changed;
-        }
-    }
-    // Same shape as the previousVersion < 3 migration above, and for the same
-    // reason: ensureDirectorNotesSource splices a freshly-built block into an
-    // already-normalized recipe.blocks with no settings-defaulting pass of its
-    // own, so the re-normalize afterward is required, not optional — without
-    // it a pre-existing user's migrated block would carry settings: {} instead
-    // of the declared { depth: 3 } default, and the Narrator would read a
-    // depth-undefined notes source that resolves to nothing.
-    if (previousVersion < 6) {
-        for (const recipe of Object.values(store.recipes)) {
-            if (recipe?.mode === 'roleplay' && recipe.apiType === 'chat' && ensureDirectorNotesSource(recipe.blocks)) {
-                recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
-                changed = true;
-            }
-        }
-    }
-    // The Director's own side of the notebook. Same shape and the same
-    // re-normalize as the migration above, and for the same reason: the
-    // spliced block declares `settings`, and without the re-normalize it
-    // would carry `settings: {}` instead of the declared depth — a source
-    // that appears in the editor and renders nothing.
-    //
-    // Runs after the active-slot loop, so a director recipe seeded on this
-    // very load already has the block and matches nothing here.
-    if (previousVersion < 7) {
-        for (const recipe of Object.values(store.recipes)) {
-            if (recipe?.mode === 'director' && ensureDirectorNotebookSource(recipe.blocks)) {
-                recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
-                changed = true;
-            }
-        }
-    }
-    // World Info stopped being rendered inside the locked Scene Snapshot and
-    // became four blocks. An existing director recipe has neither, so without
-    // this migration the Director would simply STOP receiving world
-    // information — the failure mode of a source that moves is silence, not
-    // an error, which is why this runs for every director recipe rather than
-    // only ones that look default.
-    if (previousVersion < 8) {
-        for (const recipe of Object.values(store.recipes)) {
-            if (recipe?.mode === 'director' && ensureDirectorWorldInfoSources(recipe.blocks)) {
-                recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
-                changed = true;
-            }
-        }
-    }
-    // The protocol stopped being a locked source and became an ordinary
-    // editable message, seeded with the text that source produced. Nothing
-    // about the compiled prompt changes on the day of the migration — the
-    // seed expands, through {{director::…}}, to exactly what was there before
-    // — but from here the owner can rewrite every sentence of it while the
-    // tags, the state fence and the capability list keep coming from the code.
-    if (previousVersion < 9) {
-        for (const recipe of Object.values(store.recipes)) {
-            if (recipe?.mode !== 'director' || !Array.isArray(recipe.blocks)) continue;
-            const index = recipe.blocks.findIndex((block) => block.kind === 'source' && block.sourceKey === 'directionProtocol');
-            if (index < 0) continue;
-            const previous = recipe.blocks[index];
-            recipe.blocks[index] = createPromptBlock({
-                kind: 'message',
-                role: previous.role || 'system',
-                // Position, enabled state and role are carried over; `locked`
-                // deliberately is not. Being unlockable is the whole feature.
-                enabled: previous.enabled !== false,
-                locked: false,
-                content: PROTOCOL_TEMPLATE,
-            });
-            recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
             changed = true;
         }
     }
     return changed;
 }
 
-/**
- * Add whichever of the four World Info blocks a director recipe is missing.
- *
- * `before` goes ahead of the Director Card and the rest immediately before the
- * notebook (or the Scene Snapshot, whichever comes first), so a migrated
- * recipe lands in the same reading order a fresh one is built with. Each key
- * is checked on its own: a user who already added one by hand must not have it
- * duplicated, and must still receive the other three.
- */
-function ensureDirectorWorldInfoSources(blocks) {
-    if (!Array.isArray(blocks)) return false;
-    const present = new Set(blocks.filter((block) => block.kind === 'source').map((block) => block.sourceKey));
-    let added = false;
-
-    if (!present.has('worldInfoBefore')) {
-        const cardIndex = blocks.findIndex((block) => block.kind === 'source' && block.sourceKey === 'directorCard');
-        blocks.splice(cardIndex >= 0 ? cardIndex : 0, 0, createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'worldInfoBefore' }));
-        added = true;
-    }
-
-    const trailing = ['worldInfoAfter', 'worldInfoExamples', 'worldInfoDepth']
-        .filter((key) => !present.has(key))
-        .map((key) => createPromptBlock({ kind: 'source', role: 'system', sourceKey: key }));
-    if (trailing.length) {
-        const anchor = blocks.findIndex((block) => block.kind === 'source' && ['directorNotebook', 'directorSnapshot'].includes(block.sourceKey));
-        blocks.splice(anchor >= 0 ? anchor : blocks.length, 0, ...trailing);
-        added = true;
-    }
-    return added;
-}
-
 function ensureStoryGoalsSource(blocks) {
-    if (!Array.isArray(blocks) || blocks.some((block) => block.kind === 'source' && block.sourceKey === 'storyGoals')) return false;
-    const source = createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'storyGoals', nativeIdentifier: 'remodel_story_goals' });
-    const historyIndex = blocks.findIndex((block) => block.kind === 'source' && ['chatHistory', 'currentInput'].includes(block.sourceKey));
+    if (!Array.isArray(blocks) || blocks.some((block) => block.content?.includes('{{story.goals}}'))) return false;
+    const source = createPromptBlockFromTemplate('roleplay', 'storyGoals');
+    const historyIndex = blocks.findIndex((block) => /{{chat\.(history|input)\b/i.test(block.content || ''));
     blocks.splice(historyIndex >= 0 ? historyIndex : blocks.length, 0, source);
     return true;
 }
@@ -703,23 +514,19 @@ function withStoryGoalsSource(blocks) {
     return blocks;
 }
 
-/** Same shape as ensureStoryGoalsSource, for the same reason: directorNotes is
- *  a second Remodel-owned native source, mirrored into the native Prompt
- *  Manager under 'remodel_director_notes' the same way storyGoals is under
- *  'remodel_story_goals'. Inserted right before chatHistory/currentInput —
- *  after storyGoals lands there first, so the declared source order
- *  (storyGoals, then directorNotes, then chatHistory) holds even when both
- *  helpers run back to back. */
-function ensureDirectorNotesSource(blocks) {
-    if (!Array.isArray(blocks) || blocks.some((block) => block.kind === 'source' && block.sourceKey === 'directorNotes')) return false;
-    const source = createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'directorNotes', nativeIdentifier: 'remodel_director_notes' });
-    const historyIndex = blocks.findIndex((block) => block.kind === 'source' && ['chatHistory', 'currentInput'].includes(block.sourceKey));
+/** Same shape as ensureStoryGoalsSource: Loom Context is a second
+ *  Remodel-owned native source mirrored into the native Prompt Manager.
+ *  It is inserted before chatHistory/currentInput and after Story Goals. */
+function ensureLoomContextSource(blocks) {
+    if (!Array.isArray(blocks) || blocks.some((block) => block.content?.includes('{{loom.context}}'))) return false;
+    const source = createPromptBlockFromTemplate('roleplay', 'loomContext');
+    const historyIndex = blocks.findIndex((block) => /{{chat\.(history|input)\b/i.test(block.content || ''));
     blocks.splice(historyIndex >= 0 ? historyIndex : blocks.length, 0, source);
     return true;
 }
 
-function withDirectorNotesSource(blocks) {
-    ensureDirectorNotesSource(blocks);
+function withLoomContextSource(blocks) {
+    ensureLoomContextSource(blocks);
     return blocks;
 }
 
@@ -756,12 +563,9 @@ export function normalizeRecipe(value) {
     if (!value || typeof value !== 'object' || !value.id) return null;
     const mode = PROMPT_MODES.includes(value.mode) ? value.mode : 'story';
     // Belt-and-suspenders alongside createPromptRecipe's own forcing and the
-    // normalizeStore active-slot loop skipping 'text' for director: this is
-    // the one funnel every recipe passes through (fresh creation *and*
-    // recipes loaded back out of persisted settings), so it is the place a
-    // stray or hand-edited director/text recipe gets coerced back to chat
-    // rather than silently surviving a reload.
-    const apiType = mode === 'director' ? 'chat' : (PROMPT_API_TYPES.includes(value.apiType) ? value.apiType : 'chat');
+    // Loom is a hidden Chat Completion request; it has no Text Completion
+    // transport. Normalize hand-edited data back to that supported boundary.
+    const apiType = mode === 'loom' ? 'chat' : (PROMPT_API_TYPES.includes(value.apiType) ? value.apiType : 'chat');
     return {
         id: String(value.id),
         name: normalizeText(value.name, 'Untitled Prompt'),
@@ -776,16 +580,34 @@ export function normalizeRecipe(value) {
 }
 
 function normalizeBlocks(value, mode, apiType) {
-    let blocks = Array.isArray(value) ? value.map((block) => normalizeBlock(block, mode)).filter(Boolean) : [];
+    let blocks = Array.isArray(value) ? value.map((block) => normalizeBlock(sourceBlockToMacroMessage(mode, block), mode)).filter(Boolean) : [];
     if (mode === 'roleplay') {
         blocks = blocks.map((block) => block.kind === 'source' && block.sourceKey === 'quietPrompt'
             ? { ...block, sourceKey: 'generationNudge', nativeIdentifier: 'quietPrompt' }
             : block);
     }
-    if (mode === 'roleplay' && apiType === 'text' && !blocks.some((block) => block.kind === 'source' && block.sourceKey === 'nativeContext')) {
-        blocks.push(createPromptBlock({ kind: 'source', role: 'system', sourceKey: 'nativeContext', enabled: true, locked: true, mode }));
+    if (mode === 'roleplay' && apiType === 'text' && !blocks.some((block) => block.content?.includes('{{roleplay.native}}'))) {
+        blocks.push(createPromptBlockFromTemplate('roleplay', 'nativeContext'));
     }
     return blocks;
+}
+
+function sourceBlockToMacroMessage(mode, value) {
+    if (!value || value.kind !== 'source') return value;
+    const migratedKey = value.sourceKey === 'directorNotes' ? 'loomContext' : value.sourceKey;
+    const definition = PROMPT_TEMPLATE_DEFINITIONS[mode]?.find((item) => item.key === migratedKey);
+    if (!definition) return { ...value, kind: 'message', content: `{{source key="${String(value.sourceKey || '')}"}}` };
+    const args = Object.entries(value.settings || {})
+        .map(([key, item]) => `${key}=${JSON.stringify(item)}`)
+        .join(' ');
+    return {
+        ...value,
+        kind: 'message',
+        content: `{{${definition.macro}${args ? ` ${args}` : ''}}}`,
+        sourceKey: '',
+        nativeIdentifier: value.nativeIdentifier || definition.nativeIdentifier || '',
+        advancedWarning: value.advancedWarning || '',
+    };
 }
 
 function normalizeBlock(value, mode) {
@@ -803,6 +625,7 @@ function normalizeBlock(value, mode) {
         locked: Boolean(value.locked || value.sourceKey === 'nativeContext'),
         nativeIdentifier: String(value.nativeIdentifier || ''),
         settings: normalizeBlockSettings(value.settings, mode, sourceKey),
+        advancedWarning: kind === 'message' ? String(value.advancedWarning || '') : '',
     };
 }
 

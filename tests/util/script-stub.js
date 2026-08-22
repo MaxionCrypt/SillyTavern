@@ -35,6 +35,7 @@ export const eventSource = {
 export const event_types = new Proxy({}, { get: (_target, key) => String(key) });
 
 export const main_api = 'openai';
+export function getMaxResponseTokens() { return 2048; }
 export const name1 = 'User';
 export const name2 = 'Character';
 
@@ -67,7 +68,7 @@ export function __setOnlineStatus(value) {
 
 // Pushes onto the SAME chat array st-context-stub.js hands out through
 // getContext().chat — not a private array of this module's own. Task 7 moved
-// live-direction.js's call to this function ahead of the Director round trip
+// live-direction.js's call to this function ahead of the Loom round trip
 // specifically so the message is already in context.chat by the time the
 // snapshot is built, and a test-only no-op here would make that ordering
 // untestable: __getChat() would never show the insertion this stub is meant

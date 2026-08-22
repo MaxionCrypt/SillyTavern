@@ -10,8 +10,9 @@
         "^.*/instruct-mode\\.js$": "<rootDir>/util/instruct-mode-stub.js",
         "^.*/group-chats\\.js$": "<rootDir>/util/group-chats-stub.js",
         "^.*/reasoning\\.js$": "<rootDir>/util/reasoning-stub.js",
-        "^\\.\\./\\.\\./\\.\\./extensions\\.js$": "<rootDir>/util/extensions-stub.js",
-        "^\\.\\./\\.\\./\\.\\./utils\\.js$": "<rootDir>/util/utils-js-stub.js",
+        "^\\.\\./\\.\\./shared\\.js$": "<rootDir>/util/connection-request-stub.js",
+        "^.*/extensions\\.js$": "<rootDir>/util/extensions-stub.js",
+        "^.*/utils\\.js$": "<rootDir>/util/utils-js-stub.js",
         "^.*/debug-console\\.js$": "<rootDir>/util/debug-console-stub.js"
     }
 }

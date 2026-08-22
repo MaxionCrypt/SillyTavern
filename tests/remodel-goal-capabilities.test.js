@@ -8,7 +8,7 @@ import { __setExtensionSettings } from './util/st-context-stub.js';
 
 // The Goal verbs, end to end through the real capability layer and the real
 // store. goal.shift and goal.close are gone: a shift and an opening rate are
-// the same kind of value once the band vocabulary lives in the Director's
+// the same kind of value once the band vocabulary lives in the Loom's
 // prompt, and a status is just an attribute. Both collapse into goal.edit.
 
 const TIMELINE = 'timeline-goals-1';
@@ -48,7 +48,7 @@ test('the dictionary names exactly the five Goal verbs', () => {
     expect(verbs).toEqual(['goal.create', 'goal.delete', 'goal.edit', 'goal.reach', 'goal.relate']);
 });
 
-test('goal.edit sets a rate the Director chose', () => {
+test('goal.edit sets a rate the Loom chose', () => {
     const goal = seedGoal();
     const result = run([editRequest({ goalRef: 'Hold the gate', successRate: 62 })], new Map([['Hold the gate', goal.id]]));
 
@@ -57,7 +57,7 @@ test('goal.edit sets a rate the Director chose', () => {
 });
 
 test('a rate outside 5-95 is clamped rather than refused', () => {
-    // The clamp is code's; the judgement is the Director's. Refusing the whole
+    // The clamp is code's; the judgement is the Loom's. Refusing the whole
     // request would lose the reason and the edit along with the overshoot.
     const goal = seedGoal();
     run([editRequest({ goalRef: 'Hold the gate', successRate: 130 })], new Map([['Hold the gate', goal.id]]));
@@ -111,7 +111,7 @@ test('goal.delete removes the Goal', () => {
 
 test('a Goal name that was not advertised this turn resolves to nothing', () => {
     // The containment property: a request may only address the closed set the
-    // Director was shown. An empty address table is the strongest form of that.
+    // Loom was shown. An empty address table is the strongest form of that.
     const goal = seedGoal();
     const result = run([editRequest({ goalRef: 'Hold the gate', successRate: 90 })], new Map());
 

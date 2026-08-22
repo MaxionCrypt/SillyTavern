@@ -1,9 +1,9 @@
 import { buildMechanicalSnapshot } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/mechanics-runtime.js';
-import { buildDirectionSources } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/direction-sources.js';
+import { buildLoomContext } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-context.js';
 import { createVariableValue } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
 import { __setExtensionSettings } from './util/st-context-stub.js';
 
-// End to end from a real empty Timeline to the text the Director reads.
+// End to end from a real empty Timeline to the text the Loom reads.
 //
 // The renderer tests hand-build a snapshot with `retrieval.emptyCode` already
 // on it, so they prove the wording is right given the field and nothing about
@@ -25,7 +25,7 @@ test('a Timeline with no Variables reaches the prompt as an invitation, not a de
     const snapshot = await buildMechanicalSnapshot(scene, 'Wren scans the room.', [], null, []);
     expect(snapshot.retrieval.emptyCode).toBe('none-authored');
 
-    const { mechanicsSkill } = buildDirectionSources({ mechanics: snapshot }, { mechanicsEnabled: true });
+    const { mechanicsSkill } = buildLoomContext({ mechanics: snapshot }, { mechanicsEnabled: true });
     expect(mechanicsSkill).toMatch(/no Variables yet/i);
     expect(mechanicsSkill).toContain('variable.create');
 });
@@ -44,6 +44,6 @@ test('once a Variable exists, an unmatched turn says so instead', async () => {
     const snapshot = await buildMechanicalSnapshot(scene, 'Wren scans the room.', [], null, []);
     expect(snapshot.retrieval.emptyCode).not.toBe('none-authored');
 
-    const { mechanicsSkill } = buildDirectionSources({ mechanics: snapshot }, { mechanicsEnabled: true });
+    const { mechanicsSkill } = buildLoomContext({ mechanics: snapshot }, { mechanicsEnabled: true });
     expect(mechanicsSkill).not.toMatch(/create it with variable\.create/i);
 });

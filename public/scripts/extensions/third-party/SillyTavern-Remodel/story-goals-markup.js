@@ -23,7 +23,7 @@ export function escapeAttribute(value) {
  * Owner edits go straight to the store rather than through the capability
  * layer — that layer exists to constrain a model, not its owner — so they
  * produce no receipt. The submit handler passes actor 'user' so the event
- * ledger can still tell an owner edit from a Director change.
+ * ledger can still tell an owner edit from a Loom change.
  *
  * The status and visibility options are derived from the model's own lists
  * rather than spelled out here, so a value added there appears without anyone

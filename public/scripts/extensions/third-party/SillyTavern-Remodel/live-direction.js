@@ -14,30 +14,18 @@ import {
     undoMechanicsTransaction,
 } from './mechanics-capabilities.js';
 import { buildMechanicalSnapshot, previewMechanicalContext } from './mechanics-runtime.js';
-import { buildDirectionSources, buildDirectorMacros, describeAllLore } from './direction-sources.js';
+import { buildLoomContext } from './loom-context.js';
 import { resolveByName } from './direction-address.js';
-import { resolveDirectionActions } from './direction-chrome.js';
-import { clearStandingDirection, readStandingDirection, saveStandingDirection } from './standing-direction-store.js';
+import { resolveDirectionActions } from './turn-chrome.js';
 import { deriveBeats } from './direction-beats.js';
-import { compilePromptRecipe, captureDirectorPromptLog, capturePromptLog, getCurrentPromptStudioRecipe, resolveDirectorRecipe } from './prompt-studio.js';
-import { PROMPT_SOURCE_DEFINITIONS } from './prompt-studio-store.js';
-import { ENTRY_TYPES, parseDirectorReply } from './director-reply.js';
+import { captureLoomPromptLog, capturePromptLog, compilePromptRecipe, getCurrentPromptStudioRecipe } from './prompt-studio.js';
 import { filterNarratorHistory } from './narrator-history.js';
-import {
-    abandonDirectorTurn,
-    appendDirectorEntries,
-    deleteDirectorEntry,
-    readAllEntriesForOwner,
-    readNarratorEntries,
-} from './director-notes-store.js';
 import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
-import { StructuredReplyError } from './structured-reply.js';
 import { streamChatPrompt } from './story-stream.js';
-import { buildNarratorArchivistSections, buildDirectionInjection } from './narrator-prompt.js';
-import { buildExtractionPrompt } from './narrator-extract.js';
-import { runExtraction } from './extraction-config.js';
-import { isSoloMode, soloEnvelope } from './solo-direction.js';
+import { buildNarratorArchivistSections, buildDirectionInjection, buildGoalObjectives } from './narrator-prompt.js';
+import { applySwaps, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
+import { createLoomTurnEnvelope } from './loom-turn.js';
 import { updateScene } from './timeline-state.js';
 import { recordDebugEvent } from './debug-console.js';
 
@@ -63,14 +51,14 @@ const hooks = {
     // than imported, because prompt-studio.js reaches oai_settings and this
     // module is driven from timeline-spine.js, which already owns that seam.
     setNativePromptContent: () => false,
+    activateConnectionProfile: async () => null,
     // A response landed after a failure was reported. The notice is stale.
     onRecovered: () => {},
     onFailure: () => {},
-    // Fires on every chunk of the Director's own streamed reply — cumulative
+    // Fires on every chunk of the Loom's own streamed reply — cumulative
     // { text, reasoning }, same shape story-stream.js's onChunk already
     // hands callers. No-op by default so a caller that never registers one
     // costs nothing; timeline-spine.js registers updateDirectionStreamCard.
-    onDirectorChunk: () => {},
 };
 
 let initialized = false;
@@ -90,7 +78,7 @@ let testAdapters = null;
  * The hidden half of a direction pass — everything before a visible run exists.
  *
  * WHY THIS EXISTS: `activeRun` is assigned only in generateDirectedPerformer,
- * which is reached after the Director round-trip. That call is a real request
+ * which is reached after the Loom round-trip. That call is a real request
  * costing many seconds, and for its entire duration `activeRun` was null. Every
  * entry point guards on `activeRun`, so all of them — Send, Next, Continue,
  * autoplay — saw an idle pipeline and happily started a second one. Two
@@ -134,9 +122,9 @@ function acquireDirectionLock({ scene, insertUser, autonomousSequence }) {
         autonomousSequence: Number(autonomousSequence) || 0,
         startedAt: Date.now(),
         aborted: false,
-        // The Director now streams, so `aborted` is no longer only a flag the
+        // The Loom now streams, so `aborted` is no longer only a flag the
         // pass checks between stages: it has to reach the open request itself.
-        // Without this, pressing Stop during a two-minute Director call left
+        // Without this, pressing Stop during a two-minute Loom call left
         // the request running to completion and merely discarded its answer.
         controller: new AbortController(),
     };
@@ -199,11 +187,11 @@ export function initLiveDirection(options = {}) {
         acceptNativeBuffer(message.mes);
     });
     // The Narrator is a passive voice (see the module doc on
-    // narrator-history.js): it renders what the Director decided, informed
+    // narrator-history.js): it renders what the Loom decided, informed
     // only by its OWN prior prose, never by the user's words or another cast
     // member's. Everything the user did reaches it solely through the
-    // Director's notes, which arrive as a separate injected system-role entry
-    // (setNativePromptContent('directorNotes', …) above) — not through
+    // Loom's notes, which arrive as a separate injected system-role entry
+    // (setNativePromptContent('loomNotes', …) above) — not through
     // this array — so this listener only ever narrows chat history, never
     // context.chat itself (still the true record other surfaces read) and
     // never the notes block.
@@ -212,7 +200,7 @@ export function initLiveDirection(options = {}) {
     // Chat Completion request in the app, not only the directed performer's,
     // so it must do nothing outside the window Remodel's own
     // generateDirectedPerformer owns. Remodel's OWN hidden calls (the
-    // Director's own request, Story prose) go out through story-stream.js's
+    // Loom's own request, Story prose) go out through story-stream.js's
     // sendOpenAIRequest directly and never reach prepareOpenAIMessages, so
     // they never fire this event at all — only the visible performer's native
     // context.generate()/generateGroupWrapper call does.
@@ -223,6 +211,10 @@ export function initLiveDirection(options = {}) {
     });
     const finish = () => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
+        if (activeRun.phase === 'narrator') {
+            activeRun.narratorGenerationFinished = true;
+            return;
+        }
         activeRun.generationFinished = true;
         activeRun.generationSettled = true;
         scheduleReveal(0);
@@ -246,7 +238,7 @@ export function initLiveDirection(options = {}) {
  * response") and Free play spins its indicator forever waiting on a
  * GENERATION_ENDED that will never arrive.
  *
- * The trap is that Remodel's Director and mechanics calls go through
+ * The trap is that Remodel's Loom and mechanics calls go through
  * `generateRawData`, which fetches the backend directly and never consults
  * `online_status`. So with Auto-connect off — or after any reload that leaves
  * SillyTavern disconnected — the hidden passes all succeed while every visible
@@ -275,8 +267,8 @@ export function getLiveDirectionRun() {
 }
 
 export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
-    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: scene?.liveDirection?.mode === 'solo' ? 'solo' : 'director' };
-    // A hidden Director pass is a busy pipeline with no visible run yet. It used
+    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: 'loom' };
+    // A hidden Loom pass is a busy pipeline with no visible run yet. It used
     // to report 'Ready' with Stop disabled, which is what invited the second
     // send that produced a second bubble — notifyTransient('Directing') is a
     // one-shot push, and any re-render (onSettled calls renderRoleplayScene)
@@ -286,7 +278,7 @@ export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
         active: true,
         state: activeRun?.state || (directing ? 'Directing' : 'Ready'),
         pacing: scene.liveDirection?.pacing || 'natural',
-        mode: scene.liveDirection?.mode === 'solo' ? 'solo' : 'director',
+        mode: 'loom',
         openingLabel: activeRun?.openingLabel || '',
         canContinue: activeRun?.state === 'Waiting for you',
         canSend: !directing,
@@ -312,7 +304,9 @@ export function setLiveDirectionPacing(scene, pacing) {
 }
 
 export function setLiveDirectionMode(scene, mode) {
-    if (!scene || (mode !== 'director' && mode !== 'solo')) return false;
+    // 'loom' is the only engine; the old two-agent and solo engines
+    // have been removed.
+    if (!scene || mode !== 'loom') return false;
     updateScene(scene.id, { liveDirection: { ...scene.liveDirection, mode } });
     notifyState();
     return true;
@@ -429,7 +423,7 @@ export function continueLiveDirection() {
 export async function stopLiveDirection() {
     const stoppedAutoplay = cancelAutoplay('stopped');
     // Stop must also reach a pass that has not produced a visible run yet,
-    // otherwise pressing Stop during the Director call did nothing and the
+    // otherwise pressing Stop during the Loom call did nothing and the
     // performer spoke anyway a few seconds later.
     if (directionInFlight) {
         journal('stopped.in-flight', { passId: directionInFlight.id });
@@ -454,108 +448,7 @@ export async function stopLiveDirection() {
  * this function's to guess at.
  */
 /**
- * Keep a direction that was produced and never spoken, so Continue can ask the
- * performer again without paying for a second Director call.
- *
- * PERSISTED, in its own per-Scene bucket, because the Director has no message
- * in the transcript to hang metadata off — one there would put its entries,
- * secrets included, into the chat history the Narrator reads. What makes this
- * safe to persist is that the address book travels with it and is re-validated
- * on read: see standing-direction-store.js.
- */
-function rememberStandingDirection({ scene, turn, envelope, performer, autonomousSequence, asked }) {
-    // `asked` is the same fact the abandon-check in beginDirection's `finally`
-    // keys on, and it has to be: a take the performer was never asked to speak
-    // has its entries abandoned there, so remembering it here would leave
-    // Continue offering to speak a direction that has been withdrawn.
-    if (!asked || !envelope || !performer || turn === null || !scene?.id) return;
-    saveStandingDirection({
-        protocol: DIRECTION_PROTOCOL,
-        sceneId: scene.id,
-        timelineId: scene.timelineId || '',
-        turn,
-        performerRef: performer.ref,
-        ...splitEnvelopeForStorage(envelope),
-        autonomousSequence: Number(autonomousSequence) || 0,
-        // How long the chat was when this direction was made. A longer chat on
-        // read means something was said after it, and this direction is
-        // answering a question the scene has moved past.
-        chatLength: (getContext().chat || []).length,
-    });
-    journal('standing.kept', { sceneId: scene.id, turn }, {
-        summary: 'direction.standing: the direction was not spoken and is held for Continue',
-    });
-}
-
-/**
- * The Scene's standing direction, hydrated and vouched for, or null.
- *
- * Three ways a stored record is refused, and none of them are load failures:
- * the protocol and the chat position are checked by the store, the notebook
- * turn is checked here, and the performer is re-resolved against the CURRENT
- * cast rather than trusted from the record — a Narrator that has since been
- * unbound cannot be conjured back by a saved reference.
- */
-function readStandingDirectionFor(scene) {
-    if (!scene?.id) return null;
-    const saved = readStandingDirection(scene.id, {
-        protocol: DIRECTION_PROTOCOL,
-        chatLength: (getContext().chat || []).length,
-    });
-    if (!saved) return null;
-    // The turn has to still be there. The owner can delete it from the
-    // notebook panel, and a direction whose entries are gone says nothing.
-    if (!notebookTurnEntries(scene, saved.turn).length) {
-        clearStandingDirection(scene.id);
-        return null;
-    }
-    const performer = resolvePerformer(saved.performerRef, scene);
-    if (!performer) {
-        journal('standing.dropped', { sceneId: scene.id, turn: saved.turn, reason: 'the performer is no longer in the cast' }, { severity: 'warn' });
-        clearStandingDirection(scene.id);
-        return null;
-    }
-    return { saved, performer };
-}
-
-/**
- * Restore the standing direction from a deleted message's saved metadata.
- *
- * When the user deletes a directed response, its direction — already paid for
- * — should become standing again so Continue replays it instead of spending a
- * second Director call. The metadata is the same shape `serializeRun` wrote.
- */
-export function restoreStandingDirectionFromMessage(scene, saved) {
-    if (!scene?.id || !saved?.envelope) return false;
-    const turn = toTurnNumber(saved.envelope?.notebookTurn);
-    if (turn === null || !notebookTurnEntries(scene, turn).length) return false;
-    saveStandingDirection({
-        protocol: DIRECTION_PROTOCOL,
-        sceneId: scene.id,
-        timelineId: scene.timelineId || '',
-        turn,
-        performerRef: saved.performerRef,
-        ...splitEnvelopeForStorage(hydrateSavedEnvelope(saved, scene)),
-        autonomousSequence: Number(saved.autonomousSequence) || 0,
-        chatLength: (getContext().chat || []).length,
-    });
-    journal('standing.restored', { sceneId: scene.id, turn }, {
-        summary: 'direction.standing: restored from a deleted message so Continue can replay it',
-    });
-    return true;
-}
-
-/** Whether Continue should speak an existing direction rather than make a new one. */
-export function hasStandingDirection(scene = hooks.getActiveScene()) {
-    return Boolean(readStandingDirectionFor(scene));
-}
-
-export function forgetStandingDirection(scene = hooks.getActiveScene()) {
-    return clearStandingDirection(scene?.id || '');
-}
-
-/**
- * Retry: re-run the last step IN PLACE, discarding what it produced.
+ * Retry: re-run the last turn IN PLACE, discarding what it produced.
  *
  * Which step that is comes from the same pure resolver the buttons are
  * labelled from, so the button and the action cannot disagree about what
@@ -563,74 +456,28 @@ export function forgetStandingDirection(scene = hooks.getActiveScene()) {
  */
 export async function retryLiveStep(scene = hooks.getActiveScene()) {
     const { retry } = resolveDirectionActions(describeDirectionStep(scene));
-    if (retry.target === 'director') {
-        const standing = readStandingDirectionFor(scene);
-        const turn = standing?.saved?.turn ?? null;
-        forgetStandingDirection(scene);
-        // The entries go with the direction they belong to: this is a retake
-        // of that moment, and leaving the discarded take's rulings behind
-        // would have the next Director read its own withdrawn judgment as
-        // settled fact. Filed under the SAME turn number, so a retake of an
-        // earlier moment is not stored as the newest turn.
-        if (turn !== null) discardNotebookTurn(scene, turn);
-        return requestNextDirection(scene, { notebookTurn: turn });
-    }
     if (retry.target === 'narrator') return regenerateLastDirectedResponse(scene);
     journal('retry.rejected', { reason: retry.reason }, { severity: 'warn' });
     return false;
 }
 
 /**
- * Continue: advance to the next step, touching nothing that already exists.
+ * Continue: advance to the next turn, touching nothing that already exists.
  */
 export async function continueLiveStep(scene = hooks.getActiveScene()) {
     const { continue: advance } = resolveDirectionActions(describeDirectionStep(scene));
-    if (advance.target === 'narrator') return speakStandingDirection(scene);
-    if (advance.target === 'director') return requestNextDirection(scene);
+    if (advance.target === 'loom') return requestNextDirection(scene);
     journal('continue.rejected', { reason: advance.reason }, { severity: 'warn' });
     return false;
 }
 
-/**
- * Ask the performer again for a direction that already exists. No Director
- * call — that is the entire point, and on the owner's own connection it is the
- * half of the pass that costs seconds rather than milliseconds.
- */
-async function speakStandingDirection(scene) {
-    const standing = readStandingDirectionFor(scene);
-    if (!standing) return false;
-    const { saved, performer } = standing;
-    journal('standing.spoken', { sceneId: saved.sceneId, turn: saved.turn }, {
-        summary: 'direction.standing: speaking the direction that was already made',
-    });
-    try {
-        const result = await generateDirectedPerformer({
-            scene, envelope: hydrateSavedEnvelope(saved, scene), performer,
-            autonomousSequence: Number(saved.autonomousSequence) || 0,
-        });
-        forgetStandingDirection(scene);
-        return result;
-    } catch (error) {
-        journal('standing.failed', {
-            sceneId: saved.sceneId, turn: saved.turn,
-            message: String(error?.message || error),
-        }, { severity: 'warn', summary: 'direction.standing: Narrator generation failed, direction kept for retry' });
-        return directionFailure(error, {
-            scene, action: null, insertUser: false,
-            authorizedGoalIds: saved.authorizedGoalIds || [],
-            autonomousSequence: Number(saved.autonomousSequence) || 0,
-        });
-    }
-}
-
-/** The inputs resolveDirectionActions needs, read from the chat and the store. */
-function describeDirectionStep(scene) {
+/** The inputs resolveDirectionActions needs, read from the chat. */
+function describeDirectionStep() {
     const chat = getContext().chat || [];
     const last = chat[chat.length - 1];
     return {
         hasMessages: chat.length > 0,
         lastMessageIsUser: Boolean(last?.is_user),
-        standingDirection: hasStandingDirection(scene),
         busy: Boolean(directionInFlight || activeRun && !['Waiting for you', 'Complete'].includes(activeRun.state)),
     };
 }
@@ -680,28 +527,6 @@ export function sendWithoutLiveDirection() {
  * Narrator generation failed and cannot be retried, or one the user simply
  * wants to undo so they can retype their message.
  */
-export function dismissDirectionRecord(scene, recordId) {
-    if (!scene || !recordId) return false;
-    const log = Array.isArray(scene.liveDirection?.directionLog)
-        ? scene.liveDirection.directionLog : [];
-    const record = log.find((item) => item?.id === recordId);
-    if (!record) return false;
-    const turn = toTurnNumber(record.notebookTurn);
-    if (turn !== null) discardNotebookTurn(scene, turn);
-    forgetStandingDirection(scene);
-    pendingFailure = null;
-    updateScene(scene.id, {
-        liveDirection: {
-            ...scene.liveDirection,
-            directionLog: log.filter((item) => item?.id !== recordId),
-        },
-    });
-    journal('direction.dismissed', { directionId: recordId, turn }, {
-        summary: 'direction.dismissed: user discarded a direction card',
-    });
-    return true;
-}
-
 /**
  * Whether the pending failure has user text a bypass could actually send.
  *
@@ -746,118 +571,17 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
         if (tx) undoMechanicsTransaction(tx);
     }
     await context.deleteMessage(messageId);
-    const performer = resolvePerformer(saved.performerRef, scene);
-    // Is the discarded take's direction still there to replay?
-    //
-    // The direction is now the notebook turn the saved envelope points at, so
-    // "replayable" is a question about the store, not about a string on the
-    // message. When the entries are still there, a regenerate is one native
-    // generation against the SAME turn — no second Director call, which on the
-    // owner's own connection measured 101–202 seconds. A message saved before
-    // this build carries no notebookTurn and is never replayable; it earns a
-    // fresh pass instead, which is also what a deleted turn earns.
+    // Re-run the turn fresh: the Narrator drafts again and the Loom reconciles.
+    // Undoing the transaction above already rolled back this turn's Archive
+    // events and mechanics atomically, so the retake starts clean. It reuses the
+    // same turn number rather than allocating a new one (a retake, not a new
+    // turn).
     const savedTurn = toTurnNumber(saved.envelope?.notebookTurn);
-    const replayable = savedTurn !== null && notebookTurnEntries(scene, savedTurn).length > 0;
-    if (!replayable || !performer) {
-        // A fresh Director pass is about to write this moment again. Whatever
-        // the discarded take left behind must go with the message it belonged
-        // to — otherwise the notebook accumulates rulings from takes the user
-        // never saw, and the Narrator reads a discarded attempt's judgment
-        // beside the one that replaced it. Scoped to that turn, and a no-op
-        // when the turn is already empty (which is why it can sit here).
-        //
-        // The retake is then filed under the SAME turn number rather than a
-        // fresh one. `nextNotebookTurn` is max+1, so recomputing would only
-        // give the freed number back when the discarded turn happened to be
-        // the highest; with any later turn present, a retake of the earliest
-        // moment would be filed as the newest turn and
-        // groupNotebookEntriesByTurn would hand the Narrator the fiction out
-        // of order.
-        discardNotebookTurn(scene, savedTurn);
-        return requestNextDirection(scene, { notebookTurn: savedTurn });
-    }
-    // Every pending request that survived to this point (the undo loop above
-    // reversed the ones this run actually applied) still needs the same
-    // name-to-id resolution it had originally. Without it, regenerate would
-    // resolve every name against empty Maps and reject them all as "not
-    // advertised" — reverting a Variable or Goal change the user already read,
-    // silently, while the notebook it was reasoned from still stands. And
-    // without the original authorization a persona-held Goal request would be
-    // deferred for review on the replay of a turn the user already authorized.
-    const envelope = hydrateSavedEnvelope(saved, scene);
-    return generateDirectedPerformer({ scene, envelope, performer, autonomousSequence: Number(saved.autonomousSequence) || 0 });
-}
-
-/**
- * Director mode's direction step: run the two-agent Director call, store its
- * notebook entries, and build the envelope from its reply. Extracted verbatim
- * from beginDirection so solo mode can be switched in beside it (connection
- * point 1). Returns the envelope plus the turn number if entries were stored
- * (so beginDirection's finally can tell the pass produced a record).
- *
- * @returns {Promise<{ envelope: object, storedTurn: number|null }>}
- */
-async function directorEnvelope(scene, snapshot, turn, token) {
-    const startedAt = Date.now();
-    const reply = await requestDirection(scene, snapshot, {
-        signal: token.controller.signal,
-        onChunk: (update) => {
-            // Forwarded on EVERY chunk so the direction card fills live; the
-            // journal entry below stays once-per-pass.
-            hooks.onDirectorChunk(update);
-            if (token.firstChunkAt) return;
-            token.firstChunkAt = Date.now();
-            journal('stream.first-chunk', { passId: token.id, afterMs: token.firstChunkAt - startedAt, chars: update.text.length }, { correlationId: token.id });
-        },
-    });
-    // The notebook is written whatever happens next, including for an
-    // interrupted Director: what it managed to say is a record of this turn. A
-    // cancelled take is stamped `abandoned`; its trailing entry `incomplete`.
-    const stored = appendDirectorEntries(scene.timelineId, {
-        sceneId: scene.id,
-        turn,
-        entries: markSeveredEntry(reply.entries, reply.interrupted),
-        reasoning: reply.reasoning,
-    });
-    // Stored entries but no block to carry them = a scene about to generate with
-    // no direction at all, while every other symptom looks healthy. Only when
-    // the block is MISSING — a user who toggled it off chose that.
-    const routing = describeDirectorNotesRouting();
-    if (stored.length && !routing.block && !routing.present) {
-        journal('notes.unrouted', {
-            passId: token.id,
-            turn,
-            entryCount: stored.length,
-            remedy: 'The active Roleplay · Chat recipe has no "Director\'s Notes" block, so this turn\'s direction reaches no one. Add it in Prompt Studio (Add context → Director\'s Notes).',
-        }, { correlationId: token.id, severity: 'warn', summary: 'direction.notes: stored, but no block carries them to the Narrator' });
-    }
-    const envelope = buildDirectionEnvelope(reply, turn);
-    journal('notebook', {
-        passId: token.id,
-        turn,
-        directionId: envelope.directionId,
-        durationMs: Date.now() - startedAt,
-        firstChunkMs: token.firstChunkAt ? token.firstChunkAt - startedAt : null,
-        streamed: reply.streamed,
-        interrupted: reply.interrupted,
-        replyChars: reply.raw.length,
-        reasoningLength: reply.reasoning.length,
-        entryCount: stored.length,
-        entryTypes: stored.map((entry) => entry.type),
-        tailFound: reply.tailFound,
-        requestCount: reply.state.requests.length,
-        continueAfter: reply.state.flow.continue,
-    }, { correlationId: token.id });
-    // Design §3: a missing or unparseable tail is never an error — the turn
-    // proceeds with no state changes, and this is the only notice of it.
-    if (reply.tailError) {
-        journal('tail.unparseable', { passId: token.id, turn, error: reply.tailError }, { correlationId: token.id, severity: 'warn', summary: 'direction.tail: unparseable, no state changed' });
-    }
-    return { envelope, storedTurn: stored.length ? turn : null };
+    return requestNextDirection(scene, { notebookTurn: savedTurn });
 }
 
 async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, postedMessage = null } = {}) {
-    // Checked before the Director call, not after: the Director costs a real
+    // Checked before the Loom call, not after: the Loom costs a real
     // request and ~17s, and there is no point spending either when the
     // performer that follows it cannot speak.
     const blocked = !scene ? 'No active Scene.' : describeNativeGenerationBlock();
@@ -900,24 +624,18 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
     }, { correlationId: token.id, summary: insertUser ? 'direction.begin (user)' : 'direction.begin (autonomous)' });
     try {
         pendingFailure = null;
-        // Any direction held from an earlier pass is superseded by this one.
-        // Kept beside pendingFailure because they answer the same question —
-        // what is left over from a pass that did not finish — and a leftover
-        // that outlives the moment it was made would have Continue offering to
-        // speak a direction about a scene that has since moved on.
-        forgetStandingDirection(scene);
         notifyTransient('Directing');
         const ready = await hooks.ensureSceneReady(scene);
         if (!ready) throw new Error('The native chat linked to this Scene could not be loaded.');
         if (token.aborted) return abandonPass(token, 'scene-ready');
-        // Posted here, before the Director is asked anything, rather than
+        // Posted here, before the Loom is asked anything, rather than
         // after the round trip returns — a real request that has measured
         // 101-202s, during which the user's own words used to be nowhere on
         // screen. buildDirectionSnapshot is told to leave this same entry out
         // of acceptedHistory below — NOT necessarily "the newest thing in
         // context.chat" (a retry after generation itself wrote a message and
         // then still failed can leave that message sitting after this one) —
-        // so the Director sees it exactly once, under CURRENT ACTION
+        // so the Loom sees it exactly once, under CURRENT ACTION
         // (direction-sources.js's describeSnapshot), not once there and once
         // more inside STORY SO FAR. `action` stays the single source handed to
         // the World Info scan and buildMechanicalSnapshot just below, so
@@ -925,7 +643,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         //
         // Once this runs there is no undoing it on a later failure in this
         // same pass: nothing downstream removes the message, so it stays in
-        // the chat even if the Director call or the performer that follows it
+        // the chat even if the Loom call or the performer that follows it
         // never succeeds. `postedMessage` — the actual message OBJECT
         // sendMessageAsUser returns, not a boolean or an index — is what stops
         // a RETRY from posting it again: directionFailure carries whatever it
@@ -957,7 +675,6 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             passId: token.id,
             castCount: snapshot.cast.length,
             castLabels: snapshot.cast.map((item) => item.label),
-            directorLabel: snapshot.director?.label || null,
             // Key names deliberately avoid the journal's sensitive-key regex
             // (debug-console.js SENSITIVE_KEY): it matches on the KEY before it
             // looks at the value, so `historyCount: 12` would be redacted to a
@@ -967,22 +684,17 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             receiptCount: snapshot.recentReceipts.length,
         }, { correlationId: token.id });
         if (token.aborted) return abandonPass(token, 'snapshot');
-        // Connection point 1 — how the turn's direction is produced. Director
-        // mode runs the two-agent Director call (directorEnvelope, unchanged);
-        // solo mode builds a Director-free envelope (no LLM call, no notebook).
-        // Everything downstream — performer, reveal, finalize, extraction — is
-        // shared. `notebookTurn` is supplied only by regenerate, which reuses a
-        // freed turn number rather than allocating a new one.
+        // Connection point 1 — the turn's direction. The narrator drafts first
+        // (no pre-call, no LLM round-trip here); the Loom reconciles that draft
+        // against the dice at completeVisibleRun. Everything downstream —
+        // performer, reveal, finalize, editor pass — is shared. `notebookTurn`
+        // is supplied only by regenerate, which reuses a freed turn number
+        // rather than allocating a new one.
         const turn = toTurnNumber(notebookTurn) ?? nextNotebookTurn(scene);
-        const { envelope, storedTurn: storedTurnValue } = isSoloMode(scene)
-            ? soloEnvelope(scene, snapshot, turn)
-            : await directorEnvelope(scene, snapshot, turn, token);
+        const { envelope, storedTurn: storedTurnValue } = createLoomTurnEnvelope(scene, snapshot, turn);
         if (storedTurnValue) storedTurn = storedTurnValue;
-        // The Director round-trip is the long window. Anything that happened
-        // during it — Stop, a user intervention outranking an autonomous pass —
-        // lands here, before a single native token is spent.
-        if (token.aborted) return abandonPass(token, 'director');
-        // Performer selection is no longer the Director's to make — whoever
+        if (token.aborted) return abandonPass(token, 'envelope');
+        // Performer selection is no longer the Loom's to make — whoever
         // holds the Scene's Narrator badge speaks. A manual "speak next"
         // override still outranks it when one is armed.
         const requestedRef = performerOverride || scene.liveDirection?.narratorRef;
@@ -1017,7 +729,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // Carried so Pass 2 extraction can advertise the same Variables/Goals to
         // the extractor and resolve its requests against the same address book —
         // without paying for a second retrieval after the turn. A distinct field:
-        // envelope.mechanics is the Director's pending-requests payload.
+        // envelope.mechanics is the Loom's pending-requests payload.
         normalized.mechanicsSnapshot = snapshot.mechanics;
         if (token.aborted) return abandonPass(token, 'normalized');
         // Set BEFORE the call, not after: from here the performer has been
@@ -1029,16 +741,6 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         standingPerformer = performer;
         return await generateDirectedPerformer({ scene, envelope: normalized, performer, autonomousSequence, token });
     } catch (error) {
-        // A direction the performer was asked to speak and did not is not
-        // wasted — it is the expensive half of the pass, already paid for, and
-        // its notebook entries are standing (the `finally` below abandons a
-        // turn only when the performer was never asked). Keeping it lets
-        // Continue ask the performer again for free, instead of spending a
-        // second Director call to re-derive a direction that already exists.
-        rememberStandingDirection({
-            scene, turn: storedTurn, envelope: standingEnvelope,
-            performer: standingPerformer, autonomousSequence, asked: askedThePerformer,
-        });
         // The empty-response retry chain already owns this turn's outcome, and
         // this throw is the same generation reported a second time. Declaring
         // the pass failed here would put "Direction paused" over a scene that
@@ -1067,22 +769,6 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // This covers the takes that never reached the performer. The other
         // side of that line — the performer WAS asked, and the user then
         // stopped the reveal before its first visible character — is covered
-        // by `abandonCancelledTurn`, called from finalizeRunMessage's
-        // nothing-accepted exits. Deliberately not merged into one check:
-        // this one keys on "was the performer asked", which must stay true
-        // for a generation failure so failEmptyVisibleRun can re-run the same
-        // turn against the same notes, and that one keys on the user having
-        // cancelled, which failEmptyVisibleRun never claims.
-        if (storedTurn !== null && !askedThePerformer) {
-            const marked = abandonDirectorTurn(scene.timelineId, { sceneId: scene.id, turn: storedTurn });
-            if (marked) {
-                journal('notebook.abandoned', {
-                    passId: token.id,
-                    turn: storedTurn,
-                    entryCount: marked,
-                }, { correlationId: token.id, severity: 'warn', summary: `direction.notebook: turn ${storedTurn} produced nothing and is withheld` });
-            }
-        }
         // Normally already released the moment activeRun was assigned; this
         // covers every early return and throw.
         releaseDirectionLock(token);
@@ -1107,7 +793,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     // it is already sitting in there somewhere. `excludeFromHistory` — the
     // exact message OBJECT beginDirection posted, not a position — is
     // filtered out of the window this function slices, not out of
-    // context.chat itself, so it is read back into the Director's prompt
+    // context.chat itself, so it is read back into the Loom's prompt
     // exactly once, as `action` (CURRENT ACTION), rather than a second time
     // here (STORY SO FAR).
     //
@@ -1116,9 +802,9 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     // context.chat (generation wrote a message and then the pass still
     // failed), the user's own message is no longer last — the orphaned
     // response is. Dropping the tail there would strip the WRONG message: the
-    // action would stay in acceptedHistory (so the Director reads it twice —
+    // action would stay in acceptedHistory (so the Loom reads it twice —
     // once here, once as CURRENT ACTION), the orphaned response would be
-    // hidden from the Director entirely, and resolveVariableContext below
+    // hidden from the Loom entirely, and resolveVariableContext below
     // would score the action's text twice. Filtering by the object itself
     // finds the right entry regardless of what else has been appended since.
     //
@@ -1128,10 +814,10 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     const rawChat = context.chat || [];
     const effectiveChat = excludeFromHistory ? rawChat.filter((message) => message !== excludeFromHistory) : rawChat;
     // How many of the most recent messages ride along as raw prose, on top of
-    // the Director's own notebook (which now carries continuity via
-    // `[result]` entries) — user-settable, resolved from the active director
-    // recipe's `directorSnapshot` block rather than the old hardcoded 40. See
-    // resolveDirectorSnapshotHistoryDepth for the fallback rules.
+    // the Loom's own notebook (which now carries continuity via
+    // `[result]` entries) — user-settable, resolved from the active loom
+    // recipe's `loomSnapshot` block rather than the old hardcoded 40. See
+    // resolveLoomSnapshotHistoryDepth for the fallback rules.
     //
     // `effectiveChat.slice(-historyDepth)` is NOT safe at a depth of 0:
     // `-0 === 0` in JS, and `Array.prototype.slice(0)` returns the WHOLE
@@ -1140,7 +826,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     // only sliced when it is actually positive, which is what keeps a depth
     // of 0 meaning zero messages rather than silently reverting to
     // "everything".
-    const historyDepth = resolveDirectorSnapshotHistoryDepth();
+    const historyDepth = 12; // messages of accepted history carried in the snapshot (was the loom recipe's snapshot default)
     const sliceCount = Math.min(Math.max(historyDepth, 0), effectiveChat.length);
     const recentChat = sliceCount > 0 ? effectiveChat.slice(-sliceCount) : [];
     const history = recentChat.map((message, index) => ({
@@ -1149,7 +835,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         name: message.name || '',
         content: sanitizeDirectionText(message.extra?.remodelDirection?.acceptedText ?? message.mes ?? ''),
         // A transcript line that simply stops mid-sentence is exactly what made
-        // the Director re-issue a beat it had already been given: nothing in the
+        // the Loom re-issue a beat it had already been given: nothing in the
         // text said the line was cut rather than finished. Every interrupted
         // turn in the window is marked, not only the newest one, because a
         // truncated line two turns back is just as unreadable as a fresh one.
@@ -1159,7 +845,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     // thing in the chat is a performance the user cut into, and no performer
     // has spoken since. A later completed response answers the question by
     // existing, so only the LAST entry is consulted — an older interruption is
-    // history the Director already ruled on, and re-offering its unsaid
+    // history the Loom already ruled on, and re-offering its unsaid
     // remainder would invite the same beat to be replayed turns later.
     //
     // `effectiveChat`, so the user's own just-posted message (excluded from
@@ -1177,15 +863,13 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     } catch (error) {
         lore = { warning: String(error?.message || error) };
     }
-    const directorRef = normalizeRef(scene.liveDirection?.directorRef);
-    const director = directorRef && cast.find((member) => normalizeRef(member.ref || member)?.id === directorRef.id);
-    const performingCast = cast.filter((member) => !member.disabled && (!directorRef || normalizeRef(member.ref || member)?.id !== directorRef.id));
+    const performingCast = cast.filter((member) => !member.disabled);
     const activatedEntries = [...(lore.allActivatedEntries || [])];
     // Preview never rolls or mutates and never carries authorized Goal ids —
     // but retrieval (resolveVariableContext) scores against action/history/
     // activatedEntries, so it still gets the real ones: the same `action`
     // this function was called with (the composer draft when there is one —
-    // see previewDirectorPrompt), and the same history/activatedEntries just
+    // see previewLoomPrompt), and the same history/activatedEntries just
     // computed above. Only the write-adjacent authority (authorizedGoalIds)
     // is withheld; the retrieval inputs are identical to a real pass's.
     const mechanics = preview
@@ -1203,16 +887,6 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         currentAction: action,
         cast: performingCast
             .map((member) => ({ ref: member.ref || normalizeRef(member), label: member.label || member.name, description: member.description || '', personality: member.personality || '', scenario: member.scenario || '' })),
-        director: director ? {
-            ref: director.ref || directorRef,
-            label: director.label || director.name || directorRef.label,
-            description: director.description || '',
-            personality: director.personality || '',
-            scenario: director.scenario || '',
-            creatorNotes: director.creatorNotes || '',
-            systemPrompt: director.systemPrompt || '',
-            postHistoryInstructions: director.postHistoryInstructions || '',
-        } : null,
         narratorRef: scene.liveDirection?.narratorRef || null,
         persona,
         acceptedHistory: history,
@@ -1224,25 +898,8 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         // direction-sources.js takes data in and returns text and imports
         // nothing at all; a renderer that reached into context.chat for this
         // would end that, and with it the ability to assert the exact prose the
-        // Director reads from a plain fixture.
+        // Loom reads from a plain fixture.
         interruption: cutOffRecord ? { performer: String(cutOff.name || '').trim(), ...cutOffRecord } : null,
-        // The Director's own notebook, read back to its author.
-        //
-        // `readAllEntriesForOwner`, deliberately, NOT `readNarratorEntries`:
-        // the Director wrote the secrets and is the one reader they were
-        // always meant to reach. Only the Narrator is excluded, at a
-        // different funnel entirely (formatDirectorNotesPrompt).
-        //
-        // Built HERE, before requestDirection appends this turn's reply, so
-        // what the Director reads is strictly earlier turns — the memory,
-        // not a copy of the thing it is about to write.
-        //
-        // It is not rendered by describeSnapshot (which picks its fields
-        // explicitly, so a new snapshot field starts life unrendered rather
-        // than arriving in the prompt because someone added it upstream). It
-        // reaches the prompt only through the `directorNotebook` recipe
-        // source, which is director-mode only.
-        notebook: readAllEntriesForOwner(scene.timelineId, { sceneId: scene.id }),
         lore: { before: lore.worldInfoBefore || '', after: lore.worldInfoAfter || '', examples: lore.worldInfoExamples || [], depth: lore.worldInfoDepth || [] },
         mechanics,
         // Receipts carry before/after snapshots of whole records, which is how
@@ -1271,307 +928,9 @@ function scrubReceipt(receipt) {
 }
 
 /**
- * Compiles the Director's prompt from a snapshot: resolve the active director
- * recipe, build its sources, compile it. The SAME steps a real request takes
- * (requestDirection below) and the ONLY place they run — the Prompt
- * Studio preview calls this too (see previewDirectorPrompt), so the preview
- * can never drift from what actually gets sent. A recipe that compiles to
- * nothing (emptied, or missing its protocol block) falls back to a minimal
- * built-in prompt rather than silently producing an unusable request.
- */
-function compileDirectorPrompt(snapshot, { mechanicsEnabled = false, trace = false } = {}) {
-    const recipe = resolveDirectorRecipe();
-    const sources = buildDirectionSources(snapshot, { mechanicsEnabled });
-    let prompt;
-    // Per-block provenance for the preview panel. Asking for it cannot change
-    // `messages` (see compilePromptRecipe's own note), so the real send path
-    // below is compiling the identical prompt whether or not this is on.
-    let trail = [];
-    if (recipe) {
-        // The Director's macros travel as outlets: resolvePromptOutlets reads
-        // one map under both {{outlet::x}} and {{director::x}}. This is what
-        // lets an owner rewrite the protocol's prose while the tags, the state
-        // fence and the capability list keep expanding from the code.
-        const compiled = compilePromptRecipe(recipe, sources, {
-            trace,
-            outlets: buildDirectorMacros(snapshot, { mechanicsEnabled }),
-        });
-        prompt = compiled.messages;
-        trail = compiled.trace || [];
-    }
-    // Captured before any fallback swap: this is what the user's OWN recipe
-    // compiled to, which is the number a diagnostic needs — after the swap
-    // below, prompt.length would only ever report the fallback's own size.
-    const compiledCount = prompt?.length || 0;
-    // WHAT COUNTS AS A USABLE PROMPT CHANGED WITH THE PROTOCOL BLOCK.
-    //
-    // This used to ask whether the compiled text still contained the first 40
-    // characters of the built-in protocol. That was a fair proxy while the
-    // protocol was a locked source producing one fixed string; it is wrong now
-    // that it is an editable message, because an owner rewriting its opening
-    // sentence — the entire point of making it editable — would have silently
-    // been switched onto the built-in fallback and never told.
-    //
-    // The real question is whether the contract the PARSER depends on survived
-    // the owner's edits: the four tags director-reply.js matches, and the
-    // state fence. Prose is theirs; those are not negotiable, and a prompt
-    // missing them produces a Director whose reply this codebase cannot read.
-    const compiledText = (prompt || []).map((message) => message.content).join('\n');
-    const hasTags = ENTRY_TYPES.every((type) => compiledText.includes(`[${type}]`));
-    const hasFence = compiledText.includes('```state');
-    const usedFallback = !prompt?.length;
-    if (!usedFallback && !(hasTags && hasFence)) {
-        // Warn and send, rather than refuse. It is the owner's recipe and they
-        // may be deliberately running a Director that never writes state — but
-        // a notebook silently collapsing into one untagged blob is the exact
-        // failure this codebase already shipped once, so it says so loudly in
-        // the journal and the preview rather than only in the result.
-        journal('recipe.contract-missing', {
-            missingTags: !hasTags,
-            missingFence: !hasFence,
-        }, {
-            severity: 'warn',
-            summary: `direction.recipe: the compiled prompt is missing ${[!hasTags && 'the notebook tags', !hasFence && 'the state fence'].filter(Boolean).join(' and ')}`,
-        });
-    }
-    if (usedFallback) {
-        // The notebook is resolved at the DECLARED default depth here, read
-        // from the source definition rather than written out again — the
-        // fallback has no recipe and therefore no block settings to consult,
-        // and a second copy of the number would be one more place for the
-        // vocabulary to drift. A Director whose recipe is broken still gets
-        // its memory; losing that as well as the user's style block would
-        // make the fallback worse than it needs to be.
-        const notebook = sources.directorNotebook({ depth: declaredDirectorNotebookDepth() });
-        // World Info as one block here, not four. The fallback exists for a
-        // recipe that compiled to nothing, so it has no block order to honour
-        // — but it still must not be the path where the Director quietly
-        // loses its world information, which is exactly what would happen if
-        // this list kept reading only the sources it read before the split.
-        const lore = describeAllLore(snapshot?.lore);
-        prompt = [
-            { role: 'system', content: sources.directionProtocol },
-            ...(lore ? [{ role: 'system', content: lore }] : []),
-            ...(sources.directorCard ? [{ role: 'system', content: sources.directorCard }] : []),
-            ...(sources.mechanicsSkill ? [{ role: 'system', content: sources.mechanicsSkill }] : []),
-            ...(notebook ? [{ role: 'system', content: notebook }] : []),
-            { role: 'user', content: sources.directorSnapshot },
-        ];
-        // The trace describes the user's recipe, and the recipe is no longer
-        // what is being sent. Dropping it is what keeps the by-source panel
-        // from captioning the built-in fallback with the blocks it replaced.
-        trail = [];
-    }
-    return { recipe, sources, prompt, usedFallback, compiledCount, trace: trail, contractOk: hasTags && hasFence, hasTags, hasFence };
-}
-
-/** The `directorNotebook` source's own declared default depth — one place. */
-function declaredDirectorNotebookDepth() {
-    return PROMPT_SOURCE_DEFINITIONS.director
-        .find((source) => source.key === 'directorNotebook')?.settings?.depth?.default;
-}
-
-/**
- * How many of the most recent chat messages `buildDirectionSnapshot` slices
- * into the Director's own snapshot — the resolved `history` setting on the
- * active director recipe's `directorSnapshot` block.
- *
- * Resolved HERE, not read out of a compiled recipe: buildDirectionSnapshot
- * runs BEFORE compileDirectorPrompt/compilePromptRecipe — the snapshot this
- * function feeds is the very input buildDirectionSources renders into
- * `sources`, which is what the compile then reads — so by the time a recipe's
- * blocks are normally consulted for a per-block setting, the slice this one
- * governs has already happened. This is the one place in the pass that CAN
- * read it.
- *
- * No active director recipe, no `directorSnapshot` block on it, and a block
- * switched off are all the same case for this function: the setting is not in
- * effect for this pass. All three fall back to the source definition's own
- * declared default — never to the old hardcoded 40 — and the whole function is
- * wrapped so a lookup failure (a corrupt or mid-migration recipe store) can
- * never throw out of a direction pass; it degrades to the same default.
- *
- * `normalizeBlock` (prompt-studio-store.js) has already coerced, clamped and
- * defaulted this value into `block.settings.history` by the time any recipe
- * reaches here — see `coerceSettingValue`'s own comment on the
- * `Number(null) === 0` trap it exists to close — so this is a lookup, not a
- * second coercion site. Checked with `Number.isFinite`, not truthiness: a
- * user-set depth of 0 is a real value this must hand back as 0, not treat as
- * absent and fall through to the default because 0 is falsy.
- *
- * `recipe` defaults to the live lookup so the real call site
- * (buildDirectionSnapshot) never has to pass it — but it is still a real
- * parameter, not a hardcoded read, so a test can hand this an explicit `null`
- * or a hand-built recipe shape to exercise every fallback branch (no recipe,
- * no block, a disabled block) directly, without needing to contort the actual
- * prompt-studio store into an unreachable state to prove they hold.
- */
-export function resolveDirectorSnapshotHistoryDepth(recipe = resolveDirectorRecipe()) {
-    const declaredDefault = PROMPT_SOURCE_DEFINITIONS.director
-        .find((source) => source.key === 'directorSnapshot')?.settings?.history?.default ?? 12;
-    try {
-        const block = recipe?.blocks?.find((entry) => entry.kind === 'source' && entry.sourceKey === 'directorSnapshot');
-        if (!block || block.enabled === false) return declaredDefault;
-        const value = block.settings?.history;
-        return Number.isFinite(value) ? value : declaredDefault;
-    } catch {
-        return declaredDefault;
-    }
-}
-
-/**
- * Preview-only: compiles the Director's prompt for the current Scene without
- * sending a request, rolling, or mutating anything (see buildDirectionSnapshot's
- * `preview` flag). Shares compileDirectorPrompt with the real request path, so
- * the recipe resolution, buildDirectionSources call, and compilePromptRecipe
- * call are the exact same code a real direction pass runs — that part cannot
- * drift.
- *
- * One input cannot be made exact: Variables/Goals retrieval
- * (resolveVariableContext, inside buildMechanicalSnapshot) is scored against
- * the message the user has not sent yet. This passes the real accepted
- * history, the real activated lore entries, and the current composer draft as
- * the action — the best available stand-in — but the retrieved set can still
- * differ from a real pass once the user's actual next action is known.
- *
- * Also returns `trace`: one record per enabled recipe block, saying which of
- * the compiled messages it merged into. Requesting it cannot change `prompt`
- * — see compilePromptRecipe — which is what lets the preview show the merge
- * without spending the parity that makes the preview worth showing. Empty when
- * `usedFallback`, because then the recipe's blocks are not what is being sent.
- */
-export async function previewDirectorPrompt(scene) {
-    if (!scene) return { prompt: [], recipe: null, snapshot: null, usedFallback: false, trace: [] };
-    const action = hooks.getComposerDraft() || '[preview only: retrieve state; do not mutate or roll]';
-    const snapshot = await buildDirectionSnapshot(scene, action, [], { preview: true });
-    const profile = getMechanicsProfile();
-    const { recipe, prompt, usedFallback, trace, contractOk, hasTags, hasFence } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled, trace: true });
-    // contractOk/hasTags/hasFence travel to the preview so the panel can say
-    // "your recipe compiles, but the Director's reply will not parse" — the
-    // one thing an owner rewriting the protocol most needs to be told.
-    return { prompt, recipe, snapshot, usedFallback, trace, contractOk, hasTags, hasFence };
-}
-
-/**
- * Ask the Director for this turn's notebook, streaming.
- *
- * WHY STREAMING, AND WHY NO SCHEMA: core decides streaming in one line
- * (`openai.js`, `createGenerationParameters`) — `settings.stream_openai && type
- * !== 'quiet'` — and generateRaw/generateRawData hard-code the type to 'quiet'.
- * A schema-enforced call is therefore structurally unstreamable, and worse,
- * generateRawData returns `extractJsonFromData(...)` when a jsonSchema is
- * supplied and throws the provider's response object away — the only place
- * reasoning lives. Dropping the schema is what buys both back at once: the
- * Director's text arrives as it is written, and `state.reasoning` comes with
- * it instead of having to be stolen off the wire.
- *
- * Measured, which is why this is not a preference: one recorded pass spent
- * 101s producing 11,795 characters of reasoning and a 100-character
- * instruction, because reasoning and the envelope shared one token allowance.
- * The reply is free-form now; only the trailing state fence is machine-read.
- *
- * @returns {Promise<{entries: Array<{type: string, text: string}>,
- *   state: {requests: object[], flow: {continue: boolean}}, reasoning: string,
- *   raw: string, tailFound: boolean, tailError: string, interrupted: boolean,
- *   streamed: boolean}>}
- */
-async function requestDirection(scene, snapshot, { onChunk, signal } = {}) {
-    const profile = getMechanicsProfile();
-    const { recipe, prompt, usedFallback, compiledCount, trace: trail } = compileDirectorPrompt(snapshot, { mechanicsEnabled: profile.enabled, trace: true });
-    captureDirectorPromptLog(recipe?.name, trail);
-    if (usedFallback) {
-        journal('recipe.fallback', { hadRecipe: Boolean(recipe), messages: compiledCount }, { severity: 'warn' });
-    }
-    // Held outside the try so an abort mid-reply keeps whatever arrived: the
-    // transport may either return early having seen the signal, or throw from
-    // the open fetch, and only one of those hands the text back.
-    let raw = '';
-    let reasoning = '';
-    let streamed = false;
-    const collect = (update) => {
-        raw = update.text;
-        reasoning = update.reasoning;
-        onChunk?.(update);
-    };
-    if (testAdapters?.requestDirection) {
-        const answer = await testAdapters.requestDirection({ scene, snapshot, prompt });
-        raw = String(typeof answer === 'string' ? answer : answer?.text || '');
-        reasoning = String(answer?.reasoning || '');
-    } else {
-        try {
-            const result = await streamChatPrompt({ prompt, onChunk: collect, signal });
-            raw = result.text;
-            reasoning = result.reasoning;
-            streamed = result.streamed;
-        } catch (error) {
-            // A cancelled request is not a failure to report — the user
-            // cancelled it. Anything else still is.
-            if (!signal?.aborted) throw error;
-        }
-    }
-    lastDirectorReasoning = String(reasoning || '').trim();
-    const interrupted = Boolean(signal?.aborted);
-    raw = String(raw || '').trim();
-    if (!raw && !interrupted) {
-        throw new StructuredReplyError(
-            'empty',
-            'The Game Director returned nothing at all. This is almost always the token budget: reasoning is paid for out of the same allowance as the reply, so a thinking model can exhaust it before writing a single character. Reduce the model\'s reasoning effort, or raise its response length on this connection.',
-        );
-    }
-    const reply = parseDirectorReply(raw);
-    return {
-        entries: reply.entries,
-        // An interrupted reply is never read for state. Its tail either never
-        // arrived or arrived half-written, and a fence that happens to parse
-        // out of a severed reply would apply changes the Director had not
-        // finished deciding.
-        state: interrupted ? { requests: [], flow: { continue: false } } : reply.state,
-        tailFound: interrupted ? false : reply.tailFound,
-        tailError: interrupted ? '' : reply.tailError,
-        reasoning: lastDirectorReasoning,
-        raw,
-        interrupted,
-        streamed,
-    };
-}
-
-/**
- * The envelope the rest of the pass runs on, built by code from what the
- * Director actually said.
- *
- * Everything here that is not the Director's judgment is Remodel's: the
- * protocol string is a local constant, and the direction id is generated. Both
- * used to be schema fields the model filled in, and both were observed being
- * filled in wrongly — one provider returned the literal `"dir-001"` for every
- * pass in a session, which made persistDirectionRecord's id-keyed log replace
- * its single record over and over and let one run's completion guards match
- * another run's id.
- *
- * `flow` is the one place the shapes differ. The reply carries a single
- * `continue`; the pipeline downstream reads `continueAfter`/`hardPauseAfter`.
- * Not continuing IS the scene waiting for the user, so the second field is
- * derived rather than invented — and with no tail at all both land on "wait",
- * which is the direction design §3 chose to fail in.
- */
-function buildDirectionEnvelope(reply, turn) {
-    const requests = getMechanicsProfile().enabled ? usableRequests(reply.state.requests) : [];
-    return {
-        protocol: DIRECTION_PROTOCOL,
-        directionId: createId('direction'),
-        notebookTurn: turn,
-        reasoning: reply.reasoning || '',
-        flow: {
-            continueAfter: reply.state.flow.continue === true,
-            hardPauseAfter: reply.state.flow.continue !== true,
-        },
-        requests,
-    };
-}
-
-/**
  * Requests the mechanics layer can at least read.
  *
- * `parseDirectorReply` keeps anything object-typed, which includes arrays —
+ * `parseLoomReply` keeps anything object-typed, which includes arrays —
  * and `validateMechanicsRequest` rejects the WHOLE batch when one entry is not
  * a plain object. Dropping the unreadable ones here is what stops a single
  * malformed sibling from voiding four valid requests. It is not containment:
@@ -1590,7 +949,7 @@ function usableRequests(requests) {
  * now been bitten by that exact coercion three times — `clampNumber` in
  * variables-store.js, `coerceSettingValue` in prompt-studio-store.js, and here
  * — so it gets one answer that every caller shares. Turn 0 is rejected on
- * purpose: `appendDirectorEntries` uses it as its own "unknown" fallback, and
+ * purpose: `appendLoomEntries` uses it as its own "unknown" fallback, and
  * real turns start at 1.
  */
 function toTurnNumber(value) {
@@ -1599,52 +958,13 @@ function toTurnNumber(value) {
     return Number.isFinite(turn) && turn > 0 ? turn : null;
 }
 
-/** The next turn number for this Scene's notebook: one past the highest stored. */
-function nextNotebookTurn(scene) {
-    return readAllEntriesForOwner(scene.timelineId, { sceneId: scene.id })
-        .reduce((highest, entry) => Math.max(highest, Number(entry.turn) || 0), 0) + 1;
+/** The next turn number for this Scene: one past the directed responses so far.
+ * A plain per-turn counter — the Loom keeps the durable record. */
+function nextNotebookTurn() {
+    const chat = getContext().chat || [];
+    return chat.filter((message) => message && !message.is_user).length + 1;
 }
 
-/**
- * One turn's stored entries, secrets included.
- *
- * `readAllEntriesForOwner`, deliberately, not `readNarratorEntries`: these
- * callers ask what the Director wrote, not what the performer may read, and a
- * turn that consists only of secrets is still a turn that happened.
- */
-function notebookTurnEntries(scene, turn) {
-    const wanted = toTurnNumber(turn);
-    if (!scene?.timelineId || wanted === null) return [];
-    return readAllEntriesForOwner(scene.timelineId, { sceneId: scene.id })
-        .filter((entry) => Number(entry.turn) === wanted);
-}
-
-/** Erase one turn from the notebook. Used only when its take is discarded. */
-function discardNotebookTurn(scene, turn) {
-    const entries = notebookTurnEntries(scene, turn);
-    if (!entries.length) return 0;
-    for (const entry of entries) deleteDirectorEntry(scene.timelineId, entry.id);
-    journal('notebook.discarded', { turn: toTurnNumber(turn), entryCount: entries.length }, { severity: 'warn', summary: `direction.notebook: turn ${turn} discarded with its take` });
-    return entries.length;
-}
-
-/**
- * Mark where an interrupted reply was cut: the LAST entry, and only that one.
- * Every earlier entry was closed by a newline the Director did write.
- *
- * This is the owner's record of what was severed, and nothing else. Whether
- * the TAKE counts — whether the Narrator ever sees any of it — is a separate
- * question with a separate answer, decided by beginDirection's `finally` on
- * what the pass actually produced rather than on how it ended. An interrupted
- * pass is one way to produce nothing; a pass that stored entries and then
- * threw is another, and keying the withholding here would only have caught
- * the first.
- */
-function markSeveredEntry(entries, interrupted) {
-    const list = Array.isArray(entries) ? entries : [];
-    if (!interrupted || !list.length) return list;
-    return list.map((entry, index) => (index === list.length - 1 ? { ...entry, incomplete: true } : entry));
-}
 
 /**
  * How many times a performer that renders nothing is asked again before the
@@ -1658,7 +978,7 @@ function markSeveredEntry(entries, interrupted) {
  * to ask again rather than to surface a failure the user can only answer by
  * pressing Retry themselves.
  *
- * The Director is NOT re-run: the direction was valid, only its rendering
+ * The Loom is NOT re-run: the direction was valid, only its rendering
  * failed, and re-directing would cost a second long call and could change the
  * direction the user is waiting on.
  */
@@ -1691,16 +1011,17 @@ function ownedByEmptyRetry(directionId) {
 }
 
 async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0 }) {
-    const director = resolveDirector(scene);
-    persistDirectionRecord(scene, envelope, performer, director);
     activeRun = {
         directionId: envelope.directionId,
         sceneId: scene.id,
         timelineId: scene.timelineId,
         messageId: null,
         performer,
-        director,
         envelope,
+        phase: 'narrator',
+        narratorDraft: '',
+        narratorGenerationFinished: false,
+        loomController: null,
         rawBufferedText: '',
         acceptedVisibleText: '',
         rawOffset: 0,
@@ -1728,50 +1049,34 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     // be able to submit over a revealing response.
     releaseDirectionLock(token);
     notifyState();
-    // The Director's reasoning — its raw thinking tokens — is the primary
+    // The Loom's reasoning — its raw thinking tokens — is the primary
     // creative bridge to the Narrator. When reasoning is available, it replaces
     // notebook entries as the Narrator's creative channel: richer, unfiltered,
-    // and free of the tagged-journal format that contaminated prose. When no
-    // reasoning is available (non-thinking models), fall back to the notebook.
     // The Narrator generates natively — its full configured prompt (system
     // prompt, card, persona, world info, author's notes, examples, history) —
-    // with the direction injected here into the roleplay recipe's Director's
-    // Notes slot, so it rides the real prompt rather than a stripped hand-built
-    // one. The injected direction is the archivist's structured state (what is
-    // established, what has already happened) plus the Director's own direction
-    // (its reasoning when the model exposes a reasoning channel, else the
-    // notebook).
+    // with the Loom's readable Archive state injected here into the roleplay
+    // recipe's Loom Context slot, so it rides the real prompt rather than a
+    // stripped hand-built one.
     const archivistState = buildNarratorArchivistSections(scene.timelineId, scene.id);
-    const reasoningBridge = frameDirectorReasoning(envelope.reasoning);
-    const directorDirection = reasoningBridge || formatDirectorNotesPrompt(scene);
-    const injection = buildDirectionInjection({ archivistState, directorDirection });
+    const injection = buildDirectionInjection({ archivistState });
     const injectionContext = getContext();
     const setExt = typeof injectionContext.setExtensionPrompt === 'function' ? injectionContext.setExtensionPrompt.bind(injectionContext) : null;
-    let injectionRouted;
-    if (isSoloMode(scene)) {
-        // Solo mode's grounding (append-only + anti-echo + archivist state) MUST
-        // reach the Narrator regardless of the recipe. setNativePromptContent
-        // silently drops the injection when the roleplay recipe has no enabled
-        // "Director's Notes" block (setRemodelNativePromptContent returns false),
-        // which left Solo turns running on the raw card alone — the model echoed
-        // its card instructions and had no archivist grounding. Inject through
-        // the guaranteed core extension-prompt API instead: a SYSTEM note
-        // in-chat at a shallow depth (extension_prompt_types.IN_CHAT = 1,
-        // extension_prompt_roles.SYSTEM = 0), close to the generation point.
-        if (setExt) setExt('REMODEL_SOLO_DIRECTION', injection, 1, 1, false, 0);
-        hooks.setNativePromptContent('directorNotes', '');
-        injectionRouted = setExt ? 'extension-prompt' : 'unavailable';
-    } else {
-        if (setExt) setExt('REMODEL_SOLO_DIRECTION', '', 1, 1, false, 0);
-        injectionRouted = hooks.setNativePromptContent('directorNotes', injection) ? 'recipe-block' : 'unrouted';
-    }
+    // The Narrator's grounding (append-only + anti-echo + the Loom's Archive
+    // state) MUST reach it regardless of the recipe. setNativePromptContent
+    // silently drops the injection when the roleplay recipe has no enabled
+    // "Loom Context" block, which would leave a turn running on the raw card
+    // alone — the model echoing its card instructions with no grounding. Inject
+    // through the guaranteed core extension-prompt API: a SYSTEM note in-chat at
+    // a shallow depth (extension_prompt_types.IN_CHAT = 1,
+    // extension_prompt_roles.SYSTEM = 0), close to the generation point.
+    if (setExt) setExt('REMODEL_NARRATOR_CONTEXT', injection, 1, 1, false, 0);
+    hooks.setNativePromptContent('loomContext', '');
+    const injectionRouted = setExt ? 'extension-prompt' : 'unavailable';
     journal('notes.bridge', {
         directionId: envelope.directionId,
-        path: reasoningBridge ? 'reasoning' : 'notebook',
         routed: injectionRouted,
         injectionChars: injection.length,
         hasArchivist: Boolean(String(archivistState || '').trim()),
-        reasoningLength: (envelope.reasoning || '').length,
     }, { correlationId: envelope.directionId });
     // The user message was inserted explicitly above. Native normal
     // generation also reads #send_textarea and would send any stale draft a
@@ -1786,6 +1091,10 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     const generationStartedAt = Date.now();
     try {
         const context = getContext();
+        const narratorProfileId = scene.generationProfileIds?.narrator;
+        if (narratorProfileId) {
+            await hooks.activateConnectionProfile(narratorProfileId);
+        }
         // force_chid is read by generateGroupWrapper as `typeof … == 'number'`,
         // and NaN passes that test — a member with no resolvable index would
         // activate character NaN rather than falling back. Refuse instead.
@@ -1800,6 +1109,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             nativeIndex: performer.characterId,
             transport: context.groupId ? 'group' : 'solo',
             pacing: activeRun.pacing,
+            connectionProfileId: narratorProfileId || null,
         }, { correlationId: envelope.directionId });
         if (testAdapters?.generatePerformer) {
             await testAdapters.generatePerformer({ scene, envelope, performer, options, context });
@@ -1808,7 +1118,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             // Generate(). In a native group that function conditionally enters
             // the group wrapper; if core still considers a preceding group
             // operation active, it silently falls through as a solo request and
-            // can return after only /api/ping. The Director has already selected
+            // can return after only /api/ping. The Loom has already selected
             // one validated cast member, so invoke the real group boundary
             // explicitly and force that member.
             const idleDeadline = Date.now() + 5000;
@@ -1819,7 +1129,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             if (is_group_generating) {
                 throw new Error('The native group generator is still busy. Try Direction again.');
             }
-            // Re-checked here as well as before the Director call: the Director
+            // Re-checked here as well as before the Loom call: the Loom
             // round-trip takes many seconds, and the connection can drop inside
             // that window.
             const lateBlock = describeNativeGenerationBlock();
@@ -1847,10 +1157,11 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             stillOwned: activeRun?.directionId === envelope.directionId,
         }, { correlationId: envelope.directionId });
         if (activeRun?.directionId === envelope.directionId) {
-            activeRun.generationFinished = true;
-            activeRun.generationSettled = true;
-            scheduleReveal(0);
+            activeRun.narratorGenerationFinished = true;
         }
+    }
+    if (activeRun?.directionId === envelope.directionId) {
+        await beginLoomVisibleStream(activeRun, scene);
     }
     return true;
 }
@@ -1877,6 +1188,10 @@ function acceptedProse(run) {
 function acceptNativeBuffer(text) {
     if (!activeRun) return;
     activeRun.rawBufferedText = String(text ?? '');
+    // The native Narrator is private source material. Its cumulative stream is
+    // collected at provider speed and handed to the Loom whole; it never owns
+    // the paced visible offset.
+    if (activeRun.phase === 'narrator') return;
     // Streaming fills our buffer and nothing else. We used to re-assert the
     // accepted fragment into the native message on the next task after every
     // token, which meant racing core's own streaming writer for ownership of
@@ -1889,6 +1204,73 @@ function acceptNativeBuffer(text) {
     // stopped — and recoverLiveDirectionMessages sanitizes any message that
     // still carries markers if the browser dies mid-generation.
     scheduleReveal(0);
+}
+
+/** Move one finished private Narrator draft into the only visible generation:
+ * the Loom's cumulative final-prose stream. */
+async function beginLoomVisibleStream(run, scene) {
+    if (activeRun !== run) return false;
+    const message = getContext().chat?.[run.messageId];
+    const draft = stripEchoedScaffolding(
+        sanitizeDirectionText(run.rawBufferedText || message?.mes || ''),
+        run.performer?.label || '',
+    );
+    if (!draft) {
+        run.generationFinished = true;
+        run.generationSettled = true;
+        await failEmptyVisibleRun(run);
+        return false;
+    }
+
+    run.narratorDraft = draft;
+    run.phase = 'loom';
+    run.rawBufferedText = '';
+    run.acceptedVisibleText = '';
+    run.rawOffset = 0;
+    run.lastBreathOffset = 0;
+    run.generationFinished = false;
+    run.generationSettled = false;
+    run.state = 'Speaking';
+    run.openingLabel = '';
+    run.completing = false;
+    run.loomController = new AbortController();
+
+    // The native row is only a slot reservation. Remove the private draft from
+    // it before the Loom request begins so a crash or unrelated re-render can
+    // never expose or persist the wrong version.
+    if (message && !message.is_user) {
+        message.mes = '';
+        if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)) message.swipes[message.swipe_id] = '';
+    }
+    notifyState();
+
+    const snapshot = await __buildLoomSnapshot({ id: run.sceneId, timelineId: run.timelineId });
+    const token = { controller: run.loomController };
+    const result = await runLoomReconciliation({
+        scene: { ...scene, id: run.sceneId, timelineId: run.timelineId },
+        snapshot,
+        draft,
+        draftReasoning: narratorReasoning(run),
+        token,
+        deferRequests: true,
+        onChunk: ({ text }) => {
+            if (activeRun !== run || run.loomController.signal.aborted) return;
+            run.rawBufferedText = String(text || '');
+            scheduleReveal(0);
+        },
+    });
+    if (activeRun !== run || run.loomController.signal.aborted || result?.aborted) return false;
+
+    // A non-streaming provider, or a legacy swap-only recipe, arrives here in
+    // one piece. The same reveal path handles it; there is still only one
+    // canonical buffer and one interruption offset.
+    run.rawBufferedText = String(result?.committedProse || draft);
+    run.envelope.mechanics.pendingRequests = [...(result?.requests || [])];
+    if (result?.flow) run.envelope.flow = result.flow;
+    run.generationFinished = true;
+    run.generationSettled = true;
+    scheduleReveal(0);
+    return true;
 }
 
 function scheduleReveal(delay = 50) {
@@ -2036,94 +1418,105 @@ function executeDirectionRequests(requests, context) {
 }
 
 /**
+ * The mechanics snapshot (advertised Variables/Goals + address book) the editor
+ * resolves its requests against, without running a full turn. Exported for
+ * editor-mode wiring and tests.
+ */
+export async function __buildLoomSnapshot(scene) {
+    const mechanics = await buildMechanicalSnapshot(scene, '', [], null, [], {});
+    return { mechanics };
+}
+
+/**
+ * Loom mode — reconcile the Narrator's DRAFT: build
+ * the Loom prompt (draft + reasoning + readable narrative state + the
+ * mechanical board WITH numbers), transport it, parse the committed prose +
+ * state fence, and execute the requests against the address book. Returns the
+ * committed prose to post. Never throws — a failure falls back to the draft
+ * unchanged. Dice inside goal.reach are code-rolled by the mechanics layer.
+ */
+export async function runLoomReconciliation({
+    scene, snapshot, draft, draftReasoning = '', token = null, onChunk = null, deferRequests = false,
+}) {
+    const narrativeState = [
+        buildNarratorArchivistSections(scene.timelineId, scene.id),
+        buildGoalObjectives(scene.id),
+    ].filter((part) => String(part || '').trim()).join('\n\n');
+    let mechanicsSkill = '';
+    if (snapshot?.mechanics && getMechanicsProfile().enabled) {
+        try { mechanicsSkill = buildLoomContext({ mechanics: snapshot.mechanics }, { mechanicsEnabled: true }).mechanicsSkill || ''; } catch { mechanicsSkill = ''; }
+    }
+    const sources = buildLoomRecipeSources({ draft, draftReasoning, narrativeState, mechanicsSkill });
+    const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
+    const compiled = compilePromptRecipe(recipe, sources, { trace: true });
+    const prompt = compiled.messages.length
+        ? compiled.messages
+        : buildLoomPrompt({ draft, draftReasoning, narrativeState, mechanicsSkill });
+    if (compiled.messages.length) captureLoomPromptLog(recipe?.name, compiled.messages);
+    let raw = '';
+    try {
+        if (testAdapters?.loomReconciliation) {
+            let emitted = false;
+            raw = String(await testAdapters.loomReconciliation({
+                scene,
+                draft,
+                prompt,
+                signal: token?.controller?.signal,
+                onChunk: (value) => {
+                    emitted = true;
+                    onChunk?.({ text: readLoomProse(String(value || '')), reasoning: '' });
+                },
+            }) || '');
+            if (!emitted) onChunk?.({ text: readLoomProse(raw, { final: true }), reasoning: '' });
+        } else if (testAdapters) {
+            return { committedProse: draft, result: null }; // opt-in for tests
+        } else {
+            const out = await streamChatPrompt({
+                prompt,
+                signal: token?.controller?.signal,
+                profileId: scene.generationProfileIds?.loom || undefined,
+                onChunk: ({ text, reasoning }) => onChunk?.({ text: readLoomProse(text), reasoning }),
+            });
+            raw = String(out?.text || '');
+        }
+    } catch (error) {
+        journal('loom.failed', { phase: 'generate', error: String(error?.message || error) }, { severity: 'warn' });
+        return { committedProse: draft, result: null };
+    }
+    // Preserve-and-patch: the draft is canonical. The Loom only names the
+    // exact span(s) a roll changed; code applies them. No swaps → draft stands.
+    if (token?.controller?.signal?.aborted) return { committedProse: '', requests: [], result: null, flow: null, aborted: true };
+    const { prose, swaps, requests, flow } = parseLoomReply(raw);
+    // Full-prose replies are the v12 contract. Preserve-and-patch remains a
+    // compatibility fallback for owner-authored recipes using the old fence.
+    const committedProse = prose || applySwaps(draft, swaps).prose;
+    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow };
+    try {
+        const result = executeDirectionRequests(requests, {
+            scene: { id: scene.id, timelineId: scene.timelineId },
+            addressBook: snapshot?.mechanics?.addressBook,
+            variableRefs: snapshot?.mechanics?.variableRefs,
+            goalRefs: snapshot?.mechanics?.goalRefs,
+            authorizedGoalIds: [],
+        });
+        journal('loom', { requestCount: requests.length, ok: result.ok, patched: committedProse !== draft }, { summary: 'Loom reconciled and recorded the turn' });
+        return { committedProse, requests, result, flow };
+    } catch (error) {
+        journal('loom.failed', { phase: 'apply', error: String(error?.message || error) }, { severity: 'warn' });
+        return { committedProse, requests, result: null, flow };
+    }
+}
+
+/**
  * The Narrator's own thinking for this turn — the intent channel Pass 2 reads.
  * Native generation records a reasoning model's hidden thinking on
- * message.extra.reasoning; the Director's envelope reasoning is the legacy
- * fallback (empty in solo mode). Empty here means the model produced no
+ * message.extra.reasoning; the Loom's envelope reasoning is the legacy
+ * fallback (empty in Loom mode). Empty here means the model produced no
  * reasoning at all, which the reasoning gate reports.
  */
 function narratorReasoning(run) {
     const message = getContext().chat?.[run.messageId];
     return String(message?.extra?.reasoning || run.envelope?.reasoning || '').trim();
-}
-
-/**
- * Pass 2 — the Archivist. Read the prose the Narrator just delivered plus its
- * own reasoning (the intent channel) and record what happened as archivist
- * state, so the next turn's injection is grounded in it. Diagnostics only — a
- * failure here never touches the turn the user already read.
- */
-async function extractStateFromProse(run) {
-    const prose = acceptedProse(run);
-    if (!prose) return;
-    const reasoning = narratorReasoning(run);
-    // The reasoning gate: card-authored reasoning is how extraction knows what
-    // the narrating mind DECIDED changed, rather than inferring it from prose.
-    // An empty reasoning channel means a non-reasoning model (or thinking off) —
-    // extraction still runs on prose alone, but less accurately, and the user
-    // should be told to enable thinking or switch models. Recorded per scene so
-    // getLiveDirectionUiState can surface a warning in the toolbar.
-    reasoningAbsentByScene.set(String(run.sceneId), !reasoning);
-    if (!reasoning) {
-        journal('reasoning.absent', {
-            directionId: run.directionId,
-            remedy: 'The model returned no reasoning; extraction is running on prose alone (less accurate). Enable the connection\'s thinking/reasoning, or use a reasoning-capable model.',
-        }, { correlationId: run.directionId, severity: 'warn', summary: 'direction.reasoning: none returned — extraction degraded to prose-only' });
-    }
-    const currentState = buildNarratorArchivistSections(run.timelineId, run.sceneId);
-    // Advertise the Variables/Goals this turn already surfaced, so the extractor
-    // can record numeric/goal consequences too — reusing the Director's snapshot
-    // and address book rather than retrieving again.
-    let mechanicsSkill = '';
-    const mechanics = run.envelope?.mechanicsSnapshot || null;
-    if (mechanics && getMechanicsProfile().enabled) {
-        try {
-            mechanicsSkill = buildDirectionSources({ mechanics }, { mechanicsEnabled: true }).mechanicsSkill || '';
-        } catch { mechanicsSkill = ''; }
-    }
-    const prompt = buildExtractionPrompt({ prose, reasoning, currentState, mechanicsSkill });
-    let raw = '';
-    try {
-        if (testAdapters?.extractState) {
-            raw = String(await testAdapters.extractState({ run, prose, prompt }) || '');
-        } else if (testAdapters) {
-            // Test mode with no extraction stub: extraction is opt-in for tests
-            // (a test that cares provides extractState), so never fire the real
-            // transport here — it would pollute Director-prompt captures.
-            return;
-        } else {
-            // Pass 2 runs on the configured extraction profile when set (so a
-            // non-reasoning narrator can pair with a reasoning-capable
-            // extractor), else the active connection. See extraction-config.js.
-            raw = await runExtraction(prompt);
-        }
-    } catch (error) {
-        journal('extract.failed', { directionId: run.directionId, phase: 'generate', error: String(error?.message || error) }, { severity: 'warn', correlationId: run.directionId });
-        return;
-    }
-    const reply = parseDirectorReply(String(raw || '').trim());
-    const requests = reply?.state?.requests || [];
-    if (!requests.length) {
-        journal('extract.empty', { directionId: run.directionId }, { correlationId: run.directionId });
-        return;
-    }
-    try {
-        // executeDirectionRequests resolves Variable/Goal names against the
-        // address book (archivist requests carry no refs and pass straight
-        // through), so one call records both narrative and mechanical state.
-        const result = executeDirectionRequests(requests, {
-            scene: { id: run.sceneId, timelineId: run.timelineId },
-            directionId: run.directionId,
-            messageId: run.messageId,
-            addressBook: run.addressBook,
-            variableRefs: run.variableRefs,
-            goalRefs: run.goalRefs,
-            authorizedGoalIds: run.authorizedGoalIds,
-        });
-        journal('extract', { directionId: run.directionId, requestCount: requests.length, ok: result.ok, receipts: result.receipts?.length || 0, unresolved: result.unresolvedReasons?.length || 0 }, { correlationId: run.directionId, summary: 'Archivist recorded state from the narration' });
-    } catch (error) {
-        journal('extract.failed', { directionId: run.directionId, phase: 'apply', error: String(error?.message || error) }, { severity: 'warn', correlationId: run.directionId });
-    }
 }
 
 async function completeVisibleRun(run) {
@@ -2138,18 +1531,18 @@ async function completeVisibleRun(run) {
     // A run that reveals nothing is a failed response, not a finished one.
     // Treating it as complete wrote a blank Narrator row into the chat AND
     // chained autoplay off it, so one silent provider reply became a run of
-    // empty rows that each fed the next Director pass as accepted history.
+    // empty rows that each fed the next Loom pass as accepted history.
     if (!acceptedProse(run)) {
         await failEmptyVisibleRun(run);
         return;
     }
+    // Loom mode: the accepted Narrator text is a DRAFT. Run Loom reconciliation
+    // over it and commit its reconciled version instead — the draft is never
+    // stored (the reveal-hold that keeps the draft off screen is Task 7).
     await finalizeRunMessage(run, { state: 'complete' });
     run.acceptedComplete = true;
-    // Pass 2 (connection point 2): read the prose the user just received and
-    // record what happened into the archivist, so next turn's injection is
-    // grounded in it. Solo mode only — in Director mode the Director authors
-    // mechanics, and running both would double-author. Never breaks the turn.
-    if (isSoloMode(hooks.getActiveScene())) await extractStateFromProse(run);
+    // State recording is the Loom's job now (runLoomReconciliation above, in editor
+    // mode). The old solo Pass-2 extraction has been removed.
     run.autonomousSequence += 1;
     // A response landed, so any failure notice still on screen is describing a
     // turn that has since recovered. The empty-response retries are the case
@@ -2373,21 +1766,19 @@ async function interruptLiveDirection({ preserveForIntervention }) {
     }, { correlationId: run.directionId, severity: 'warn' });
     run.interrupted = true;
     run.holdReason = 'interrupt';
-    if (!run.generationSettled && ownsLiveDirectionGeneration()) {
+    if (run.phase === 'loom') {
+        try { run.loomController?.abort(); } catch { /* already aborted */ }
+    } else if (!run.narratorGenerationFinished && ownsLiveDirectionGeneration()) {
         getContext().stopGeneration?.();
-        await waitFor(() => run.generationSettled, 2200);
+        await waitFor(() => run.narratorGenerationFinished, 2200);
     }
-    // Solo mode: Stop CUTS OFF, it does not delete. The reveal lags the buffer
+    // Loom mode: Stop CUTS OFF, it does not delete. The reveal lags the buffer
     // for pacing, so at the moment of a Stop most of what the model generated
     // sits unrevealed in rawBufferedText — flush it into the accepted text so
     // every generated word is kept (losing it was the "everything vanishes on
     // Stop" bug). A run that generated nothing still has an empty buffer here,
-    // so finalizeRunMessage still deletes the truly-empty case. Director mode
+    // so finalizeRunMessage still deletes the truly-empty case. Loom mode
     // keeps its original discard-the-unrevealed-tail behaviour (and its tests).
-    if (isSoloMode(hooks.getActiveScene()) && run.rawBufferedText.length > run.rawOffset) {
-        run.acceptedVisibleText += run.rawBufferedText.slice(run.rawOffset);
-        run.rawOffset = run.rawBufferedText.length;
-    }
     await finalizeRunMessage(run, { state: preserveForIntervention ? 'interrupted' : 'stopped' });
     activeRun = null;
     notifyState();
@@ -2413,7 +1804,6 @@ async function finalizeRunMessage(run, { state }) {
             chatLength: context.chat?.length ?? null,
             reason: message ? 'the resolved message is the user line' : 'no message at the resolved id',
         }, { correlationId: run.directionId, severity: 'warn' });
-        abandonCancelledTurn(run);
         return;
     }
     const accepted = acceptedProse(run);
@@ -2430,7 +1820,6 @@ async function finalizeRunMessage(run, { state }) {
         }, { correlationId: run.directionId, severity: 'warn', summary: 'direction.finalize: deleted an empty interrupted message' });
         await context.deleteMessage(run.messageId);
         run.messageId = null;
-        abandonCancelledTurn(run);
         return;
     }
     // State changes land here, not at a marker in the prose the model wrote:
@@ -2450,7 +1839,7 @@ async function finalizeRunMessage(run, { state }) {
         // Still "discarded" from the VISIBLE message — the user never read it
         // and it never becomes prose. It is no longer destroyed: when this turn
         // was cut short, the same tail is kept on the record below as the
-        // performer's unspoken intention for the Director to rule on.
+        // performer's unspoken intention for the Loom to rule on.
         discardedLength: Math.max(0, run.rawBufferedText.length - run.rawOffset),
         interrupted: Boolean(run.interrupted),
         cutShort: Boolean(interruption),
@@ -2464,48 +1853,6 @@ async function finalizeRunMessage(run, { state }) {
     await context.saveChat();
 }
 
-/**
- * A take the USER cancelled that accepted nothing did not happen, so withhold
- * its notebook turn from the next one.
- *
- * beginDirection's `finally` already covers every take that never reached the
- * performer. This is the gap on the other side of that line: the Director
- * returns, its entries are stored, `askedThePerformer` is set, generation
- * begins — and the user presses Stop before the reveal emits a single
- * character. `finalizeRunMessage` then DELETES the message and returns before
- * `applyPendingRequests`, so no message and no state change survive. Without
- * this call, that turn's `[ruling]` and `[result]` entries were still
- * delivered to the Narrator on the next turn under "treat as settled fact",
- * with "Ruling — binding: " in front of them, describing prose that does not
- * exist in the chat. The withholding ruling's own words for that situation
- * are "a cancelled take produced no message and changed no state"; the branch
- * implemented it for a Stop during the Director stream and the opposite for a
- * Stop two seconds later, with nothing on screen distinguishing the two.
- *
- * Keyed on `run.interrupted`, which is what makes it disjoint from
- * `failEmptyVisibleRun`: that path deliberately does NOT set the flag (the
- * user did nothing, so recording an interruption would misreport the
- * failure), and it re-runs this SAME turn against these SAME notes. Withholding
- * there would make the retry generate with no direction at all.
- *
- * Called from both of `finalizeRunMessage`'s nothing-accepted exits rather
- * than only the delete-empty one, so a run whose message went missing
- * entirely is covered by construction instead of by remembering — the same
- * reasoning that moved the beginDirection check into a `finally`.
- */
-function abandonCancelledTurn(run) {
-    if (!run?.interrupted || !run.timelineId) return;
-    const turn = toTurnNumber(run.envelope?.notebookTurn);
-    if (turn === null) return;
-    const marked = abandonDirectorTurn(run.timelineId, { sceneId: run.sceneId, turn });
-    if (!marked) return;
-    journal('notebook.abandoned', {
-        directionId: run.directionId,
-        turn,
-        entryCount: marked,
-        reason: 'the user stopped this take before it produced a single visible character',
-    }, { correlationId: run.directionId, severity: 'warn', summary: `direction.notebook: turn ${turn} was cancelled and is withheld` });
-}
 
 /**
  * Apply the direction's mechanical requests exactly once, now that some
@@ -2723,7 +2070,7 @@ function serializeRun(run, state) {
  * that has already finished revealing goes through the same function and sets
  * the same flag (see the re-entrancy test in remodel-direction-lifecycle), as
  * does closing out a run that is sitting at "Waiting for you". Recording those
- * as interruptions would put a cut-off notice on the Director's desk for every
+ * as interruptions would put a cut-off notice on the Loom's desk for every
  * ordinary completed turn — the loudest possible way to be wrong. `acceptedComplete`
  * is what completeVisibleRun sets once the whole buffer has been revealed and
  * accepted, so `interrupted && !acceptedComplete` is the pair that means the
@@ -2733,7 +2080,7 @@ function serializeRun(run, state) {
  * defensive guard. An interruption at character zero is not a small version of
  * an interruption at character four hundred: nothing was read, so nothing
  * became fiction, and finalizeRunMessage deletes the message and applies no
- * state at all. There is no turn for the Director to direct around, and telling
+ * state at all. There is no turn for the Loom to direct around, and telling
  * it a beat was cut short would invite it to write around a beat the user never
  * saw a word of. Mid-sentence is the opposite case: the read half IS fiction and
  * has to be worked with. The two must not arrive as one flag.
@@ -2742,7 +2089,7 @@ function serializeRun(run, state) {
  * `rawOffset` — the exact text the reveal loop had not emitted when it froze —
  * and it is the only evidence of what the performer was in the middle of doing.
  * Destroying it is what made an interruption an error instead of an event: a
- * Director asked to rule on "someone grabs you and drags you toward the door"
+ * Loom asked to rule on "someone grabs you and drags you toward the door"
  * cut after "grabs you" cannot decide whether the drag still happens if the
  * drag no longer exists anywhere. It is stored, and rendered, as an unspoken
  * intention (direction-sources.js's describeInterruption) — never as something
@@ -2777,7 +2124,11 @@ function readInterruptionRecord(message) {
 }
 
 function publicRun(run) {
-    return { ...run, envelope: undefined };
+    // AbortController is private pipeline state. It is meaningless to the UI
+    // and cannot be structured-cloned; exposing it here made
+    // getLiveDirectionRun() throw after every Loom pass.
+    const { envelope: _envelope, loomController: _loomController, ...snapshot } = run;
+    return snapshot;
 }
 
 function notifyTransient(state) {
@@ -2809,15 +2160,11 @@ function directionFailure(error, retry) {
 }
 
 function resolvePerformer(ref, scene) {
-    const director = normalizeRef(scene.liveDirection?.directorRef);
-    const cast = (hooks.getCast() || []).filter((item) => {
-        const candidate = item.ref || normalizeRef(item);
-        return !item.disabled && (!director || candidate?.id !== director.id);
-    });
+    const cast = (hooks.getCast() || []).filter((item) => !item.disabled);
     const normalized = normalizeRef(ref);
     // Do not reject an empty ref before considering the only native performer
     // the Scene actually makes available. `ref` is never model-selected —
-    // performer selection is code's, not the Director's — but a Scene may
+    // performer selection is code's, not the Loom's — but a Scene may
     // still have no Narrator bound.
     if (!normalized && cast.length !== 1) return null;
     const member = cast.find((item) => {
@@ -2860,88 +2207,6 @@ function resolvePerformer(ref, scene) {
     };
 }
 
-function resolveDirector(scene) {
-    const requested = normalizeRef(scene?.liveDirection?.directorRef);
-    if (!requested) return null;
-    const member = (hooks.getCast() || []).find((item) => normalizeRef(item.ref || item)?.id === requested.id);
-    if (!member) return null;
-    return {
-        characterId: Number(member.characterId),
-        label: member.label || member.name || requested.label || 'Roleplay Director',
-        ref: { kind: 'character', id: requested.id, label: member.label || member.name || requested.label || 'Roleplay Director' },
-    };
-}
-
-/**
- * The Director's raw reasoning, from the most recent direction request.
- *
- * It arrives on the stream now — `sendOpenAIRequest`'s generator accumulates
- * `state.reasoning` alongside the text — so this is just the last value that
- * came off it, held for `persistDirectionRecord` to put on the direction card.
- *
- * Getting hold of it used to require wrapping `globalThis.fetch` for the
- * duration of the call and reading a clone of the response, because
- * `generateRawData` returns `extractJsonFromData(data)` whenever a jsonSchema
- * is supplied and the provider's response object — the only place reasoning
- * lives — never escaped the function. Dropping the schema deleted that patch.
- */
-let lastDirectorReasoning = '';
-
-/** Compact, storable summary of what the Director asked the system to do. */
-function summarizeRequests(requests) {
-    return (Array.isArray(requests) ? requests : []).filter(Boolean).map((request) => ({
-        capability: String(request.capability || 'unknown'),
-        reason: String(request.reason || '').trim(),
-    })).slice(0, 40);
-}
-
-/**
- * The direction card's headline, drawn from the notebook turn this direction
- * belongs to.
- *
- * Secrets are left out. The card renders inline in the Roleplay stream right
- * beside the prose, and while a secret IS the owner's to see, "the owner
- * happens to be looking at the story" is not the moment to put it on screen
- * unlabelled. The owner-facing notebook surface is where secrets belong, and
- * it can mark them as withheld.
- */
-function describeDirectionForRecord(scene, turn) {
-    return notebookTurnEntries(scene, turn)
-        .filter((entry) => entry.type !== 'secret')
-        .map((entry) => String(entry.text || '').trim())
-        .filter(Boolean)
-        .join('\n');
-}
-
-function persistDirectionRecord(scene, envelope, performer, director) {
-    if (!scene) return;
-    // normalizeDirectionRecord (timeline-state.js) drops a record with no
-    // objective, so a turn that produced nothing readable writes no card
-    // rather than an empty one.
-    const objective = describeDirectionForRecord(scene, envelope?.notebookTurn);
-    if (!objective) return;
-    const existing = Array.isArray(scene.liveDirection?.directionLog) ? scene.liveDirection.directionLog : [];
-    const record = {
-        id: envelope.directionId,
-        createdAt: new Date().toISOString(),
-        directorRef: director?.ref || null,
-        directorLabel: director?.label || 'Game Director',
-        performerRef: performer.ref,
-        performerLabel: performer.label,
-        // Still `objective`: this is the field timeline-state.js's
-        // normalizeDirectionRecord requires (and the roleplay stream's
-        // direction card already reads) to keep the record instead of silently
-        // dropping it. Its content is the turn's notebook now.
-        objective,
-        notebookTurn: toTurnNumber(envelope.notebookTurn),
-        operations: summarizeRequests(envelope.mechanics.pendingRequests),
-        reasoning: lastDirectorReasoning,
-        continueAfter: envelope.flow.continueAfter,
-        hardPauseAfter: envelope.flow.hardPauseAfter,
-    };
-    const next = [...existing.filter((item) => item?.id !== record.id), record].slice(-60);
-    updateScene(scene.id, { liveDirection: { ...scene.liveDirection, directionLog: next } });
-}
 
 function normalizeRef(value) {
     if (!value || typeof value !== 'object') return null;
@@ -2979,147 +2244,6 @@ function normalizeEnvelope(value, scene) {
     };
 }
 
-/**
- * The Director's recent notes for this Scene, as prose for the Narrator's
- * directorNotes recipe block — the counterpart to direction-sources.js's
- * `section()` register: a heading with nothing under it tells the Narrator
- * less than no heading, so no entries renders nothing at all, never an empty
- * bracketed block.
- *
- * `entries` is expected to already be Narrator-safe (readNarratorEntries has
- * filtered `secret` and applied the depth window) — this function only
- * renders what it is given and does not re-check `type` itself. Re-checking
- * here would suggest the boundary might not already be enforced, when the
- * whole point of readNarratorEntries is that it is.
- *
- * Grouped by turn and sorted ascending, so the newest turn's notes land last
- * — closest to the generation point, the same ordering direction-sources.js
- * uses for STORY SO FAR. `ruling` and `result` are labelled, because unlike a
- * `note` they are not colour: a ruling binds the next response and a result
- * is a settled fact, and the performer needs to tell those apart from
- * scene-setting observation.
- */
-const SCENE_DIRECTION_HEADER = `[A scene director has reviewed the full context of this conversation — the user's messages, the world's mechanics, and the story so far — and worked out what should happen next. Below is their creative thinking. Write the narrative from it. Ignore any technical references you don't recognise.]`;
-
-export function frameDirectorReasoning(reasoning) {
-    const text = String(reasoning || '').trim();
-    if (!text) return '';
-    return `${SCENE_DIRECTION_HEADER}\n\n${text}`;
-}
-
-export function buildDirectorNotesSource(entries) {
-    const turns = groupNotebookEntriesByTurn(entries);
-    if (!turns.length) return '';
-    const body = turns
-        .map(([turn, turnEntries]) => describeNotebookTurn(turn, turnEntries))
-        .filter(Boolean)
-        .join('\n\n');
-    if (!body) return '';
-    // "treat as settled fact" was the whole header, applied to every line.
-    //
-    // It is right for a `result` and wrong for a `ruling`, which is an
-    // instruction about the response not yet written — and it actively invites
-    // the failure the owner reported, a Narrator re-narrating its own previous
-    // turn. The Director's notes describe the state of the scene; that state is
-    // the outcome of the last response; a header calling all of it settled fact
-    // and no line saying "do not write this again" leaves re-rendering it a
-    // reasonable reading of the job.
-    return `[DIRECTOR'S NOTES — from the hidden director. These are not prose to reproduce. Write only what happens NEXT.]\n${body}`;
-}
-
-function groupNotebookEntriesByTurn(entries) {
-    const byTurn = new Map();
-    for (const entry of Array.isArray(entries) ? entries : []) {
-        if (!entry) continue;
-        const turn = Number.isFinite(Number(entry.turn)) ? Number(entry.turn) : 0;
-        if (!byTurn.has(turn)) byTurn.set(turn, []);
-        byTurn.get(turn).push(entry);
-    }
-    return [...byTurn.entries()].sort((a, b) => a[0] - b[0]);
-}
-
-/**
- * What the performer is supposed to DO with each kind of entry.
- *
- * Every label here is an instruction, not a category name, and `note` has one
- * now where it used to render bare. A bare line in a block headed "treat as
- * settled fact" reads as prose to reproduce, which is the likeliest reading
- * behind a Narrator that re-narrated its own previous turn: the Director's
- * notes describe the CURRENT state of the scene, the current state is the
- * outcome of the last response, and nothing told the performer that describing
- * it again was not the job.
- */
-const NOTEBOOK_ENTRY_LABELS = Object.freeze({
-    note: 'Context (already on the page — draw on it, do not restate it): ',
-    ruling: 'Binding (your next response must honour this): ',
-    result: 'Already happened (do NOT narrate this again): ',
-});
-
-function describeNotebookTurn(turn, turnEntries) {
-    const lines = turnEntries.map(describeNotebookEntry).filter(Boolean);
-    return lines.length ? `Turn ${turn}\n${lines.join('\n')}` : '';
-}
-
-/**
- * No `incomplete` marker here, deliberately. A severed entry only ever exists
- * inside a cancelled take, and `readNarratorEntries` withholds a cancelled
- * take in full — so a fragment cannot reach this function through any
- * production path, and a marker rendered here would be a caption for
- * something the performer never sees. The flag is the owner's record; the
- * withholding is the performer's protection.
- */
-function describeNotebookEntry(entry) {
-    const text = String(entry?.text || '').trim();
-    if (!text) return '';
-    return `- ${NOTEBOOK_ENTRY_LABELS[entry?.type] || ''}${text}`;
-}
-
-/**
- * Ties the notes source to the currently active Roleplay/Chat recipe: reads
- * that recipe's OWN directorNotes block for its `settings.depth`, rather than
- * a hardcoded default, so the depth the user configured in Prompt Studio is
- * the one that actually governs what the Narrator reads — this is the
- * "settings feed the compile" requirement, applied at the one real call site
- * that reaches production generation (timeline-spine.js mirrors this into
- * SillyTavern's native prompt manager via setExtensionPrompt, the same way it
- * does for Story Goals).
- *
- * No directorNotes block on the recipe (removed by the user, or a recipe
- * imported from native settings that never carried one) means the Narrator
- * gets no notes — an explicit opt-out, not a fallback default. A block that
- * is merely disabled (Prompt Studio's per-block eye toggle) is the same
- * opt-out: the toggle is a visible, discoverable control and must not be the
- * one thing on this block that silently does nothing.
- *
- * Since the depth-0 direction injection was removed, this block is the ONLY
- * route the Director's direction takes to the Narrator — so its absence is no
- * longer a missing extra, it is a scene generating against no direction at
- * all. That is why beginDirection journals a warning when a pass stores
- * entries and findDirectorNotesBlock returns nothing: silence here is
- * indistinguishable from a Director that had nothing to say.
- */
-export function formatDirectorNotesPrompt(scene) {
-    if (!scene?.timelineId) return '';
-    const { block } = describeDirectorNotesRouting();
-    if (!block) return '';
-    const entries = readNarratorEntries(scene.timelineId, { sceneId: scene.id, depth: block.settings?.depth });
-    return buildDirectorNotesSource(entries);
-}
-
-/**
- * How the active Roleplay/Chat recipe is set up to carry the Director's notes.
- *
- * `block` is the enabled one, if any. `present` says whether the recipe has a
- * Director's Notes block AT ALL — which is the difference between a user who
- * switched it off and a user who never had it. Both deliver nothing; only one
- * of them is a surprise, and warning about the other one every single turn
- * trains the user to ignore the warning, costing it the case it exists for.
- */
-function describeDirectorNotesRouting() {
-    const recipe = getCurrentPromptStudioRecipe('roleplay', 'chat');
-    const blocks = (recipe?.blocks || []).filter((entry) => entry.kind === 'source' && entry.sourceKey === 'directorNotes');
-    return { block: blocks.find((entry) => entry.enabled !== false) || null, present: blocks.length > 0 };
-}
 
 function clearRevealTimer() {
     clearTimeout(revealTimer);

@@ -76,7 +76,7 @@ export function formatStoryGoalsPrompt(scene) {
     return [publicLines.length ? `[Public Story Goals]\n${publicLines.join('\n')}` : '', secretLines.length ? `[Private behavioral Goals — do not disclose]\n${secretLines.join('\n')}` : ''].filter(Boolean).join('\n\n');
 }
 
-// The former cast-character Director and fenced `loom` protocol have been
+// The former cast-character Loom and fenced `loom` protocol have been
 // retired. The only mechanical preflight is now the hidden schema-constrained
 // call in mechanics-runtime.js.
 
@@ -100,7 +100,7 @@ export function renderStoryGoalsForRoleplay(root, scene) {
     renderStoryGoalViewport(root, scene);
 }
 
-// Roll/clash event cards on native messages arrive with the Director.
+// Roll/clash event cards on native messages arrive with the Loom.
 export function decorateStoryGoalStream() {}
 
 // --- the floating Story Goals viewport (tarot-card deck) -------------------
@@ -334,7 +334,7 @@ function bindStoryGoalEvents() {
         // Owner authoring. These write to the store directly rather than
         // through the capability layer: that layer exists to constrain a model,
         // not its owner. They pass actor 'user' so the event ledger can still
-        // tell an owner edit from a Director change.
+        // tell an owner edit from a Loom change.
         const editButton = target.closest('[data-remodel-goal-edit]');
         if (editButton) {
             setEditingGoalId(scene.id, editButton.dataset.remodelGoalEdit);

@@ -258,10 +258,36 @@ export function listMechanicsTransactions({ timelineId = '', sceneId = '' } = {}
 
 export function snapshotVariableStore() { return clone(getVariableStore()); }
 
+/**
+ * A snapshot for a transaction's `undo` field — the full store MINUS the
+ * transaction ledger. The ledger lives inside this same store, so capturing it
+ * into a transaction's own undo would embed every prior transaction's undo,
+ * doubling the store on each new transaction (an ~83MB blow-up seen in the
+ * wild — 29 transactions, each 2× the last). Undo restores Variable VALUES,
+ * never the ledger of transactions itself; restoreVariableStore keeps the live
+ * ledger when a snapshot omits it.
+ */
+export function snapshotVariableStoreForUndo() {
+    const snapshot = clone(getVariableStore());
+    delete snapshot.transactions;
+    delete snapshot.transactionIds;
+    return snapshot;
+}
+
 export function restoreVariableStore(snapshot, { save = true } = {}) {
     const context = getContext();
     context.extensionSettings[SETTINGS_NAMESPACE] ??= {};
-    context.extensionSettings[SETTINGS_NAMESPACE][SETTINGS_KEY] = clone(snapshot);
+    const live = context.extensionSettings[SETTINGS_NAMESPACE][SETTINGS_KEY];
+    const next = clone(snapshot);
+    // An undo snapshot deliberately omits the transaction ledger (see
+    // snapshotVariableStoreForUndo). Restoring one must KEEP the live ledger
+    // rather than wipe it to empty — a full backup that includes the ledger
+    // still replaces it as before.
+    if (next && next.transactions === undefined && live?.transactions) {
+        next.transactions = live.transactions;
+        next.transactionIds = live.transactionIds;
+    }
+    context.extensionSettings[SETTINGS_NAMESPACE][SETTINGS_KEY] = next;
     normalizeStore(context.extensionSettings[SETTINGS_NAMESPACE][SETTINGS_KEY]);
     // A rolled-back mechanical transaction and an undo both land here, and both
     // move Variables across every Timeline the snapshot covers at once.
@@ -277,7 +303,6 @@ export function updateMechanicsProfile(patch = {}) {
     if (patch.enabled !== undefined) profile.enabled = Boolean(patch.enabled);
     if (typeof patch.handbookAdditions === 'string') profile.handbookAdditions = patch.handbookAdditions;
     if (patch.contextBudget !== undefined) profile.contextBudget = clampInt(patch.contextBudget, 1000, 32000, 6000);
-    if (patch.directorResponseTokens !== undefined) profile.directorResponseTokens = clampInt(patch.directorResponseTokens, 1500, 32000, 4000);
     if (patch.retrievalLimit !== undefined || patch.sweepLimit !== undefined) profile.retrievalLimit = clampInt(patch.retrievalLimit ?? patch.sweepLimit, 1, 16, 8);
     if (patch.retrievalWindow !== undefined || patch.sweepWindow !== undefined) profile.retrievalWindow = clampInt(patch.retrievalWindow ?? patch.sweepWindow, 1, 60, 12);
     if (['hybrid', 'review-all', 'automatic'].includes(patch.automationPolicy)) profile.automationPolicy = patch.automationPolicy;
@@ -447,7 +472,7 @@ function emptyStore() {
     return {
         version: STORE_VERSION, timelines: {}, eventIds: [], events: {}, transactionIds: [], transactions: {}, vectorIndexState: {},
         mechanicsProfile: {
-            enabled: false, handbookAdditions: '', contextBudget: 6000, directorResponseTokens: 4000,
+            enabled: false, handbookAdditions: '', contextBudget: 6000,
             retrievalWindow: 12, retrievalLimit: 8, automationPolicy: 'hybrid', failureBehavior: 'pause', updatedAt: now(),
         },
         migrationBackup: { migratedAt: '', sources: {}, unresolved: [], idMap: {} },
@@ -485,6 +510,7 @@ function normalizeStore(store) {
     store.eventIds = Array.isArray(store.eventIds) ? store.eventIds.filter((id) => store.events[id]) : [];
     store.transactionIds = Array.isArray(store.transactionIds) ? store.transactionIds.filter((id) => store.transactions[id]) : [];
     store.mechanicsProfile = { ...emptyStore().mechanicsProfile, ...(store.mechanicsProfile || {}) };
+    delete store.mechanicsProfile.directorResponseTokens;
     store.mechanicsProfile.retrievalWindow = clampInt(store.mechanicsProfile.retrievalWindow ?? store.mechanicsProfile.sweepWindow, 1, 60, 12);
     store.mechanicsProfile.retrievalLimit = clampInt(store.mechanicsProfile.retrievalLimit ?? store.mechanicsProfile.sweepLimit, 1, 16, 8);
     store.migrationBackup = { ...emptyStore().migrationBackup, ...(store.migrationBackup || {}) };

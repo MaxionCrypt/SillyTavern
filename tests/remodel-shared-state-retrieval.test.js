@@ -44,7 +44,7 @@ function names(items) {
 
 // ------------------------------------------------------------- the new channels
 
-test('a Variable the Director wrote about in its notebook is retrieved on that evidence alone', () => {
+test('a Variable the Loom wrote about in its notebook is retrieved on that evidence alone', () => {
     const morale = variable('Morale');
     const bare = retrieveRelevantState({ variables: [morale] });
     const noted = retrieveRelevantState({ variables: [morale], notebookText: 'Morale is fraying and she has not noticed.' });
@@ -173,7 +173,7 @@ test('an independent authored mention CAN corroborate, which is what separates i
         loreLinks: [{ book: 'Halloway', uid: 7 }, { book: 'Halloway', uid: 9 }],
     });
 
-    // Same shape as above, with a Director note naming it instead of recall.
+    // Same shape as above, with a Loom note naming it instead of recall.
     // The note is a statement someone wrote about this Variable; recall is the
     // system agreeing with itself.
     const noted = retrieveRelevantState({

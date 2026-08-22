@@ -1,9 +1,11 @@
 import { sendOpenAIRequest } from '../../../openai.js';
 import { extractReasoningFromData } from '../../../reasoning.js';
 import { getContext } from '../../../st-context.js';
+import { getMaxResponseTokens } from '../../../../script.js';
+import { ConnectionManagerRequestService } from '../../shared.js';
 
 // Streaming transport for Remodel's own hidden Chat Completion calls — Story
-// prose and the Director's notebook both go out through here.
+// prose and the Loom's notebook both go out through here.
 //
 // WHY THIS BYPASSES generateRaw: SillyTavern decides streaming in
 // `createGenerationParameters` (openai.js) with
@@ -43,7 +45,7 @@ export function canStreamStory() {
  * Stream one compiled chat prompt.
  *
  * Named for what it does rather than for who calls it: Story asks it for prose
- * and Live Direction asks it for the Director's notebook, and neither shape is
+ * and Live Direction asks it for the Loom's notebook, and neither shape is
  * this function's business — it carries messages out and text back.
  *
  * @param {object[]} prompt   compiled chat-style messages
@@ -52,12 +54,24 @@ export function canStreamStory() {
  *        generator accumulates rather than emitting deltas, and passing that
  *        through unchanged keeps the caller from having to reassemble it
  * @param {AbortSignal} [signal]
+ * @param {string} [profileId] optional Connection Manager route
  * @returns {Promise<{ text: string, reasoning: string, streamed: boolean }>}
  *          `streamed: false` means the provider answered in one piece despite
  *          the request — the caller should treat the text as a final answer.
  */
-export async function streamChatPrompt({ prompt, onChunk, signal } = {}) {
-    const response = await sendOpenAIRequest(STREAM_REQUEST_TYPE, prompt, signal);
+export async function streamChatPrompt({ prompt, onChunk, signal, profileId } = {}) {
+    let response;
+    if (profileId) {
+        const routedPrompt = ConnectionManagerRequestService.constructPrompt(prompt, profileId);
+        response = await ConnectionManagerRequestService.sendRequest(
+            profileId,
+            routedPrompt,
+            getMaxResponseTokens(),
+            { stream: true, signal, extractData: true, includePreset: true, includeInstruct: true },
+        );
+    } else {
+        response = await sendOpenAIRequest(STREAM_REQUEST_TYPE, prompt, signal);
+    }
 
     // A provider that ignores `stream` (or a source core refuses to stream, such
     // as o1) returns the plain response object instead of a generator.
@@ -90,7 +104,7 @@ export async function streamChatPrompt({ prompt, onChunk, signal } = {}) {
  *
  * WHY THIS EXISTS AT ALL: the deleted `withCapturedResponse` fetch patch read
  * reasoning off the wire regardless of streaming. Returning `reasoning: ''`
- * here would have made the Director's reasoning permanently blank for every
+ * here would have made the Loom's reasoning permanently blank for every
  * user with SillyTavern's streaming toggle off, plus o1 and Workers AI JSON
  * mode — a capability regression disguised as a neutral trade, since the text
  * still arrives and nothing looks broken.

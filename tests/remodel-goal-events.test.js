@@ -37,7 +37,7 @@ test('an owner edit is recorded as the owner\'s', () => {
 test('an AI change is distinguishable from an owner edit in the same ledger', () => {
     const goal = seedGoal();
     updateStoryGoal(goal.id, { successRate: 55 }, { sceneId: SCENE, actor: 'user', reason: 'Owner.' });
-    updateStoryGoal(goal.id, { successRate: 61 }, { sceneId: SCENE, actor: 'mechanics', reason: 'Director.' });
+    updateStoryGoal(goal.id, { successRate: 61 }, { sceneId: SCENE, actor: 'mechanics', reason: 'Loom.' });
 
     const actors = getGoalEvents(goal.id).map((event) => event.actor);
     expect(actors).toContain('user');

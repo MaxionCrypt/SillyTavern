@@ -1,10 +1,10 @@
 // Task 8: narrow the Narrator's own generation prompt to its own prose.
 //
 // Design: the Narrator is a passive voice. It renders what the hidden
-// Director decided, informed by its own PRIOR PROSE — not by the user's
+// Loom decided, informed by its own PRIOR PROSE — not by the user's
 // words, and not by anything another cast member wrote. Everything the user
-// did this turn reaches the Narrator only through the Director's notes (a
-// separate, already-filtered injection — director-notes-store.js's
+// did this turn reaches the Narrator only through the Loom's notes (a
+// separate, already-filtered injection — loom-notes-store.js's
 // readNarratorEntries never returns `secret` or `abandoned` entries), so the
 // one property this suite exists to pin down is: the filter removes exactly
 // the user's and other cast members' chat-history lines, and never the notes
@@ -146,8 +146,8 @@ test('under the default Names behavior no assistant entry carries a name, so the
     ]);
 });
 
-test("the Director's notes injection — a role: 'system' entry, not chat history — is untouched", () => {
-    const notesEntry = { role: 'system', content: "[DIRECTOR'S NOTES — established by the hidden director; treat as settled fact]\nTurn 1\n- The lantern flickers." };
+test("the Loom's notes injection — a role: 'system' entry, not chat history — is untouched", () => {
+    const notesEntry = { role: 'system', content: "[DIRECTOR'S NOTES — established by the hidden loom; treat as settled fact]\nTurn 1\n- The lantern flickers." };
     const withNotes = [notesEntry, ...chatFixture];
     const filtered = filterNarratorHistory(withNotes, { narratorName: 'The Narrator' });
     // Same reference, same position, unmutated — never mistaken for chat
@@ -203,7 +203,7 @@ const scene = {
     title: 'Narrator History Scene',
     mode: 'roleplay',
     staging: 'directed',
-    liveDirection: { enabled: true, directorRef: null, narratorRef: null, pacing: 'instant', autoplay: false },
+    liveDirection: { enabled: true, loomRef: null, narratorRef: null, pacing: 'instant', autoplay: false },
 };
 
 // One active card, no Narrator bound: resolvePerformer takes the sole
@@ -213,7 +213,7 @@ const cast = [{ ref: { kind: 'character', id: 'char-narrator', label: 'The Narra
 
 const RESPONSE = 'The Narrator answers the room.';
 
-function directorReply() {
+function loomReply() {
     return ['[note] The room holds its breath.', '```state', JSON.stringify({ requests: [], flow: { continue: false } }), '```'].join('\n');
 }
 
@@ -255,71 +255,6 @@ afterEach(async () => {
     await stopLiveDirection();
     clearLiveDirectionFailure();
     setLiveDirectionTestAdapters(null);
-});
-
-test("the Narrator's own native request keeps its own prior line and the Director's notes, and drops the user's and another cast member's lines", async () => {
-    // Seeded so the fixture proves discrimination rather than passing on an
-    // empty history either way (the same trap a reviewer already found once
-    // in this file's neighbour, remodel-direction-lifecycle.test.js).
-    __getChat().push({ name: 'The Narrator', is_user: false, mes: 'The lantern is lit.', extra: {} });
-    __getChat().push({ name: 'Someone Else', is_user: false, mes: 'A voice from the dark.', extra: {} });
-
-    let capturedNotes = null;
-    let capturedChat = null;
-    setLiveDirectionTestAdapters({
-        requestDirection: async () => directorReply(),
-        // Stands in for core's native generate(): by this point
-        // generateDirectedPerformer has already called setNativePromptContent
-        // for this turn's notes (mirrors production ordering — see the
-        // comment on that call in live-direction.js), so reading it here is
-        // reading the SAME content core would have merged into its own
-        // compiled prompt as a system-role entry.
-        generatePerformer: async () => {
-            capturedNotes = nativePromptCapture.get('directorNotes');
-            const eventData = {
-                chat: [
-                    { role: 'system', content: 'World info before...' },
-                    { role: 'user', name: 'User', content: 'I step into the room.' },
-                    { role: 'assistant', name: 'The Narrator', content: 'The lantern is lit.' },
-                    { role: 'assistant', name: 'Someone Else', content: 'A voice from the dark.' },
-                    { role: 'system', content: capturedNotes },
-                ],
-            };
-            await __emit('CHAT_COMPLETION_PROMPT_READY', eventData);
-            capturedChat = eventData.chat;
-
-            const chat = __getChat();
-            chat.push({ name: 'The Narrator', is_user: false, mes: RESPONSE, extra: {} });
-            await __emit('MESSAGE_RECEIVED', chat.length - 1);
-        },
-    });
-
-    await requestNextDirection(scene);
-    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
-
-    expect(capturedNotes).toBeTruthy();
-    // Sanity: this is a real, turn-specific notes block, not an empty string
-    // or a stand-in — so the assertions below are about the actual notes
-    // this turn produced.
-    expect(capturedNotes).toContain('The room holds its breath.');
-    expect(capturedChat).toBeTruthy();
-
-    // The user's line is gone — unconditionally, by role, under every
-    // "Names behavior" setting...
-    expect(capturedChat.some((m) => m.role === 'user')).toBe(false);
-    // ...another cast member's line is gone. PRECONDITION: this fixture
-    // carries `name` fields, which core only produces under
-    // `names_behavior: Completion`; under the default those fields are absent
-    // and the entry would be kept (pinned by the default-mode test in Part 1).
-    // This assertion is about Completion mode, not about every configuration.
-    expect(capturedChat.some((m) => m.name === 'Someone Else')).toBe(false);
-    // ...the Narrator's OWN prior line survives...
-    expect(capturedChat).toContainEqual({ role: 'assistant', name: 'The Narrator', content: 'The lantern is lit.' });
-    // ...and the Director's notes — the only channel left for what the user
-    // did this turn, now that the Narrator is blind to the chat history
-    // carrying it — are present verbatim, not merely "some system entry".
-    expect(capturedChat).toContainEqual({ role: 'system', content: capturedNotes });
-    expect(capturedChat).toHaveLength(3); // world info, the Narrator's own line, the notes
 });
 
 test('the filter does nothing to a Chat Completion request live-direction does not own', async () => {

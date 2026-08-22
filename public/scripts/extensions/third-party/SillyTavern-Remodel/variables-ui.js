@@ -130,7 +130,7 @@ function renderPane(timelineId) {
 }
 
 /**
- * What the Director last actually saw — read from the retrieval layer's own
+ * What the Loom last actually saw — read from the retrieval layer's own
  * cache rather than the debug journal, so pausing diagnostics does not empty it.
  */
 function renderRelevantPane(timelineId) {

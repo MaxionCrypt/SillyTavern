@@ -1,4 +1,5 @@
 import { getContext } from '../../../st-context.js';
+import { activateConnectionProfile } from '../../connection-manager/index.js';
 import {
     doNavbarIconClick,
     doNewChat,
@@ -31,13 +32,10 @@ import {
     getScene,
     getSceneFromMetadata,
     getTimelineStore,
-    isDuetScene,
     setActiveArc,
     setActiveScene,
     setActiveTimeline,
     setInsertedTextSlot,
-    setSceneDuetSeats,
-    setSceneRoleplayDirector,
     updateArc,
     updateScene,
     updateTimeline,
@@ -81,7 +79,18 @@ import {
 } from './story-goals.js';
 import { getSceneGoals, updateSceneGoalState } from './story-goals-store.js';
 import { clearMechanicsReceiptInjection } from './mechanics-runtime.js';
-import { listVariablesForLoreRef } from './variables-store.js';
+import { listVariablesForLoreRef, listVariableValues } from './variables-store.js';
+import {
+    listEvents as archiveListEvents,
+    listSceneFacts as archiveListSceneFacts,
+    listCharStates as archiveListCharStates,
+    listSecrets as archiveListSecrets,
+    setSceneFact as archiveSetSceneFact,
+    clearSceneFact as archiveClearSceneFact,
+    setSecret as archiveSetSecret,
+    clearSecret as archiveClearSecret,
+    clearCharStateFacet as archiveClearCharStateFacet,
+} from './archivist-store.js';
 import {
     buildVariableStateBodyMarkup,
     handleVariablesUiChange,
@@ -96,10 +105,6 @@ import {
     canSendWithoutLiveDirection,
     clearLiveDirectionFailure,
     continueLiveDirection,
-    dismissDirectionRecord,
-    restoreStandingDirectionFromMessage,
-    formatDirectorNotesPrompt,
-    frameDirectorReasoning,
     getLiveDirectionRun,
     getLiveDirectionUiState,
     handleLiveDirectionDraft,
@@ -107,32 +112,21 @@ import {
     describeNativeGenerationBlock,
     isDirectedLiveScene,
     ownsLiveDirectionGeneration,
-    previewDirectorPrompt,
     regenerateLastDirectedResponse,
     requestNextDirection,
     retryLiveStep,
     continueLiveStep,
     describeLiveStepActions,
-    forgetStandingDirection,
     retryLiveDirection,
     sendWithoutLiveDirection,
     setLiveDirectionEnabled,
     setLiveDirectionPacing,
-    setLiveDirectionMode,
     setNextPerformerOverride,
     stopLiveDirection,
     submitDirectedRoleplay,
 } from './live-direction.js';
-import { listExtractionProfiles, getExtractionProfileId, setExtractionProfileId } from './extraction-config.js';
 import { sanitizeDirectionText } from './live-direction-markers.js';
-import { resolveDirectionChromeMode } from './direction-chrome.js';
-import {
-    deleteDirectorEntry,
-    readAllEntriesForOwner,
-    readTurnReasoning,
-    updateDirectorEntry,
-} from './director-notes-store.js';
-import { ENTRY_TYPES } from './director-reply.js';
+import { resolveDirectionChromeMode } from './turn-chrome.js';
 import {
     handleDebugConsoleChange,
     handleDebugConsoleClick,
@@ -194,35 +188,34 @@ const LEGACY_OUTLET_ID = 'remodel-tavern-legacy-outlet';
 const timelineChromeStages = new Map();
 const timelineScrollIntent = new Map();
 
-// View state for the Director's Notebook panel (a Timeline-focus surface,
-// same family as codexOpen in session-state.js, but kept local here rather
-// than added to that shared module: this task's file scope is
-// timeline-spine.js and style.css, and nothing outside this file needs it.
-// Not chat-scoped and not persisted, matching every other view-only flag in
-// this file (storyGenerating, timelineChromeStages, etc.).
-const directorNotebook = {
+// View state for the Loom's Archive panel (a Timeline-focus surface, same
+// family as codexOpen in session-state.js, but kept local here rather than
+// added to that shared module: nothing outside this file needs it). Not
+// chat-scoped and not persisted, matching every other view-only flag in this
+// file (storyGenerating, timelineChromeStages, etc.).
+const loomArchive = {
     open: false,
-    // Which Scene's notebook is showing. Null selects the Timeline's own
+    // Which Scene's Archive is showing. Null selects the Timeline's own
     // activeSceneId (or the first eligible Scene) at render time, so the
     // picker doesn't have to be primed before the panel can open.
     sceneId: null,
-    filter: 'all', // 'all' | one of ENTRY_TYPES
-    // The one entry currently showing an edit textarea instead of read-only
-    // text, or '' when none. Deliberately NOT mirrored into a re-rendered-
-    // on-every-keystroke state field (unlike characterSearchQuery): this
-    // workspace replaces its whole body innerHTML on every queueRender(),
-    // which would steal focus and cursor position out of a textarea on the
-    // first keystroke. The textarea is read directly from the DOM at Save
-    // time instead (same as chooseTimelineLorebook reads its <select> and
-    // handleRoleplaySend reads its composer).
+    // Whose view of the Archive: 'loom' sees everything (secrets, odds,
+    // variable values); 'narrator' sees the filtered view (no secrets, goals
+    // as objectives without numbers, no variables).
+    view: 'loom', // 'loom' | 'narrator'
+    // The one record currently showing an inline edit field instead of
+    // read-only text, or '' when none. Deliberately NOT mirrored into a
+    // re-rendered-on-every-keystroke state field: this workspace replaces its
+    // whole body innerHTML on every queueRender(), which would steal focus and
+    // cursor position. The field is read directly from the DOM at Save time.
     editingId: '',
 };
 
-function resetDirectorNotebookView() {
-    directorNotebook.open = false;
-    directorNotebook.sceneId = null;
-    directorNotebook.filter = 'all';
-    directorNotebook.editingId = '';
+function resetLoomArchiveView() {
+    loomArchive.open = false;
+    loomArchive.sceneId = null;
+    loomArchive.view = 'loom';
+    loomArchive.editingId = '';
 }
 
 const TIMELINE_SCROLL_RESISTANCE = 160;
@@ -302,7 +295,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindRoleplayComposerEvents();
     bindRoleplayGenerationFeedback();
     bindRoleplayCastPickerEvents();
-    bindRoleplayDuetPickerEvents();
+    bindRoleplayNarratorPickerEvents();
     bindRoleplayCastDragEvents();
     registerSceneMacros();
     registerCharacterFieldMacro();
@@ -313,6 +306,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
         getRuntimeMode: () => isRealStoryDocSceneActive() ? 'story' : 'roleplay',
         getRuntimeRecipeId: (mode, apiType) => {
             const scene = getActiveScene();
+            if (mode === 'loom' && scene?.mode === 'roleplay') return scene.promptRecipeIds?.loom || null;
             return scene?.mode === mode ? scene.promptRecipeIds?.[apiType] || null : null;
         },
         isRecipeInUse: (recipeId) => Object.values(getTimelineStore().scenes)
@@ -338,13 +332,9 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
         onStateChange: refreshLiveDirectionChrome,
         onSettled: () => { setRoleplayGenerating(false); renderRoleplayScene(); },
         setNativePromptContent: (sourceKey, content) => setRemodelNativePromptContent(sourceKey, content),
+        activateConnectionProfile,
         onRecovered: () => { document.getElementById('remodel-direction-failure')?.remove(); },
         onFailure: showLiveDirectionFailure,
-        // Called on EVERY chunk of the Director's streamed reply —
-        // beginDirection's onChunk closure forwards each one unconditionally
-        // (live-direction.js). This is the receiving half; do not add a
-        // second forward, or every chunk arrives twice.
-        onDirectorChunk: updateDirectionStreamCard,
     });
     // Initial extension startup can occur after core has already loaded a
     // linked chat, so no CHAT_CHANGED event remains to paint the correct
@@ -3099,13 +3089,13 @@ async function handleAction(element) {
             setActiveTimeline(element.dataset.timelineId);
             timelineChromeStages.delete(element.dataset.timelineId);
             timelineScrollIntent.delete(element.dataset.timelineId);
-            resetDirectorNotebookView();
+            resetLoomArchiveView();
             setFocusedTimelineId(element.dataset.timelineId);
             break;
         case 'close-timeline':
             timelineChromeStages.delete(focusedTimelineId);
             timelineScrollIntent.delete(focusedTimelineId);
-            resetDirectorNotebookView();
+            resetLoomArchiveView();
             setFocusedTimelineId(null);
             break;
         case 'delete-timeline':
@@ -3131,68 +3121,37 @@ async function handleAction(element) {
             // Entry names and the attach browser come from an async read.
             if (getSessionState().codexOpen) refreshVariableLore().then(queueRender);
             break;
-        case 'toggle-notebook':
-            directorNotebook.open = !directorNotebook.open;
-            directorNotebook.editingId = '';
+        case 'toggle-archive':
+            loomArchive.open = !loomArchive.open;
+            loomArchive.editingId = '';
             break;
-        case 'notebook-filter':
-            directorNotebook.filter = element.dataset.filter || 'all';
+        case 'archive-view':
+            loomArchive.view = element.dataset.view === 'narrator' ? 'narrator' : 'loom';
+            loomArchive.editingId = '';
             break;
-        case 'notebook-edit-start':
-            directorNotebook.editingId = element.dataset.entryId || '';
+        case 'archive-edit-start':
+            loomArchive.editingId = element.dataset.recordId || '';
             break;
-        case 'notebook-edit-cancel':
-            directorNotebook.editingId = '';
+        case 'archive-edit-cancel':
+            loomArchive.editingId = '';
             break;
-        case 'notebook-edit-save': {
-            const timelineId = element.dataset.timelineId;
-            const entryId = element.dataset.entryId;
-            // Read straight off the DOM rather than tracked state — see the
-            // directorNotebook.editingId comment above for why.
-            const draft = element.closest('.remodel-notebook-entry-edit')?.querySelector('[data-remodel-notebook-draft]');
-            if (timelineId && entryId && draft instanceof HTMLTextAreaElement) {
-                updateDirectorEntry(timelineId, entryId, { text: draft.value });
+        case 'archive-edit-save': {
+            const { timelineId, sceneId, recordId } = element.dataset;
+            // Read straight off the DOM rather than tracked state — the panel
+            // re-renders on every keystroke, which would steal the caret.
+            const draft = element.closest('.remodel-archive-item')?.querySelector('[data-remodel-archive-draft]');
+            if (timelineId && sceneId && recordId && draft instanceof HTMLInputElement) {
+                applyArchiveEdit(timelineId, sceneId, recordId, draft.value);
             }
-            directorNotebook.editingId = '';
+            loomArchive.editingId = '';
             break;
         }
-        case 'notebook-delete': {
-            const timelineId = element.dataset.timelineId;
-            const entryId = element.dataset.entryId;
-            if (timelineId && entryId && confirm('Delete this Director entry? This cannot be undone.')) {
-                deleteDirectorEntry(timelineId, entryId);
-                if (directorNotebook.editingId === entryId) directorNotebook.editingId = '';
+        case 'archive-delete': {
+            const { timelineId, sceneId, recordId } = element.dataset;
+            if (timelineId && sceneId && recordId && confirm('Remove this from the Loom\'s memory? This cannot be undone.')) {
+                applyArchiveDelete(timelineId, sceneId, recordId);
+                if (loomArchive.editingId === recordId) loomArchive.editingId = '';
             }
-            break;
-        }
-        case 'notebook-turn-delete': {
-            const { timelineId, sceneId, turn } = element.dataset;
-            const entries = notebookTurnEntriesForOwner(timelineId, sceneId, turn);
-            if (!entries.length) break;
-            if (!confirm(`Delete all ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} in turn ${turn}? This cannot be undone.`)) break;
-            for (const entry of entries) {
-                deleteDirectorEntry(timelineId, entry.id);
-                if (directorNotebook.editingId === entry.id) directorNotebook.editingId = '';
-            }
-            // A standing direction whose entries are gone says nothing, and
-            // Continue must stop offering to speak it. live-direction drops it
-            // on its own next read, but clearing here means the button updates
-            // with this click rather than on whatever refresh comes later.
-            forgetStandingDirection(getActiveScene());
-            break;
-        }
-        case 'notebook-turn-rerun': {
-            const { timelineId, sceneId, turn } = element.dataset;
-            const entries = notebookTurnEntriesForOwner(timelineId, sceneId, turn);
-            if (!confirm(`Direct turn ${turn} again? Its ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} will be discarded and the Director asked for a new take.`)) break;
-            for (const entry of entries) deleteDirectorEntry(timelineId, entry.id);
-            directorNotebook.editingId = '';
-            forgetStandingDirection(getActiveScene());
-            // Filed under the SAME turn number, not a fresh one: this is a
-            // retake of that moment. `nextNotebookTurn` is max+1, so letting
-            // it recompute would file the retake as a new turn and hand the
-            // Narrator this Scene's fiction out of order.
-            requestNextDirection(getActiveScene(), { notebookTurn: Number(turn) });
             break;
         }
         case 'create-arc': {
@@ -3398,9 +3357,9 @@ async function handleFieldChange(field) {
         case 'arc-summary':
             updateArc(field.dataset.arcId, { summary: value });
             break;
-        case 'notebook-scene':
-            directorNotebook.sceneId = value || null;
-            directorNotebook.editingId = '';
+        case 'archive-scene':
+            loomArchive.sceneId = value || null;
+            loomArchive.editingId = '';
             break;
         default:
             break;
@@ -3486,10 +3445,10 @@ function renderTimelinePanel() {
         }
     }
 
-    if (directorNotebook.editingId) {
-        const draft = body.querySelector('[data-remodel-notebook-draft]');
+    if (loomArchive.editingId) {
+        const draft = body.querySelector('[data-remodel-archive-draft]');
 
-        if (draft instanceof HTMLTextAreaElement) {
+        if (draft instanceof HTMLInputElement) {
             draft.focus();
             draft.setSelectionRange(draft.value.length, draft.value.length);
         }
@@ -3983,14 +3942,14 @@ function renderTimelineFocus(timeline, store) {
                     </button>
                     <button
                         type="button"
-                        class="remodel-route-round-button ${directorNotebook.open ? 'is-open' : ''}"
-                        title="${directorNotebook.open ? 'Back to Scenes' : "Director's Notebook"}"
-                        aria-label="Director's Notebook"
-                        aria-pressed="${directorNotebook.open ? 'true' : 'false'}"
-                        data-remodel-timeline-action="toggle-notebook"
+                        class="remodel-route-round-button ${loomArchive.open ? 'is-open' : ''}"
+                        title="${loomArchive.open ? 'Back to Scenes' : "Loom's Archive"}"
+                        aria-label="Loom's Archive"
+                        aria-pressed="${loomArchive.open ? 'true' : 'false'}"
+                        data-remodel-timeline-action="toggle-archive"
                         data-timeline-id="${escapeAttribute(timeline.id)}"
                     >
-                        <i class="fa-solid fa-note-sticky" aria-hidden="true"></i>
+                        <i class="fa-solid fa-box-archive" aria-hidden="true"></i>
                     </button>
                     <label class="remodel-route-round-button" title="Change timeline cover">
                         <input type="file" accept="image/*" data-remodel-timeline-photo-input data-timeline-id="${escapeAttribute(timeline.id)}" hidden>
@@ -4001,7 +3960,7 @@ function renderTimelineFocus(timeline, store) {
                     </button>
                 </div>
             </header>
-            ${getSessionState().codexOpen ? `<div class="remodel-route-layout is-codex">${renderVariableCodex()}</div>` : directorNotebook.open ? `<div class="remodel-route-layout is-notebook">${renderDirectorNotebook(timeline, store)}</div>` : `
+            ${getSessionState().codexOpen ? `<div class="remodel-route-layout is-codex">${renderVariableCodex()}</div>` : loomArchive.open ? `<div class="remodel-route-layout is-archive">${renderLoomArchive(timeline, store)}</div>` : `
             <div class="remodel-route-layout">
                 <aside class="remodel-route-side">
                     <label class="remodel-timeline-card remodel-route-cover-card" title="Change timeline cover">
@@ -4059,25 +4018,20 @@ function renderTimelineFocus(timeline, store) {
     `;
 }
 
-// --- Director's Notebook (Timeline focus surface) ---------------------------
+// --- Loom's Archive (Timeline focus surface) --------------------------------
 //
-// The owner-facing view onto director-notes-store.js: every entry the
-// Director has written for this Timeline's directed Roleplay Scenes,
-// including `secret` ones, grouped by turn, filterable by type, editable
-// (text only — type is not, matching updateDirectorEntry's own refusal) and
-// individually deletable. Reached from the same toolbar as the Variables
-// Codex (toggle-notebook / toggle-codex are siblings) and replaces the same
-// arc-stage layout while open.
-//
-// readAllEntriesForOwner is the deliberately-named owner-facing read (see its
-// own doc comment in director-notes-store.js) — never readNarratorEntries,
-// which silently drops secrets and cancelled takes. That distinction is the
-// whole point of this panel: it is where a user goes to see what the
-// Narrator does NOT see.
+// The owner-facing view onto the Loom's memory of a Scene: its own store
+// (events, scene facts, character states, secrets) plus the Goals and
+// Variables it posts to. Reached from the same toolbar as the Variables Codex
+// (toggle-archive / toggle-codex are siblings) and replaces the same arc-stage
+// layout while open. A view toggle switches between the Loom's full view
+// (everything, including secrets and the numbers) and the Narrator's filtered
+// view (no secrets, goals as objectives without odds, no variables) — so the
+// owner can see exactly what each side of the turn is allowed to know.
 
-/** Roleplay Scenes in this Timeline, in Arc/Scene order — the only mode that
- * writes Director entries. */
-function listNotebookScenes(timeline, store) {
+/** Roleplay Scenes in this Timeline, in Arc/Scene order — the ones the Loom
+ * keeps an Archive for. */
+function listArchiveScenes(timeline, store) {
     return timeline.arcIds
         .flatMap((arcId) => store.arcs[arcId]?.sceneIds || [])
         .map((sceneId) => store.scenes[sceneId])
@@ -4085,195 +4039,188 @@ function listNotebookScenes(timeline, store) {
         .map((scene) => ({ id: scene.id, title: scene.title || 'Untitled Scene' }));
 }
 
-const NOTEBOOK_TYPE_META = {
-    note: { label: 'Note', icon: 'fa-comment' },
-    ruling: { label: 'Ruling', icon: 'fa-gavel' },
-    result: { label: 'Result', icon: 'fa-check' },
-    secret: { label: 'Secret', icon: 'fa-lock' },
-};
-
-function notebookTypeLabel(type) {
-    return NOTEBOOK_TYPE_META[type]?.label || type;
-}
-
-function notebookTypeIcon(type) {
-    return NOTEBOOK_TYPE_META[type]?.icon || 'fa-note-sticky';
+/** One Archive section: a titled, counted list of items (each already HTML),
+ * or an empty line when there is nothing to show. */
+function renderArchiveSection(title, icon, items, emptyText, { tone = '' } = {}) {
+    return `<section class="remodel-archive-section ${tone}">
+        <header class="remodel-archive-section-head">
+            <i class="fa-solid ${icon}" aria-hidden="true"></i>
+            <span>${escapeHtml(title)}</span>
+            <span class="remodel-archive-count">${items.length}</span>
+        </header>
+        ${items.length
+        ? `<ul class="remodel-archive-list">${items.join('')}</ul>`
+        : `<p class="remodel-archive-empty-line">${escapeHtml(emptyText)}</p>`}
+    </section>`;
 }
 
 /**
- * Entries grouped by turn, newest first, with the active filter already
- * applied to each group's `visible` list — turns left with nothing visible
- * are dropped entirely rather than rendered empty. `entries` (the
- * unfiltered list) rides along so a turn can still report "was this whole
- * take cancelled?" even when the filter hides every entry that says so.
+ * A keyed item: an optional key/label on the left, its value text on the
+ * right, and an optional trailing badge (odds / a number). When `recordId` is
+ * given and the item is editable/deletable, it also carries the Loom-only edit
+ * (inline text field) and delete controls that correct the Loom's memory. The
+ * whole item collapses to an inline editor while `loomArchive.editingId`
+ * matches its `recordId`.
  */
-function groupNotebookEntriesByTurn(entries, filter) {
-    const byTurn = new Map();
-    for (const entry of entries) {
-        if (!byTurn.has(entry.turn)) byTurn.set(entry.turn, []);
-        byTurn.get(entry.turn).push(entry);
+function renderArchiveItem(key, text, {
+    badge = '', recordId = '', editable = false, deletable = false, editValue = '', timelineId = '', sceneId = '',
+} = {}) {
+    const editing = recordId && loomArchive.editingId === recordId;
+    const attrs = `data-record-id="${escapeAttribute(recordId)}" data-timeline-id="${escapeAttribute(timelineId)}" data-scene-id="${escapeAttribute(sceneId)}"`;
+
+    if (editing) {
+        return `<li class="remodel-archive-item${key ? ' has-key' : ''} is-editing">
+            ${key ? `<span class="remodel-archive-key">${escapeHtml(key)}</span>` : ''}
+            <span class="remodel-archive-edit">
+                <input type="text" data-remodel-archive-draft value="${escapeAttribute(editValue)}">
+                <button type="button" data-remodel-timeline-action="archive-edit-save" ${attrs}>Save</button>
+                <button type="button" data-remodel-timeline-action="archive-edit-cancel">Cancel</button>
+            </span>
+        </li>`;
     }
-    return [...byTurn.entries()]
-        .sort((a, b) => b[0] - a[0])
-        .map(([turn, all]) => ({
-            turn,
-            entries: all,
-            visible: filter === 'all' ? all : all.filter((entry) => entry.type === filter),
-        }))
-        .filter((group) => group.visible.length);
+
+    const actions = recordId && (editable || deletable)
+        ? `<span class="remodel-archive-item-actions">
+            ${editable ? `<button type="button" title="Edit" aria-label="Edit" data-remodel-timeline-action="archive-edit-start" ${attrs}><i class="fa-solid fa-pen" aria-hidden="true"></i></button>` : ''}
+            ${deletable ? `<button type="button" class="danger" title="Remove from the Loom's memory" aria-label="Remove" data-remodel-timeline-action="archive-delete" ${attrs}><i class="fa-solid fa-trash-can" aria-hidden="true"></i></button>` : ''}
+        </span>`
+        : '';
+
+    return `<li class="remodel-archive-item${key ? ' has-key' : ''}">
+        ${key ? `<span class="remodel-archive-key">${escapeHtml(key)}</span>` : ''}
+        <span class="remodel-archive-item-text">${text}</span>
+        ${badge ? `<span class="remodel-archive-badge">${escapeHtml(badge)}</span>` : ''}
+        ${actions}
+    </li>`;
 }
 
-function renderNotebookFilterButton(value, label) {
-    return `<button
-        type="button"
-        class="${directorNotebook.filter === value ? 'is-active' : ''}"
-        aria-pressed="${directorNotebook.filter === value ? 'true' : 'false'}"
-        data-remodel-timeline-action="notebook-filter"
-        data-filter="${escapeAttribute(value)}"
-    >${escapeHtml(label)}</button>`;
+/** Apply an inline edit from the Archive: the recordId is `<type>:<key>`. Only
+ * the Loom's own key/value records (facts, secrets) are editable. */
+function applyArchiveEdit(timelineId, sceneId, recordId, value) {
+    const separator = recordId.indexOf(':');
+    const type = recordId.slice(0, separator);
+    const key = recordId.slice(separator + 1);
+    if (type === 'fact') archiveSetSceneFact(timelineId, sceneId, key, value);
+    else if (type === 'secret') archiveSetSecret(timelineId, sceneId, key, value);
 }
 
-function renderDirectorNotebook(timeline, store) {
-    const closeButton = `<button type="button" class="remodel-notebook-close" data-remodel-timeline-action="toggle-notebook">
+/** Delete a record from the Loom's memory. Facts and secrets clear directly; a
+ * character record is removed by clearing every facet it holds. */
+function applyArchiveDelete(timelineId, sceneId, recordId) {
+    const separator = recordId.indexOf(':');
+    const type = recordId.slice(0, separator);
+    const key = recordId.slice(separator + 1);
+    if (type === 'fact') archiveClearSceneFact(timelineId, sceneId, key);
+    else if (type === 'secret') archiveClearSecret(timelineId, sceneId, key);
+    else if (type === 'char') {
+        const record = archiveListCharStates(timelineId, sceneId).find((char) => char.charId === key);
+        for (const facet of Object.keys(record?.facets || {})) archiveClearCharStateFacet(timelineId, sceneId, key, facet);
+    }
+}
+
+function renderArchiveViewToggle() {
+    const isNarrator = loomArchive.view === 'narrator';
+    return `<div class="remodel-archive-viewtoggle" role="group" aria-label="Whose view of the Archive">
+        <button type="button" class="${isNarrator ? '' : 'is-active'}" aria-pressed="${isNarrator ? 'false' : 'true'}" data-remodel-timeline-action="archive-view" data-view="loom"><i class="fa-solid fa-eye" aria-hidden="true"></i> Loom's view</button>
+        <button type="button" class="${isNarrator ? 'is-active' : ''}" aria-pressed="${isNarrator ? 'true' : 'false'}" data-remodel-timeline-action="archive-view" data-view="narrator"><i class="fa-solid fa-feather-pointed" aria-hidden="true"></i> Narrator's view</button>
+    </div>`;
+}
+
+function renderLoomArchive(timeline, store) {
+    const isNarrator = loomArchive.view === 'narrator';
+    const closeButton = `<button type="button" class="remodel-notebook-close" data-remodel-timeline-action="toggle-archive">
         <i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back to Scenes
     </button>`;
     const head = `<header class="remodel-notebook-head">
         <div>
-            <span>Director's Notebook</span>
+            <span>Loom's Archive</span>
             <strong>${escapeHtml(timeline.title)}</strong>
         </div>
-        <p>Everything the Director has written for a Scene, including what it marked secret. Note, ruling and result entries can reach the Narrator, inside its notebook depth; secret entries and a cancelled take's entries never do.</p>
+        <p>${isNarrator
+        ? 'The Narrator\'s view: readable state and objectives only — no odds, no variables, no secrets.'
+        : 'The Loom\'s full memory of this Scene — what happened, the facts and characters it tracks, its secrets, and the numbers behind Goals and Variables.'}</p>
     </header>`;
 
-    const scenes = listNotebookScenes(timeline, store);
+    const scenes = listArchiveScenes(timeline, store);
     if (!scenes.length) {
-        return `<section class="remodel-notebook" aria-label="Director's Notebook">
+        return `<section class="remodel-notebook remodel-archive" aria-label="Loom's Archive">
             ${closeButton}
             ${head}
             <div class="remodel-notebook-empty">
-                <i class="fa-solid fa-note-sticky" aria-hidden="true"></i>
-                <p>This Timeline has no Roleplay Scenes yet, so its Director has written nothing.</p>
+                <i class="fa-solid fa-box-archive" aria-hidden="true"></i>
+                <p>This Timeline has no Roleplay Scenes yet, so the Loom has no Archive.</p>
             </div>
         </section>`;
     }
 
-    const activeSceneId = scenes.some((scene) => scene.id === directorNotebook.sceneId)
-        ? directorNotebook.sceneId
+    const activeSceneId = scenes.some((scene) => scene.id === loomArchive.sceneId)
+        ? loomArchive.sceneId
         : (scenes.find((scene) => scene.id === timeline.activeSceneId)?.id || scenes[0].id);
-    const entries = readAllEntriesForOwner(timeline.id, { sceneId: activeSceneId });
-    const turns = groupNotebookEntriesByTurn(entries, directorNotebook.filter);
 
-    return `<section class="remodel-notebook" aria-label="Director's Notebook">
+    const events = archiveListEvents(timeline.id, activeSceneId);
+    const facts = archiveListSceneFacts(timeline.id, activeSceneId);
+    const chars = archiveListCharStates(timeline.id, activeSceneId);
+    const secrets = archiveListSecrets(timeline.id, activeSceneId);
+    const goals = getSceneGoals(activeSceneId, { includeResolved: true, states: ['active', 'background'] });
+    const variables = listVariableValues({ timelineId: timeline.id });
+
+    // Edit/delete correct the Loom's own memory — offered only in the Loom's
+    // view (the Narrator's view is a read-only preview of what it may see).
+    const editable = !isNarrator;
+    const scope = { timelineId: timeline.id, sceneId: activeSceneId };
+
+    // What happened — newest first, so the latest beat is at the top. Events
+    // are an append-only record, so they are never edited or deleted here.
+    const eventItems = events.slice().reverse()
+        .map((event) => renderArchiveItem('', escapeHtml(event.summary || '')));
+    const factItems = facts.map((fact) => renderArchiveItem(fact.key, escapeHtml(String(fact.value)), {
+        recordId: `fact:${fact.key}`, editable, deletable: editable, editValue: String(fact.value), ...scope,
+    }));
+    const charItems = chars.map((char) => renderArchiveItem(
+        char.charId,
+        escapeHtml(Object.entries(char.facets || {}).map(([facet, value]) => `${facet}: ${value}`).join(' · ')),
+        { recordId: `char:${char.charId}`, deletable: editable, ...scope },
+    ));
+    const goalItems = goals.map((goal) => renderArchiveItem(
+        '',
+        `<strong>${escapeHtml(goal.title || 'Untitled goal')}</strong>${goal.description ? ` — ${escapeHtml(goal.description)}` : ''}`,
+        // The odds are the Loom's alone; the Narrator sees an objective, not a bet.
+        { badge: isNarrator ? '' : `${Number(goal.successRate)}%` },
+    ));
+    const variableItems = variables.map((variable) => renderArchiveItem(
+        variable.name,
+        escapeHtml(String(variable.value)),
+    ));
+    const secretItems = secrets.map((secret) => renderArchiveItem(secret.key, escapeHtml(String(secret.value)), {
+        recordId: `secret:${secret.key}`, editable, deletable: editable, editValue: String(secret.value), ...scope,
+    }));
+
+    const sections = [
+        renderArchiveSection('What happened', 'fa-clock-rotate-left', eventItems, 'Nothing recorded yet.'),
+        renderArchiveSection('Scene', 'fa-map-pin', factItems, 'No scene facts yet.'),
+        renderArchiveSection('Characters', 'fa-users', charItems, 'No character states yet.'),
+        renderArchiveSection(isNarrator ? 'Objectives' : 'Goals', 'fa-bullseye', goalItems, 'No goals yet.'),
+        // Loom-only sections — the numbers and the hidden truths.
+        ...(isNarrator ? [] : [renderArchiveSection('Variables', 'fa-sliders', variableItems, 'No variables yet.')]),
+        ...(isNarrator ? [] : [renderArchiveSection('Secrets', 'fa-lock', secretItems, 'No secrets kept.', { tone: 'is-secret' })]),
+    ].join('');
+
+    return `<section class="remodel-notebook remodel-archive" aria-label="Loom's Archive">
         ${closeButton}
         ${head}
         <div class="remodel-notebook-controls">
             <label class="remodel-notebook-scene-picker">
                 <span>Scene</span>
-                <select data-remodel-timeline-field="notebook-scene" data-timeline-id="${escapeAttribute(timeline.id)}">
+                <select data-remodel-timeline-field="archive-scene" data-timeline-id="${escapeAttribute(timeline.id)}">
                     ${scenes.map((scene) => `<option value="${escapeAttribute(scene.id)}" ${scene.id === activeSceneId ? 'selected' : ''}>${escapeHtml(scene.title)}</option>`).join('')}
                 </select>
             </label>
-            <div class="remodel-notebook-filters" role="group" aria-label="Filter entries by type">
-                ${renderNotebookFilterButton('all', 'All')}
-                ${ENTRY_TYPES.map((type) => renderNotebookFilterButton(type, notebookTypeLabel(type))).join('')}
-            </div>
+            ${renderArchiveViewToggle()}
         </div>
-        <div class="remodel-notebook-turns">
-            ${turns.length
-        ? turns.map((group) => renderNotebookTurn(timeline, group, {
-            sceneId: activeSceneId,
-            // Newest turn of the Scene the app is actually on, and only when
-            // that Scene is directed. `turns` is filtered, so "newest" is read
-            // from the unfiltered entries — otherwise filtering to `secret`
-            // would make whatever secret turn happened to be last look like
-            // the newest turn in the Scene.
-            rerunnable: group.turn === newestNotebookTurn(entries)
-                && activeSceneId === getActiveScene()?.id
-                && isDirectedLiveScene(getActiveScene()),
-        })).join('')
-        : `<div class="remodel-notebook-empty">
-                <i class="fa-solid fa-note-sticky" aria-hidden="true"></i>
-                <p>${entries.length ? 'No entries match this filter.' : 'No Director entries yet for this Scene.'}</p>
-            </div>`}
+        <div class="remodel-archive-sections">
+            ${sections}
         </div>
     </section>`;
-}
-
-/**
- * @param {object} timeline
- * @param {object} group one turn's entries
- * @param {{sceneId: string, rerunnable: boolean}} context `rerunnable` is true
- *        only for the newest turn of the Scene the app is actually on. A
- *        rerun of an older turn would direct a moment the story has already
- *        narrated past, producing a direction for a scene that no longer
- *        exists — so it is not offered rather than offered and refused.
- */
-function renderNotebookTurn(timeline, group, context) {
-    const allWithheld = group.entries.length > 0 && group.entries.every((entry) => entry.abandoned);
-    const turnAttrs = `data-timeline-id="${escapeAttribute(timeline.id)}" data-scene-id="${escapeAttribute(context.sceneId)}" data-turn="${escapeAttribute(String(group.turn))}"`;
-    return `<section class="remodel-notebook-turn">
-        <header>
-            <span>Turn ${group.turn}</span>
-            ${allWithheld ? '<span class="remodel-notebook-turn-flag"><i class="fa-solid fa-ban" aria-hidden="true"></i> Cancelled take — withheld from the Narrator</span>' : ''}
-            <span class="remodel-notebook-turn-actions">
-                ${context.rerunnable
-        ? `<button type="button" title="Direct this moment again — discards these entries and asks the Director for a new take" data-remodel-timeline-action="notebook-turn-rerun" ${turnAttrs}><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Rerun</button>`
-        : ''}
-                <button type="button" class="danger" title="Delete every entry in this turn" data-remodel-timeline-action="notebook-turn-delete" ${turnAttrs}><i class="fa-solid fa-trash-can" aria-hidden="true"></i> Delete turn</button>
-            </span>
-        </header>
-        <ul class="remodel-notebook-entries">
-            ${group.visible.map((entry) => renderNotebookEntry(timeline, entry)).join('')}
-        </ul>
-    </section>`;
-}
-
-/** The highest turn number present, or null when there are no entries. */
-function newestNotebookTurn(entries) {
-    const turns = (entries || []).map((entry) => Number(entry.turn)).filter(Number.isFinite);
-    return turns.length ? Math.max(...turns) : null;
-}
-
-/** One turn's entries, read fresh from the store at the moment of the click. */
-function notebookTurnEntriesForOwner(timelineId, sceneId, turn) {
-    const wanted = Number(turn);
-    if (!timelineId || !Number.isFinite(wanted)) return [];
-    return readAllEntriesForOwner(timelineId, { sceneId: sceneId || '' })
-        .filter((entry) => Number(entry.turn) === wanted);
-}
-
-function renderNotebookEntry(timeline, entry) {
-    // What "withheld" means differs by cause, and both are worth naming: a
-    // secret is withheld by the Director's own choice of type; an abandoned
-    // entry is withheld because the take it belongs to never happened. Both
-    // answer the one question this panel exists to answer at a glance —
-    // "can the Narrator see this?" — so both get the same visible marker.
-    const withheldReason = entry.type === 'secret'
-        ? 'marked secret'
-        : (entry.abandoned ? 'take was cancelled' : '');
-    const editing = directorNotebook.editingId === entry.id;
-    return `<li class="remodel-notebook-entry" data-type="${escapeAttribute(entry.type)}">
-        <div class="remodel-notebook-entry-head">
-            <span class="remodel-notebook-type-badge" data-type="${escapeAttribute(entry.type)}">
-                <i class="fa-solid ${notebookTypeIcon(entry.type)}" aria-hidden="true"></i> ${escapeHtml(notebookTypeLabel(entry.type))}
-            </span>
-            ${withheldReason ? `<span class="remodel-notebook-withheld"><i class="fa-solid fa-eye-slash" aria-hidden="true"></i> Withheld from Narrator — ${escapeHtml(withheldReason)}</span>` : ''}
-            ${entry.incomplete ? '<span class="remodel-notebook-flag">Cut off mid-reply</span>' : ''}
-            <span class="remodel-notebook-entry-actions">
-                <button type="button" title="Edit text" aria-label="Edit text" data-remodel-timeline-action="notebook-edit-start" data-entry-id="${escapeAttribute(entry.id)}"><i class="fa-solid fa-pen" aria-hidden="true"></i></button>
-                <button type="button" title="Delete entry" aria-label="Delete entry" class="danger" data-remodel-timeline-action="notebook-delete" data-entry-id="${escapeAttribute(entry.id)}" data-timeline-id="${escapeAttribute(timeline.id)}"><i class="fa-solid fa-trash-can" aria-hidden="true"></i></button>
-            </span>
-        </div>
-        ${editing
-        ? `<div class="remodel-notebook-entry-edit">
-                <textarea data-remodel-notebook-draft data-entry-id="${escapeAttribute(entry.id)}">${escapeHtml(entry.text)}</textarea>
-                <div class="remodel-notebook-entry-edit-actions">
-                    <button type="button" data-remodel-timeline-action="notebook-edit-save" data-entry-id="${escapeAttribute(entry.id)}" data-timeline-id="${escapeAttribute(timeline.id)}">Save</button>
-                    <button type="button" data-remodel-timeline-action="notebook-edit-cancel">Cancel</button>
-                </div>
-            </div>`
-        : `<p class="remodel-notebook-entry-text">${escapeHtml(entry.text)}</p>`}
-    </li>`;
 }
 
 function renderArcIndex(timeline, store, activeArc) {
@@ -4857,12 +4804,12 @@ async function openScene(sceneId) {
     }
 
     if (!scene.linkedChat) {
-        // Never-opened Roleplay Scene. A Roleplay Scene is a Director and a
-        // Narrator, so casting one is choosing those two seats rather than
-        // assembling a group and assigning jobs to it afterwards.
-        openRoleplayDuetPicker({
+        // The narrator card is the only model-facing seat in the editor
+        // pipeline. It drafts the visible turn; the Loom reconciles mechanics
+        // afterward as system machinery, never as a second character card.
+        openRoleplayNarratorPicker({
             sceneTitle: scene.title,
-            onConfirm: (seats) => beginRoleplaySceneAsDuet(sceneId, seats),
+            onConfirm: (selection) => beginRoleplaySceneWithNarrator(sceneId, selection),
         });
         return;
     }
@@ -4932,150 +4879,58 @@ async function openScene(sceneId) {
 }
 
 /**
- * Casts a fresh Roleplay Scene as a Director + Narrator pair.
- *
- * The native chat is still an ordinary group, because everything downstream —
- * World Info, swipes, generation, force_chid — is native group machinery and
- * stays that way. What changes is that the group has exactly two members with
- * fixed jobs: the Director card supplies directing doctrine to the hidden pass
- * and never speaks, and the Narrator card is the only visible performer.
- *
- * Both seats are written before the group is opened, so the Scene is already a
- * complete directed Scene the first time anything renders it — there is no
- * intermediate state where a two-card group has no assigned Director and could
- * be mistaken for an ordinary free-play group.
+ * Creates the native chat for a new Roleplay Scene and binds its one narrator.
+ * The Loom is part of the editor pipeline, not a character card or cast seat.
  */
-async function beginRoleplaySceneAsDuet(sceneId, { directorAvatar, narratorAvatar } = {}) {
+async function beginRoleplaySceneWithNarrator(sceneId, { narratorAvatar, narratorProfileId = null, loomProfileId = null } = {}) {
     const context = getContext();
     const scene = getScene(sceneId);
-    if (!scene || !directorAvatar || !narratorAvatar || directorAvatar === narratorAvatar) {
+    if (!scene || !narratorAvatar) {
         return;
     }
-    const findCard = (avatar) => (context.characters || []).find((item) => item?.avatar === avatar) || null;
-    const directorCard = findCard(directorAvatar);
-    const narratorCard = findCard(narratorAvatar);
-    if (!directorCard || !narratorCard) {
+    const narratorIndex = (context.characters || []).findIndex((item) => item?.avatar === narratorAvatar);
+    const narratorCard = context.characters?.[narratorIndex];
+    if (narratorIndex < 0 || !narratorCard) {
         return;
     }
-
-    // Narrator first, Director muted. Directed generation always forces the
-    // performer, so neither matters on that path — but a Scene switched to Free
-    // play, a swipe, or any native path that reaches the group without
-    // force_chid falls back to core's own activation over `enabledMembers`.
-    // Muting the Director there is what makes "the Director never speaks" a
-    // property of the group rather than a promise Remodel has to keep. It stays
-    // a member, so its card is still read for directing doctrine, and
-    // resolveDirector matches on the ref rather than on enabled membership.
-    const groupId = await createRoleplayGroup([narratorAvatar, directorAvatar], scene.title, {
-        disabledMembers: [directorAvatar],
-    });
-    if (!groupId) {
-        return;
-    }
-    // Ids read back off the real group object — openGroupChat guards with a
-    // strict === on id, so a stringified id silently fails and nothing opens.
-    const group = findRoleplayGroup(groupId);
-    const nativeGroupId = group?.id ?? groupId;
-    const nativeChatId = group?.chats?.[0] ?? group?.chat_id;
-    if (nativeChatId === undefined || nativeChatId === null) {
-        return;
-    }
-
-    updateScene(sceneId, {
-        linkedChat: { type: 'group', groupId: String(nativeGroupId), chatId: String(nativeChatId) },
-        status: 'active',
-    });
-    setSceneDuetSeats(sceneId, {
-        directorRef: { kind: 'character', id: directorAvatar, label: directorCard.name },
-        narratorRef: { kind: 'narrator', id: narratorAvatar, label: narratorCard.name },
-    });
-
-    setActiveScene(sceneId);
-    await openGroupById(nativeGroupId);
-    await waitForChatIdSettled();
-    dismissProgrammaticGroupEditor();
-    // A fresh group opens with both cards' greetings. In a directed Scene the
-    // Director must never appear as a visible line, and the Narrator's opening
-    // belongs to the Director's first movement, not to the card's own greeting.
-    await clearFreshRoleplayGreetingMessages();
-    writeSceneMetadata(getScene(sceneId));
-    syncStoryWorkspaceClass(getScene(sceneId));
-    await enterSceneViewport(getScene(sceneId));
-}
-
-// Casts a fresh roleplay scene from the picker's chosen characters. One
-// character → a solo character chat (selectCharacterById + new chat, bound
-// exactly like before). Two or more → a real group + a fresh group chat,
-// bound to the scene. Either way the scene ends up with a linkedChat and
-// drops into the viewport.
-//
-// Retained for Scenes cast before the two-seat model and for the "add a
-// character" path, which promotes a solo chat into a group.
-async function beginRoleplaySceneWithCast(sceneId, avatars) {
-    const context = getContext();
-    const scene = getScene(sceneId);
-    if (!scene || !Array.isArray(avatars) || avatars.length === 0) {
-        return;
-    }
-
-    if (avatars.length === 1) {
-        // Solo: resolve the chosen character's id, select it, new chat, bind.
-        const idx = (context.characters || []).findIndex((c) => c.avatar === avatars[0]);
-        if (idx < 0) {
+    if (narratorProfileId) {
+        try {
+            await activateConnectionProfile(narratorProfileId);
+        } catch (error) {
+            console.error('Remodel: could not activate the selected Narrator connection profile', error);
+            showRoleplayToast('The Narrator connection profile could not be activated. Check API Connections and try again.');
             return;
         }
-        await context.selectCharacterById(idx, { switchMenu: false });
-        await createNewChatForScene(sceneId);
-        if (!getScene(sceneId)?.linkedChat) {
-            return;
-        }
-        await clearFreshRoleplayGreetingMessages();
-        await enterSceneViewport(getScene(sceneId));
+    }
+    await context.selectCharacterById(narratorIndex, { switchMenu: false });
+    await createNewChatForScene(sceneId);
+    if (!getScene(sceneId)?.linkedChat) {
         return;
     }
-
-    // Group: create it, bind the scene to its fresh chat, open it.
-    const groupId = await createRoleplayGroup(avatars, scene.title);
-    if (!groupId) {
-        return;
-    }
-    // Read the ids back off the real group object so they carry core's own
-    // types — openGroupChat() looks the group up with a STRICT === on id and
-    // includes() on chat id, so a stringified id silently fails that guard
-    // and nothing opens (confirmed live: the group was created but never
-    // entered). Pass group.id / group.chats[0] verbatim.
-    const group = findRoleplayGroup(groupId);
-    const nativeGroupId = group?.id ?? groupId;
-    const nativeChatId = group?.chats?.[0] ?? group?.chat_id;
-    if (nativeChatId === undefined || nativeChatId === null) {
-        return;
-    }
-    updateScene(sceneId, {
-        linkedChat: { type: 'group', groupId: String(nativeGroupId), chatId: String(nativeChatId) },
-        status: 'active',
+    const bound = getScene(sceneId);
+    const updated = updateScene(sceneId, {
+        staging: 'directed',
+        generationProfileIds: {
+            narrator: narratorProfileId,
+            loom: loomProfileId,
+        },
+        liveDirection: {
+            ...bound.liveDirection,
+            enabled: true,
+            mode: 'loom',
+            narratorRef: { kind: 'narrator', id: narratorAvatar, label: narratorCard.name },
+        },
     });
-    setActiveScene(sceneId);
-    // openGroupById is the complete "switch to this group" entry point — it
-    // sets selected_group AND loads the group's chat. context.openGroupChat
-    // alone does NOT select the group (it only switches chats within an
-    // already-selected group), so it silently no-ops for a just-created
-    // group — confirmed live. A fresh group has exactly one chat, which
-    // openGroupById opens.
-    await openGroupById(nativeGroupId);
-    await waitForChatIdSettled();
-    dismissProgrammaticGroupEditor();
     await clearFreshRoleplayGreetingMessages();
-    writeSceneMetadata(getScene(sceneId));
-    // openGroupById's CHAT_CHANGED can land before the scene metadata write
-    // settles, so set the workspace class directly here too (idempotent).
-    syncStoryWorkspaceClass(getScene(sceneId));
-    await enterSceneViewport(getScene(sceneId));
+    writeSceneMetadata(updated);
+    syncStoryWorkspaceClass(updated);
+    await enterSceneViewport(updated);
     renderRoleplayScene();
 }
 
 // Native solo and group chats begin by inserting each selected card's first
 // message. That is correct for ordinary SillyTavern chats, but a freshly cast
-// Remodel Scene has not begun yet: the Director should respond only after the
+// Remodel Scene has not begun yet: the Loom should respond only after the
 // user's first accepted action. This helper is called only during creation of a
 // brand-new Scene chat, never while opening an existing chat.
 async function clearFreshRoleplayGreetingMessages() {
@@ -5310,8 +5165,7 @@ async function addCharacterToRoleplayScene(newAvatar) {
         return false;
     }
     const group = findRoleplayGroup(groupId);
-    // Native id/chat-id types — openGroupChat guards with strict === (see
-    // beginRoleplaySceneWithCast).
+    // Keep core's native id/chat-id types: openGroupChat guards with strict ===.
     const nativeGroupId = group?.id ?? groupId;
     const nativeChatId = group?.chats?.[0] ?? group?.chat_id;
     if (nativeChatId === undefined || nativeChatId === null) {
@@ -5393,15 +5247,213 @@ async function reorderRoleplayCast(movedAvatar, targetAvatar) {
 
 // --- Roleplay cast picker (modal overlay) --------------------------------
 //
-// A tarot-styled character picker used both for scene creation (multi-select
-// → "Begin scene") and for adding to an existing scene's cast ("+"). It's a
-// self-contained overlay appended to <body>; selection state lives on the
-// element, and the confirm/cancel result is delivered via a callback. This
-// is deliberately Remodel's own UI (not core's native character list) so the
-// aesthetic matches and multi-select actually works.
+// Remodel-owned character pickers. New scenes choose one narrator; the
+// multi-select surface remains available for adding characters to an existing
+// group. Both are self-contained overlays appended to <body>.
 
 const ROLEPLAY_PICKER_ID = 'remodel-rp-cast-picker';
-const ROLEPLAY_DUET_PICKER_ID = 'remodel-rp-duet-picker';
+const ROLEPLAY_NARRATOR_PICKER_ID = 'remodel-rp-narrator-picker';
+
+/**
+ * Chooses the sole model-facing role in an editor turn. The Loom is pipeline
+ * machinery and therefore never appears here as a second character seat.
+ */
+function openRoleplayNarratorPicker({ sceneTitle = '', onConfirm } = {}) {
+    document.getElementById(ROLEPLAY_NARRATOR_PICKER_ID)?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = ROLEPLAY_NARRATOR_PICKER_ID;
+    overlay.className = 'remodel-rp-picker-scrim';
+    const activeProfileId = getContext().extensionSettings?.connectionManager?.selectedProfile || '';
+    overlay._remodelNarrator = {
+        narratorAvatar: '',
+        narratorProfileId: activeProfileId,
+        loomProfileId: activeProfileId,
+        onConfirm,
+    };
+    overlay.innerHTML = `
+        <div class="remodel-rp-picker remodel-rp-narrator-picker" role="dialog" aria-modal="true" aria-labelledby="remodel-rp-narrator-title" data-remodel-rp-picker-stop>
+            <div class="remodel-rp-picker-head">
+                <div>
+                    <div class="remodel-rp-picker-kicker">New roleplay scene</div>
+                    <div class="remodel-rp-picker-title" id="remodel-rp-narrator-title">Choose a narrator</div>
+                    <div class="remodel-rp-picker-hint">Pick the card that will draft every visible turn${sceneTitle ? ` in <strong>${escapeHtml(sceneTitle)}</strong>` : ''}. The Loom reviews mechanics and continuity behind the page; it is not a cast seat.</div>
+                </div>
+                <button type="button" class="remodel-rp-picker-x" data-remodel-rp-narrator-cancel aria-label="Close"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+            </div>
+            <div class="remodel-rp-generation-routes">
+                <div class="remodel-rp-generation-routes-copy">
+                    <span class="remodel-rp-generation-routes-title">Generation routes</span>
+                    <span class="remodel-rp-generation-routes-hint">Connection Profiles carry the API, model, preset, endpoint, and credentials together.</span>
+                </div>
+                <div class="remodel-rp-generation-route-grid">
+                    <label class="remodel-rp-generation-route">
+                        <span class="remodel-rp-generation-route-label"><i class="fa-solid fa-feather-pointed" aria-hidden="true"></i> Narrator</span>
+                        <select data-remodel-rp-narrator-profile aria-label="Narrator connection profile"></select>
+                        <span class="remodel-rp-generation-route-note">Native generation · full character prompt</span>
+                    </label>
+                    <label class="remodel-rp-generation-route">
+                        <span class="remodel-rp-generation-route-label"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Loom</span>
+                        <select data-remodel-rp-loom-profile aria-label="Loom connection profile"></select>
+                        <span class="remodel-rp-generation-route-note">Hidden continuity and mechanics pass</span>
+                    </label>
+                </div>
+            </div>
+            <div class="remodel-rp-picker-tools">
+                <label class="remodel-rp-picker-search-wrap">
+                    <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+                    <input type="text" class="remodel-rp-picker-search" data-remodel-rp-narrator-search placeholder="Search character cards" spellcheck="false" />
+                </label>
+                <span class="remodel-rp-picker-card-total" data-remodel-rp-narrator-total></span>
+            </div>
+            <div class="remodel-rp-picker-grid" data-remodel-rp-narrator-grid></div>
+            <div class="remodel-rp-picker-foot">
+                <span class="remodel-rp-picker-count" data-remodel-rp-narrator-status>Choose one narrator to continue</span>
+                <div class="remodel-rp-picker-actions">
+                    <button type="button" class="remodel-rp-picker-btn" data-remodel-rp-narrator-cancel>Cancel</button>
+                    <button type="button" class="remodel-rp-picker-btn remodel-rp-picker-go" data-remodel-rp-narrator-confirm disabled>Begin scene <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+    renderRoleplayNarratorPicker(overlay);
+    requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
+    overlay.querySelector('[data-remodel-rp-narrator-search]')?.focus();
+}
+
+function renderRoleplayNarratorPicker(overlay) {
+    const state = overlay._remodelNarrator;
+    const context = getContext();
+    const characters = (context.characters || []).filter((item) => item?.avatar && item.avatar !== 'none');
+    renderRoleplayGenerationRoutes(overlay, context);
+    const grid = overlay.querySelector('[data-remodel-rp-narrator-grid]');
+    if (grid) {
+        grid.innerHTML = characters.map((card) => {
+            const thumb = context.getThumbnailUrl('avatar', card.avatar);
+            const isChosen = state.narratorAvatar === card.avatar;
+            return `
+                <button type="button" class="remodel-rp-picker-card${isChosen ? ' remodel-rp-picked' : ''}"
+                        data-remodel-rp-narrator-pick="${escapeAttribute(card.avatar)}"
+                        aria-pressed="${String(isChosen)}"
+                        title="Choose ${escapeAttribute(card.name)} as narrator">
+                    <span class="remodel-rp-picker-av" ${thumb ? `style="background-image:url('${escapeAttribute(thumb)}')"` : ''}>${thumb ? '' : escapeHtml(roleplayInitials(card.name))}</span>
+                    <span class="remodel-rp-picker-card-copy">
+                        <span class="remodel-rp-picker-name">${escapeHtml(card.name)}</span>
+                        <span class="remodel-rp-picker-role">Narrator card</span>
+                    </span>
+                    <span class="remodel-rp-picker-check" aria-hidden="true"><i class="fa-solid fa-check"></i></span>
+                </button>`;
+        }).join('') || '<div class="remodel-rp-picker-empty">No character cards are available yet.</div>';
+    }
+
+    const selected = characters.find((card) => card.avatar === state.narratorAvatar);
+    const status = overlay.querySelector('[data-remodel-rp-narrator-status]');
+    if (status) status.textContent = selected ? `${selected.name} will narrate this scene` : 'Choose one narrator to continue';
+    const total = overlay.querySelector('[data-remodel-rp-narrator-total]');
+    if (total) total.textContent = `${characters.length} card${characters.length === 1 ? '' : 's'}`;
+    const confirm = overlay.querySelector('[data-remodel-rp-narrator-confirm]');
+    if (confirm) confirm.toggleAttribute('disabled', !selected);
+
+    const search = overlay.querySelector('[data-remodel-rp-narrator-search]');
+    if (search instanceof HTMLInputElement && search.value.trim()) filterRoleplayNarratorGrid(overlay, search.value);
+}
+
+function renderRoleplayGenerationRoutes(overlay, context = getContext()) {
+    const state = overlay._remodelNarrator;
+    const profiles = (context.extensionSettings?.connectionManager?.profiles || [])
+        .filter((profile) => {
+            const boundary = context.CONNECT_API_MAP?.[profile?.api]?.selected;
+            return profile?.id && profile?.name && ['openai', 'textgenerationwebui'].includes(boundary);
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+    const options = [
+        '<option value="">Current SillyTavern connection</option>',
+        ...profiles.map((profile) => {
+            const detail = [profile.api, profile.model].filter(Boolean).join(' · ');
+            return `<option value="${escapeAttribute(profile.id)}">${escapeHtml(profile.name)}${detail ? ` — ${escapeHtml(detail)}` : ''}</option>`;
+        }),
+    ].join('');
+
+    for (const [selector, value] of [
+        ['[data-remodel-rp-narrator-profile]', state.narratorProfileId],
+        ['[data-remodel-rp-loom-profile]', state.loomProfileId],
+    ]) {
+        const select = overlay.querySelector(selector);
+        if (!(select instanceof HTMLSelectElement)) continue;
+        select.innerHTML = options;
+        select.value = profiles.some((profile) => profile.id === value) ? value : '';
+    }
+}
+
+function filterRoleplayNarratorGrid(overlay, query) {
+    const needle = String(query || '').trim().toLowerCase();
+    overlay.querySelectorAll('[data-remodel-rp-narrator-pick]').forEach((card) => {
+        const name = card.querySelector('.remodel-rp-picker-name')?.textContent?.toLowerCase() ?? '';
+        card.style.display = !needle || name.includes(needle) ? '' : 'none';
+    });
+}
+
+function closeRoleplayNarratorPicker() {
+    const overlay = document.getElementById(ROLEPLAY_NARRATOR_PICKER_ID);
+    if (!overlay) return;
+    overlay.classList.remove('remodel-rp-picker-in');
+    setTimeout(() => overlay.remove(), 200);
+}
+
+function bindRoleplayNarratorPickerEvents() {
+    document.addEventListener('click', (event) => {
+        const overlay = document.getElementById(ROLEPLAY_NARRATOR_PICKER_ID);
+        if (!overlay) return;
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target) return;
+
+        if (target === overlay || target.closest('[data-remodel-rp-narrator-cancel]')) {
+            closeRoleplayNarratorPicker();
+            return;
+        }
+
+        const card = target.closest('[data-remodel-rp-narrator-pick]');
+        if (card) {
+            overlay._remodelNarrator.narratorAvatar = card.getAttribute('data-remodel-rp-narrator-pick');
+            renderRoleplayNarratorPicker(overlay);
+            return;
+        }
+
+        if (target.closest('[data-remodel-rp-narrator-confirm]')) {
+            const state = overlay._remodelNarrator;
+            if (!state.narratorAvatar) return;
+            const callback = state.onConfirm;
+            closeRoleplayNarratorPicker();
+            callback?.({
+                narratorAvatar: state.narratorAvatar,
+                narratorProfileId: state.narratorProfileId || null,
+                loomProfileId: state.loomProfileId || null,
+            });
+        }
+    });
+
+    document.addEventListener('change', (event) => {
+        const overlay = document.getElementById(ROLEPLAY_NARRATOR_PICKER_ID);
+        if (!overlay) return;
+        const target = event.target;
+        if (!(target instanceof HTMLSelectElement)) return;
+        if (target.matches('[data-remodel-rp-narrator-profile]')) {
+            overlay._remodelNarrator.narratorProfileId = target.value;
+        } else if (target.matches('[data-remodel-rp-loom-profile]')) {
+            overlay._remodelNarrator.loomProfileId = target.value;
+        }
+    });
+
+    document.addEventListener('input', (event) => {
+        const overlay = document.getElementById(ROLEPLAY_NARRATOR_PICKER_ID);
+        if (!overlay) return;
+        const search = event.target instanceof Element ? event.target.closest('[data-remodel-rp-narrator-search]') : null;
+        if (!(search instanceof HTMLInputElement)) return;
+        filterRoleplayNarratorGrid(overlay, search.value);
+    });
+}
 
 /**
  * Casts a Roleplay Scene by filling two named seats.
@@ -5412,202 +5464,8 @@ const ROLEPLAY_DUET_PICKER_ID = 'remodel-rp-duet-picker';
  * advances. A card already holding the other seat is shown as taken rather than
  * hidden, so swapping the two is one click rather than a reset.
  *
- * onConfirm: ({ directorAvatar, narratorAvatar }) => void
+ * onConfirm: ({ loomAvatar, narratorAvatar }) => void
  */
-function openRoleplayDuetPicker({ sceneTitle = '', onConfirm } = {}) {
-    document.getElementById(ROLEPLAY_DUET_PICKER_ID)?.remove();
-
-    const overlay = document.createElement('div');
-    overlay.id = ROLEPLAY_DUET_PICKER_ID;
-    overlay.className = 'remodel-rp-picker-scrim';
-    overlay._remodelDuet = { seat: 'narrator', directorAvatar: '', narratorAvatar: '', onConfirm };
-
-    overlay.innerHTML = `
-        <div class="remodel-rp-picker remodel-rp-duet" role="dialog" aria-modal="true" data-remodel-rp-picker-stop>
-            <div class="remodel-rp-picker-head">
-                <div>
-                    <div class="remodel-rp-picker-title">Cast ${sceneTitle ? escapeHtml(sceneTitle) : 'this scene'}</div>
-                    <div class="remodel-rp-picker-hint">A Roleplay Scene is two cards. The Narrator performs every visible line; the Director decides what happens and never speaks.</div>
-                </div>
-                <button type="button" class="remodel-rp-picker-x" data-remodel-rp-duet-cancel aria-label="Close">×</button>
-            </div>
-            <div class="remodel-rp-duet-seats" data-remodel-rp-duet-seats></div>
-            <input type="text" class="remodel-rp-picker-search" data-remodel-rp-duet-search placeholder="Search characters…" spellcheck="false" />
-            <div class="remodel-rp-picker-grid" data-remodel-rp-duet-grid></div>
-            <div class="remodel-rp-picker-foot">
-                <span class="remodel-rp-picker-count" data-remodel-rp-duet-status></span>
-                <div class="remodel-rp-picker-actions">
-                    <button type="button" class="remodel-rp-picker-btn" data-remodel-rp-duet-cancel>Cancel</button>
-                    <button type="button" class="remodel-rp-picker-btn remodel-rp-picker-go" data-remodel-rp-duet-confirm disabled>Begin scene</button>
-                </div>
-            </div>
-        </div>
-    `;
-
-    document.body.appendChild(overlay);
-    renderRoleplayDuetPicker(overlay);
-    requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
-    overlay.querySelector('[data-remodel-rp-duet-search]')?.focus();
-}
-
-const ROLEPLAY_DUET_SEATS = Object.freeze([
-    {
-        key: 'narrator',
-        field: 'narratorAvatar',
-        label: 'Narrator',
-        icon: 'fa-microphone-lines',
-        blurb: 'Writes every visible line',
-        empty: 'Choose who tells this story',
-    },
-    {
-        key: 'director',
-        field: 'directorAvatar',
-        label: 'Director',
-        icon: 'fa-clapperboard',
-        blurb: 'Decides cause and consequence, unseen',
-        empty: 'Choose who directs it',
-    },
-]);
-
-function renderRoleplayDuetPicker(overlay) {
-    const state = overlay._remodelDuet;
-    const context = getContext();
-    const characters = (context.characters || []).filter((item) => item?.avatar && item.avatar !== 'none');
-    const byAvatar = new Map(characters.map((item) => [item.avatar, item]));
-
-    const seats = overlay.querySelector('[data-remodel-rp-duet-seats]');
-    if (seats) {
-        seats.innerHTML = ROLEPLAY_DUET_SEATS.map((seat) => {
-            const avatar = state[seat.field];
-            const card = avatar ? byAvatar.get(avatar) : null;
-            const thumb = card ? context.getThumbnailUrl('avatar', card.avatar) : '';
-            const active = state.seat === seat.key;
-            return `
-                <button type="button" class="remodel-rp-duet-seat${active ? ' is-active' : ''}${card ? ' is-filled' : ''}"
-                        data-remodel-rp-duet-seat="${escapeAttribute(seat.key)}"
-                        aria-pressed="${active}">
-                    <span class="remodel-rp-duet-seat-av" ${thumb ? `style="background-image:url('${escapeAttribute(thumb)}')"` : ''}>${card ? '' : '<i class="fa-solid fa-plus" aria-hidden="true"></i>'}</span>
-                    <span class="remodel-rp-duet-seat-text">
-                        <span class="remodel-rp-duet-seat-role"><i class="fa-solid ${seat.icon}" aria-hidden="true"></i>${escapeHtml(seat.label)}</span>
-                        <span class="remodel-rp-duet-seat-name">${card ? escapeHtml(card.name) : escapeHtml(seat.empty)}</span>
-                        <span class="remodel-rp-duet-seat-blurb">${escapeHtml(seat.blurb)}</span>
-                    </span>
-                </button>`;
-        }).join('');
-    }
-
-    const grid = overlay.querySelector('[data-remodel-rp-duet-grid]');
-    if (grid) {
-        const activeSeat = ROLEPLAY_DUET_SEATS.find((seat) => seat.key === state.seat) || ROLEPLAY_DUET_SEATS[0];
-        const otherSeat = ROLEPLAY_DUET_SEATS.find((seat) => seat.key !== state.seat);
-        grid.innerHTML = characters.map((card) => {
-            const thumb = context.getThumbnailUrl('avatar', card.avatar);
-            const isChosen = state[activeSeat.field] === card.avatar;
-            // Held by the OTHER seat. Shown, not hidden: clicking it swaps the
-            // two, which is the most common correction.
-            const isTaken = otherSeat && state[otherSeat.field] === card.avatar;
-            return `
-                <button type="button" class="remodel-rp-picker-card${isChosen ? ' remodel-rp-picked' : ''}${isTaken ? ' remodel-rp-duet-taken' : ''}"
-                        data-remodel-rp-duet-pick="${escapeAttribute(card.avatar)}"
-                        title="${escapeAttribute(isTaken ? `${card.name} — currently the ${otherSeat.label}; choosing here swaps the seats` : card.name)}">
-                    <span class="remodel-rp-picker-av" ${thumb ? `style="background-image:url('${escapeAttribute(thumb)}')"` : ''}>${thumb ? '' : escapeHtml(roleplayInitials(card.name))}</span>
-                    <span class="remodel-rp-picker-name">${escapeHtml(card.name)}</span>
-                    ${isTaken ? `<span class="remodel-rp-duet-taken-tag">${escapeHtml(otherSeat.label)}</span>` : '<span class="remodel-rp-picker-check" aria-hidden="true">✓</span>'}
-                </button>`;
-        }).join('') || '<div class="remodel-rp-picker-empty">No characters available.</div>';
-    }
-
-    const ready = Boolean(state.directorAvatar && state.narratorAvatar);
-    const status = overlay.querySelector('[data-remodel-rp-duet-status]');
-    if (status) {
-        const activeSeat = ROLEPLAY_DUET_SEATS.find((seat) => seat.key === state.seat);
-        status.textContent = ready
-            ? 'Both seats filled'
-            : `Choosing the ${activeSeat?.label || 'Narrator'}`;
-    }
-    const confirm = overlay.querySelector('[data-remodel-rp-duet-confirm]');
-    if (confirm) confirm.toggleAttribute('disabled', !ready);
-
-    // Re-apply the live filter so re-rendering the grid does not undo a search.
-    const search = overlay.querySelector('[data-remodel-rp-duet-search]');
-    if (search instanceof HTMLInputElement && search.value.trim()) filterRoleplayDuetGrid(overlay, search.value);
-}
-
-function filterRoleplayDuetGrid(overlay, query) {
-    const needle = String(query || '').trim().toLowerCase();
-    overlay.querySelectorAll('[data-remodel-rp-duet-pick]').forEach((card) => {
-        const name = card.querySelector('.remodel-rp-picker-name')?.textContent?.toLowerCase() ?? '';
-        card.style.display = !needle || name.includes(needle) ? '' : 'none';
-    });
-}
-
-function closeRoleplayDuetPicker() {
-    const overlay = document.getElementById(ROLEPLAY_DUET_PICKER_ID);
-    if (!overlay) return;
-    overlay.classList.remove('remodel-rp-picker-in');
-    setTimeout(() => overlay.remove(), 200);
-}
-
-// One delegated listener set, bound once at init, gated on the picker existing.
-function bindRoleplayDuetPickerEvents() {
-    document.addEventListener('click', (event) => {
-        const overlay = document.getElementById(ROLEPLAY_DUET_PICKER_ID);
-        if (!overlay) return;
-        const target = event.target instanceof Element ? event.target : null;
-        if (!target) return;
-
-        if (target === overlay || target.closest('[data-remodel-rp-duet-cancel]')) {
-            closeRoleplayDuetPicker();
-            return;
-        }
-
-        const seatButton = target.closest('[data-remodel-rp-duet-seat]');
-        if (seatButton) {
-            overlay._remodelDuet.seat = seatButton.getAttribute('data-remodel-rp-duet-seat');
-            renderRoleplayDuetPicker(overlay);
-            return;
-        }
-
-        const card = target.closest('[data-remodel-rp-duet-pick]');
-        if (card) {
-            const avatar = card.getAttribute('data-remodel-rp-duet-pick');
-            const state = overlay._remodelDuet;
-            const activeSeat = ROLEPLAY_DUET_SEATS.find((seat) => seat.key === state.seat) || ROLEPLAY_DUET_SEATS[0];
-            const otherSeat = ROLEPLAY_DUET_SEATS.find((seat) => seat.key !== activeSeat.key);
-            // Picking the card the other seat holds swaps them, rather than
-            // leaving the same card in both seats — which setSceneDuetSeats
-            // would refuse anyway.
-            if (otherSeat && state[otherSeat.field] === avatar) {
-                state[otherSeat.field] = state[activeSeat.field];
-            }
-            state[activeSeat.field] = avatar;
-            // Advance to the empty seat if there is one, so the common path is
-            // two clicks with no seat-switching in between.
-            const unfilled = ROLEPLAY_DUET_SEATS.find((seat) => !state[seat.field]);
-            if (unfilled) state.seat = unfilled.key;
-            renderRoleplayDuetPicker(overlay);
-            return;
-        }
-
-        if (target.closest('[data-remodel-rp-duet-confirm]')) {
-            const state = overlay._remodelDuet;
-            if (!state.directorAvatar || !state.narratorAvatar) return;
-            const seats = { directorAvatar: state.directorAvatar, narratorAvatar: state.narratorAvatar };
-            const callback = state.onConfirm;
-            closeRoleplayDuetPicker();
-            callback?.(seats);
-        }
-    });
-
-    document.addEventListener('input', (event) => {
-        const overlay = document.getElementById(ROLEPLAY_DUET_PICKER_ID);
-        if (!overlay) return;
-        const search = event.target instanceof Element ? event.target.closest('[data-remodel-rp-duet-search]') : null;
-        if (!(search instanceof HTMLInputElement)) return;
-        filterRoleplayDuetGrid(overlay, search.value);
-    });
-}
-
 // mode: 'create' (choose a fresh cast) | 'add' (add to current scene).
 // excludeAvatars: characters already in the scene (hidden in 'add' mode).
 // onConfirm: (selectedAvatars: string[]) => void
@@ -5824,7 +5682,7 @@ function writeSceneMetadata(scene) {
  * `timeline.lorebookName` used to have exactly one consumer — story-world-info.js
  * — so a Timeline book did nothing whatsoever in Roleplay while the UI showed
  * it as bound. Chat lore is the only one of core's four bindings that resolves
- * without a selected character, which is what the Director's out-of-band scan
+ * without a selected character, which is what the Loom's out-of-band scan
  * needs; the module header on chat-lorebook.js has the full reasoning.
  *
  * @returns {string|null} the book now under our management, for the metadata.
@@ -5943,7 +5801,9 @@ function syncStoryWorkspaceClass(scene) {
     }
 
     if (enteringRoleplay) {
-        relocateRoleplayNativeButtons();
+        // Keep core's Chat Options and Extensions controls in their native
+        // homes. The roleplay workspace owns a deliberately small rail.
+        restoreNativeButtonsToOriginalHomes();
     } else if (enteringStoryDoc) {
         relocateStoryDocNativeButtons();
     } else {
@@ -6221,29 +6081,32 @@ function isRealStoryDocSceneActive() {
     return Boolean(scene && scene.mode === 'story' && scene.storyDocId);
 }
 
-function getScenePromptChoice(scene = getActiveScene()) {
-    const apiType = getPromptApiType();
-    const selectedId = scene?.promptRecipeIds?.[apiType] || null;
+function getScenePromptChoice(scene = getActiveScene(), requestedMode = null) {
+    const mode = requestedMode || scene?.mode || 'roleplay';
+    const apiType = mode === 'loom' ? 'chat' : getPromptApiType();
+    const selectedId = mode === 'loom' ? scene?.promptRecipeIds?.loom || null : scene?.promptRecipeIds?.[apiType] || null;
     const selected = getPromptStudioRecipe(selectedId);
-    const validSelection = selected?.mode === scene?.mode && selected?.apiType === apiType;
+    const validSelection = selected?.mode === mode && selected?.apiType === apiType;
     const recipe = validSelection
         ? selected
-        : getDefaultPromptStudioRecipe(scene?.mode || 'roleplay', apiType);
+        : getDefaultPromptStudioRecipe(mode, apiType);
     return {
+        mode,
         apiType,
         recipe,
         inherited: !validSelection,
     };
 }
 
-function renderScenePromptChoice(scene = getActiveScene(), compact = false) {
-    const { apiType, recipe, inherited } = getScenePromptChoice(scene);
+function renderScenePromptChoice(scene = getActiveScene(), compact = false, requestedMode = null) {
+    const { mode, apiType, recipe, inherited } = getScenePromptChoice(scene, requestedMode);
     const completion = apiType === 'chat' ? 'Chat' : 'Text';
+    const job = mode === 'loom' ? 'Loom' : mode === 'roleplay' ? 'Narrator' : 'Story';
     return `
-        <button type="button" class="remodel-scene-prompt-choice ${compact ? 'is-compact' : ''}" data-remodel-scene-prompt-choice title="Choose the prompt recipe for this Scene">
+        <button type="button" class="remodel-scene-prompt-choice ${compact ? 'is-compact' : ''}" data-remodel-scene-prompt-choice data-prompt-mode="${escapeAttribute(mode)}" title="Choose the ${escapeAttribute(job)} recipe for this Scene">
             <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
             <span class="remodel-scene-prompt-choice-copy">
-                <small>${inherited ? `${completion} default` : `${completion} recipe`}</small>
+                <small>${job} · ${inherited ? `${completion} default` : `${completion} recipe`}</small>
                 <strong>${escapeHtml(recipe?.name || 'No prompt recipe')}</strong>
             </span>
             <i class="fa-solid fa-chevron-down remodel-scene-prompt-choice-caret" aria-hidden="true"></i>
@@ -6254,20 +6117,21 @@ function renderScenePromptChoice(scene = getActiveScene(), compact = false) {
 function openScenePromptRecipeMenu(anchor) {
     const scene = getActiveScene();
     if (!scene) return;
-    const { apiType, recipe: current, inherited } = getScenePromptChoice(scene);
-    const defaultRecipe = getDefaultPromptStudioRecipe(scene.mode, apiType);
-    const recipes = getPromptStudioRecipes(scene.mode, apiType);
+    const requestedMode = anchor?.dataset?.promptMode || scene.mode;
+    const { mode, apiType, recipe: current, inherited } = getScenePromptChoice(scene, requestedMode);
+    const defaultRecipe = getDefaultPromptStudioRecipe(mode, apiType);
+    const recipes = getPromptStudioRecipes(mode, apiType);
     const items = [
         {
             id: '__default__',
             label: `Use default · ${defaultRecipe?.name || 'None'}`,
-            sublabel: `Follow the account ${scene.mode} ${apiType} default`,
+            sublabel: `Follow the account ${mode} ${apiType} default`,
             active: inherited,
         },
         ...recipes.map((recipe) => ({
             id: recipe.id,
             label: recipe.name,
-            sublabel: recipe.description || `${capitalizePromptLabel(scene.mode)} · ${apiType === 'chat' ? 'Chat Completion' : 'Text Completion'}`,
+            sublabel: recipe.description || `${capitalizePromptLabel(mode)} · ${apiType === 'chat' ? 'Chat Completion' : 'Text Completion'}`,
             active: !inherited && current?.id === recipe.id,
         })),
     ];
@@ -6278,7 +6142,7 @@ function openScenePromptRecipeMenu(anchor) {
         updateScene(latestScene.id, {
             promptRecipeIds: {
                 ...(latestScene.promptRecipeIds || {}),
-                [apiType]: recipeId === '__default__' ? null : recipeId,
+                [mode === 'loom' ? 'loom' : apiType]: recipeId === '__default__' ? null : recipeId,
             },
         });
         applyPromptStudioRuntimeRecipe();
@@ -7589,7 +7453,7 @@ function openPromptStudioPreviewModal(title) {
 // against that same text (resolveStoryWorldInfo's corpus scan reads doc+beat),
 // so further edits the user makes before actually sending can change what
 // activates — the one part of this preview that cannot be pinned down ahead
-// of time. Mirrors DIRECTOR_RETRIEVAL_NOTE's treatment of the Director's own
+// of time. Mirrors DIRECTOR_RETRIEVAL_NOTE's treatment of the Loom's own
 // retrieval caveat: same neutral callout, same reasoning, a different source
 // of drift. Always shown — unlike the diagnostics note below, this is not
 // conditional on what happened to resolve, it is a property of every preview.
@@ -7631,9 +7495,9 @@ async function openStoryPromptPreview() {
         body.textContent = formatPromptStudioPreview(compiled);
         populateStoryWorldInfoReport(overlay.querySelector('[data-remodel-storydoc-preview-report]'), assembled);
 
-        // Same by-source treatment the Director tab gets, off the same trace
+        // Same by-source treatment the Loom tab gets, off the same trace
         // shape and the same renderer — see renderPromptTraceSections. Story
-        // has no fallback-prompt path the way the Director does, so a trace
+        // has no fallback-prompt path the way the Loom does, so a trace
         // is always present here; the guard stays anyway rather than assuming
         // that instead of defending against an empty or malformed compile.
         const sourcesEl = overlay.querySelector('[data-remodel-rp-preview-sources]');
@@ -8393,7 +8257,7 @@ function ensureRoleplayRoot() {
                     <i class="fa-solid fa-users" aria-hidden="true"></i>
                     <span class="remodel-rp-cast-toggle-copy">
                         <strong>Cast</strong>
-                        <em data-remodel-rp-director-label>No Roleplay Director</em>
+                        <em data-remodel-rp-narrator-label>Narrator</em>
                     </span>
                     <small data-remodel-rp-cast-count>0</small>
                     <i class="fa-solid fa-chevron-down remodel-rp-cast-toggle-caret" aria-hidden="true"></i>
@@ -8421,12 +8285,12 @@ function renderRoleplayHeader(root) {
     const members = roleplaySceneMembers(getContext());
     const title = root.querySelector('[data-remodel-rp-scene-title]');
     const count = root.querySelector('[data-remodel-rp-cast-count]');
-    const director = root.querySelector('[data-remodel-rp-director-label]');
+    const narrator = root.querySelector('[data-remodel-rp-narrator-label]');
     if (title) title.textContent = scene?.title || 'Roleplay';
     if (count) count.textContent = String(members.length);
-    if (director) director.textContent = scene?.liveDirection?.directorRef?.label
-        ? `Director: ${scene.liveDirection.directorRef.label}`
-        : 'Choose a Roleplay Director';
+    if (narrator) narrator.textContent = scene?.liveDirection?.narratorRef?.label
+        ? `Narrator: ${scene.liveDirection.narratorRef.label}`
+        : 'Narrator';
 }
 
 // Builds the roleplay composer zone: a compact command dock above the persona
@@ -8465,7 +8329,7 @@ function renderRoleplayComposer(root) {
     // handler resolves the same function against the same inputs.
     //
     // Directed Scenes only. In free play these buttons map onto core's own
-    // regenerate/continue, which have no Director step to be between.
+    // regenerate/continue, which have no Loom step to be between.
     const step = isDirectedLiveScene(activeScene)
         ? describeLiveStepActions(activeScene)
         : { retry: { target: 'narrator', reason: 'Regenerate the last response' }, continue: { target: 'narrator', reason: 'Generate the next response' } };
@@ -8492,7 +8356,7 @@ function renderRoleplayComposer(root) {
             <button type="button" class="remodel-rp-command remodel-rp-act" data-remodel-rp-action="preview" title="Preview the final prompt">
                 <span class="remodel-rp-command-icon"><i class="fa-solid fa-eye" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Preview</span>
             </button>
-            <span class="remodel-rp-command-prompt">${renderScenePromptChoice(getActiveScene(), true)}</span>
+            <span class="remodel-rp-command-prompt">${renderScenePromptChoice(getActiveScene(), true, 'roleplay')}${renderScenePromptChoice(getActiveScene(), true, 'loom')}</span>
             <span class="remodel-live-flow-actions">
                 <button type="button" data-remodel-live-continue${directionUi.canContinue ? '' : ' hidden'}><i class="fa-solid fa-play"></i> Continue</button>
                 <button type="button" data-remodel-live-stop${directionUi.canStop ? '' : ' hidden'}><i class="fa-solid fa-stop"></i> Stop</button>
@@ -8526,18 +8390,8 @@ function renderRoleplayComposer(root) {
                     ${['slow', 'natural', 'fast', 'instant'].map((value) => `<option value="${value}"${directionUi.pacing === value ? ' selected' : ''}>${value[0].toUpperCase() + value.slice(1)}</option>`).join('')}
                 </select>
             </label>
-            <label class="remodel-live-pacing">Engine
-                <select data-remodel-live-mode aria-label="Roleplay engine">
-                    ${[['director', 'Director'], ['solo', 'Solo']].map(([value, label]) => `<option value="${value}"${(directionUi.mode || 'director') === value ? ' selected' : ''}>${label}</option>`).join('')}
-                </select>
-            </label>
-            ${directionUi.mode === 'solo' ? `<label class="remodel-live-pacing">Extractor
-                <select data-remodel-live-extractor aria-label="Extraction model" title="Which model records what changed after each turn. Pick a reasoning-capable profile to pair with a non-reasoning narrator.">
-                    ${[{ id: '', name: 'Same as narrator' }, ...listExtractionProfiles()].map((p) => `<option value="${escapeHtml(p.id)}"${p.id === getExtractionProfileId() ? ' selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
-                </select>
-            </label>` : ''}
         </div>
-        ${directionUi.reasoningWarning ? `<div class="remodel-live-reasoning-warning" role="status" title="Solo mode records what changed from the Narrator's reasoning. This model returned none, so state was inferred from the prose alone.">⚠ No reasoning from this model — enable thinking or use a reasoning-capable model for accurate state tracking.</div>` : ''}
+        ${directionUi.reasoningWarning ? `<div class="remodel-live-reasoning-warning" role="status" title="The Loom uses the Narrator's reasoning when it is available. This model returned none, so reconciliation used the prose alone.">⚠ No reasoning from this model — enable thinking or use a reasoning-capable model for more accurate reconciliation.</div>` : ''}
 
         <div class="remodel-rp-composer">
             <button type="button" class="remodel-rp-as-chip" data-remodel-rp-persona-menu title="Speak as… — click to switch persona">
@@ -8606,7 +8460,7 @@ function getLiveDirectionCast() {
 // The remodeled Scene can remain visible after Tavern navigation has cleared
 // core's selected character/group. Live Direction must generate against the
 // Scene's real native chat, not whichever chat happens to be selected (or no
-// chat at all). This hook runs before every Director request, including Retry,
+// chat at all). This hook runs before every Loom request, including Retry,
 // Next, and autonomous continuations, while leaving the composer draft intact.
 async function ensureRoleplaySceneChatReady(scene) {
     if (!scene?.linkedChat) return false;
@@ -8671,38 +8525,6 @@ async function removeLeakedNativeRoleplayGreetings(scene) {
     context.chat.splice(0, count);
     await context.saveChat();
     return true;
-}
-
-function openRoleplayDirectorMenu(anchor) {
-    const scene = getActiveScene();
-    if (!scene || !anchor) return;
-    const context = getContext();
-    const members = roleplaySceneMembers(context);
-    const currentId = scene.liveDirection?.directorRef?.id || '';
-    const narratorId = scene.liveDirection?.narratorRef?.id || '';
-    const items = [
-        ...(currentId ? [{ id: '__clear__', label: 'No Roleplay Director', sublabel: 'Clear the Director seat', active: false }] : []),
-        ...members.map((member) => {
-            const avatar = roleplayCharacterAvatar(member);
-            return {
-                id: avatar,
-                label: member.name,
-                avatar: avatar ? context.getThumbnailUrl('avatar', avatar) : '',
-                initials: roleplayInitials(member.name),
-                sublabel: avatar === narratorId ? 'Bound Narrator — unavailable as Director' : 'Directs privately; operation cards appear in the stream',
-                active: avatar === currentId,
-            };
-        }).filter((item) => item.id && item.id !== narratorId),
-    ];
-    openRoleplayMenu(anchor, items, (id) => {
-        const member = members.find((item) => roleplayCharacterAvatar(item) === id);
-        const directorRef = id === '__clear__' || !member ? null : { kind: 'character', id, label: member.name };
-        setSceneRoleplayDirector(scene.id, directorRef);
-        clearLiveDirectionFailure();
-        document.getElementById('remodel-direction-failure')?.remove();
-        showRoleplayToast(directorRef ? `${member.name} is now the Roleplay Director.` : 'Roleplay Director seat cleared.');
-        renderRoleplayScene();
-    });
 }
 
 // --- Turn-bar menus: persona switch + next speaker -----------------------
@@ -8867,30 +8689,18 @@ async function triggerRoleplaySpeaker(name) {
 // Prompt preview: assembles (but never sends) the exact prompts a normal turn
 // would produce right now, and shows them in a read-only modal split into two
 // tabs — Directed Roleplay sends two separately-authored prompts on a turn,
-// the hidden Director and the visible Narrator, and a user should be able to
+// the hidden Loom and the visible Narrator, and a user should be able to
 // see what each one will actually be sent.
 //
 // Narrator tab: reuses the same dry-run + formatter the Story workspace's
 // preview uses. Honest "here's what the model will actually see," including
 // whatever's typed in the composer.
-//
-// Director tab: compiles through the exact path a real direction pass takes
-// (previewDirectorPrompt → compileDirectorPrompt in live-direction.js — same
-// recipe resolution, same buildDirectionSources, same compilePromptRecipe) so
-// the compile mechanism can never drift from what actually gets sent. The one
-// piece that cannot be made exact is Variables/Goals retrieval, which is
-// scored against a message the user has not sent yet — see the note rendered
-// in the Director panel below and previewDirectorPrompt's own doc comment.
 const ROLEPLAY_PREVIEW_ID = 'remodel-rp-preview-modal';
-
-const previewTab = (id, label, active) =>
-    `<button type="button" data-remodel-rp-preview-tab="${id}" class="${active === id ? 'is-active' : ''}">${label}</button>`;
 
 // The hint under the title used to describe both prompts at once, which is
 // never what is on screen — only one tab is ever visible. One line per tab,
 // swapped by setRoleplayPreviewTab.
 const PREVIEW_TAB_HINTS = Object.freeze({
-    director: 'What the hidden Director will receive on the next turn — nothing is sent.',
     narrator: 'What the Narrator will receive on the next turn — nothing is sent.',
 });
 
@@ -8914,20 +8724,15 @@ const previewPanel = (id, activeTab, lead = '') => `
                 ${lead}${PREVIEW_VIEWS_MARKUP}
             </div>`;
 
-// Informational, not a fault: the compile path is exact and only the retrieval
-// scoring can move, so this gets the neutral callout. The red warn box in the
-// same panel stays reserved for usedFallback, which genuinely is a fault.
-const DIRECTOR_RETRIEVAL_NOTE = '<p class="remodel-rp-preview-note">Everything here compiles exactly like a real request, except Variables/Goals retrieval — it is scored against your current history and this composer draft, and can select differently once you actually send.</p>';
-
 async function openRoleplayPromptPreview() {
     // Build the modal shell immediately with a loading state so the click is
     // acknowledged, then fill it once the dry runs resolve.
     document.getElementById(ROLEPLAY_PREVIEW_ID)?.remove();
     const activeScene = getActiveScene();
     const directed = isDirectedLiveScene(activeScene);
-    // Free play never calls the Director, so default to whichever tab this
+    // Free play never calls the Loom, so default to whichever tab this
     // Scene will actually use on its next turn.
-    const defaultTab = directed ? 'director' : 'narrator';
+    const defaultTab = 'narrator';
     const overlay = document.createElement('div');
     overlay.id = ROLEPLAY_PREVIEW_ID;
     overlay.className = 'remodel-rp-picker-scrim';
@@ -8940,11 +8745,6 @@ async function openRoleplayPromptPreview() {
                 </div>
                 <button type="button" class="remodel-rp-picker-x" data-remodel-rp-preview-close aria-label="Close">×</button>
             </div>
-            <div class="remodel-rp-preview-tabs" data-remodel-rp-preview-tabs>
-                ${previewTab('director', 'Director', defaultTab)}
-                ${previewTab('narrator', 'Narrator', defaultTab)}
-            </div>
-            ${previewPanel('director', defaultTab, directed ? DIRECTOR_RETRIEVAL_NOTE : '')}
             ${previewPanel('narrator', defaultTab)}
         </div>
     `;
@@ -8955,19 +8755,18 @@ async function openRoleplayPromptPreview() {
     // view toggle, so every lookup has to be scoped to its own panel — an
     // overlay-wide querySelector would find whichever panel comes first.
     const narratorPanel = overlay.querySelector('[data-remodel-rp-preview-panel="narrator"]');
-    fillDirectorPreviewPanel(overlay.querySelector('[data-remodel-rp-preview-panel="director"]'), activeScene, directed);
 
     try {
         const { generateData, warnings } = await runPromptPreviewDryRun('normal');
         const attachedGoalIntents = activeScene ? getStoryGoalComposerIntents(activeScene.id) : [];
         if (attachedGoalIntents.length) {
-            warnings.push(`${attachedGoalIntents.length} attached Story Goal attempt${attachedGoalIntents.length === 1 ? '' : 's'} will be assessed by the hidden Game Director when sent; preview never rolls or mutates.`);
+            warnings.push(`${attachedGoalIntents.length} attached Story Goal attempt${attachedGoalIntents.length === 1 ? '' : 's'} will be assessed by the Loom after the Narrator drafts; preview never rolls or mutates.`);
         }
         // Names what actually still happens. Performer selection, openings and
-        // checkpoints were all deleted by the director rework: the Narrator
+        // checkpoints were all deleted by the loom rework: the Narrator
         // badge decides who speaks, pacing is derived from the finished prose,
         // and every mechanical request applies once the response is accepted.
-        if (directed) warnings.push('The Director has not run: its instruction to the performer, and any Goal or Variable change it requests, are decided when you send and applied once the response is accepted. Preview never rolls or mutates.');
+        if (directed) warnings.push('The Loom has not run: it receives the completed Narrator draft, then reconciles continuity, Goals, Variables, and uncertain outcomes before the response becomes visible. Preview never rolls or mutates.');
         const bodyEl = narratorPanel?.querySelector('[data-remodel-rp-preview-body]');
         const warnEl = narratorPanel?.querySelector('[data-remodel-rp-preview-warn]');
         if (bodyEl) {
@@ -8997,64 +8796,14 @@ async function openRoleplayPromptPreview() {
     }
 }
 
-// Fills the Director tab by compiling the active Director recipe against a
-// snapshot built for the current Scene — the same compile path
-// requestDirection uses for a real direction pass (see
-// previewDirectorPrompt/compileDirectorPrompt in live-direction.js) — so the
-// two can never drift apart. Runs independently of the Narrator dry run above
-// so one tab's failure never blocks the other from filling in.
-async function fillDirectorPreviewPanel(panel, scene, directed) {
-    const bodyEl = panel?.querySelector('[data-remodel-rp-preview-body]');
-    const warnEl = panel?.querySelector('[data-remodel-rp-preview-warn]');
-    if (!bodyEl) return;
-    if (!directed) {
-        bodyEl.textContent = '(This Scene is on Free play — no Director request is made on its next turn. Turn Live Direction on to preview it.)';
-        return;
-    }
-    try {
-        const { prompt, usedFallback, trace, contractOk, hasTags, hasFence } = await previewDirectorPrompt(scene);
-        bodyEl.textContent = formatPromptStudioPreview({ apiType: 'chat', messages: prompt });
-        // Keyed on usedFallback, not on "no recipe": compileDirectorPrompt also
-        // falls back when a recipe exists but compiles to nothing or lost its
-        // protocol block — exactly the user who most needs to be told they are
-        // looking at the built-in prompt, not their own recipe's output.
-        if (usedFallback && warnEl) {
-            warnEl.textContent = '⚠ No usable Director recipe — showing the built-in fallback prompt.';
-            warnEl.hidden = false;
-        } else if (!contractOk && warnEl) {
-            // The recipe compiles and will be sent exactly as shown. What it
-            // no longer carries is the part the REPLY PARSER depends on, and
-            // the symptom of that is silent: a Director writes prose, nothing
-            // tags it, and the whole reply is stored as one untagged note with
-            // any secret inside it. Said here because this panel is where an
-            // owner rewriting the protocol is standing.
-            const missing = [!hasTags && 'the notebook tags ({{director::notebook.tags}})', !hasFence && 'the state fence ({{director::state.fence}})'].filter(Boolean).join(' and ');
-            warnEl.textContent = `⚠ This prompt is missing ${missing}. It will be sent as shown, but the Director's reply cannot be parsed into typed entries — everything it writes lands as a single untagged note, secrets included, and no Goal or Variable request can be read.`;
-            warnEl.hidden = false;
-        }
-        // No trace on the fallback path: the cards would be captioning the
-        // user's recipe blocks over a prompt those blocks did not produce.
-        // That case keeps the raw dump and the red box that explains it.
-        const sourcesEl = panel.querySelector('[data-remodel-rp-preview-sources]');
-        const viewsEl = panel.querySelector('[data-remodel-rp-preview-views]');
-        if (Array.isArray(trace) && trace.length && sourcesEl && viewsEl) {
-            sourcesEl.innerHTML = await renderPromptTraceSections(trace, prompt);
-            sourcesEl.hidden = false;
-            viewsEl.hidden = false;
-            bodyEl.hidden = true;
-        }
-    } catch (err) {
-        bodyEl.textContent = `Could not assemble a Director preview.\n\n${String(err)}`;
-    }
-}
 
 /**
  * Sizes a list of prompt texts, and says what unit it managed to size them in.
  *
  * The Narrator's own per-source figures come from core's promptManager
  * tokenHandler, keyed by native identifier — which does not apply to the
- * Director or Story previews at all: neither one populates the native prompt
- * manager (the Director streams its own message array through
+ * Loom or Story previews at all: neither one populates the native prompt
+ * manager (the Loom streams its own message array through
  * sendOpenAIRequest — generateRawData and its schema were deleted with the
  * envelope; the Story preview compiles through compilePromptRecipe
  * directly). The only
@@ -9080,9 +8829,9 @@ async function measurePreviewTexts(texts) {
 
 /**
  * The BY SOURCE view for any surface that compiles through compilePromptRecipe
- * with `trace: true` — currently the Director tab and the Story preview.
+ * with `trace: true` — currently the Loom tab and the Story preview.
  * One function, not one per surface: both recipes concatenate adjacent
- * same-role blocks (the seeded Director recipe's five authored blocks arrive
+ * same-role blocks (the seeded Loom recipe's five authored blocks arrive
  * as two messages; a Story recipe's several same-role World Info/context
  * blocks fold the same way), and a second near-identical renderer is exactly
  * the shape of defect this codebase has repeatedly shipped — a rule or
@@ -9098,7 +8847,7 @@ async function measurePreviewTexts(texts) {
 async function renderPromptTraceSections(trace, messages) {
     // Measured per contribution rather than per block: a block that straddled
     // two messages would otherwise have its whole size counted into both of
-    // the groups it appears in. No Director source straddles — every one
+    // the groups it appears in. No Loom source straddles — every one
     // resolves to a single string — but a Story source can: worldInfoDepth
     // resolves to a `{messages: [...]}` array (see compilePromptRecipe), and
     // its parts can land in more than one message. Sizing per part rather
@@ -9185,7 +8934,7 @@ function setRoleplayPreviewTab(overlay, tab) {
     if (hintEl && PREVIEW_TAB_HINTS[tab]) hintEl.textContent = PREVIEW_TAB_HINTS[tab];
 }
 
-// Takes a scoping element, not necessarily the whole overlay: the Director
+// Takes a scoping element, not necessarily the whole overlay: the Loom
 // and Narrator tabs each pass their own panel so the toggle only switches
 // that tab's own body and cards, while the Story preview — which has no tab
 // panels of its own — passes its overlay directly, the same shape one level
@@ -9340,10 +9089,12 @@ function dismissDirectionFailureOnOutsideClick(panel) {
 function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
     const root = getRealRoleplayRoot();
     if (!root) return;
-    renderRoleplayDirectionFeed(root, getActiveScene());
-    ensureLiveDirectionCardInStream(root, run);
     const body = root.querySelector('[data-remodel-rp-typing-body]');
-    if (body && run?.acceptedVisibleText != null) body.textContent = run.acceptedVisibleText;
+    if (body && run?.acceptedVisibleText != null) {
+        // This buffer belongs only to the Loom. The native Narrator's private
+        // draft never enters the roleplay renderer.
+        body.textContent = run.acceptedVisibleText;
+    }
     const zone = root.querySelector('[data-remodel-rp-composer]');
     const flow = zone?.querySelector('[data-remodel-live-flow]');
     if (flow) {
@@ -9364,24 +9115,24 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
         const continueButton = zone.querySelector('[data-remodel-live-continue]');
         if (continueButton) continueButton.hidden = run?.state !== 'Waiting for you';
         const stopButton = zone.querySelector('[data-remodel-live-stop]');
-        // ui.canStop, not the existence of a run: a Director pass that has not
+        // ui.canStop, not the existence of a run: a Loom pass that has not
         // produced a visible run yet is still a busy pipeline the user must be
         // able to abandon. Keyed on `run` alone, Stop was hidden for the whole
         // multi-second hidden call and pressing nothing did nothing.
         if (stopButton) stopButton.hidden = !ui.canStop;
-        // Same reason — refusing a send while the Director is out is only
+        // Same reason — refusing a send while the Loom is out is only
         // legible if the composer says so.
         const sendButton = zone?.querySelector('[data-remodel-rp-send]');
         if (sendButton instanceof HTMLButtonElement) sendButton.disabled = ui.canSend === false;
     }
-    // A hidden Director pass — after beginDirection's opening notifyTransient
+    // A hidden Loom pass — after beginDirection's opening notifyTransient
     // but before generateDirectedPerformer has a record for
     // ensureLiveDirectionCardInStream to insert — gets its own streaming
     // shell instead of the generic "Composing" bubble, so the wait reads as
-    // the Director's own from the first moment rather than an unlabeled
+    // the Loom's own from the first moment rather than an unlabeled
     // placeholder.
     //
-    // The three-way choice is resolved by direction-chrome.js's pure
+    // The three-way choice is resolved by turn-chrome.js's pure
     // predicate, shared with renderRoleplayScene's tail below, because
     // deciding it by hand here is what shipped the defect: `run` is TRUTHY on
     // the two calls that mean "a pass just started" (notifyTransient and
@@ -9389,7 +9140,7 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
     // the card on exactly the calls that should have opened it.
     const mode = resolveDirectionChromeMode({ run, uiState: getLiveDirectionUiState(getActiveScene()) });
     if (mode !== 'directing') {
-        closeDirectionStreamCard(root);
+        closeLoomReviewIndicator(root);
     }
     // A recovered run at the end of its accepted response is deliberately
     // represented as "Waiting for you" so Continue can start a fresh
@@ -9402,127 +9153,34 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
         if (!root.querySelector('.remodel-rp-typing')) showRoleplayTypingIndicator(run.performer || null);
         return;
     }
-    // No run yet, but a Director pass is out. Survives re-render, unlike the
+    // No run yet, but a Loom pass is out. Survives re-render, unlike the
     // one-shot indicator handleRoleplaySend puts up at submit time — losing it
     // was half of why a hidden pass looked like an idle Scene. The generic
     // bubble comes down with it: the two are alternatives, and leaving a
-    // stale one up beside the Director's shell is the unlabeled wait this
+    // stale one up beside the Loom's shell is the unlabeled wait this
     // card exists to replace.
     if (mode === 'directing') {
         removeRoleplayTypingIndicator();
-        ensureDirectionStreamCard(root);
+        ensureLoomReviewIndicator(root, run?.phase);
     }
 }
 
-/**
- * Puts the current pass's Director card into the stream as soon as the pass has
- * one, rather than whenever the next full rebuild happens to run.
- *
- * The card was only ever painted by renderRoleplayScene(), so which side of the
- * narration it landed on depended on which incidental re-render fired first: an
- * autonomous continuation had one before the prose, a user send did not, and the
- * card only appeared once the response settled. Direction is decided BEFORE the
- * performer speaks, so the card belongs above the prose in both cases.
- *
- * Insert-before-the-typing-indicator keeps it there while the response reveals.
- */
-function ensureLiveDirectionCardInStream(root, run) {
-    if (!run?.directionId) return;
-    const stream = root.querySelector('[data-remodel-rp-stream]');
-    if (!stream) return;
-    if (stream.querySelector(`[data-remodel-direction-id="${CSS.escape(run.directionId)}"]`)) return;
-    const record = (getActiveScene()?.liveDirection?.directionLog || []).find((item) => item?.id === run.directionId);
-    if (!record) return;
+/** Show the hidden post-draft pass without exposing its private reply. */
+function ensureLoomReviewIndicator(root, phase = '') {
+    const stream = root?.querySelector('[data-remodel-rp-stream]');
+    if (!stream || stream.querySelector('[data-remodel-loom-review]')) return;
     stream.querySelector('.remodel-rp-empty')?.remove();
-    const card = buildRoleplayDirectionCard(record);
-    const typing = stream.querySelector('.remodel-rp-typing');
-    if (typing) stream.insertBefore(card, typing);
-    else stream.appendChild(card);
+    const row = document.createElement('div');
+    row.className = 'remodel-rp-loom-review';
+    row.dataset.remodelLoomReview = 'true';
+    const label = phase === 'narrator' ? 'The Narrator is drafting privately' : 'Preparing the Loom';
+    row.innerHTML = `<i class="fa-solid fa-wave-square" aria-hidden="true"></i><span>${label}</span><b><i></i><i></i><i></i></b>`;
+    stream.appendChild(row);
     requestAnimationFrame(() => { stream.scrollTop = stream.scrollHeight; });
 }
 
-/**
- * The Director's OWN streaming shell — shown from the moment a pass begins
- * (beginDirection's opening `notifyTransient('Directing')`), well before
- * ensureLiveDirectionCardInStream above has a real record to insert
- * (persistDirectionRecord only runs once the whole Director round-trip has
- * returned). Shares its outer look with the finished card
- * (remodel-rp-direction-stream-card/-inner, remodel-rp-direction-badge) but
- * is a distinct element — the finished card is a permanent record of what
- * happened; this one is torn down the moment that record lands or the pass
- * ends any other way (see closeDirectionStreamCard, called from
- * refreshLiveDirectionChrome).
- *
- * Shape follows openStoryStreamPreview/updateStoryStreamPreview: cumulative
- * text plus a reasoning disclosure that un-hides once reasoning is
- * non-empty — Story mode's own pattern for exactly this kind of live fill,
- * copied rather than reinvented.
- */
-function ensureDirectionStreamCard(root) {
-    const stream = root.querySelector('[data-remodel-rp-stream]');
-    if (!stream || stream.querySelector('[data-remodel-direction-live]')) return;
-    stream.querySelector('.remodel-rp-empty')?.remove();
-    const live = document.createElement('article');
-    live.className = 'remodel-rp-msg remodel-rp-direction-stream-card is-live';
-    live.dataset.remodelDirectionLive = 'true';
-    live.innerHTML = `
-        <div class="remodel-rp-direction-stream-inner">
-            <header>
-                <span class="remodel-rp-direction-badge"><i class="fa-solid fa-clapperboard"></i> Roleplay Director</span>
-                <span class="remodel-rp-direction-live-dots"><i></i><i></i><i></i></span>
-            </header>
-            <div class="remodel-rp-direction-live-text" data-remodel-direction-live-text></div>
-            <details class="remodel-rp-direction-section is-reasoning" data-remodel-direction-live-reasoning hidden>
-                <summary><i class="fa-solid fa-brain"></i> Reasoning</summary>
-                <pre class="remodel-rp-direction-reasoning" data-remodel-direction-live-reasoning-body></pre>
-            </details>
-        </div>`;
-    stream.appendChild(live);
-    requestAnimationFrame(() => { stream.scrollTop = stream.scrollHeight; });
-}
-
-/**
- * Fills the streaming shell with the Director's cumulative text/reasoning so
- * far. Registered as the `onDirectorChunk` hook (see initLiveDirection's
- * call site above) and shaped to match story-stream.js's onChunk contract
- * exactly — `{ text, reasoning }`, cumulative, same as
- * updateStoryStreamPreview reads.
- *
- * Fed for real: `beginDirection`'s onChunk closure calls
- * `hooks.onDirectorChunk(update)` on every chunk, unconditionally (the
- * once-per-pass journal entry beside it is a separate, first-chunk-only
- * record). So this fills live for the whole 101-202s of a Director call, and
- * the shell `ensureDirectionStreamCard` opened is not an empty placeholder.
- *
- * Returns silently when no shell is open. That is not a gap either: the shell
- * is opened by `refreshLiveDirectionChrome`/`renderRoleplayScene` whenever the
- * pass is in the Directing state (see `resolveDirectionChromeMode`), and a
- * chunk arriving when the Roleplay workspace is not on screen has nowhere to
- * go by definition.
- */
-function updateDirectionStreamCard(update) {
-    const live = getRealRoleplayRoot()?.querySelector('[data-remodel-direction-live]');
-    if (!live) return;
-    const body = live.querySelector('[data-remodel-direction-live-text]');
-    if (body) body.textContent = String(update?.text || '');
-    const panel = live.querySelector('[data-remodel-direction-live-reasoning]');
-    const thoughts = String(update?.reasoning || '').trim();
-    if (panel) {
-        // The panel only appears once the model actually reasons, so a
-        // non-reasoning model shows no empty console — same rule as Story's.
-        panel.hidden = !thoughts;
-        const pre = panel.querySelector('[data-remodel-direction-live-reasoning-body]');
-        if (pre && pre.textContent !== thoughts) {
-            pre.textContent = thoughts;
-            pre.scrollTop = pre.scrollHeight;
-        }
-    }
-    const stream = getRealRoleplayRoot()?.querySelector('[data-remodel-rp-stream]');
-    if (stream) stream.scrollTop = stream.scrollHeight;
-}
-
-function closeDirectionStreamCard(root) {
-    root?.querySelector('[data-remodel-direction-live]')?.remove();
+function closeLoomReviewIndicator(root) {
+    root?.querySelector('[data-remodel-loom-review]')?.remove();
 }
 
 // One-line-growing textarea, capped so a long message scrolls inside the
@@ -9551,12 +9209,12 @@ function stepAttrs(action, name) {
  *
  * Worth the extra word because the two targets are not interchangeable: a
  * Continue that speaks a standing direction costs one generation, and a
- * Continue that directs the next moment costs a Director call as well. The
+ * Continue that directs the next moment costs a Loom call as well. The
  * suffix is the only thing on screen that distinguishes them.
  */
 function stepLabel(verb, action) {
     if (!action.target) return verb;
-    return `${verb} · ${action.target === 'director' ? 'Director' : 'Narrator'}`;
+    return `${verb} · ${action.target === 'loom' ? 'Loom' : 'Narrator'}`;
 }
 
 // Maps the roleplay action buttons onto core's real controls. Reuses the
@@ -9567,7 +9225,7 @@ function handleRoleplayAction(action) {
         case 'regenerate': {
             if (isDirectedLiveScene(getActiveScene())) {
                 // Retry, not regenerate: re-runs the last STEP of the loop in
-                // place, which is the Director when a direction is standing
+                // place, which is the Loom when a direction is standing
                 // unspoken and the performer otherwise. retryLiveStep decides
                 // that from the same resolver the button is labelled from, so
                 // the label and the action cannot disagree.
@@ -9590,7 +9248,7 @@ function handleRoleplayAction(action) {
             if (isDirectedLiveScene(getActiveScene())) {
                 // Continue advances the loop by one step without touching
                 // what is already there. When a direction is standing that
-                // means asking the performer to speak it — no second Director
+                // means asking the performer to speak it — no second Loom
                 // call, which is the expensive half.
                 continueLiveStep(getActiveScene());
                 break;
@@ -9717,14 +9375,14 @@ function bindRoleplayComposerEvents() {
             const viewButton = target.closest('[data-remodel-rp-preview-view]');
             if (viewButton && previewOverlay.contains(viewButton)) {
                 event.preventDefault();
-                // Scoped to the panel the button lives in, so the Director and
+                // Scoped to the panel the button lives in, so the Loom and
                 // Narrator tabs keep their own view state.
                 setRoleplayPreviewView(viewButton.closest('[data-remodel-rp-preview-panel]'), viewButton.dataset.remodelRpPreviewView);
                 return;
             }
         }
 
-        // Popover menu (persona / next-speaker / Director) lives in <body>, outside the
+        // Popover menu (persona / next-speaker / Loom) lives in <body>, outside the
         // roleplay root — handle picks and outside-click-to-close here first.
         const menu = document.getElementById('remodel-rp-menu');
         if (menu) {
@@ -9739,7 +9397,7 @@ function bindRoleplayComposerEvents() {
             }
             // A click anywhere that isn't the menu itself (or the trigger that
             // would reopen it) closes it.
-            if (!menu.contains(target) && !target.closest('[data-remodel-rp-persona-menu], [data-remodel-rp-nextspeaker-menu], [data-remodel-rp-director-menu], [data-remodel-scene-prompt-choice]')) {
+            if (!menu.contains(target) && !target.closest('[data-remodel-rp-persona-menu], [data-remodel-rp-nextspeaker-menu], [data-remodel-scene-prompt-choice]')) {
                 closeRoleplayMenu();
                 // fall through — the click may also be a real control.
             }
@@ -9838,13 +9496,6 @@ function bindRoleplayComposerEvents() {
             return;
         }
 
-        const directorMenu = target.closest('[data-remodel-rp-director-menu]');
-        if (directorMenu) {
-            event.preventDefault();
-            openRoleplayDirectorMenu(directorMenu);
-            return;
-        }
-
         if (root.classList.contains('is-cast-open')
             && !target.closest('[data-remodel-rp-cast]')) {
             setRoleplayCastOpen(root, false);
@@ -9913,18 +9564,6 @@ function bindRoleplayComposerEvents() {
             return;
         }
 
-        const directionDismiss = target.closest('[data-remodel-direction-card-dismiss]');
-        if (directionDismiss) {
-            event.preventDefault();
-            const recordId = directionDismiss.getAttribute('data-remodel-direction-card-dismiss');
-            if (recordId && confirm('Discard this direction? Its notebook entries will be removed.')) {
-                dismissDirectionRecord(getActiveScene(), recordId);
-                document.getElementById('remodel-direction-failure')?.remove();
-                renderRoleplayScene();
-            }
-            return;
-        }
-
         // Per-bubble controls (edit / delete / swipe).
         const bubbleCtrl = target.closest('[data-remodel-rp-bubble]');
         if (bubbleCtrl) {
@@ -9950,33 +9589,6 @@ function bindRoleplayComposerEvents() {
             return;
         }
 
-        // The Director plaque is deliberately inside the expanded Cast
-        // roster: choosing a card here assigns the extension-only Director
-        // seat. It does not make that card speak in native chat.
-        const directorSeat = target.closest('[data-remodel-rp-director-seat]');
-        if (directorSeat) {
-            event.preventDefault();
-            event.stopPropagation();
-            const avatar = directorSeat.getAttribute('data-remodel-rp-director-seat');
-            const scene = getActiveScene();
-            const member = roleplaySceneMembers(getContext()).find(
-                (item) => roleplayCharacterAvatar(item) === avatar,
-            );
-            if (!scene || !member) return;
-            const currentId = scene.liveDirection?.directorRef?.id || '';
-            const directorRef = currentId === avatar
-                ? null
-                : { kind: 'character', id: avatar, label: member.name };
-            setSceneRoleplayDirector(scene.id, directorRef);
-            clearLiveDirectionFailure();
-            document.getElementById('remodel-direction-failure')?.remove();
-            showRoleplayToast(directorRef
-                ? `${member.name} is now the Roleplay Director.`
-                : 'Roleplay Director seat cleared.');
-            renderRoleplayScene();
-            setRoleplayCastOpen(document.getElementById('remodel-roleplay-root'), true);
-            return;
-        }
     });
 
     // Enter-to-send + autosize in the roleplay input; Enter-to-roll in the
@@ -10065,10 +9677,6 @@ function bindRoleplayComposerEvents() {
         if (!isRealRoleplayWorkspaceActive()) return;
         const pacing = event.target instanceof Element ? event.target.closest('[data-remodel-live-pacing]') : null;
         if (pacing instanceof HTMLSelectElement) setLiveDirectionPacing(getActiveScene(), pacing.value);
-        const mode = event.target instanceof Element ? event.target.closest('[data-remodel-live-mode]') : null;
-        if (mode instanceof HTMLSelectElement) setLiveDirectionMode(getActiveScene(), mode.value);
-        const extractor = event.target instanceof Element ? event.target.closest('[data-remodel-live-extractor]') : null;
-        if (extractor instanceof HTMLSelectElement) setExtractionProfileId(extractor.value);
     });
 }
 
@@ -10162,7 +9770,7 @@ function showRoleplayTypingIndicator(forcedPerformer = null) {
     // In a directed Scene the upcoming speaker is not a guess — it is the
     // Scene's bound Narrator. Without this, every call that could not name a
     // performer yet (the send handler's first paint, a stream rebuild during
-    // generation, the hidden Director pass) fell through to the group's "we
+    // generation, the hidden Loom pass) fell through to the group's "we
     // cannot know" branch and drew a CHARACTER bubble labelled "Composing",
     // while the calls that did know a performer drew the Narrator's manuscript
     // byline. Same pending response, two completely different rows depending
@@ -10495,12 +10103,7 @@ async function handleRoleplayBubbleControl(action, mesId, row) {
             if (!confirm('Delete this message? This cannot be undone.')) {
                 return;
             }
-            const deleted = context.chat[mesId];
-            const directionMeta = deleted?.extra?.remodelDirection;
             await context.deleteMessage(mesId);
-            if (directionMeta && !deleted.is_user) {
-                restoreStandingDirectionFromMessage(getActiveScene(), directionMeta);
-            }
             renderRoleplayScene();
             break;
         }
@@ -10673,19 +10276,11 @@ function renderRoleplayScene() {
     // Written onto the native prompt rather than injected at a chat depth, so
     // the recipe's own ordering places it. See setRemodelNativePromptContent.
     setRemodelNativePromptContent('storyGoals', formatStoryGoalsPrompt(activeRoleplayScene));
-    // Same mirroring as Story Goals above, under the Director's Notes source's
-    // own native identifier (remodel_director_notes) — this call, not the
-    // recipe editor, is what actually gets the Director's notebook into a real
-    // Narrator generation. Reasoning-first: when the Director's raw thinking
-    // tokens are stored for the latest turn, use them instead of the tagged
-    // journal entries that contaminate Narrator prose.
-    const latestTurn = readAllEntriesForOwner(activeRoleplayScene.timelineId, { sceneId: activeRoleplayScene.id })
-        .reduce((highest, entry) => Math.max(highest, Number(entry.turn) || 0), 0);
-    const storedReasoning = latestTurn > 0
-        ? readTurnReasoning(activeRoleplayScene.timelineId, { sceneId: activeRoleplayScene.id, turn: latestTurn })
-        : '';
-    const reasoningBridge = frameDirectorReasoning(storedReasoning);
-    setRemodelNativePromptContent('directorNotes', reasoningBridge || formatDirectorNotesPrompt(activeRoleplayScene));
+    // The editor engine injects the Narrator's grounding itself, through the
+    // guaranteed REMODEL_SOLO_DIRECTION extension prompt (see
+    // generateDirectedPerformer). Clear the legacy loomNotes slot so a stale
+    // recipe block cannot carry anything into the turn.
+    setRemodelNativePromptContent('loomContext', '');
     const stream = root.querySelector('[data-remodel-rp-stream]');
     if (!stream) {
         return;
@@ -10709,9 +10304,6 @@ function renderRoleplayScene() {
         empty.textContent = 'The scene is set. Write the first line below to begin.';
         stream.appendChild(empty);
     } else {
-        const pendingDirections = [...(Array.isArray(activeRoleplayScene?.liveDirection?.directionLog)
-            ? activeRoleplayScene.liveDirection.directionLog
-            : [])].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
         mesEls.forEach((mesEl, index) => {
             const mesId = Number(mesEl.getAttribute('mesid'));
             const message = context.chat[mesId];
@@ -10722,15 +10314,9 @@ function renderRoleplayScene() {
             // (a roll from many turns back is stale context, not something
             // that should keep taking up visual weight forever).
             const messagesSince = mesEls.length - 1 - index;
-            const messageTime = new Date(message.send_date || message.sendDate || 0).getTime();
-            while (pendingDirections.length && Number.isFinite(messageTime)
-                && new Date(pendingDirections[0].createdAt).getTime() <= messageTime) {
-                stream.appendChild(buildRoleplayDirectionCard(pendingDirections.shift()));
-            }
             const isHiddenLiveMessage = liveRun && !liveRun.acceptedComplete && !message.is_user && mesId === liveRun.messageId;
             if (!isHiddenLiveMessage) stream.appendChild(buildRoleplayMessage(mesId, message, { messagesSince }));
         });
-        pendingDirections.forEach((record) => stream.appendChild(buildRoleplayDirectionCard(record)));
         // Land at the latest line, same as the manuscript's scroll-to-bottom.
         requestAnimationFrame(() => {
             stream.scrollTop = stream.scrollHeight;
@@ -10739,14 +10325,13 @@ function renderRoleplayScene() {
 
     renderRoleplayHeader(root);
     renderRoleplayCast(root);
-    renderRoleplayDirectionFeed(root, activeRoleplayScene);
     renderRoleplayComposer(root);
     decorateStoryGoalStream(root, getActiveScene());
     renderStoryGoalsForRoleplay(root, getActiveScene());
     ensureRoleplayPanels();
 
     // A stream rebuild wipes the (non-.mes-backed) typing indicator, and the
-    // Director's live shell with it (stream.textContent = '' above). Put
+    // Loom's live shell with it (stream.textContent = '' above). Put
     // whichever one belongs back, so a full rebuild mid-wait (switching tabs
     // away and back, say) doesn't drop back to the unlabeled bubble — the
     // SAME predicate refreshLiveDirectionChrome uses, shared rather than
@@ -10759,7 +10344,7 @@ function renderRoleplayScene() {
         showRoleplayTypingIndicator(liveRun.performer);
         updateRoleplayTypingText(liveRun.acceptedVisibleText || '');
     } else if (chromeMode === 'directing') {
-        ensureDirectionStreamCard(root);
+        ensureLoomReviewIndicator(root);
     } else if (document.body.classList.contains('remodel-roleplay-generating')) {
         showRoleplayTypingIndicator();
     }
@@ -10774,7 +10359,6 @@ function ensureRoleplayPanels() {
     ensureRoleplayPanelGroup();
     ensureRoleplayRulesPanel();
     ensureRoleplayDicePanel();
-    ensureRoleplayPriorTextPanel();
     ensureRoleplayStatePanel();
 }
 
@@ -10925,21 +10509,8 @@ function ensureRoleplayPanelGroup() {
         <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="state" title="Timeline State" aria-label="Timeline State">
             <i class="fa-solid fa-chart-simple" aria-hidden="true"></i>
         </button>
-        <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="priortext" title="Prior Scene Text" aria-label="Prior Scene Text">
-            <i class="fa-solid fa-book-open" aria-hidden="true"></i>
-        </button>
-        <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-action="add-cast" title="Cast & Group Controls" aria-label="Cast & Group Controls">
-            <i class="fa-solid fa-users" aria-hidden="true"></i>
-        </button>
-        <div class="remodel-rp-panel-icon remodel-rp-native-slot" data-remodel-rp-native-slot="options_button" title="Chat Options"></div>
-        <div class="remodel-rp-panel-icon remodel-rp-native-slot" data-remodel-rp-native-slot="extensionsMenuButton" title="Extensions"></div>
     `;
     getRealSheld()?.appendChild(group);
-    // The rail may be built after syncStoryWorkspaceClass already flipped
-    // into roleplay (renderRoleplayScene calls ensureRoleplayPanels() on
-    // every render) — relocate here too so the slots don't sit empty on
-    // first render.
-    relocateRoleplayNativeButtons();
 }
 
 // Rules / Mechanics panel: a free-text scratchpad for the table's house
@@ -11255,25 +10826,23 @@ function renderRoleplayCast(root) {
     const context = getContext();
     const members = roleplaySceneMembers(context);
     const scene = getActiveScene();
-    const directorId = scene?.liveDirection?.directorRef?.id || '';
     const narratorId = scene?.liveDirection?.narratorRef?.id || '';
     const speakingName = roleplayCurrentSpeakerName(context);
     // A two-seat Scene's cast is not a list that happens to have two entries —
     // it is two named jobs. Both seats were bound when the Scene was cast, so
     // there is nothing to assign, add, remove, or reorder here.
-    const duet = isDuetScene(scene);
 
     const label = document.createElement('div');
     label.className = 'remodel-rp-cast-label';
-    label.textContent = duet ? 'Seats' : 'Cast';
+    label.textContent = 'Cast';
     cast.appendChild(label);
 
     // Remove + reorder are only meaningful in a group with more than one
     // member (a scene needs at least one character; order matters for the
     // group's turn/activation ordering).
     const isMultiMemberGroup = Boolean(context.groupId) && members.length > 1;
-    const canRemove = isMultiMemberGroup && !duet;
-    const canReorder = isMultiMemberGroup && !duet;
+    const canRemove = isMultiMemberGroup;
+    const canReorder = isMultiMemberGroup;
 
     members.forEach((member) => {
         const avatar = roleplayCharacterAvatar({ characterId: member.characterId, name: member.name });
@@ -11296,35 +10865,7 @@ function renderRoleplayCast(root) {
         const av = buildRoleplayAvatar(member.name, { className: 'remodel-rp-cast-avatar' });
         chip.appendChild(av);
 
-        if (duet) {
-            // Fixed badges. The seat is a property of the Scene, so it reads as
-            // a statement of what this card IS, not a control that might move.
-            const seat = avatar === directorId ? 'director' : (avatar === narratorId ? 'narrator' : '');
-            if (seat) {
-                const badge = document.createElement('span');
-                badge.className = `remodel-rp-seat-badge remodel-rp-seat-${seat}`;
-                badge.innerHTML = seat === 'director'
-                    ? '<i class="fa-solid fa-clapperboard" aria-hidden="true"></i><span>Director</span>'
-                    : '<i class="fa-solid fa-microphone-lines" aria-hidden="true"></i><span>Narrator</span>';
-                badge.title = seat === 'director'
-                    ? `${member.name} directs this scene and never speaks in it.`
-                    : `${member.name} performs every visible line in this scene.`;
-                chip.classList.add(`is-seat-${seat}`);
-                chip.appendChild(badge);
-            }
-        } else if (avatar && avatar !== narratorId) {
-            const director = document.createElement('button');
-            director.type = 'button';
-            director.className = 'remodel-rp-director-plaque';
-            director.dataset.remodelRpDirectorSeat = avatar;
-            director.title = directorId === avatar ? `${member.name} is the Roleplay Director — click to clear` : `Make ${member.name} the Roleplay Director`;
-            director.setAttribute('aria-pressed', String(directorId === avatar));
-            director.innerHTML = directorId === avatar
-                ? '<i class="fa-solid fa-clapperboard" aria-hidden="true"></i><span>Roleplay Director</span>'
-                : '<i class="fa-solid fa-clapperboard" aria-hidden="true"></i><span>Direct</span>';
-            chip.classList.toggle('is-roleplay-director', directorId === avatar);
-            chip.appendChild(director);
-        } else if (avatar === narratorId) {
+        if (avatar === narratorId) {
             const performer = document.createElement('span');
             performer.className = 'remodel-rp-performer-plaque';
             performer.innerHTML = '<i class="fa-solid fa-microphone-lines" aria-hidden="true"></i><span>Visible Narrator</span>';
@@ -11352,10 +10893,6 @@ function renderRoleplayCast(root) {
     // A two-seat Scene has no third seat to add a card to. Offering "+" here
     // would promote the group to three members and hand the extra card to
     // native activation, which is precisely the shape this model removes.
-    if (duet) {
-        return;
-    }
-
     // Divider + add-character affordance. In a group this opens core's
     // group management; solo scenes surface it too so the path to "add a
     // second character" (which promotes the solo chat) is always visible.
@@ -11370,82 +10907,6 @@ function renderRoleplayCast(root) {
     add.dataset.remodelRpAction = 'add-cast';
     add.textContent = '+';
     cast.appendChild(add);
-}
-
-function renderRoleplayDirectionFeed(root, scene) {
-    // Director selection belongs exclusively to the expanded Cast roster.
-    // Direction records themselves are inserted chronologically into the
-    // roleplay stream, so no detached floating Director bar is rendered.
-}
-
-function buildRoleplayDirectionCard(record) {
-    const row = document.createElement('article');
-    row.className = 'remodel-rp-msg remodel-rp-direction-stream-card';
-    row.dataset.remodelDirectionId = record.id;
-    const beats = record.constraints?.length
-        ? `<ul>${record.constraints.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
-        : '';
-    const openings = record.openings?.length
-        ? `<span><i class="fa-regular fa-lightbulb"></i> ${record.openings.map((item) => escapeHtml(item.label)).join(' · ')}</span>`
-        : '';
-    const mechanicalCount = Number(record.immediateCount || 0) + Number(record.checkpointCount || 0);
-    const trace = record.decisionTrace || {};
-    const traceItems = [
-        ...(trace.observations || []).map((item) => `<li><span>Observed</span>${escapeHtml(item)}</li>`),
-        ...(trace.intent ? [`<li><span>Intent</span>${escapeHtml(trace.intent)}</li>`] : []),
-        ...(trace.performerReason ? [`<li><span>Performer</span>${escapeHtml(trace.performerReason)}</li>`] : []),
-    ].join('');
-    // Each section folds independently so the card stays a one-line summary
-    // until you want the detail behind it.
-    const operations = Array.isArray(record.operations) ? record.operations : [];
-    const operationsSection = operations.length
-        // "on accept" is stated once here, not per line: every operation in
-        // this list applies under the same rule (see finalizeRunMessage), so
-        // repeating it per row carried no information, only noise.
-        ? `<details class="remodel-rp-direction-section">
-            <summary><i class="fa-solid fa-gears"></i> What it changed · applied on accept <b>${operations.length}</b></summary>
-            <ul class="remodel-rp-direction-ops">
-                ${operations.map((op) => `<li>
-                    <code>${escapeHtml(op.capability)}</code>
-                    ${op.reason ? `<span>${escapeHtml(op.reason)}</span>` : ''}
-                </li>`).join('')}
-            </ul>
-        </details>`
-        : (mechanicalCount
-            ? `<details class="remodel-rp-direction-section"><summary><i class="fa-solid fa-gears"></i> What it changed <b>${mechanicalCount}</b></summary><p class="remodel-rp-direction-note">Recorded before per-operation detail was captured, so only the count survives for this one.</p></details>`
-            : '');
-    const traceSection = traceItems
-        ? `<details class="remodel-rp-direction-section">
-            <summary><i class="fa-solid fa-diagram-project"></i> Decision trace</summary>
-            <p class="remodel-rp-direction-note">The Director's own declared rationale — a summary it wrote for you, not its private thinking.</p>
-            <ul class="remodel-rp-direction-trace-list">${traceItems}</ul>
-        </details>`
-        : '';
-    const reasoning = String(record.reasoning || '').trim();
-    const reasoningSection = reasoning
-        ? `<details class="remodel-rp-direction-section is-reasoning">
-            <summary><i class="fa-solid fa-brain"></i> Raw reasoning</summary>
-            <p class="remodel-rp-direction-note">Unedited chain-of-thought as the model returned it.</p>
-            <pre class="remodel-rp-direction-reasoning">${escapeHtml(reasoning)}</pre>
-        </details>`
-        : '';
-    const beatsSection = beats
-        ? `<details class="remodel-rp-direction-section" open>
-            <summary><i class="fa-solid fa-list-ol"></i> Beats for ${escapeHtml(record.performerLabel || 'the performer')}</summary>
-            ${beats}
-        </details>`
-        : '';
-
-    row.innerHTML = `<div class="remodel-rp-direction-stream-inner">
-        <header><span class="remodel-rp-direction-badge"><i class="fa-solid fa-clapperboard"></i> Roleplay Director</span><strong>${escapeHtml(record.directorLabel || 'Game Director')}</strong><small>${escapeHtml(formatRoleplayTime(record.createdAt))}</small><button type="button" class="remodel-rp-direction-dismiss" data-remodel-direction-card-dismiss="${escapeAttribute(record.id)}" title="Discard this direction and its notebook entries" aria-label="Discard direction"><i class="fa-solid fa-xmark"></i></button></header>
-        <p>${escapeHtml(record.objective)}</p>
-        ${beatsSection}
-        ${operationsSection}
-        ${traceSection}
-        ${reasoningSection}
-        <footer><span>Directing ${escapeHtml(record.performerLabel || 'the next performer')}</span>${openings}${record.hardPauseAfter ? '<span><i class="fa-solid fa-hand"></i> Hard pause</span>' : ''}</footer>
-    </div>`;
-    return row;
 }
 
 // Pointer-based drag-to-reorder for cast members. Native HTML5 drag-and-drop
@@ -11472,7 +10933,7 @@ function bindRoleplayCastDragEvents() {
         }
         const chip = event.target instanceof Element ? event.target.closest('.remodel-rp-cast-draggable') : null;
         // Don't start a drag from the remove "×" button.
-        if (!chip || (event.target instanceof Element && event.target.closest('[data-remodel-rp-cast-remove], [data-remodel-rp-director-seat]'))) {
+        if (!chip || (event.target instanceof Element && event.target.closest('[data-remodel-rp-cast-remove]'))) {
             return;
         }
         roleplayDrag.pointerId = event.pointerId;

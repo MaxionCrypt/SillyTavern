@@ -45,7 +45,7 @@ export function createConstitutionPool({ label = 'Resolve', current = 100, max =
     };
 }
 
-/** A stat reference is just owner + name — the same pair the Director uses. */
+/** A stat reference is just owner + name — the same pair the Loom uses. */
 export function normalizeStatRef(value) {
     if (!value || typeof value !== 'object') {
         return null;

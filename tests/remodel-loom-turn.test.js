@@ -1,20 +1,20 @@
 import { __setExtensionSettings } from './util/st-context-stub.js';
-import { isSoloMode, soloEnvelope } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/solo-direction.js';
+import { createLoomTurnEnvelope, isLoomMode } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-turn.js';
 import { setLiveDirectionMode } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { createArc, createScene, createTimeline, getScene } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/timeline-state.js';
 
 beforeEach(() => __setExtensionSettings({ remodel: {} }));
 
-test('isSoloMode is true only when the scene opts in', () => {
-    expect(isSoloMode({ liveDirection: { mode: 'solo' } })).toBe(true);
-    expect(isSoloMode({ liveDirection: { mode: 'director' } })).toBe(false);
-    expect(isSoloMode({ liveDirection: {} })).toBe(false);
-    expect(isSoloMode(null)).toBe(false);
+test('isLoomMode is true only when the scene opts in', () => {
+    expect(isLoomMode({ liveDirection: { mode: 'loom' } })).toBe(true);
+    expect(isLoomMode({ liveDirection: { mode: 'free' } })).toBe(false);
+    expect(isLoomMode({ liveDirection: {} })).toBe(false);
+    expect(isLoomMode(null)).toBe(false);
 });
 
-test('soloEnvelope builds a Director-free envelope that pauses after the turn', () => {
+test('createLoomTurnEnvelope builds the shared turn envelope', () => {
     const snapshot = { mechanics: { addressBook: { entries: [] }, variableRefs: new Map(), goalRefs: new Map() } };
-    const { envelope, storedTurn } = soloEnvelope({ id: 's1', timelineId: 't1' }, snapshot, 3);
+    const { envelope, storedTurn } = createLoomTurnEnvelope({ id: 's1', timelineId: 't1' }, snapshot, 3);
     expect(storedTurn).toBe(null);
     expect(envelope.reasoning).toBe('');
     expect(envelope.requests).toEqual([]);
@@ -25,17 +25,18 @@ test('soloEnvelope builds a Director-free envelope that pauses after the turn', 
     expect(envelope.directionId.length).toBeGreaterThan(0);
 });
 
-test('setLiveDirectionMode persists the chosen mode and rejects an invalid one', () => {
+test('setLiveDirectionMode accepts only the Loom engine', () => {
     const timeline = createTimeline('Mode Timeline');
     const arc = createArc(timeline.id, 'Mode Arc');
     const scene = createScene(arc.id, 'roleplay', 'Mode Scene');
 
-    expect(setLiveDirectionMode(scene, 'solo')).toBe(true);
-    expect(getScene(scene.id).liveDirection.mode).toBe('solo');
+    // Every directed scene resolves to Loom — the only engine.
+    expect(getScene(scene.id).liveDirection.mode).toBe('loom');
+    expect(setLiveDirectionMode(scene, 'loom')).toBe(true);
+    expect(getScene(scene.id).liveDirection.mode).toBe('loom');
 
-    expect(setLiveDirectionMode(scene, 'director')).toBe(true);
-    expect(getScene(scene.id).liveDirection.mode).toBe('director');
-
+    // The removed legacy engines and anything else are rejected.
+    expect(setLiveDirectionMode(scene, 'solo')).toBe(false);
     expect(setLiveDirectionMode(scene, 'bogus')).toBe(false);
-    expect(getScene(scene.id).liveDirection.mode).toBe('director');
+    expect(getScene(scene.id).liveDirection.mode).toBe('loom');
 });

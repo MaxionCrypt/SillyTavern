@@ -8,7 +8,7 @@ export const HARD_LIMIT = 16;
 export const DEFAULT_RECALL_WINDOW = 10;
 
 const DIRECT_WEIGHT = 2;
-// Above passive evidence and below the action naming it: the Director writing
+// Above passive evidence and below the action naming it: the Loom writing
 // "Morale is fraying" is a deliberate statement that Morale matters, but the
 // user acting on it right now matters more.
 const NOTEBOOK_WEIGHT = 1.5;
@@ -178,7 +178,7 @@ export function retrieveRelevantState({
             if (activatedCount) reasons.push(`${activatedCount} linked Lorebook entr${activatedCount === 1 ? 'y is' : 'ies are'} active.`);
             if (semantic) reasons.push(`Semantically relevant at ${bestThreshold.toFixed(2)}.`);
             if (recentIds.has(variable.id)) reasons.push('Recently relevant state remains continuous.');
-            if (noted) reasons.push('Named in a recent Director note.');
+            if (noted) reasons.push('Named in a recent Loom note.');
             if (namedByGoal) reasons.push('Named in an active Goal.');
             if (variable.retrieval.mode === 'always') reasons.push('Configured as always available.');
         }
@@ -212,7 +212,7 @@ export function retrieveRelevantState({
 }
 
 /**
- * Score Goals against the action, the recent fiction, the Director's notebook
+ * Score Goals against the action, the recent fiction, the Loom's notebook
  * and windowed recall. No vector channel: Goals have no lore links and no
  * indexed documents, and indexing them would add an embedding cost on every
  * Goal edit. Their text is short and distinctive, so name and keyword matching
@@ -246,7 +246,7 @@ export function scoreGoalRelevance({
         const inAction = needle && explicit.includes(needle) ? 1 : coverage(explicit, tokens);
         if (inAction >= 0.5) { channels.push('direct'); reasons.push('Named by the action.'); score += DIRECT_WEIGHT * inAction; }
         const inNotebook = needle && notebook.includes(needle) ? 1 : coverage(notebook, tokens);
-        if (inNotebook >= 0.5) { channels.push('notebook'); reasons.push('Written about in a recent Director note.'); score += NOTEBOOK_WEIGHT * inNotebook; }
+        if (inNotebook >= 0.5) { channels.push('notebook'); reasons.push('Written about in a recent Loom note.'); score += NOTEBOOK_WEIGHT * inNotebook; }
 
         // The strongest single mention, not the sum of all of them: a Goal named
         // in six older messages should not outrank one named in the last.
@@ -315,7 +315,7 @@ export function assignVariableRefs(selected) {
 }
 
 /**
- * The Variable lines the Director reads.
+ * The Variable lines the Loom reads.
  *
  * Deliberately NO `[vN]` prefix. The refs assignVariableRefs hands out are an
  * internal bookkeeping key for the retrieval diagnostics and the State drawer;
@@ -328,7 +328,7 @@ export function assignVariableRefs(selected) {
 export function serializeRetrievedVariables(listed) {
     // Empty is empty, not a sentence. The prompt renderer decides what an empty
     // list MEANS — "this Timeline has none yet" and "none matched this turn" are
-    // different things to tell a Director, and only it knows which applies.
+    // different things to tell a Loom, and only it knows which applies.
     if (!listed.length) return '';
     return listed.map(({ variable, reasons }) => {
         const subvalues = variable.subvalues.map((item) => `${item.label}: ${String(item.value)}`);

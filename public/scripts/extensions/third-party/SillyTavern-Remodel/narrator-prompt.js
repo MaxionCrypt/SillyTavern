@@ -1,5 +1,21 @@
 import { listSceneFacts, listCharStates, listEvents, getBeat } from './archivist-store.js';
+import { getSceneGoals } from './story-goals-store.js';
 import { canStreamStory } from './story-stream.js';
+
+/**
+ * The scene's active goals as narrative OBJECTIVES for the narrator view — what
+ * characters are trying to do, never the odds behind it. The odds and status
+ * numbers stay on the Loom's private board. Empty when none.
+ */
+export function buildGoalObjectives(sceneId) {
+    const goals = getSceneGoals(sceneId, { includeResolved: false, states: ['active', 'background'] });
+    if (!goals.length) return '';
+    const lines = goals.map((goal) => {
+        const desc = String(goal.description || '').trim();
+        return `- ${goal.title}${desc ? `: ${desc}` : ''}`;
+    });
+    return `## Objectives\n${lines.join('\n')}`;
+}
 
 // The Narrator's grounding window: the most recent chat lines, newest last,
 // bounded so the prompt stays affordable. Long-range memory is the archivist's
@@ -9,7 +25,7 @@ export const NARRATOR_HISTORY_MAX_MESSAGES = 40;
 
 // The Narrator is framed as a camera to make append-only intuitive: it can
 // only move forward, so it never restates what is already on the page.
-export const CAMERA_CONSTRAINT = 'You are a camera. You can only move forward. You see the current scene, you hear the director\'s instruction, and you write what happens next. You never cut away, never rewind, and never restate what is already on the page.';
+export const CAMERA_CONSTRAINT = 'You are a camera. You can only move forward. You see the current scene and write what happens next. You never cut away, never rewind, and never restate what is already on the page.';
 
 // The anti-rewriting instruction injected with every directed turn. The
 // Narrator generates natively and therefore sees the real chat history, so
@@ -19,15 +35,15 @@ export const APPEND_ONLY_DIRECTIVE = 'Continue the scene forward from the most r
 
 /**
  * Assemble the direction injected into the native Narrator prompt (the roleplay
- * recipe's Director's Notes slot): the append-only directive first, then the
- * archivist's structured state, then any Director direction. The directive is
- * always present, even when there is no state yet.
+ * recipe's Loom Context slot): the append-only directive first, then the
+ * Loom's readable Archive state. The directive is always present, even when
+ * there is no state yet.
  *
- * @param {{archivistState?: string, directorDirection?: string}} input
+ * @param {{archivistState?: string}} input
  * @returns {string}
  */
-export function buildDirectionInjection({ archivistState = '', directorDirection = '' } = {}) {
-    return [APPEND_ONLY_DIRECTIVE, archivistState, directorDirection]
+export function buildDirectionInjection({ archivistState = '' } = {}) {
+    return [APPEND_ONLY_DIRECTIVE, archivistState]
         .map((part) => String(part || '').trim())
         .filter(Boolean)
         .join('\n\n');
@@ -69,7 +85,7 @@ export function buildNarratorArchivistSections(timelineId, sceneId) {
 /**
  * Build the Narrator's message array. Order: a single system message (card +
  * persona + camera constraint), then world info, archivist state, and the
- * framed Director reasoning as system context, then the voice window as the
+ * framed turn reasoning as system context, then the voice window as the
  * only prior prose. The full chat history is deliberately absent.
  */
 export function compileNarratorPrompt(input = {}) {

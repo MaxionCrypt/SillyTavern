@@ -9,16 +9,16 @@
 //
 // - `getCharacterLore()` opens with `characters[this_chid]` — the single
 //   SELECTED character. A group chat at rest has no `this_chid`, so when Live
-//   Direction runs its own out-of-band scan to build the Director's snapshot,
+//   Direction runs its own out-of-band scan to build the Loom's snapshot,
 //   character lore resolves to nothing no matter whose card the book is on.
 //   During a native group generation core sets `this_chid` to the speaking
 //   member, so the performer resolves ITS OWN card's book and no one else's —
-//   which means a book on the Director's card is invisible to every path.
+//   which means a book on the Loom's card is invisible to every path.
 // - `getPersonaLore()` has the same shape, against the persona.
 // - `getGlobalLore()` applies everywhere, which is the opposite of what a
 //   per-Timeline book is for.
 // - `getChatLore()` reads `chat_metadata['world_info']` and consults nothing
-//   else. It is the one binding that resolves identically for the Director's
+//   else. It is the one binding that resolves identically for the Loom's
 //   scan and the performer's native generation.
 //
 // So the Timeline book becomes the chat book. Before this, `lorebookName` had

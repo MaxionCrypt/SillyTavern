@@ -5,7 +5,7 @@ import { __getExtensionSettings } from './util/st-context-stub.js';
 // A Goal is just a Goal. It used to be bindable to a Variable with a completion
 // threshold, so a reach converted a hit through an impact scale and moved that
 // Variable automatically. Both the scale and the binding are gone: if the
-// Director wants to treat a Variable as a Goal's constitution it says so in its
+// Loom wants to treat a Variable as a Goal's constitution it says so in its
 // notes and reads the value, rather than code wiring the two together.
 
 const TL = 'tl-goals-migration';

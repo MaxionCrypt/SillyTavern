@@ -198,7 +198,7 @@ describe('authority', () => {
         expect(variableNamed("Aiden's Corruption").authority).toBe('review');
     });
 
-    test('a later Director write to the invented fact defers for review instead of applying', async () => {
+    test('a later Loom write to the invented fact defers for review instead of applying', async () => {
         expect(run([createRequest()]).ok).toBe(true);
         const created = variableNamed("Aiden's Corruption");
         const { book } = await advertise();
@@ -269,7 +269,7 @@ describe('malformed requests are refused with a diagnostic, never partly applied
     });
 });
 
-describe('the Director is told the capability exists', () => {
+describe('the Loom is told the capability exists', () => {
     test('the dictionary rendered into the prompt carries variable.create', () => {
         const entry = getCapabilityDictionary().find((item) => item.name === 'variable.create');
 

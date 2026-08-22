@@ -639,7 +639,7 @@ export function renderDebugConsoleWorkspace() {
 
 /**
  * The Mechanics profile lives here rather than in a Variables workspace: it
- * decides whether the Director may change stored facts at all, and while that
+ * decides whether the Loom may change stored facts at all, and while that
  * pipeline is still being hardened the people who need the switch are the
  * people reading this journal. It moves to the Timeline State drawer once that
  * surface exists.
@@ -652,11 +652,9 @@ function renderMechanicsProfile() {
             <summary>Mechanics profile — <b>${profile.enabled ? 'enabled' : 'disabled'}</b></summary>
             <div class="remodel-debug-mechanics-grid">
                 <label class="is-wide"><input type="checkbox" data-remodel-debug-mechanics="enabled" ${profile.enabled ? 'checked' : ''}>
-                    Let the Director propose changes to Goals and Variables</label>
+                    Let the Loom propose changes to Goals and Variables</label>
                 <label>Context budget
                     <input type="number" min="1000" max="32000" step="500" data-remodel-debug-mechanics="contextBudget" value="${profile.contextBudget}"></label>
-                <label class="is-inert" title="Streaming removed the last caller that read this value. The Director's reply now runs through the same Chat Completion connection Story mode uses, which takes no response-length argument of its own — so this input is kept only so an existing saved value is not silently discarded, and no longer governs anything.">Director answer allowance <small>— no longer used; the connection's own response length applies instead</small>
-                    <input type="number" min="1500" max="32000" step="500" data-remodel-debug-mechanics="directorResponseTokens" value="${profile.directorResponseTokens}" disabled></label>
                 <label title="One budget covering both kinds. Goals and Variables are scored in a single ranking and the top of it travels, so a Goal-poor turn spends the budget on Variables and the reverse.">Goals and Variables per pass
                     <input type="number" min="1" max="16" data-remodel-debug-mechanics="retrievalLimit" value="${profile.retrievalLimit}"></label>
                 <label>Recent messages scanned
@@ -674,11 +672,8 @@ function renderMechanicsProfile() {
                         ${option('retry-once', 'Retry once, then pause', profile.failureBehavior)}
                     </select></label>
             </div>
-            <p class="remodel-debug-mechanics-note">The budget sizes how much mechanical state enters the prompt. The Director
-                answer allowance above no longer governs anything: the Director streams its reply now, through the same Chat
-                Completion connection Story mode uses, and that transport takes no response-length argument of its own — raise or
-                lower the Director's reply room from your connection's own settings instead. Left in place, disabled, rather than
-                deleted, so a value you had already set is not silently discarded.</p>
+            <p class="remodel-debug-mechanics-note">The budget sizes how much mechanical state enters the Loom recipe. Response
+                length and reasoning effort come from the Loom connection profile selected for the scene.</p>
         </details>`;
 }
 

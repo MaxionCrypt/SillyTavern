@@ -1,14 +1,14 @@
 // Story Goals — the oracle.
 //
-// This module owns the die and the arithmetic, and nothing else. The Director
+// This module owns the die and the arithmetic, and nothing else. The Loom
 // calls it and cannot fudge the answer: the roll, the margin, and whether a
 // reach hit are decided here.
 //
 // What it deliberately does NOT own is vocabulary. How favourable a chance is,
 // how far a meaningful shift moves — those are judgements, and they live in the
-// Director's editable prompt where the owner can change them. This module used
+// Loom's editable prompt where the owner can change them. This module used
 // to hold seven named rate bands and four shift magnitudes as lookup tables,
-// and `goal.shift` accepted only those four words; the Director could not
+// and `goal.shift` accepted only those four words; the Loom could not
 // express how far a Goal had actually moved. Deleting the tables is what lets
 // it state a number.
 //
@@ -72,7 +72,7 @@ export function clampRate(value) {
  * rolling *under* the rate.
  *
  * A margin >= 0 is a hit; a negative margin is a miss, and its magnitude says
- * how badly — which is the Director's to interpret in the fiction, not this
+ * how badly — which is the Loom's to interpret in the fiction, not this
  * module's to charge a penalty for.
  */
 export function margin(rate, roll, modifier = 0) {

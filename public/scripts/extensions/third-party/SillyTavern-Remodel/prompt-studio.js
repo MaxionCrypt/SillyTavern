@@ -15,11 +15,12 @@ import {
     PROMPT_API_TYPES,
     PROMPT_MODES,
     PROMPT_ROLES,
-    PROMPT_SOURCE_DEFINITIONS,
+    PROMPT_TEMPLATE_DEFINITIONS,
     captureTextTransport,
     clonePromptRecipe,
     createBlocksFromNativeChat,
     createPromptBlock,
+    createPromptBlockFromTemplate,
     createPromptRecipe,
     deletePromptRecipe,
     getActivePromptRecipe,
@@ -61,9 +62,10 @@ const state = {
     boundMode: null,
     boundApiType: null,
     boundRecipeId: null,
+    advancedUnlockedBlocks: new Set(),
 };
 
-const promptLog = { director: null, narrator: null, chat: null };
+const promptLog = { loom: null, narrator: null, chat: null, latest: null };
 
 let saveLabelTimer = null;
 let transportFeedbackTimer = null;
@@ -102,6 +104,19 @@ export function initPromptStudio({
     eventSource.on(event_types.PRESET_CHANGED, captureNativeSettingsIfChanged);
     eventSource.on(event_types.MAIN_API_CHANGED, () => syncPromptStudioForCurrentMode({ apply: true }));
     eventSource.on(event_types.CHATCOMPLETION_SOURCE_CHANGED, () => syncPromptStudioForCurrentMode({ apply: true }));
+    eventSource.on(event_types.GENERATE_AFTER_DATA, (generateData, dryRun) => {
+        if (dryRun || !generateData) return;
+        const runtimeMode = normalizeMode(state.getRuntimeMode());
+        const mode = runtimeMode === 'roleplay' ? 'narrator' : 'chat';
+        const recipe = getCurrentPromptStudioRecipe(runtimeMode, getPromptApiType());
+        captureSentPromptLog(mode, {
+            recipeName: recipe?.name || capitalize(runtimeMode),
+            messages: Array.isArray(generateData.prompt) ? generateData.prompt : [],
+            text: typeof generateData.prompt === 'string' ? generateData.prompt : '',
+            request: generateData,
+            transport: getPromptApiType(),
+        });
+    });
     eventSource.on(event_types.GENERATE_BEFORE_COMBINE_PROMPTS, () => {
         if (state.getRuntimeMode() === 'roleplay' && getPromptApiType() === 'text') {
             state.roleplayTextPending = true;
@@ -140,7 +155,7 @@ export function getCurrentPromptStudioRecipe(mode = state.getRuntimeMode(), apiT
 /**
  * Which prompt modes may be mirrored into SillyTavern's native Prompt Manager.
  *
- * Director recipes must never be: they are compiled by Remodel for the hidden
+ * Loom recipes must never be: they are compiled by Remodel for the hidden
  * directing call. Applying one to native would make the performing character
  * generate while reading directing instructions.
  */
@@ -148,10 +163,10 @@ export function isNativeApplicableMode(mode) {
     return mode === 'roleplay' || mode === 'story';
 }
 
-/** The active Director recipe, or null when none is configured. */
-export function resolveDirectorRecipe() {
-    const recipe = getActivePromptRecipe('director', 'chat');
-    return recipe && recipe.mode === 'director' ? recipe : null;
+/** The active Loom recipe, or null when none is configured. */
+export function resolveLoomRecipe() {
+    const recipe = getActivePromptRecipe('loom', 'chat');
+    return recipe && recipe.mode === 'loom' ? recipe : null;
 }
 
 export function getPromptStudioRecipes(mode, apiType) {
@@ -215,7 +230,7 @@ export function syncPromptStudioForCurrentMode({ apply = false } = {}) {
  * Adjacent blocks that share a role are merged into one message (see
  * appendMessage below), and `messages` records only `{role, content}` — so by
  * the time any caller sees the result, which authored block produced which
- * paragraph is gone. The default Director recipe's five blocks arrive as two
+ * paragraph is gone. The default Loom recipe's blocks arrive as two
  * messages this way. `trace: true` asks for that accounting back: one record
  * per enabled block, naming its source key, its human label, its role, its own
  * resolved text before merging, and the index of the message it landed in.
@@ -226,8 +241,8 @@ export function syncPromptStudioForCurrentMode({ apply = false } = {}) {
  * the Prompt Studio preview and the real request compile through this same
  * function and must agree byte for byte, which is the only reason the preview
  * can be trusted. It is asserted directly in
- * tests/remodel-director-preview-trace.test.js and again, end to end, by
- * tests/remodel-director-preview-parity.test.js (the preview side asks for a
+ * tests/remodel-loom-preview-trace.test.js and again, end to end, by
+ * tests/remodel-loom-preview-parity.test.js (the preview side asks for a
  * trace, the real side does not, and the two message arrays must still match).
  */
 export function compilePromptRecipe(recipe, sources = {}, { includeUnresolved = false, macroOptions = {}, outlets = {}, trace = false } = {}) {
@@ -254,11 +269,18 @@ export function compilePromptRecipe(recipe, sources = {}, { includeUnresolved = 
         if (!block.enabled) continue;
         const parts = [];
         if (block.kind === 'message') {
-            parts.push(appendMessage(block.role, block.content || ''));
+            const expanded = expandRecipeMessage(recipe, block.content || '', sources, includeUnresolved);
+            if (expanded?.messages) {
+                for (const message of expanded.messages) {
+                    parts.push(appendMessage(message?.role || block.role, message?.content || ''));
+                }
+            } else {
+                parts.push(appendMessage(block.role, expanded?.content ?? block.content ?? ''));
+            }
         } else {
             const provided = sources[block.sourceKey];
             // A source may resolve lazily from the block's own settings (e.g.
-            // directorNotes' `depth`) instead of a flat value the caller
+            // loomNotes' `depth`) instead of a flat value the caller
             // already computed. This is the only way settings reach the
             // compile: the resolver function receives block.settings as its
             // argument and returns ordinary content, so whatever it computes
@@ -315,11 +337,12 @@ export function compilePromptRecipe(recipe, sources = {}, { includeUnresolved = 
  * having contributed nothing rather than dropping it silently).
  */
 function describeTracedBlock(recipe, block, parts) {
+    const macros = block.kind === 'message' ? findRecipeMacros(recipe, block.content || '') : [];
     return {
         blockId: block.id || null,
         kind: block.kind,
         sourceKey: block.kind === 'source' ? block.sourceKey || null : null,
-        label: block.kind === 'source' ? getSourceLabel(recipe, block.sourceKey) : 'Authored message',
+        label: block.kind === 'source' ? getSourceLabel(recipe, block.sourceKey) : (macros.length ? macros.map((item) => item.label).join(' + ') : 'Authored message'),
         role: parts[0]?.role || (block.role === 'instruction' ? 'system' : block.role),
         // The block's own resolved text, before it was concatenated into a
         // shared message — the thing the raw dump can no longer show.
@@ -336,16 +359,82 @@ function describeTracedBlock(recipe, block, parts) {
     };
 }
 
+const RECIPE_MACRO_PATTERN = /{{\s*([a-z][\w.-]*)(?:\s+([^{}]*?))?\s*}}/gi;
+
+/** Expand Remodel recipe macros without interfering with SillyTavern macros. */
+function expandRecipeMessage(recipe, content, sources, includeUnresolved) {
+    const raw = String(content || '');
+    const whole = parseWholeRecipeMacro(recipe, raw);
+    if (whole) {
+        const resolved = resolveRecipeMacro(whole, sources, includeUnresolved);
+        if (resolved && typeof resolved === 'object' && Array.isArray(resolved.messages)) return resolved;
+    }
+    return {
+        content: raw.replace(RECIPE_MACRO_PATTERN, (token, name, rawArgs) => {
+            const invocation = getRecipeMacroDefinition(recipe, name, rawArgs);
+            if (!invocation) return token;
+            const resolved = resolveRecipeMacro(invocation, sources, includeUnresolved);
+            if (resolved && typeof resolved === 'object' && Array.isArray(resolved.messages)) {
+                return resolved.messages.map((message) => String(message?.content || '')).filter(Boolean).join('\n\n');
+            }
+            return String(resolved || '');
+        }),
+    };
+}
+
+function findRecipeMacros(recipe, content) {
+    const found = [];
+    String(content || '').replace(RECIPE_MACRO_PATTERN, (_token, name, rawArgs) => {
+        const invocation = getRecipeMacroDefinition(recipe, name, rawArgs);
+        if (invocation) found.push(invocation);
+        return _token;
+    });
+    return found;
+}
+
+function parseWholeRecipeMacro(recipe, content) {
+    const match = String(content || '').trim().match(/^{{\s*([a-z][\w.-]*)(?:\s+([^{}]*?))?\s*}}$/i);
+    return match ? getRecipeMacroDefinition(recipe, match[1], match[2]) : null;
+}
+
+function getRecipeMacroDefinition(recipe, name, rawArgs = '') {
+    const definition = getSourceDefinitions(recipe).find((item) => item.macro.toLowerCase() === String(name).toLowerCase());
+    return definition ? { ...definition, args: parseMacroArguments(rawArgs) } : null;
+}
+
+/** Named arguments support numbers, booleans, quoted strings, and bare words. */
+export function parseMacroArguments(raw = '') {
+    const args = {};
+    const pattern = /([\w.-]+)\s*=\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+)/g;
+    let match;
+    while ((match = pattern.exec(String(raw || '')))) {
+        let value = match[2];
+        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1).replace(/\\([\\"'])/g, '$1');
+        } else if (/^-?\d+(?:\.\d+)?$/.test(value)) value = Number(value);
+        else if (/^(true|false)$/i.test(value)) value = value.toLowerCase() === 'true';
+        args[match[1]] = value;
+    }
+    if (args.messages !== undefined && args.depth === undefined) args.depth = args.messages;
+    return args;
+}
+
+function resolveRecipeMacro(invocation, sources, includeUnresolved) {
+    const provided = sources?.[invocation.key];
+    if (provided == null) return includeUnresolved ? `[Macro: {{${invocation.macro}}}]` : '';
+    return typeof provided === 'function' ? provided(invocation.args) : provided;
+}
+
 /** Attaches the trace only when the caller asked for it; never touches `messages`. */
 function withPromptTrace(compiled, traceEntries, wanted) {
     return wanted ? { ...compiled, trace: traceEntries } : compiled;
 }
 
 /**
- * Expand `{{outlet::name}}` and `{{director::name}}` from the same map.
+ * Expand a named `{{outlet::name}}` supplied by the active compiler.
  *
  * Two spellings, one mechanism, because they are the same idea reached from
- * two directions. Story recipes fill outlets from World Info; a Director
+ * two directions. Story recipes fill outlets from World Info; a Loom
  * recipe fills them with the parts of its contract that the PARSER depends on
  * — the notebook tags, the state fence, the capability list.
  *
@@ -358,7 +447,7 @@ function withPromptTrace(compiled, traceEntries, wanted) {
  * that renders it.
  */
 function resolvePromptOutlets(content, outlets) {
-    return String(content || '').replace(/{{(?:outlet|director)::(.+?)}}/gi, (_, name) => {
+    return String(content || '').replace(/{{outlet::(.+?)}}/gi, (_, name) => {
         const value = outlets?.[String(name).trim()];
         return Array.isArray(value) ? value.join('\n') : String(value || '');
     });
@@ -386,17 +475,19 @@ export function renderPromptStudioWorkspace() {
                         <span class="remodel-prompt-kicker">Prompt Studio</span>
                         <h2>Recipes</h2>
                     </div>
-                    <button type="button" class="remodel-prompt-icon-button ${state.showLog ? 'is-active' : ''}" data-remodel-prompt-log-toggle title="Prompt Log" aria-label="Prompt Log" aria-pressed="${state.showLog ? 'true' : 'false'}">
-                        <i class="fa-solid fa-clipboard-list" aria-hidden="true"></i>
-                    </button>
-                    <button type="button" class="remodel-prompt-icon-button" data-remodel-prompt-create title="New prompt" aria-label="New prompt">
-                        <i class="fa-solid fa-plus" aria-hidden="true"></i>
-                    </button>
+                    <div class="remodel-prompt-library-actions">
+                        <button type="button" class="remodel-prompt-icon-button ${state.showLog ? 'is-active' : ''}" data-remodel-prompt-log-toggle title="Prompt Log" aria-label="Prompt Log" aria-pressed="${state.showLog ? 'true' : 'false'}">
+                            <i class="fa-solid fa-clipboard-list" aria-hidden="true"></i>
+                        </button>
+                        <button type="button" class="remodel-prompt-icon-button" data-remodel-prompt-create title="New prompt" aria-label="New prompt">
+                            <i class="fa-solid fa-plus" aria-hidden="true"></i>
+                        </button>
+                    </div>
                 </div>
                 <div class="remodel-prompt-matrix" aria-label="Prompt category">
                     ${renderFilterGroup('mode', PROMPT_MODES, state.mode, 'Mode')}
-                    ${renderFilterGroup('api', PROMPT_API_TYPES, state.apiType, 'Transport', state.mode === 'director'
-                        ? { text: 'Director recipes are Chat Completion only' }
+                    ${renderFilterGroup('api', PROMPT_API_TYPES, state.apiType, 'Transport', state.mode === 'loom'
+                        ? { text: 'Loom recipes are Chat Completion only' }
                         : null)}
                 </div>
                 <label class="remodel-prompt-search">
@@ -446,7 +537,7 @@ function renderRecipeRow(recipe) {
 function renderRecipeEditor(recipe) {
     const active = isPromptRecipeActive(recipe.id);
     const usedByScene = state.isRecipeInUse(recipe.id);
-    const availableSources = getAvailableSources(recipe);
+    const availableTemplates = getAvailableTemplates(recipe);
     return `
         <header class="remodel-prompt-editor-head">
             <div class="remodel-prompt-editor-title">
@@ -470,7 +561,7 @@ function renderRecipeEditor(recipe) {
                     <span class="remodel-prompt-kicker">Instructions</span>
                     <h3>Message stack</h3>
                 </div>
-                <p>Messages are sent from top to bottom. Linked sources resolve when a request is assembled.</p>
+                <p>Messages are sent from top to bottom. Macros resolve from the active scene when the request is assembled.</p>
             </div>
             <div class="remodel-prompt-blocks" data-remodel-prompt-blocks>
                 ${(recipe.blocks || []).map((block, index) => renderPromptBlock(recipe, block, index)).join('')}
@@ -484,13 +575,14 @@ function renderRecipeEditor(recipe) {
                 </label>
                 <button type="button" data-remodel-prompt-add-message><i class="fa-solid fa-plus"></i> Add message</button>
                 <label>
-                    <span>Linked context</span>
-                    <select data-remodel-prompt-add-source>
-                        ${availableSources.map((source) => `<option value="${escapeAttribute(source.key)}">${escapeHtml(source.label)}</option>`).join('')}
+                    <span>Template</span>
+                    <select data-remodel-prompt-add-template>
+                        ${availableTemplates.map((template) => `<option value="${escapeAttribute(template.key)}">${escapeHtml(template.label)}</option>`).join('')}
                     </select>
                 </label>
-                <button type="button" data-remodel-prompt-add-context ${availableSources.length ? '' : 'disabled'}><i class="fa-solid fa-link"></i> Add context</button>
+                <button type="button" data-remodel-prompt-insert-template ${availableTemplates.length ? '' : 'disabled'}><i class="fa-solid fa-file-circle-plus"></i> Add template</button>
             </div>
+            ${renderMacroReference(recipe)}
             ${recipe.apiType === 'text' ? renderTransportEditor(recipe) : ''}
         </div>
     `;
@@ -498,8 +590,10 @@ function renderRecipeEditor(recipe) {
 
 function renderPromptBlock(recipe, block, index) {
     const source = block.kind === 'source' ? getSourceDefinition(recipe, block.sourceKey) : null;
+    const macros = findRecipeMacros(recipe, block.content || '');
     const bindingNote = sourceBindingNote(recipe, block);
     const movable = canMoveBlock(recipe, block);
+    const advancedLocked = Boolean(block.advancedWarning) && !state.advancedUnlockedBlocks.has(block.id);
     const railTitle = movable
         ? (block.locked ? 'Drag to reorder — this source stays linked and cannot be deleted' : 'Drag to reorder')
         : bindingNote;
@@ -514,7 +608,7 @@ function renderPromptBlock(recipe, block, index) {
                     <select data-remodel-prompt-block-role aria-label="Message role">
                         ${PROMPT_ROLES.map((role) => `<option value="${role}" ${block.role === role ? 'selected' : ''}>${roleLabels[role]}</option>`).join('')}
                     </select>
-                    <span class="remodel-prompt-block-kind">${block.kind === 'source' ? '<i class="fa-solid fa-link"></i> Live source' : '<i class="fa-regular fa-message"></i> Authored message'}</span>
+                    <span class="remodel-prompt-block-kind">${block.kind === 'source' ? '<i class="fa-solid fa-link"></i> Legacy source' : macros.length ? '<i class="fa-solid fa-braces"></i> Macro message' : '<i class="fa-regular fa-message"></i> Authored message'}</span>
                     <div class="remodel-prompt-block-actions">
                         <button type="button" data-remodel-prompt-block-toggle title="${block.enabled ? 'Disable' : 'Enable'}"><i class="fa-solid ${block.enabled ? 'fa-eye' : 'fa-eye-slash'}"></i></button>
                         <button type="button" data-remodel-prompt-block-up title="Move up" ${index === 0 || !movable ? 'disabled' : ''}><i class="fa-solid fa-chevron-up"></i></button>
@@ -525,11 +619,22 @@ function renderPromptBlock(recipe, block, index) {
                 </div>
                 ${block.kind === 'source'
                     ? `<div class="remodel-prompt-source-card"><strong>${escapeHtml(source?.label || block.sourceKey)}</strong><p>${escapeHtml(sourceDescription(recipe, block.sourceKey))}</p>${bindingNote ? `<span>${escapeHtml(bindingNote)}</span>` : ''}${canOpenSource(block.sourceKey) ? '<button type="button" data-remodel-prompt-source-open><i class="fa-solid fa-arrow-up-right-from-square"></i> Open source</button>' : ''}</div>`
-                    : `<textarea data-remodel-prompt-block-content placeholder="Write the ${escapeAttribute(roleLabels[block.role].toLowerCase())} message…">${escapeHtml(block.content)}</textarea>`}
+                    : `${block.advancedWarning ? `<div class="remodel-prompt-advanced-warning"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>${escapeHtml(block.advancedWarning)}</span>${advancedLocked ? '<button type="button" data-remodel-prompt-advanced-unlock>Unlock contract editing</button>' : '<strong>Contract editing unlocked for this session</strong>'}</div>` : ''}<textarea data-remodel-prompt-block-content placeholder="Write the ${escapeAttribute(roleLabels[block.role].toLowerCase())} message…" ${advancedLocked ? 'disabled aria-disabled="true"' : ''}>${escapeHtml(block.content)}</textarea>`}
+                ${macros.length ? `<div class="remodel-prompt-macro-chips">${macros.map((item) => `<span title="${escapeAttribute(item.description || item.label)}">{{${escapeHtml(item.macro)}}}</span>`).join('')}</div>` : ''}
                 ${renderPromptBlockSettings(recipe, block)}
             </div>
         </article>
     `;
+}
+
+function renderMacroReference(recipe) {
+    const definitions = getSourceDefinitions(recipe).filter((item) => !item.textOnly || recipe.apiType === 'text');
+    if (!definitions.length) return '';
+    return `<details class="remodel-prompt-macro-reference">
+        <summary><i class="fa-solid fa-braces" aria-hidden="true"></i> Available macros <small>Named arguments supported</small></summary>
+        <div>${definitions.map((item) => `<span><code>{{${escapeHtml(item.macro)}}}</code><small>${escapeHtml(item.label)}</small></span>`).join('')}</div>
+        <p>Arguments use <code>name=value</code>, for example <code>{{world.info.depth messages=3}}</code>. Structural macros such as chat history should remain alone in their message so their original roles and ordering are preserved.</p>
+    </details>`;
 }
 
 /**
@@ -543,7 +648,7 @@ function renderPromptBlock(recipe, block, index) {
  * setting that "would have been cheaper and effectively undiscoverable". With
  * the bag built, the source declaring `label`/`min`/`max`, the normaliser
  * clamping, and no control anywhere, what shipped was neither discoverable NOR
- * editable: `directorNotes` had `depth` permanently 3 for every user forever,
+ * editable: `loomNotes` had `depth` permanently 3 for every user forever,
  * and the declared bounds were decoration. That is strictly worse than the
  * alternative the design rejected, at higher cost.
  *
@@ -658,11 +763,13 @@ function renderTransportTextarea(path, label, value) {
 
 function renderPromptLogView() {
     const modes = [
-        { key: 'director', label: 'Director', icon: 'fa-bullhorn' },
+        { key: 'loom', label: 'Loom', icon: 'fa-wave-square' },
         { key: 'narrator', label: 'Narrator', icon: 'fa-book-open' },
         { key: 'chat', label: 'Chat', icon: 'fa-comments' },
     ];
-    const sections = modes.map(({ key, label, icon }) => {
+    const sections = modes
+        .sort((a, b) => (promptLog[b.key]?.timestamp || 0) - (promptLog[a.key]?.timestamp || 0))
+        .map(({ key, label, icon }) => {
         const entry = promptLog[key];
         if (!entry) {
             return `<section class="remodel-prompt-log-section">
@@ -694,9 +801,13 @@ function renderPromptLogView() {
                 ${body}
             </article>`;
         }).join('');
-        return `<details class="remodel-prompt-log-section" open>
+        const requestDump = entry.request
+            ? `<details class="remodel-prompt-log-request"><summary>Complete request payload</summary><pre class="remodel-prompt-log-pre">${escapeHtml(safePromptJson(entry.request))}</pre></details>`
+            : '';
+        return `<details class="remodel-prompt-log-section" ${promptLog.latest === entry ? 'open' : ''}>
             <summary><i class="fa-solid ${icon}" aria-hidden="true"></i> ${escapeHtml(label)} <small>${escapeHtml(entry.recipeName)} · ${ago}</small></summary>
             ${blockRows}
+            ${requestDump}
         </details>`;
     }).join('');
     return `<div class="remodel-prompt-log-view">
@@ -705,7 +816,7 @@ function renderPromptLogView() {
                 <span class="remodel-prompt-kicker">Prompt Studio</span>
                 <h2>Prompt Log</h2>
             </div>
-            <p>Last recipe blocks sent for each generation mode.</p>
+            <p>The complete most-recent request sent by each generation path. Newest is shown first.</p>
         </header>
         ${sections}
     </div>`;
@@ -741,13 +852,13 @@ function bindPromptStudioEvents() {
             const value = filter.dataset.value;
             if (filter.dataset.remodelPromptFilter === 'mode' && PROMPT_MODES.includes(value)) {
                 state.mode = value;
-                // Director recipes are Chat Completion only (enforced in the
+                // Loom recipes are Chat Completion only (enforced in the
                 // data model — see normalizeRecipe in prompt-studio-store.js).
-                // Switching into director mode while the Transport filter is
+                // Switching into loom mode while the Transport filter is
                 // still on 'text' would leave it pointing at a filter
                 // combination with no matching recipes, so pull it back to
                 // 'chat' the same way the data model would.
-                if (state.mode === 'director' && state.apiType === 'text') state.apiType = 'chat';
+                if (state.mode === 'loom' && state.apiType === 'text') state.apiType = 'chat';
             }
             if (filter.dataset.remodelPromptFilter === 'api' && PROMPT_API_TYPES.includes(value)) state.apiType = value;
             ensureSelectedRecipe(true);
@@ -766,6 +877,16 @@ function bindPromptStudioEvents() {
             return;
         }
         const recipe = getPromptRecipe(state.selectedRecipeId);
+        const unlock = target.closest('[data-remodel-prompt-advanced-unlock]');
+        if (unlock && recipe) {
+            const card = unlock.closest('[data-remodel-prompt-block]');
+            const block = card ? recipe.blocks.find((item) => item.id === card.dataset.remodelPromptBlock) : null;
+            if (block?.advancedWarning && window.confirm(`${block.advancedWarning}\n\nUnlock this contract for editing during this session?`)) {
+                state.advancedUnlockedBlocks.add(block.id);
+                state.requestRender();
+            }
+            return;
+        }
         if (target.closest('[data-remodel-prompt-create]')) {
             const created = createPromptRecipe({ mode: state.mode, apiType: state.apiType, transport: state.apiType === 'text' ? captureTextTransport(power_user) : null });
             state.selectedRecipeId = created.id;
@@ -809,10 +930,10 @@ function bindPromptStudioEvents() {
             patchRecipeBlocks(recipe, [...recipe.blocks, createPromptBlock({ kind: 'message', role })]);
             return;
         }
-        if (target.closest('[data-remodel-prompt-add-context]')) {
-            const sourceKey = studio.querySelector('[data-remodel-prompt-add-source]')?.value;
-            const source = getSourceDefinition(recipe, sourceKey);
-            if (source) patchRecipeBlocks(recipe, [...recipe.blocks, createPromptBlock({ kind: 'source', role: source.role, sourceKey, locked: source.locked })]);
+        if (target.closest('[data-remodel-prompt-insert-template]')) {
+            const templateKey = studio.querySelector('[data-remodel-prompt-add-template]')?.value;
+            const block = createPromptBlockFromTemplate(recipe.mode, templateKey);
+            if (block) patchRecipeBlocks(recipe, [...recipe.blocks, block]);
             return;
         }
 
@@ -1018,7 +1139,7 @@ function showTransportFeedback(field) {
 function applyRecipeToNative(recipe) {
     if (!recipe) return;
     // Defense in depth: every native path funnels through this one function,
-    // so this is where the director/native split holds even for a call site
+    // so this is where the loom/native split holds even for a call site
     // that forgets to check isNativeApplicableMode() itself (see onRecipeChanged).
     if (!isNativeApplicableMode(recipe.mode)) return;
     state.nativeSyncGuard = true;
@@ -1041,7 +1162,7 @@ function applyRecipeToNative(recipe) {
  * These are the two that must not be markers. Everything else in a roleplay
  * recipe names something core already knows how to fill.
  */
-const REMODEL_RENDERED_SOURCES = new Set(['directorNotes', 'storyGoals']);
+const REMODEL_RENDERED_SOURCES = new Set(['loomContext', 'storyGoals']);
 
 /**
  * Put fresh text into one of our own native prompts, at whatever position the
@@ -1060,10 +1181,10 @@ const REMODEL_RENDERED_SOURCES = new Set(['directorNotes', 'storyGoals']);
 export function setRemodelNativePromptContent(sourceKey, content) {
     const recipe = getCurrentPromptStudioRecipe('roleplay', 'chat');
     const block = (recipe?.blocks || [])
-        .filter((entry) => entry.kind === 'source' && entry.sourceKey === sourceKey)
+        .filter((entry) => parseWholeRecipeMacro(recipe, entry.content || '')?.key === sourceKey)
         .find((entry) => entry.enabled !== false);
     if (!block) return false;
-    const identifier = block.nativeIdentifier || getSourceDefinition({ mode: 'roleplay' }, sourceKey)?.nativeIdentifier;
+    const identifier = getSourceDefinition({ mode: 'roleplay' }, sourceKey)?.nativeIdentifier || block.nativeIdentifier;
     if (!identifier) return false;
     oai_settings.prompts ??= [];
     const prompt = oai_settings.prompts.find((entry) => entry?.identifier === identifier);
@@ -1078,17 +1199,17 @@ export function setRemodelNativePromptContent(sourceKey, content) {
 }
 
 export function capturePromptLog(mode) {
-    const recipeMode = mode === 'director' ? 'director' : 'roleplay';
+    const recipeMode = mode === 'loom' ? 'loom' : 'roleplay';
     const recipe = getCurrentPromptStudioRecipe(recipeMode, 'chat');
     if (!recipe) return;
     const blocks = (recipe.blocks || []).filter((b) => b.enabled !== false).map((block) => {
-        const source = block.kind === 'source' ? getSourceDefinition(recipe, block.sourceKey) : null;
+        const source = parseWholeRecipeMacro(recipe, block.content || '');
         const identifier = block.nativeIdentifier || source?.nativeIdentifier;
         const nativePrompt = identifier
             ? (oai_settings.prompts || []).find((p) => p?.identifier === identifier)
             : null;
         let content = '';
-        if (block.kind === 'source') {
+        if (source?.nativeIdentifier) {
             content = nativePrompt?.marker ? '' : (nativePrompt?.content || '');
         } else {
             content = substituteParams(block.content || '');
@@ -1096,8 +1217,8 @@ export function capturePromptLog(mode) {
         return {
             label: source?.label || nativePrompt?.name || 'Message',
             role: nativePrompt?.role || (block.role === 'instruction' ? 'system' : block.role),
-            kind: block.kind,
-            sourceKey: block.sourceKey || null,
+            kind: 'message',
+            sourceKey: source?.key || null,
             marker: Boolean(nativePrompt?.marker),
             content,
         };
@@ -1105,17 +1226,20 @@ export function capturePromptLog(mode) {
     promptLog[mode] = { mode, recipeName: recipe.name, timestamp: Date.now(), blocks };
 }
 
-export function captureDirectorPromptLog(recipeName, traceBlocks) {
+export function captureLoomPromptLog(recipeName, traceBlocks) {
     if (!Array.isArray(traceBlocks)) return;
-    const blocks = traceBlocks.map((entry) => ({
-        label: entry.label || 'Block',
-        role: entry.role || 'system',
-        kind: entry.kind || 'message',
-        sourceKey: entry.sourceKey || null,
-        marker: false,
-        content: entry.text || '',
-    }));
-    promptLog.director = { mode: 'director', recipeName: recipeName || 'Director', timestamp: Date.now(), blocks };
+    const looksCompiled = traceBlocks.every((entry) => entry && typeof entry.role === 'string' && Object.prototype.hasOwnProperty.call(entry, 'content'));
+    const messages = looksCompiled
+        ? traceBlocks
+        : traceBlocks.flatMap((entry) => Array.isArray(entry.parts)
+            ? entry.parts.map((part) => ({ role: part.role, content: part.content }))
+            : [{ role: entry.role || 'system', content: entry.text || '' }]);
+    captureSentPromptLog('loom', {
+        recipeName: recipeName || 'Loom',
+        messages,
+        request: { prompt: messages, transport: 'chat', purpose: 'loom-reconciliation' },
+        transport: 'chat',
+    });
 }
 
 /**
@@ -1124,26 +1248,61 @@ export function captureDirectorPromptLog(recipeName, traceBlocks) {
  * The custom Narrator path compiles its own message array and bypasses core's
  * prompt assembly, so `capturePromptLog('narrator')` — which reads the roleplay
  * recipe and oai_settings.prompts — would show a stale prompt nobody sent. This
- * stores the compiled messages the way captureDirectorPromptLog stores the
- * Director's, so the Narrator section shows exactly what went out.
+ * stores the compiled messages the way captureLoomPromptLog stores the
+ * Loom's, so the Narrator section shows exactly what went out.
  *
  * @param {{label?: string, role?: string, content?: string}[]} blocks
  */
 export function captureNarratorPromptLog(blocks) {
     if (!Array.isArray(blocks)) return;
-    promptLog.narrator = {
-        mode: 'narrator',
+    captureSentPromptLog('narrator', {
         recipeName: 'Narrator (custom stream)',
+        messages: blocks,
+        request: { prompt: blocks, transport: 'chat', purpose: 'narrator' },
+        transport: 'chat',
+    });
+}
+
+export function captureSentPromptLog(mode, { recipeName = '', messages = [], text = '', request = null, transport = '' } = {}) {
+    if (!['loom', 'narrator', 'chat'].includes(mode)) return;
+    const normalizedMessages = Array.isArray(messages) ? messages.map((entry, index) => ({
+        label: entry?.name || `Message ${index + 1}`,
+        role: entry?.role || 'system',
+        kind: 'message',
+        sourceKey: null,
+        marker: false,
+        content: String(entry?.content ?? entry?.mes ?? ''),
+    })) : [];
+    if (text) normalizedMessages.push({ label: 'Serialized prompt', role: 'system', kind: 'message', sourceKey: null, marker: false, content: String(text) });
+    const entry = {
+        mode,
+        recipeName: recipeName || capitalize(mode),
         timestamp: Date.now(),
-        blocks: blocks.map((entry) => ({
-            label: entry.label || 'Message',
-            role: entry.role || 'system',
-            kind: 'message',
-            sourceKey: null,
-            marker: false,
-            content: String(entry.content || ''),
-        })),
+        transport,
+        blocks: normalizedMessages,
+        request: redactPromptSecrets(request),
     };
+    promptLog[mode] = entry;
+    promptLog.latest = entry;
+    if (state.showLog) state.requestRender();
+}
+
+function redactPromptSecrets(value, seen = new WeakSet()) {
+    if (value == null || typeof value !== 'object') return value;
+    if (seen.has(value)) return '[Circular]';
+    seen.add(value);
+    if (Array.isArray(value)) return value.map((item) => redactPromptSecrets(item, seen));
+    const copy = {};
+    for (const [key, item] of Object.entries(value)) {
+        copy[key] = /^(api[_-]?key|authorization|cookie|password|secret)$/i.test(key)
+            ? '[redacted]'
+            : redactPromptSecrets(item, seen);
+    }
+    return copy;
+}
+
+function safePromptJson(value) {
+    try { return JSON.stringify(value, null, 2); } catch { return String(value || ''); }
 }
 
 export function getPromptLog() {
@@ -1155,9 +1314,10 @@ function applyRoleplayChatRecipe(recipe) {
     oai_settings.prompt_order ??= [];
     const promptMap = new Map(oai_settings.prompts.filter(Boolean).map((prompt) => [prompt.identifier, prompt]));
     const order = [];
-    for (const block of recipe.blocks || []) {
-        const source = block.kind === 'source' ? getSourceDefinition({ mode: 'roleplay' }, block.sourceKey) : null;
-        const identifier = block.nativeIdentifier || source?.nativeIdentifier || `remodel-${block.id}`;
+    for (const recipeBlock of recipe.blocks || []) {
+        for (const block of expandRoleplayNativeBlock(recipe, recipeBlock)) {
+        const source = parseWholeRecipeMacro(recipe, block.content || '');
+        const identifier = source?.nativeIdentifier || block.nativeIdentifier || `remodel-${block.id}`;
         block.nativeIdentifier = identifier;
         let prompt = promptMap.get(identifier);
         if (!prompt) {
@@ -1165,12 +1325,12 @@ function applyRoleplayChatRecipe(recipe) {
             oai_settings.prompts.push(prompt);
             promptMap.set(identifier, prompt);
         }
-        if (block.kind === 'source' && REMODEL_RENDERED_SOURCES.has(block.sourceKey)) {
+        if (source && REMODEL_RENDERED_SOURCES.has(source.key)) {
             // OURS TO RENDER, so not a marker.
             //
             // A marker tells core "resolve this identifier yourself", which
             // works for charDescription and every other native source. Core has
-            // never heard of remodel_director_notes, so the marker resolved to
+            // never heard of remodel_loom_notes, so the marker resolved to
             // NOTHING and the real text had to arrive separately, as an IN_CHAT
             // depth injection — which is why the block sat in the recipe, could
             // be dragged, and ignored where it was dragged to.
@@ -1180,13 +1340,13 @@ function applyRoleplayChatRecipe(recipe) {
             // works is not a guess: an authored block is exactly this shape, and
             // one of the owner's landed after the chat history precisely where
             // their recipe put it.
-            prompt.name = source?.label || block.sourceKey;
+            prompt.name = source.label;
             prompt.marker = false;
             prompt.system_prompt = false;
             prompt.role = 'system';
             prompt.content = prompt.content || '';
-        } else if (block.kind === 'source') {
-            prompt.name = source?.label || block.sourceKey;
+        } else if (source?.nativeIdentifier) {
+            prompt.name = source.label;
             prompt.marker = true;
             prompt.system_prompt = true;
             delete prompt.content;
@@ -1198,6 +1358,7 @@ function applyRoleplayChatRecipe(recipe) {
             prompt.system_prompt = ['main', 'nsfw', 'jailbreak', 'enhanceDefinitions'].includes(identifier);
         }
         order.push({ identifier, enabled: block.enabled !== false });
+        }
     }
     let globalOrder = oai_settings.prompt_order.find((entry) => String(entry.character_id) === String(CHAT_PROMPT_ORDER_ID));
     if (!globalOrder) {
@@ -1206,6 +1367,46 @@ function applyRoleplayChatRecipe(recipe) {
     }
     globalOrder.order = order;
     promptManager?.render?.(false);
+}
+
+/**
+ * Native Prompt Manager markers are structural. When a user embeds one of
+ * those macros inside prose, split the ordinary recipe block into ordered
+ * text/marker/text pieces so the macro still resolves at generation time.
+ */
+function expandRoleplayNativeBlock(recipe, block) {
+    const content = String(block.content || '');
+    const pattern = new RegExp(RECIPE_MACRO_PATTERN.source, 'gi');
+    const parts = [];
+    let cursor = 0;
+    let match;
+    while ((match = pattern.exec(content))) {
+        const invocation = getRecipeMacroDefinition(recipe, match[1], match[2]);
+        if (!invocation?.nativeIdentifier) continue;
+        if (match.index > cursor) parts.push({ type: 'text', content: content.slice(cursor, match.index) });
+        parts.push({ type: 'macro', invocation, content: match[0] });
+        cursor = match.index + match[0].length;
+    }
+    if (!parts.length) return [block];
+    if (cursor < content.length) parts.push({ type: 'text', content: content.slice(cursor) });
+    if (parts.length === 1 && parts[0].type === 'macro' && content.trim() === parts[0].content.trim()) return [block];
+    return parts
+        .filter((part) => part.type === 'macro' || part.content.trim())
+        .map((part, index) => part.type === 'macro'
+            ? {
+                ...block,
+                id: `${block.id}-macro-${index}`,
+                content: `{{${part.invocation.macro}}}`,
+                nativeIdentifier: part.invocation.nativeIdentifier,
+                locked: true,
+            }
+            : {
+                ...block,
+                id: `${block.id}-text-${index}`,
+                content: part.content,
+                nativeIdentifier: `${block.nativeIdentifier || `remodel-${block.id}`}-text-${index}`,
+                locked: false,
+            });
 }
 
 function applyTextTransport(transport) {
@@ -1249,9 +1450,9 @@ function captureNativeSettingsFor(mode, apiType, recipeId = null) {
         // withRemodelSources, for the same reason createSeededStore applies it:
         // this replaces the recipe's blocks wholesale from native settings, and
         // a Chat Completion preset authored before Remodel has no
-        // remodel_director_notes / remodel_story_goals in its prompt order. It
+        // remodel_loom_notes / remodel_story_goals in its prompt order. It
         // used to strip both out of an already-migrated recipe on any preset
-        // change — and the Director's notebook is now the only route its
+        // change — and the Loom's notebook is now the only route its
         // direction takes to the Narrator.
         updatePromptRecipe(recipe.id, { blocks: withRemodelSources(createBlocksFromNativeChat(oai_settings.prompts || [], oai_settings.prompt_order || [])) });
     }
@@ -1274,11 +1475,11 @@ function compileRoleplayTextRecipe(recipe, nativeContext) {
     const parts = [];
     for (const block of recipe.blocks || []) {
         if (!block.enabled) continue;
-        if (block.kind === 'source' && block.sourceKey === 'nativeContext') {
+        if (parseWholeRecipeMacro(recipe, block.content || '')?.key === 'nativeContext') {
             parts.push(nativeContext);
             continue;
         }
-        if (block.kind !== 'message' || !block.content.trim()) continue;
+        if (!block.content.trim()) continue;
         const content = substituteParams(block.content);
         parts.push(formatTextMessage(block.role, content));
     }
@@ -1310,21 +1511,14 @@ function ensureSelectedRecipe(force = false) {
         || null;
 }
 
-function getAvailableSources(recipe) {
-    const existing = new Set((recipe.blocks || []).filter((block) => block.kind === 'source').map((block) => block.sourceKey));
-    const existingNativeIdentifiers = new Set((recipe.blocks || [])
-        .filter((block) => block.kind === 'source')
-        .map((block) => block.nativeIdentifier || getSourceDefinition(recipe, block.sourceKey)?.nativeIdentifier)
-        .filter(Boolean));
+function getAvailableTemplates(recipe) {
     return getSourceDefinitions(recipe)
         .filter((source) => !source.textOnly || recipe.apiType === 'text')
-        .filter((source) => recipe.apiType !== 'text' || recipe.mode !== 'roleplay' || source.key === 'nativeContext')
-        .filter((source) => !existing.has(source.key))
-        .filter((source) => !source.nativeIdentifier || !existingNativeIdentifiers.has(source.nativeIdentifier));
+        .filter((source) => recipe.apiType !== 'text' || recipe.mode !== 'roleplay' || source.key === 'nativeContext');
 }
 
 function getSourceDefinitions(recipe) {
-    return PROMPT_SOURCE_DEFINITIONS[recipe?.mode] || [];
+    return PROMPT_TEMPLATE_DEFINITIONS[recipe?.mode] || [];
 }
 
 function getSourceDefinition(recipe, key) {
@@ -1341,21 +1535,15 @@ function sourceDescription(recipe, key) {
     // A source definition may declare its own description; that always wins
     // over the per-mode fallback maps below. Without this, a new source key
     // silently inherits whatever the current mode's default text claims —
-    // which is how the director-mode fix below (and directorNotes, which
+    // which is how the loom-mode fix below (and loomNotes, which
     // declares one) each had to happen in the first place.
     const declaredDescription = getSourceDefinition(recipe, key)?.description;
     if (declaredDescription) return declaredDescription;
-    // A Director recipe never touches the native prompt manager — it is
+    // A Loom recipe never touches the native prompt manager — it is
     // compiled to an explicit message array and sent on its own. Falling
     // through to the roleplay default below told the user the exact opposite.
-    if (mode === 'director') {
-        const director = {
-            directionProtocol: 'The reply contract the hidden Director must satisfy. Locked: without it the reply cannot be parsed and Remodel falls back to a built-in prompt.',
-            directorCard: 'The character card bound as this Scene’s Director, read as judgment, priorities and genre sense — never spoken as dialogue.',
-            mechanicsSkill: 'The Goals and Variables addressable this turn, by name, with the capabilities that may be requested against them. Remove this and the Director stops seeing any persistent state.',
-            directorSnapshot: 'The Scene, cast, persona, accepted history, activated World Info and recent mechanical receipts assembled for this pass.',
-        };
-        return director[key] || 'Assembled by Remodel and sent directly to the Director, without the native prompt manager.';
+    if (mode === 'loom') {
+        return 'Resolved by Remodel from the active Roleplay turn and sent directly to the Loom.';
     }
     if (mode === 'story') {
         if (key === 'worldInfoExamples') return 'Lorebook entries using Example placement, resolved by the active Story document immediately before generation.';
@@ -1371,7 +1559,7 @@ function sourceDescription(recipe, key) {
         scenario: 'The Scenario field from the character card bound to the active Roleplay scene.',
         dialogueExamples: 'Example Dialogue from the bound character card, formatted by SillyTavern at generation time.',
         storyGoals: 'The active Scene’s public goals plus private NPC instructions and the latest resolved Goal events.',
-        directorNotes: 'The hidden Director’s recent notes for this Scene, rendered by Remodel and placed at THIS position in the prompt. Put it after Chat History to have it read last, immediately before the performer writes. Only note, ruling and result entries are ever included.',
+        loomContext: 'The Loom’s readable scene continuity supplied to the native Narrator request.',
         chatHistory: 'The token-budgeted messages from the active Roleplay conversation, including the newest user turn.',
         currentInput: 'The newest user message, carried through SillyTavern’s native Chat History marker.',
         generationNudge: 'The generation-specific quiet prompt or nudge supplied by SillyTavern for the current request.',

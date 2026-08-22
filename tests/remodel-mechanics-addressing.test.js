@@ -106,7 +106,7 @@ const plainBook = buildAddressBook([
 
 test('a ref-shaped name that names nothing resolves nothing, even when the base map has that key', () => {
     // Exactly the shape production hands in: the retrieval layer's refToId,
-    // keyed v1…vN, plus a Director that typed one of those refs back.
+    // keyed v1…vN, plus a Loom that typed one of those refs back.
     const baseVariableRefs = new Map([['v1', 'var-hp']]);
     const requests = [{ id: 'r1', capability: 'variable.set', arguments: { variableRef: 'v1', value: 5 } }];
     const { variableRefs, unresolvedReasons } = addressRequestsByName(requests, plainBook, baseVariableRefs, new Map());

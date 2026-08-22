@@ -5,7 +5,7 @@ import { getContext } from '../../../st-context.js';
 //
 // Every other retrieval channel is derived at retrieval time from data that
 // already exists — the action, the history, activated lore, the vector index,
-// the Director's notebook, the stores — so there is no weight store to keep in
+// the Loom's notebook, the stores — so there is no weight store to keep in
 // sync and nothing here that can go stale against them. This buffer exists
 // because "how often has this been pulled lately" is the one signal with no
 // other source.

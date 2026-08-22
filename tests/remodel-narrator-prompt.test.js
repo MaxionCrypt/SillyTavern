@@ -64,14 +64,12 @@ describe('buildDirectionInjection', () => {
         // extracted as a junk "event". The directive must forbid the echo.
         expect(APPEND_ONLY_DIRECTIVE).toMatch(/never (restate|repeat|quote|acknowledge)[^.]*instruction/i);
     });
-    test('includes archivist state and director direction when present', () => {
+    test('includes the archivist state when present', () => {
         const injection = buildDirectionInjection({
             archivistState: '## What has happened\n- Marcus drew his knife',
-            directorDirection: 'Escalate the standoff.',
         });
         expect(injection).toContain(APPEND_ONLY_DIRECTIVE);
         expect(injection).toContain('Marcus drew his knife');
-        expect(injection).toContain('Escalate the standoff.');
     });
     test('the directive comes first, before the state', () => {
         const injection = buildDirectionInjection({ archivistState: '## Scene\n- location: rooftop' });

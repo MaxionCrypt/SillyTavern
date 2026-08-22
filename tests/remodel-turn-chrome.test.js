@@ -1,26 +1,26 @@
-// Review I1: the live Director card almost never opened.
+// Review I1: the live Loom indicator almost never opened.
 //
 // `refreshLiveDirectionChrome` decided between three chrome states by hand,
 // with `const directing = !run && uiState.state === 'Directing'`. But
 // live-direction.js's `notifyTransient('Directing')` — the call that announces
 // a pass has begun — passes a truthy placeholder `{state, acceptedVisibleText}`
 // rather than null, and `handleRoleplaySend` hand-rolled the same shape. So on
-// both of those calls `directing` was false: the function CLOSED the Director
-// card and put the generic unlabeled "composing…" bubble up instead.
+// both of those calls `directing` was false: the function CLOSED the Loom
+// indicator and put the generic unlabeled "composing…" bubble up instead.
 //
 // The only remaining opener was renderRoleplayScene's tail, and the only thing
 // that triggers it during a pass is USER_MESSAGE_RENDERED — which fires from
 // sendMessageAsUser, i.e. a first-attempt user send. Autoplay continuations,
 // Next, Retry after a failure that had already posted, and the empty-response
-// retry therefore showed nothing Director-specific for the whole 101-202s of
-// the call. That is the branch's headline feature — watching the Director
+// retry therefore showed nothing Loom-specific for the whole 101-202s of
+// the call. That is the branch's headline feature — watching the Loom
 // think — working on one entry point out of five.
 //
 // The branch now lives in a pure module precisely so it can be tested:
 // timeline-spine.js touches the DOM at module scope through its imports and
 // cannot be imported here at all, which is why the defect had no coverage.
 import { test, expect } from '@jest/globals';
-import { resolveDirectionChromeMode } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/direction-chrome.js';
+import { resolveDirectionChromeMode } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/turn-chrome.js';
 
 // Exactly what live-direction.js's notifyTransient builds. Reproduced as a
 // literal rather than imported, because the POINT is that it is run-shaped
@@ -47,24 +47,24 @@ function liveRun(overrides = {}) {
 
 // ------------------------------------------------------------ the defect
 
-test("the placeholder notifyTransient('Directing') passes opens the Director card rather than closing it", () => {
+test("the placeholder notifyTransient('Directing') passes opens the Loom indicator rather than closing it", () => {
     // THE regression. Under the old `!run` test this returned 'idle', which
-    // closed the card and fell through to the unlabeled bubble.
+    // closed the indicator and fell through to the unlabeled bubble.
     expect(resolveDirectionChromeMode({ run: transientPlaceholder, uiState: directingUi }))
         .toBe('directing');
 });
 
-test("handleRoleplaySend's placeholder opens the card even before the direction lock exists", () => {
+test("handleRoleplaySend's placeholder opens the indicator even before the direction lock exists", () => {
     // handleRoleplaySend paints this synchronously, BEFORE submitDirectedRoleplay
     // has taken the lock — so getLiveDirectionUiState still says 'Ready' at
     // that instant. The first frame after the user presses send is exactly
-    // when the card matters most, so the placeholder's own state has to be
+    // when the indicator matters most, so the placeholder's own state has to be
     // enough on its own.
     expect(resolveDirectionChromeMode({ run: { state: 'Directing', acceptedVisibleText: '' }, uiState: readyUi }))
         .toBe('directing');
 });
 
-test('a pass with no run object at all still opens the card (autoplay, Next, Retry, the empty-response retry)', () => {
+test('a pass with no run object at all still opens the indicator (autoplay, Next, Retry, the empty-response retry)', () => {
     // These paths reach the chrome through notifyState(), which passes null
     // when there is no activeRun. getLiveDirectionUiState is authoritative
     // here: it reads the direction lock directly.
@@ -73,13 +73,24 @@ test('a pass with no run object at all still opens the card (autoplay, Next, Ret
 
 // ------------------------------------------------- the other two branches
 
-test('a real run mid-reveal is the performer speaking, never the Director card', () => {
+test('a real run mid-reveal is the performer speaking, never the Loom indicator', () => {
     expect(resolveDirectionChromeMode({ run: liveRun(), uiState: readyUi })).toBe('speaking');
+});
+
+test('a private Narrator run stays hidden until the Loom owns the visible buffer', () => {
+    expect(resolveDirectionChromeMode({
+        run: { directionId: 'dir-private', phase: 'narrator', acceptedVisibleText: '', acceptedComplete: false },
+        uiState: readyUi,
+    })).toBe('directing');
+    expect(resolveDirectionChromeMode({
+        run: { directionId: 'dir-loom', phase: 'loom', acceptedVisibleText: 'The door', acceptedComplete: false },
+        uiState: readyUi,
+    })).toBe('speaking');
 });
 
 test('a real run outranks a Directing ui state, so the two surfaces are never both up', () => {
     // Can happen transiently: a run exists while the lock has not yet been
-    // released. Showing the Director's shell over a revealing response would
+    // released. Showing the Loom's shell over a revealing response would
     // claim the pass had not started generating.
     expect(resolveDirectionChromeMode({ run: liveRun(), uiState: directingUi })).toBe('speaking');
 });
@@ -116,7 +127,7 @@ test('a run-shaped object with no directionId is never treated as a run, whateve
     // The structural distinction the fix rests on: only generateDirectedPerformer
     // assigns a directionId, so nothing else can be mistaken for a run. This
     // placeholder carries acceptedVisibleText and a performer-ish state and
-    // still must not suppress the Director card.
+    // still must not suppress the Loom indicator.
     expect(resolveDirectionChromeMode({
         run: { state: 'Directing', acceptedVisibleText: 'partial', performer: { label: 'Wren' } },
         uiState: directingUi,
