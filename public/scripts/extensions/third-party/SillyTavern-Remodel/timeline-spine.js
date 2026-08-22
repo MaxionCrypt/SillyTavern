@@ -9225,6 +9225,13 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
         // This buffer belongs only to the Loom. The native Narrator's private
         // draft never enters the roleplay renderer.
         body.textContent = run.acceptedVisibleText;
+        // The Loom reveal does not emit native STREAM_TOKEN_RECEIVED events:
+        // it advances acceptedVisibleText on its own pacing clock and reaches
+        // this renderer through onStateChange. Native streaming already keeps
+        // the typing row in view in updateRoleplayTypingText(); mirror that
+        // behavior here so the manuscript follows every revealed chunk.
+        const stream = root.querySelector('[data-remodel-rp-stream]');
+        if (stream) stream.scrollTop = stream.scrollHeight;
     }
     const zone = root.querySelector('[data-remodel-rp-composer]');
     const flow = zone?.querySelector('[data-remodel-live-flow]');
