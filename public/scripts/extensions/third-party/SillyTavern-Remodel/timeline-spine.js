@@ -126,6 +126,7 @@ import {
     submitDirectedRoleplay,
 } from './live-direction.js';
 import { sanitizeDirectionText } from './live-direction-markers.js';
+import { APPEND_ONLY_DIRECTIVE, buildDirectionInjection, buildNarratorArchivistSections } from './narrator-prompt.js';
 import { resolveRoleplayMessageIds } from './roleplay-message-list.js';
 import { resolveDirectionChromeMode } from './turn-chrome.js';
 import {
@@ -2356,7 +2357,7 @@ function registerAllInsertedTextSlotMacros() {
 // promptPreviewInFlight now lives in session-state.js's panels domain — see
 // getPanelsState()/setPromptPreviewInFlight() imported above.
 
-async function runPromptPreviewDryRun(generationType) {
+async function runPromptPreviewDryRun(generationType, { composerText: composerTextOverride, narratorContext } = {}) {
     const context = getContext();
     const previousCharacterId = context.characterId;
     const previousCharacterName = context.name2;
@@ -2369,8 +2370,27 @@ async function runPromptPreviewDryRun(generationType) {
     // 'normal' turn — Continue extends the last AI message and takes no new
     // user input, so there's nothing to splice for it.
     const textarea = document.getElementById('send_textarea');
-    const composerText = textarea instanceof HTMLTextAreaElement ? textarea.value.trim() : '';
+    // Story writes directly into #send_textarea. Roleplay deliberately has a
+    // separate visible composer and only copies it into the native textarea at
+    // Send time, so its Preview must pass that draft explicitly. An explicit
+    // empty string is meaningful: it prevents stale hidden native text from
+    // appearing in a Roleplay preview.
+    const composerText = composerTextOverride === undefined
+        ? (textarea instanceof HTMLTextAreaElement ? textarea.value.trim() : '')
+        : String(composerTextOverride || '').trim();
     let splicedMessage = null;
+
+    // Directed Narrator generation injects its append-only instruction and
+    // current Archive state immediately before native prompt assembly. Mirror
+    // that same extension prompt during the dry run, then restore the exact
+    // prior entry so opening Preview never changes the next real request.
+    const narratorPromptKey = 'REMODEL_NARRATOR_CONTEXT';
+    const previousNarratorPrompt = narratorContext === undefined
+        ? undefined
+        : context.extensionPrompts?.[narratorPromptKey];
+    if (narratorContext !== undefined) {
+        setExtensionPrompt(narratorPromptKey, narratorContext, extension_prompt_types.IN_CHAT, 1, false, extension_prompt_roles.SYSTEM);
+    }
 
     if (composerText && generationType === 'normal') {
         splicedMessage = {
@@ -2440,6 +2460,22 @@ async function runPromptPreviewDryRun(generationType) {
             const index = context.chat.indexOf(splicedMessage);
             if (index !== -1) {
                 context.chat.splice(index, 1);
+            }
+        }
+
+        if (narratorContext !== undefined) {
+            if (previousNarratorPrompt) {
+                setExtensionPrompt(
+                    narratorPromptKey,
+                    previousNarratorPrompt.value,
+                    previousNarratorPrompt.position,
+                    previousNarratorPrompt.depth,
+                    previousNarratorPrompt.scan,
+                    previousNarratorPrompt.role,
+                    previousNarratorPrompt.filter,
+                );
+            } else if (context.extensionPrompts) {
+                delete context.extensionPrompts[narratorPromptKey];
             }
         }
     }
@@ -2560,7 +2596,18 @@ function collectPromptPreviewSections() {
         const messages = typeof entry?.getChat === 'function'
             ? entry.getChat()
             : [{ role: entry?.role, content: entry?.content, name: entry?.name }];
-        const filled = messages.filter((message) => String(message?.content || '').trim().length > 0);
+        const filled = messages
+            .filter((message) => String(message?.content || '').trim().length > 0)
+            .map((message) => ({
+                ...message,
+                // Core folds in-chat extension prompts into Chat History. Keep
+                // that real request shape, but label our generated grounding
+                // so it cannot be mistaken for authored history or a recipe
+                // block in the by-source view.
+                previewSourceLabel: String(message?.content || '').startsWith(APPEND_ONLY_DIRECTIVE)
+                    ? 'Narrator grounding (engine)'
+                    : '',
+            }));
         return {
             identifier,
             title: prompt?.name || prettifyPromptIdentifier(identifier),
@@ -2575,6 +2622,7 @@ function collectPromptPreviewSections() {
 
 function prettifyPromptIdentifier(identifier) {
     if (!identifier) return 'Unnamed prompt';
+    if (identifier === 'REMODEL_NARRATOR_CONTEXT') return 'Narrator grounding (engine)';
     return identifier
         .replace(/[-_]+/g, ' ')
         .replace(/([a-z\d])([A-Z])/g, '$1 $2')
@@ -2589,9 +2637,9 @@ function renderPromptPreviewSections(sections) {
         const body = section.messages
             .map((message) => {
                 const speaker = String(message.name || '').trim();
-                const label = speaker
+                const label = message.previewSourceLabel || (speaker
                     ? `${String(message.role || 'system').toUpperCase()} · ${speaker}`
-                    : String(message.role || 'system').toUpperCase();
+                    : String(message.role || 'system').toUpperCase());
                 return `<div class="remodel-rp-preview-msg"><span class="remodel-rp-preview-msg-role">${escapeHtml(label)}</span><pre>${escapeHtml(message.content || '')}</pre></div>`;
             })
             .join('');
@@ -8853,7 +8901,7 @@ async function openRoleplayPromptPreview() {
                 </div>
                 <button type="button" class="remodel-rp-picker-x" data-remodel-rp-preview-close aria-label="Close">×</button>
             </div>
-            ${previewPanel('narrator', defaultTab)}
+            ${previewPanel('narrator', defaultTab, `<div class="remodel-rp-preview-note">Recipe-authored system blocks are editable in Prompt Studio; Character and Persona sources are edited at their source. <strong>Narrator grounding (engine)</strong> is generated for directed turns from the append-only rule and the Loom Archive.</div>`)}
         </div>
     `;
     document.body.appendChild(overlay);
@@ -8865,7 +8913,14 @@ async function openRoleplayPromptPreview() {
     const narratorPanel = overlay.querySelector('[data-remodel-rp-preview-panel="narrator"]');
 
     try {
-        const { generateData, warnings } = await runPromptPreviewDryRun('normal');
+        const visibleComposer = getRealRoleplayRoot()?.querySelector('[data-remodel-rp-input]');
+        const composerText = visibleComposer instanceof HTMLTextAreaElement ? visibleComposer.value : '';
+        const narratorContext = directed && activeScene
+            ? buildDirectionInjection({
+                archivistState: buildNarratorArchivistSections(activeScene.timelineId, activeScene.id),
+            })
+            : undefined;
+        const { generateData, warnings } = await runPromptPreviewDryRun('normal', { composerText, narratorContext });
         const attachedGoalIntents = activeScene ? getStoryGoalComposerIntents(activeScene.id) : [];
         if (attachedGoalIntents.length) {
             warnings.push(`${attachedGoalIntents.length} attached Story Goal attempt${attachedGoalIntents.length === 1 ? '' : 's'} will be assessed by the Loom after the Narrator drafts; preview never rolls or mutates.`);

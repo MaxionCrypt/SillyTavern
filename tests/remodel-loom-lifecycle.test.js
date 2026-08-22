@@ -14,7 +14,7 @@ import {
     clearLiveDirectionFailure,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { listEvents } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
-import { __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
+import { __setContextOverrides, __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
 import { __setOnlineStatus } from './util/script-stub.js';
 
 globalThis.document ??= { getElementById: () => null };
@@ -81,6 +81,20 @@ test('a Loom turn commits the Narrator draft and waits for the user', async () =
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     // The Narrator's held draft became the committed message.
     expect(__getChat().at(-1).mes).toBe(RESPONSE);
+});
+
+test('directed Narrator grounding is cleared after its native request', async () => {
+    const prompts = [];
+    __setContextOverrides({
+        setExtensionPrompt: (...args) => prompts.push(args),
+    });
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    const narratorPrompts = prompts.filter(([key]) => key === 'REMODEL_NARRATOR_CONTEXT');
+    expect(narratorPrompts[0]?.[1]).toMatch(/Continue the scene forward/i);
+    expect(narratorPrompts.at(-1)?.[1]).toBe('');
 });
 
 test('a completed turn waits for the user and Continue advances the next one', async () => {

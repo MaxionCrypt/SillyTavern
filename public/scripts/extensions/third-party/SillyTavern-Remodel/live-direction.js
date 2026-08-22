@@ -179,6 +179,9 @@ export function initLiveDirection(options = {}) {
     if (initialized) return;
     initialized = true;
     const context = getContext();
+    // Repair a prompt left behind by an older build or a browser interruption.
+    // Directed grounding is request-scoped; it must never bleed into free play.
+    context.setExtensionPrompt?.('REMODEL_NARRATOR_CONTEXT', '', 1, 1, false, 0);
     context.eventSource.on(context.eventTypes.STREAM_TOKEN_RECEIVED, (text) => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
         const messageId = Number(context.streamingProcessor?.messageId);
@@ -1168,6 +1171,10 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         }
     } finally {
         ownedGenerationDepth = Math.max(0, ownedGenerationDepth - 1);
+        // setExtensionPrompt is persistent global state, not request-local.
+        // The Loom does not use this native injection, and leaving it populated
+        // would feed directed-only grounding into the next free-play request.
+        if (setExt) setExt('REMODEL_NARRATOR_CONTEXT', '', 1, 1, false, 0);
         journal('generation.end', {
             directionId: envelope.directionId,
             durationMs: Date.now() - generationStartedAt,
