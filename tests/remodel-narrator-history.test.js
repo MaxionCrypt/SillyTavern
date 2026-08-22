@@ -16,7 +16,7 @@
 // the notes injection genuinely survives what reaches the seam, rather than
 // merely what a hand-built fixture claims about it.
 import { test, expect, beforeEach, afterEach } from '@jest/globals';
-import { filterNarratorHistory } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/narrator-history.js';
+import { filterNarratorHistory, repairDirectedNarratorRoles } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/narrator-history.js';
 import {
     initLiveDirection,
     setLiveDirectionTestAdapters,
@@ -44,6 +44,36 @@ const chatFixture = [
     { role: 'assistant', name: 'Other Character', content: 'Someone else speaks from the shadows.' },
     { role: 'assistant', name: 'The Narrator', content: 'The room is empty.' },
 ];
+
+test('directed narrator prose is repaired to ordinary assistant history without touching native narrator messages', () => {
+    const directed = {
+        is_user: false,
+        mes: 'Directed prose',
+        extra: { type: 'narrator', remodelDirection: { directionId: 'direction-1', performerRef: { kind: 'narrator' } } },
+    };
+    const nativeNarrator = {
+        is_user: false,
+        mes: 'Native narration',
+        extra: { type: 'narrator' },
+    };
+    const directedCast = {
+        is_user: false,
+        mes: 'Cast dialogue',
+        extra: { type: 'narrator', remodelDirection: { directionId: 'direction-2', performerRef: { kind: 'character' } } },
+    };
+    const user = {
+        is_user: true,
+        mes: 'User text',
+        extra: { type: 'narrator', remodelDirection: { directionId: 'impossible-user-record', performerRef: { kind: 'narrator' } } },
+    };
+
+    expect(repairDirectedNarratorRoles([directed, nativeNarrator, directedCast, user])).toBe(1);
+    expect(directed.extra.type).toBeUndefined();
+    expect(nativeNarrator.extra.type).toBe('narrator');
+    expect(directedCast.extra.type).toBe('narrator');
+    expect(user.extra.type).toBe('narrator');
+    expect(repairDirectedNarratorRoles([directed, nativeNarrator, directedCast, user])).toBe(0);
+});
 
 test("only the Narrator's own messages survive filtering", () => {
     const filtered = filterNarratorHistory(chatFixture, { narratorName: 'The Narrator' });

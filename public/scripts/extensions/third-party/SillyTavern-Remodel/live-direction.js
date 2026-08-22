@@ -19,7 +19,7 @@ import { resolveByName } from './direction-address.js';
 import { resolveDirectionActions } from './turn-chrome.js';
 import { deriveBeats } from './direction-beats.js';
 import { captureLoomPromptLog, capturePromptLog, compilePromptRecipe, getCurrentPromptStudioRecipe } from './prompt-studio.js';
-import { filterNarratorHistory } from './narrator-history.js';
+import { filterNarratorHistory, repairDirectedNarratorRoles } from './narrator-history.js';
 import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
 import { streamChatPrompt } from './story-stream.js';
@@ -1091,6 +1091,17 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     const generationStartedAt = Date.now();
     try {
         const context = getContext();
+        // Releases Remodel-authored prose that older builds accidentally
+        // stored as native system Narrator messages before core assembles the
+        // next prompt. Persist once so future turns and reloads stay repaired.
+        const repairedHistoryRoles = repairDirectedNarratorRoles(context.chat);
+        if (repairedHistoryRoles) {
+            await context.saveChat();
+            journal('history.roles-repaired', {
+                directionId: envelope.directionId,
+                count: repairedHistoryRoles,
+            }, { correlationId: envelope.directionId });
+        }
         const narratorProfileId = scene.generationProfileIds?.narrator;
         if (narratorProfileId) {
             await hooks.activateConnectionProfile(narratorProfileId);
@@ -1849,7 +1860,6 @@ async function finalizeRunMessage(run, { state }) {
     if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)) message.swipes[message.swipe_id] = accepted;
     message.extra ??= {};
     message.extra.remodelDirection = serializeRun(run, state);
-    if (run.performer.ref.kind === 'narrator') message.extra.type = 'narrator';
     await context.saveChat();
 }
 

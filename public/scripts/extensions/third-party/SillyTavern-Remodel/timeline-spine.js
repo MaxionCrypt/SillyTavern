@@ -702,6 +702,10 @@ function bindTimelineEvents(drawer) {
     });
 
     drawer.addEventListener('wheel', (event) => {
+        // Prompt Log owns its own scroll surface. The Timeline chrome gesture
+        // must never consume its wheel events, including at either boundary.
+        if (event.target instanceof Element && event.target.closest('.remodel-prompt-log-view')) return;
+
         const main = event.target instanceof Element
             ? event.target.closest('[data-remodel-route-main]')
             : null;
@@ -1736,7 +1740,9 @@ function isNarrativeProseMessage(mes) {
 //                         "You" side of the scene), label = persona name
 //   - character/AI      -> key "char:<name>", label = the character name
 function messageSpeaker(mes) {
-    const isNarrator = Boolean(mes?.is_system) || mes?.extra?.type === 'narrator';
+    const isNarrator = Boolean(mes?.is_system)
+        || mes?.extra?.type === 'narrator'
+        || mes?.extra?.remodelDirection?.performerRef?.kind === 'narrator';
     if (isNarrator) {
         return { key: 'narrator', label: 'Narrator' };
     }

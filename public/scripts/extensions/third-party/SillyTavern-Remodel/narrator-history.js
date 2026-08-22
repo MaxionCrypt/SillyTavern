@@ -41,6 +41,31 @@ function sanitizedNameKey(value) {
 }
 
 /**
+ * Remodel's completed directed prose belongs to ordinary assistant history.
+ * Older builds tagged those messages as SillyTavern's native `narrator`
+ * system-message type, which made OpenAI prompt assembly promote the prose to
+ * `role: system`. Models then tended to obey the previous answer as a prompt
+ * and reproduce it before adding the new turn.
+ *
+ * Restrict the repair to records owned by the Remodel direction pipeline so a
+ * genuine native Narrate/system message is never reclassified.
+ *
+ * @param {object[]} messages canonical SillyTavern chat records
+ * @returns {number} number of repaired records
+ */
+export function repairDirectedNarratorRoles(messages) {
+    if (!Array.isArray(messages)) return 0;
+    let repaired = 0;
+    for (const message of messages) {
+        if (!message || typeof message !== 'object' || message.is_user) continue;
+        if (message.extra?.remodelDirection?.performerRef?.kind !== 'narrator' || message.extra.type !== 'narrator') continue;
+        delete message.extra.type;
+        repaired++;
+    }
+    return repaired;
+}
+
+/**
  * @param {object[]} messages  compiled chat-completion-style messages, in the
  *        order they will be sent — each shaped roughly like
  *        `{role: 'user'|'assistant'|'system'|..., content: string, name?: string}`.
