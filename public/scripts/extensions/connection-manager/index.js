@@ -420,6 +420,29 @@ async function applyConnectionProfile(profile) {
         }
     }
 
+    // Commands late in the profile — `secret-id` above all, and the second
+    // `api` pass — re-enter core's `#main_api` change handler, which calls
+    // cancelStatusCheck(). That ABORTS the in-flight status probe AND forces
+    // online_status to 'no_connection', and nothing schedules a replacement.
+    //
+    // activateConnectionProfile then waits for online_status to leave
+    // 'no_connection', so it was waiting on a probe that would never be made:
+    // it burned its full 10s and threw, and the caller abandoned the Scene it
+    // was opening. In the debug journal this reads as "Canceled because main
+    // api changed" immediately followed by a failed
+    // POST /api/backends/chat-completions/status.
+    //
+    // Re-issue the profile's own `api` command once the rest of the profile has
+    // settled, so a live probe exists for that wait to observe. Guarded on
+    // no_connection: a profile that left a healthy connection re-probes nothing.
+    if (online_status === 'no_connection' && profile.api) {
+        try {
+            await SlashCommandParser.commands['api'].callback(getNamedArguments(), profile.api);
+        } catch (error) {
+            console.error('Failed to re-establish the connection after applying the profile', error);
+        }
+    }
+
     spinner.stop();
 }
 

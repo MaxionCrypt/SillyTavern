@@ -4923,9 +4923,14 @@ async function beginRoleplaySceneWithNarrator(sceneId, { narratorAvatar, narrato
         try {
             await activateConnectionProfile(narratorProfileId);
         } catch (error) {
+            // Do NOT abandon the Scene here. Creating and entering a Scene does
+            // not need a live API — only a turn does, and generateDirectedPerformer
+            // re-activates the profile and fails loudly at that point. Returning
+            // early left the user with a Scene that existed but could never be
+            // opened: three attempts in a row produced no chat, no error anyone
+            // could act on, and no way forward.
             console.error('Remodel: could not activate the selected Narrator connection profile', error);
-            showRoleplayToast('The Narrator connection profile could not be activated. Check API Connections and try again.');
-            return;
+            showRoleplayToast('Scene created, but the Narrator connection profile could not be activated. Check API Connections before starting a turn.');
         }
     }
     await context.selectCharacterById(narratorIndex, { switchMenu: false });
