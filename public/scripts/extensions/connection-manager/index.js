@@ -19,6 +19,7 @@ import { performFuzzySearch } from '/scripts/power-user.js';
 import { StreamingDisplay } from '/scripts/streaming-display.js';
 import { ConnectionManagerRequestService } from '../shared.js';
 import { formatReasoning } from '/scripts/reasoning.js';
+import { CONNECT_API_MAP } from '../../slash-commands.js';
 
 const MODULE_NAME = 'connection-manager';
 const NONE = '<None>';
@@ -420,30 +421,35 @@ async function applyConnectionProfile(profile) {
         }
     }
 
-    // Commands late in the profile — `secret-id` above all, and the second
-    // `api` pass — re-enter core's `#main_api` change handler, which calls
-    // cancelStatusCheck(). That ABORTS the in-flight status probe AND forces
-    // online_status to 'no_connection', and nothing schedules a replacement.
-    //
-    // activateConnectionProfile then waits for online_status to leave
-    // 'no_connection', so it was waiting on a probe that would never be made:
-    // it burned its full 10s and threw, and the caller abandoned the Scene it
-    // was opening. In the debug journal this reads as "Canceled because main
-    // api changed" immediately followed by a failed
-    // POST /api/backends/chat-completions/status.
-    //
-    // Re-issue the profile's own `api` command once the rest of the profile has
-    // settled, so a live probe exists for that wait to observe. Guarded on
-    // no_connection: a profile that left a healthy connection re-probes nothing.
-    if (online_status === 'no_connection' && profile.api) {
-        try {
-            await SlashCommandParser.commands['api'].callback(getNamedArguments(), profile.api);
-        } catch (error) {
-            console.error('Failed to re-establish the connection after applying the profile', error);
-        }
-    }
 
     spinner.stop();
+}
+
+/**
+ * Start a real connection probe for the API selected by a profile.
+ *
+ * WHY NOT A STATE CHECK: the first version of this guarded on
+ * `online_status === 'no_connection'` at the end of applyConnectionProfile and
+ * never fired. Captured live — the probe is aborted at .646 and main_api_changed
+ * lands at .666, both AFTER the guard runs, and at that moment the log still
+ * reads "Connection successful". The flag it tested had not been set yet.
+ *
+ * Calling the `api` slash command again is not enough: when the requested API
+ * and source are already selected its `connectionRequired` flag is false and
+ * it deliberately does not click Connect. Use the same exported API map to
+ * press the provider's actual connection button instead.
+ */
+async function reissueConnection(profile) {
+    if (!profile?.api) return false;
+    try {
+        const api = CONNECT_API_MAP[String(profile.api).toLowerCase()];
+        if (!api?.button || !document.querySelector(api.button)) return false;
+        $(api.button).trigger('click');
+        return true;
+    } catch (error) {
+        console.error('Failed to re-establish the connection after applying the profile', error);
+        return false;
+    }
 }
 
 /**
@@ -480,6 +486,21 @@ export async function activateConnectionProfile(profileId) {
     // were applied; native generation is safe only after core reports the
     // connection online. This mirrors `/profile await=true` instead of racing
     // Generate() against the reconnect it just triggered.
+    // Commands late in the profile — `secret-id` above all — re-enter core's
+    // `#main_api` change handler, which calls cancelStatusCheck(): that aborts the
+    // in-flight probe AND forces online_status to 'no_connection', with no
+    // replacement scheduled. Waiting alone therefore burns the full 10s and throws,
+    // and the caller abandons the Scene it was opening.
+    //
+    // Let change handlers queued by the last profile command finish before
+    // starting the final probe. This probe is deliberately unconditional when
+    // a profile was actually applied: the early return above already makes an
+    // active healthy profile free, while trusting the stale online flag here is
+    // the race that stranded Scene entry in the first place.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (!await reissueConnection(profile)) {
+        throw new Error(`Could not start the connection check for profile: ${profile.name || profile.id}`);
+    }
     await waitUntilCondition(() => online_status !== 'no_connection', 10000, 100, { rejectOnTimeout: true });
 
     const select = document.getElementById('connection_profiles');

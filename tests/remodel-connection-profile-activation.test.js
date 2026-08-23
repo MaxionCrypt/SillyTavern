@@ -19,19 +19,6 @@ test('native profile activation waits for asynchronous reconnect before returnin
     expect(connectionManager).toMatch(/waitUntilCondition\(\(\) => online_status !== 'no_connection'/);
 });
 
-// THE DEFECT: applying a profile runs `secret-id` and a second `api` pass near
-// the end of CC_COMMANDS. Those re-enter core's `#main_api` change handler,
-// which calls cancelStatusCheck() — aborting the in-flight status probe and
-// forcing online_status to 'no_connection' with no replacement scheduled. The
-// wait above then spun its full 10s and threw, and the Scene being opened was
-// abandoned. Applying a profile must leave a live probe behind for that wait.
-test('applying a profile re-establishes the connection when its own commands cancelled the probe', () => {
-    const body = connectionManager.slice(
-        connectionManager.indexOf('async function applyConnectionProfile'),
-        connectionManager.indexOf('export async function activateConnectionProfile'));
-    expect(body).toMatch(/if \(online_status === 'no_connection' && profile\.api\)/);
-    expect(body).toMatch(/SlashCommandParser\.commands\['api'\]\.callback\(getNamedArguments\(\), profile\.api\)/);
-});
 
 // THE DEFECT: a failed connection check used to `return` out of
 // beginRoleplaySceneWithNarrator BEFORE selectCharacterById and
@@ -51,4 +38,49 @@ test('a failed Narrator profile activation does not abandon Scene creation', () 
     // ...and the Scene really is still created afterwards.
     expect(body).toMatch(/await context\.selectCharacterById\(narratorIndex/);
     expect(body).toMatch(/await createNewChatForScene\(sceneId\)/);
+});
+
+
+// THE DEFECT: applying a profile runs `secret-id` and a second `api` pass near
+// the end of CC_COMMANDS. Those re-enter core's `#main_api` change handler,
+// which calls cancelStatusCheck() — aborting the in-flight status probe AND
+// forcing online_status to 'no_connection', with nothing scheduled to replace
+// it. The wait then burns its full 10s and throws, and the Scene being opened
+// is abandoned.
+//
+// The FIRST fix guarded on online_status at the end of applyConnectionProfile
+// and never fired. Captured live: the probe aborts at .646 and main_api_changed
+// lands at .666, both after the guard runs, with the log still reading
+// "Connection successful". It tested a flag that had not been set yet.
+//
+// The final probe must be real and must start after the queued change handlers,
+// rather than trusting that transient flag or waiting on a probe already known
+// to have been cancelled.
+test('activation starts a final real connection probe after profile commands settle', () => {
+    const body = connectionManager.slice(
+        connectionManager.indexOf('export async function activateConnectionProfile'),
+        connectionManager.indexOf('async function updateConnectionProfile'));
+
+    expect(body).toContain('setTimeout(resolve, 100)');
+    expect(body).toContain('reissueConnection(profile)');
+    expect(body).toContain("waitUntilCondition(() => online_status !== 'no_connection'");
+});
+
+test('the final probe clicks the mapped Connect button rather than repeating a no-op API command', () => {
+    expect(connectionManager).toContain('async function reissueConnection(profile)');
+    expect(connectionManager).toContain('CONNECT_API_MAP[String(profile.api).toLowerCase()]');
+    expect(connectionManager).toContain("$(api.button).trigger('click')");
+    const helper = connectionManager.slice(
+        connectionManager.indexOf('async function reissueConnection(profile)'),
+        connectionManager.indexOf('export async function activateConnectionProfile'));
+    expect(helper).not.toContain("SlashCommandParser.commands['api'].callback");
+});
+
+// The re-issue must not be a bare state check any more — that shape is what
+// silently did nothing.
+test('the re-probe is no longer guarded on a transient online_status read', () => {
+    const apply = connectionManager.slice(
+        connectionManager.indexOf('async function applyConnectionProfile'),
+        connectionManager.indexOf('export async function activateConnectionProfile'));
+    expect(apply).not.toContain("online_status === 'no_connection' && profile.api");
 });
