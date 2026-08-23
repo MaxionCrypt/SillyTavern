@@ -559,7 +559,16 @@ export function canSendWithoutLiveDirection() {
 }
 
 export async function regenerateLastDirectedResponse(scene = hooks.getActiveScene()) {
-    if (!isDirectedLiveScene(scene) || activeRun || directionInFlight) return false;
+    if (!isDirectedLiveScene(scene) || directionInFlight) return false;
+    // A SETTLED run stays in activeRun so the finished turn keeps its chrome.
+    // Loom envelopes are built with hardPauseAfter: true, so `hard` in
+    // completeVisibleRun is always true and that is EVERY completed turn, not
+    // an edge case. Refusing whenever activeRun was merely truthy therefore
+    // made Retry a no-op after every turn — silently, because
+    // describeDirectionStep reports those same states as not-busy and left the
+    // button enabled. Accept exactly the states requestNextDirection advances
+    // from, so Retry and Continue cannot disagree about when a turn is over.
+    if (activeRun && !['Waiting for you', 'Complete'].includes(activeRun.state)) return false;
     cancelAutoplay('regenerate');
     const context = getContext();
     const messageId = context.chat.length - 1;
@@ -588,6 +597,10 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
         const tx = transactions.find((item) => item.id === id);
         if (tx) undoMechanicsTransaction(tx);
     }
+    // Release the settled run before its message goes. requestNextDirection
+    // below finalizes whatever activeRun still points at, and once this row is
+    // deleted that index names a different turn's message.
+    activeRun = null;
     await context.deleteMessage(messageId);
     // Re-run the turn fresh: the Narrator drafts again and the Loom reconciles.
     // Undoing the transaction above already rolled back this turn's Archive
@@ -1992,6 +2005,33 @@ async function catchUpArchive(run, reason) {
             goalRefs: run.goalRefs,
             authorizedGoalIds: [],
         });
+        // The catch-up writes state on behalf of THIS turn, so Retry has to be
+        // able to undo it. Two separate reasons it used to survive Retry, and
+        // repairing either one alone leaves the bug intact:
+        //
+        //   1. this transaction id was recorded nowhere, unlike the one
+        //      applyPendingRequests keeps above;
+        //   2. finalizeRunMessage has ALREADY serialized the run by the time a
+        //      queued catch-up lands, so the undo set regenerateLastDirected-
+        //      Response reads back was snapshotted before this transaction
+        //      existed.
+        //
+        // Hence the id goes onto the run AND into the saved snapshot. This is
+        // deliberately not persistRun(): that recomputes the stored `state`
+        // from run.state and would clobber the interrupted/stopped marker
+        // finalizeRunMessage set from its own argument.
+        if (result.transaction?.id) {
+            run.checkpointTransactionIds.push(result.transaction.id);
+            const stored = getContext().chat?.[run.messageId];
+            const saved = stored && !stored.is_user ? stored.extra?.remodelDirection : null;
+            // Matched on directionId rather than trusting the index: a queued
+            // catch-up can land after the chat has moved under it, and amending
+            // another turn's undo set would make its Retry roll back state the
+            // user kept.
+            if (saved?.directionId === run.directionId) {
+                saved.checkpointTransactionIds = [...run.checkpointTransactionIds];
+            }
+        }
         journal('archive.catchup', {
             directionId: run.directionId,
             reason,
