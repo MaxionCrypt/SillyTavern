@@ -55,16 +55,28 @@
  *
  * PURE, and separated from the store queries that answer its inputs.
  *
- * @param {{lastMessageIsUser?: boolean, hasMessages?: boolean, busy?: boolean}} [input]
+ * @param {{lastMessageIsUser?: boolean, hasMessages?: boolean, busy?: boolean,
+ *          resumable?: boolean}} [input]
  * @returns {{retry: {target: 'narrator'|null, reason: string},
- *            continue: {target: 'loom'|null, reason: string}}}
+ *            continue: {target: 'loom'|'resume'|null, reason: string}}}
  *          `target` is null when the action cannot do anything, and `reason`
  *          says why — a disabled button that cannot explain itself is the
  *          thing this return shape exists to prevent.
  */
 export function resolveDirectionActions({
-    lastMessageIsUser = false, hasMessages = false, busy = false,
+    lastMessageIsUser = false, hasMessages = false, busy = false, resumable = false,
 } = {}) {
+    // A reveal that is holding — for a breath, for the user's typing, or at the
+    // end of a turn — is "busy" by every other measure, but it is precisely the
+    // moment Continue must work. There is only ONE Continue control now, so if
+    // it went inert here the user would have no way to resume a held reveal at
+    // all. Checked BEFORE busy for that reason.
+    if (resumable) {
+        return {
+            retry: { target: null, reason: 'Let this response finish first.' },
+            continue: { target: 'resume', reason: 'Resume the reveal.' },
+        };
+    }
     if (busy) {
         return {
             retry: { target: null, reason: 'Something is already running.' },

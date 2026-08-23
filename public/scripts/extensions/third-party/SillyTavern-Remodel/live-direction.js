@@ -484,6 +484,10 @@ export async function retryLiveStep(scene = hooks.getActiveScene()) {
  */
 export async function continueLiveStep(scene = hooks.getActiveScene()) {
     const { continue: advance } = resolveDirectionActions(describeDirectionStep(scene));
+    // One control, two meanings: a held reveal resumes where it stopped, an
+    // idle scene advances to the next turn. Resolved from the same function
+    // the button is labelled from, so the two cannot disagree.
+    if (advance.target === 'resume') return continueLiveDirection();
     if (advance.target === 'loom') return requestNextDirection(scene);
     journal('continue.rejected', { reason: advance.reason }, { severity: 'warn' });
     return false;
@@ -497,6 +501,11 @@ function describeDirectionStep() {
         hasMessages: chat.length > 0,
         lastMessageIsUser: Boolean(last?.is_user),
         busy: Boolean(directionInFlight || activeRun && !['Waiting for you', 'Complete'].includes(activeRun.state)),
+        // continueLiveDirection() is the only thing that can clear a hold, and
+        // it refuses unless the run is actually waiting — so this mirrors its
+        // guard rather than guessing, and the button cannot offer a resume the
+        // handler would then decline.
+        resumable: Boolean(activeRun && activeRun.state === 'Waiting for you'),
     };
 }
 

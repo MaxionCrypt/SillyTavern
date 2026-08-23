@@ -20,7 +20,7 @@
 // timeline-spine.js touches the DOM at module scope through its imports and
 // cannot be imported here at all, which is why the defect had no coverage.
 import { test, expect } from '@jest/globals';
-import { resolveDirectionChromeMode } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/turn-chrome.js';
+import { resolveDirectionActions, resolveDirectionChromeMode } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/turn-chrome.js';
 
 // Exactly what live-direction.js's notifyTransient builds. Reproduced as a
 // literal rather than imported, because the POINT is that it is run-shaped
@@ -132,4 +132,34 @@ test('a run-shaped object with no directionId is never treated as a run, whateve
         run: { state: 'Directing', acceptedVisibleText: 'partial', performer: { label: 'Wren' } },
         uiState: directingUi,
     })).toBe('directing');
+});
+
+// The two Continue controls were collapsed into one. The dock's Continue now
+// has to cover the case the flow-row button used to own — resuming a reveal
+// that is holding — and a held run is "busy" by every other measure, so without
+// this branch the single remaining control would go inert exactly when the user
+// needs it and there would be no way to resume at all.
+test('a resumable run offers Continue even though it is otherwise busy', () => {
+    const actions = resolveDirectionActions({ hasMessages: true, busy: true, resumable: true });
+    expect(actions.continue.target).toBe('resume');
+    expect(actions.continue.reason).toMatch(/resume/i);
+});
+
+test('resume wins over busy, so the control never goes inert mid-hold', () => {
+    const busyOnly = resolveDirectionActions({ hasMessages: true, busy: true, resumable: false });
+    expect(busyOnly.continue.target).toBeNull();
+    const resumable = resolveDirectionActions({ hasMessages: true, busy: true, resumable: true });
+    expect(resumable.continue.target).toBe('resume');
+});
+
+// Retry must NOT fire mid-reveal — it deletes the message being revealed.
+test('a resumable run refuses Retry and says why', () => {
+    const actions = resolveDirectionActions({ hasMessages: true, busy: true, resumable: true });
+    expect(actions.retry.target).toBeNull();
+    expect(actions.retry.reason).toBeTruthy();
+});
+
+test('an idle scene still advances rather than resuming', () => {
+    const actions = resolveDirectionActions({ hasMessages: true, lastMessageIsUser: false, busy: false, resumable: false });
+    expect(actions.continue.target).toBe('loom');
 });

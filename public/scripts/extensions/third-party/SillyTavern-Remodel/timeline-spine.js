@@ -8489,7 +8489,6 @@ function renderRoleplayComposer(root) {
             </button>
             <span class="remodel-rp-command-prompt">${renderScenePromptChoice(getActiveScene(), true, 'roleplay')}</span>
             <span class="remodel-live-flow-actions">
-                <button type="button" data-remodel-live-continue${directionUi.canContinue ? '' : ' hidden'}><i class="fa-solid fa-play"></i> Continue</button>
                 <button type="button" data-remodel-live-stop${directionUi.canStop ? '' : ' hidden'}><i class="fa-solid fa-stop"></i> Stop</button>
             </span>
         </div>
@@ -9255,8 +9254,8 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
         }
         // Run controls live in the command dock, not in the flow row — looked
         // up from the zone so this keeps working wherever the dock puts them.
-        const continueButton = zone.querySelector('[data-remodel-live-continue]');
-        if (continueButton) continueButton.hidden = run?.state !== 'Waiting for you';
+        // The flow row no longer carries its own Continue — the command dock's
+        // single Continue resumes a held reveal and advances an idle scene alike.
         const stopButton = zone.querySelector('[data-remodel-live-stop]');
         // ui.canStop, not the existence of a run: a Loom pass that has not
         // produced a visible run yet is still a busy pipeline the user must be
@@ -9357,6 +9356,8 @@ function stepAttrs(action, name) {
  */
 function stepLabel(verb, action) {
     if (!action.target) return verb;
+    // A resume costs nothing and acts on nothing new, so it takes no suffix.
+    if (action.target === 'resume') return verb;
     return `${verb} · ${action.target === 'loom' ? 'Loom' : 'Narrator'}`;
 }
 
@@ -9612,11 +9613,6 @@ function bindRoleplayComposerEvents() {
             const scene = getActiveScene();
             setLiveDirectionEnabled(scene, !isDirectedLiveScene(scene));
             renderRoleplayComposer(root);
-            return;
-        }
-        if (target.closest('[data-remodel-live-continue]')) {
-            event.preventDefault();
-            continueLiveDirection();
             return;
         }
         if (target.closest('[data-remodel-live-stop]')) {
