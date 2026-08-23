@@ -68,7 +68,7 @@ test('v13 stores migrate old hidden grounding into an editable recipe policy and
 
     const store = initializePromptStudioStore();
     const recipe = store.recipes.rp;
-    expect(store.version).toBe(15);
+    expect(store.version).toBe(17);
     expect(recipe.blocks.some((block) => block.content === '{{loom.context}}')).toBe(false);
     expect(recipe.blocks).toEqual(expect.arrayContaining([
         expect.objectContaining({ content: NARRATOR_POLICY_DEFAULT, locked: false }),
@@ -102,7 +102,7 @@ test('v15 seeds the patch Loom recipe, activates it, and leaves the existing one
     });
     const store = initializePromptStudioStore();
 
-    expect(store.version).toBe(15);
+    expect(store.version).toBe(17);
     // The user's recipe is untouched and still selectable.
     expect(store.recipes.mine).toBeTruthy();
     expect(store.recipes.mine.blocks[0].content).toBe('my own carefully edited policy');
@@ -126,4 +126,48 @@ test('v15 does not seed a second patch recipe on a store that already has one', 
     const again = initializePromptStudioStore();
     expect(again.recipeIds.filter((id) => again.recipes[id]?.name === 'Loom · Patch (fast)').length).toBeLessThanOrEqual(1);
     expect(count()).toBeLessThanOrEqual(1);
+});
+
+
+// v17: a Goal now covers a standing WANT as well as a contest. The Loom was
+// offered goal.create from the start and never used it, because the mechanics
+// board defined a Goal as a gamble and told it to "create one only when the
+// fiction has raised the stakes itself". goalCount was 0 on all 35 turns of a
+// live session and the Narrator's ## Objectives section never once appeared.
+//
+// Widening the definition removes the brake that kept creation rare, so the
+// policy has to close what the fiction overtakes — otherwise every character
+// accumulates wants nothing can resolve and ## Objectives becomes the wall
+// this was meant to prevent.
+test('v17 policy creates standing wants and closes the dead ones', async () => {
+    const { LOOM_POLICY_PATCH, LOOM_POLICY_PATCH_PRIOR } = await import('../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js');
+    expect(LOOM_POLICY_PATCH).toMatch(/standing want/i);
+    expect(LOOM_POLICY_PATCH).toMatch(/goal\.create/);
+    expect(LOOM_POLICY_PATCH).toMatch(/impossible/);
+    expect(LOOM_POLICY_PATCH).toMatch(/abandoned/);
+    expect(LOOM_POLICY_PATCH).toMatch(/goal\.edit/);
+    // The brake is the WARNING, not the capability names: without a stated cost
+    // the model has no reason to spend a request closing anything.
+    expect(LOOM_POLICY_PATCH).toMatch(/noise you will be shown every turn/i);
+    expect(LOOM_POLICY_PATCH_PRIOR.length).toBeGreaterThanOrEqual(2);
+    expect(LOOM_POLICY_PATCH_PRIOR).not.toContain(LOOM_POLICY_PATCH);
+});
+
+test('v17 migrates every superseded policy and never an edited one', async () => {
+    const { LOOM_POLICY_PATCH, LOOM_POLICY_PATCH_PRIOR } = await import('../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js');
+    const recipes = { edited: { id: 'edited', name: 'Mine', mode: 'loom', apiType: 'chat', blocks: [{ id: 'b', kind: 'message', role: 'system', content: 'my own policy' }] } };
+    const ids = ['edited'];
+    LOOM_POLICY_PATCH_PRIOR.forEach((prior, i) => {
+        const id = `prior${i}`;
+        ids.push(id);
+        recipes[id] = { id, name: `Loom v${i}`, mode: 'loom', apiType: 'chat', blocks: [{ id: `pb${i}`, kind: 'message', role: 'system', content: prior }] };
+    });
+    __setExtensionSettings({ remodel: { promptStudioV1: { version: 15, recipeIds: ids, recipes, active: { loom: { chat: 'prior0' } } } } });
+
+    const store = initializePromptStudioStore();
+    expect(store.version).toBe(17);
+    for (let i = 0; i < LOOM_POLICY_PATCH_PRIOR.length; i += 1) {
+        expect(store.recipes[`prior${i}`].blocks[0].content).toBe(LOOM_POLICY_PATCH);
+    }
+    expect(store.recipes.edited.blocks[0].content).toBe('my own policy');
 });

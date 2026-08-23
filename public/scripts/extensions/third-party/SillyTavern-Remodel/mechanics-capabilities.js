@@ -140,7 +140,7 @@ export function getMechanicsRequestSchema() {
                                     fromGoalRef: { type: 'string', description: 'goal.relate only: the Goal the relationship starts from, addressed the same way as goalRef.' },
                                     toGoalRef: { type: 'string', description: 'goal.relate only: the Goal the relationship points to, addressed the same way as goalRef.' },
                                     title: { type: 'string', description: 'goal.create and goal.edit: the Goal\'s title.' },
-                                    description: { type: 'string', description: 'goal.create: what this Goal is, for the Goal record itself. variable.create: what this new Variable means in the fiction, in one line — you are shown it again every time the Variable is retrieved, so write it for your future self.' },
+                                    description: { type: 'string', description: 'goal.create: the CONDITION this Goal is measured against — what has to be true for it to still be on track, and what would break it. A want with no condition cannot be advanced or closed, only restated. variable.create: what this new Variable means in the fiction, in one line — you are shown it again every time the Variable is retrieved, so write it for your future self.' },
                                     visibility: { type: 'string', enum: ['public', 'secret'], description: 'goal.create and goal.edit: whether the user can see this Goal exists. Use secret for a twist or a threat the user has not discovered.' },
                                     holderRefs: { type: 'array', items: ownerRefSchema(), description: 'goal.create only: who holds this Goal — at least one typed owner is required.' },
                                     targetRefs: { type: 'array', items: ownerRefSchema(), description: 'goal.create only: who or what the Goal is directed at, if it has a target. Optional.' },
@@ -553,7 +553,7 @@ function removeModifier(request, args, runtime) {
 function createGoal(request, args, runtime) {
     const holderRefs = requireOwners(args.holderRefs);
     const targetRefs = requireOwners(args.targetRefs || [], true);
-    if (holderRefs.some((owner) => !isAuthorizedOwner(owner, runtime)) && !runtime.allowUserGoalCreate) return defer(request, runtime, 'A user-owned Goal proposal requires review.');
+    if (holderRefs.some((owner) => !isAuthorizedOwner(owner)) && !runtime.allowUserGoalCreate) return defer(request, runtime, 'A user-owned Goal proposal requires review.');
     // The Loom states a number, informed by the rate guidance in its
     // prompt. `?? 30` is the record's own default for a Goal created without a
     // stated rate — clampRate returns null rather than reading an absent value
@@ -659,9 +659,20 @@ function reachGoal(request, args, runtime) {
  * required argument the model is never told about is indistinguishable, from
  * the outside, from a capability that does not work.
  */
+/** Keys advertised to the model as required, which are never enforced with a
+ *  throw. See the note at the require() call for why the difference matters. */
+// Keyed BY CAPABILITY, not a flat set. A flat set also exempted
+// variable.create's description, which the suite guards ('refuses a missing
+// meaning') — a Variable with no stated meaning is shown back to the model
+// every time it is retrieved, so that one must stay fatal.
+const SOFT_REQUIRED_ARGUMENTS = Object.freeze({
+    'goal.create': Object.freeze(new Set(['description'])),
+});
+
 export const REQUIRED_ARGUMENTS = Object.freeze({
     'goal.create': Object.freeze([
         ['title', 'what is being attempted, as a short line'],
+        ['description', 'the condition it is measured against: what has to be true for it to still be on track, and what would break it'],
         ['holderRefs', 'who holds it: [{"kind":"character","id":"<cast name>","label":"<cast name>"}] — at least one'],
     ]),
     'goal.edit': Object.freeze([["goalRef", "the Goal's exact advertised name"]]),
@@ -706,12 +717,47 @@ function validateArguments(request) {
     const require = (...keys) => { for (const key of keys) if (missing(key)) throw new MechanicsError(`${request.id}: ${key} is required.`); };
     // Read from the same table the prompt is built from, so a requirement can
     // never again exist here without the Loom being told about it.
-    require(...(REQUIRED_ARGUMENTS[request.capability] || []).map(([key]) => key));
+    // Advertised-but-not-fatal. A MechanicsError rolls the ENTIRE transaction
+    // back (see the catch that records status: 'rolled-back'), so enforcing a
+    // missing description would throw away every event.record, scene.set and
+    // beat.set in the same turn over one absent sentence. That is exactly how
+    // the undefined isAuthorizedOwner cost seven requests at a stroke.
+    //
+    // The model is TOLD it is required, which is the half that was missing: the
+    // capability guide listed only title and holderRefs, so description was
+    // never mentioned in the arguments line and was omitted on every Goal.
+    require(...(REQUIRED_ARGUMENTS[request.capability] || [])
+        .map(([key]) => key)
+        .filter((key) => !(SOFT_REQUIRED_ARGUMENTS[request.capability]?.has(key))));
 }
 
 function isAuthorizedVariable(variable, ref, runtime) {
     if (variable.authority === 'world') return true;
     return runtime.authorizedVariableRefs.has(String(ref || ''));
+}
+
+/**
+ * May the Loom place a new Goal on this owner without review?
+ *
+ * THE DEFECT, so it is not reintroduced: this function was deleted by
+ * cebcd1596 (typed Variables -> lore-linked V3) and its only call site, in
+ * goal.create, survived the deletion. Every goal.create therefore threw
+ * ReferenceError. It stayed invisible because nothing ever asked the Loom to
+ * create a Goal — the mechanics board defined a Goal as a gamble and told it to
+ * create one "only when the fiction has raised the stakes itself", so it never
+ * did. The moment the v17 policy asked for standing wants, every turn that
+ * proposed one failed.
+ *
+ * And it failed LOUDLY WRONG: requests execute as one atomic transaction, so a
+ * ReferenceError inside goal.create took every event.record, scene.set and
+ * beat.set in the same turn down with it. Seven requests lost to one missing
+ * function.
+ *
+ * Mirrors isAuthorizedGoal below: what the Loom invents is its own to hold,
+ * except a Goal placed on the player's persona, which is theirs to accept.
+ */
+function isAuthorizedOwner(owner) {
+    return owner?.kind !== 'persona';
 }
 
 function isAuthorizedGoal(goal, runtime) {

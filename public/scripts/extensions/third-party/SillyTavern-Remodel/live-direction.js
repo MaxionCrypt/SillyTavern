@@ -1095,6 +1095,15 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     // with the Loom's readable Archive state resolved into the recipe-owned
     // Narrator Grounding macro. Placement and policy remain user-authored.
     const archivistState = buildNarratorArchivistSections(scene.timelineId, scene.id);
+    // What the other characters are after, which is the only thing in the whole
+    // request that is not downstream of the player. Without it the Narrator knows
+    // what everyone DID and never what anyone WANTS, and the lowest-energy
+    // continuation of any user action is that it simply works.
+    //
+    // buildGoalObjectives had two call sites, both inside the Loom. Its own
+    // docstring says "for the narrator view" — which was intent, not wiring: the
+    // Narrator had never once been shown a Goal.
+    const objectives = buildGoalObjectives(scene.id);
     // A retry must not re-send the request that just failed. The empty-response
     // path was re-issuing a byte-identical body — verified on the wire — so the
     // nudge rides the grounding channel, which is the one injection point already
@@ -1104,7 +1113,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         // MESSAGE_RECEIVED lands, so at this point it names nothing.
         reasoningLength: Number(previousReasoningLength) || 0,
     });
-    const groundedState = [archivistState, retryNudge].filter(Boolean).join('\n\n');
+    const groundedState = [archivistState, objectives, retryNudge].filter(Boolean).join('\n\n');
     const groundingRouted = hooks.setNativePromptContent('narratorGrounding', groundedState);
     journal('notes.bridge', {
         directionId: envelope.directionId,

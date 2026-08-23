@@ -1,9 +1,9 @@
 import { getContext } from '../../../st-context.js';
-import { LOOM_OUTPUT_CONTRACT_PATCH, LOOM_POLICY_PATCH, LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT, LOOM_POLICY_V12 } from './loom-reconciliation.js';
+import { LOOM_POLICY_PATCH_PRIOR, LOOM_OUTPUT_CONTRACT_PATCH, LOOM_POLICY_PATCH, LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT, LOOM_POLICY_V12 } from './loom-reconciliation.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 15;
+const STORE_VERSION = 17;
 
 export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
@@ -573,6 +573,32 @@ function normalizeStore(store, seed) {
     // The user's existing Loom recipe is NOT modified and stays selectable — it
     // may carry their own edits. A new patch-contract recipe is seeded and made
     // active, so the change is one dropdown away from being undone.
+    // v16: the Loom was offered goal.create from the start and never used it,
+    // because STEP 2 only asked it to record CHANGES to goals that already
+    // existed. Nothing asked it to give anyone an objective, so goalCount was 0
+    // on every turn and the Narrator's ## Objectives section never appeared.
+    //
+    // Replaces the policy ONLY where it is still the untouched v15 text — the
+    // same rule the v13 migration used. An owner-edited Loom is left alone.
+    // v17: Goals now cover standing WANTS as well as contests, and the policy
+    // is responsible for closing the ones the fiction has overtaken. Widening
+    // them without that closing rule would remove the only brake on goal spam.
+    //
+    // Replaces the policy ONLY where it still matches a superseded version
+    // verbatim — an owner-edited Loom is left exactly as authored.
+    if (previousVersion < 17) {
+        for (const id of store.recipeIds) {
+            const recipe = store.recipes[id];
+            if (!recipe || recipe.mode !== 'loom') continue;
+            for (const block of recipe.blocks || []) {
+                if (LOOM_POLICY_PATCH_PRIOR.includes(block.content)) {
+                    block.content = LOOM_POLICY_PATCH;
+                    changed = true;
+                }
+            }
+        }
+    }
+
     if (previousVersion < 15 && !store.recipeIds.some((id) => store.recipes[id]?.name === PATCH_LOOM_RECIPE_NAME)) {
         const patchRecipe = createPromptRecipeWithoutSave(store, {
             name: PATCH_LOOM_RECIPE_NAME,

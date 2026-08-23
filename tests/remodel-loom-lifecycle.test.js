@@ -163,3 +163,40 @@ test('an intervention stores only the visible Loom prefix and never the private 
     expect(archivePrompt).not.toContain('presses it');
     expect(archivePrompt).not.toContain(RESPONSE);
 });
+
+
+// buildGoalObjectives had two call sites and both were inside the Loom. Its own
+// docstring says "for the narrator view", which was intent rather than wiring —
+// the Narrator had never once been shown a Goal, so it knew what everyone had
+// DONE and never what anyone WANTED, and the cheapest continuation of any user
+// action was that it simply worked.
+//
+// Asserts the value actually handed to setNativePromptContent, NOT
+// buildGoalObjectives in isolation: a helper-only version of this test passed
+// identically with the wiring removed.
+test('a character Goal reaches the Narrator grounding, not only the Loom', async () => {
+    const { createTimelineGoal, linkGoalToScene } = await import('../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js');
+    const goal = createTimelineGoal(scene.timelineId, {
+        title: 'Marissa means to be home by six',
+        holderRefs: [{ kind: 'character', id: 'marissa', label: 'Marissa' }],
+        successRate: 30,
+    }, { sceneId: scene.id, actor: 'mechanics' });
+    linkGoalToScene(scene.id, goal.id);
+
+    const promptContent = [];
+    initLiveDirection({
+        setNativePromptContent: (...args) => {
+            promptContent.push(args);
+            return true;
+        },
+    });
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    const grounding = promptContent.filter(([key]) => key === 'narratorGrounding');
+    expect(grounding[0]?.[1]).toContain('Marissa means to be home by six');
+    // The odds stay on the Loom's private board — the Narrator sees the want,
+    // never the number behind it.
+    expect(grounding[0]?.[1]).not.toMatch(/\b30\b/);
+});

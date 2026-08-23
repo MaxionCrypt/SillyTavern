@@ -106,13 +106,14 @@ Create one only when the fiction has actually raised it. An invented number nobo
 function describeNoGoals(retrieval, mechanicsEnabled) {
     if (retrieval?.goalsEmptyCode !== 'none-authored') return 'None of this Scene\'s Goals were relevant this turn.';
     if (!mechanicsEnabled) return 'No Goals are open in this Scene.';
-    return `No Goals are open in this Scene — nothing here is being played toward an outcome that could fail.
-When someone in the scene is actually reaching for something that could go either way, write it down with goal.create: what they are trying to do, and the chance it lands from the position the fiction has reached. A Goal is what the story is currently gambling on, not a task list.
-Create one only when the fiction has raised the stakes itself. A Goal nobody is pushing on is noise you will be shown every turn afterwards.`;
+    return `No Goals are open in this Scene, so nobody here is visibly after anything.
+A Goal is what someone is trying to get. Two kinds belong here. A WANT is what a character carried into the scene and would still be pursuing if the player never appeared. A CONTEST is an outcome that could genuinely go either way. Write either down with goal.create.
+Give every named character other than the player at least one want of their own, and prefer wants that can collide with the player's. A want needs no meaningful chance attached; a contest does.
+A Goal earns its place only while someone can still pursue it. Close the ones the fiction has overtaken with goal.edit - impossible when events put it out of reach, abandoned when its holder gives up, achieved when they get it. A Goal nobody can still pursue is noise you will be shown every turn afterwards.`;
 }
 
 function rateGuidance() {
-    return `A Success Rate is the chance a decisive attempt lands from the position the fiction has reached. These are reference points, not a list to choose from — state the number that fits:
+    return `A Success Rate applies to a CONTEST, not to a standing want. A standing want needs no meaningful rate - leave it where it is and do not shift it. For a contest, the Success Rate is the chance a decisive attempt lands from the position the fiction has reached. These are reference points, not a list to choose from — state the number that fits:
   5 nearly impossible · 15 extreme · 30 difficult · 50 uncertain · 70 favourable · 85 strongly favoured · 95 nearly assured
 Rates hold between 5 and 95: a Goal already certain or already lost is a status, not a roll. When the fiction moves a Goal's position, say what its rate now is. For scale, a small shift is a few points, a real one is nearer seven, and a decisive turn is twenty or more.
 Code rolls the d100 and settles the outcome. A reach returns a result you must respect — narrate the hit or the miss you were given, never the one you wanted.`;

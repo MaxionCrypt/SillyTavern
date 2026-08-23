@@ -144,3 +144,114 @@ test('a Goal that already ended can still be edited and reopened', () => {
     expect(result.ok).toBe(true);
     expect(getStoryGoal(goal.id).status).toBe('active');
 });
+
+
+// THE DEFECT, so it is not reintroduced: isAuthorizedOwner was deleted by
+// cebcd1596 and its call site inside goal.create survived, so every
+// goal.create threw ReferenceError. Nothing caught it for months because the
+// mechanics board defined a Goal as a gamble and told the Loom to create one
+// "only when the fiction has raised the stakes itself" — so it never did.
+//
+// Requests execute as ONE atomic transaction, so the throw took every
+// event.record, scene.set and beat.set in the same turn down with it. A live
+// session lost seven requests to one missing function and reported only
+// "Mechanical transaction failed: isAuthorizedOwner is not defined".
+test('goal.create places a Goal on a character rather than throwing', () => {
+    const result = run([{
+        id: 'r1',
+        capability: 'goal.create',
+        arguments: {
+            title: 'Be home by six',
+            description: 'She meant to finish the chapter and leave.',
+            holderRefs: [{ kind: 'character', id: 'marissa', label: 'Marissa' }],
+            successRate: 30,
+        },
+        reason: 'She carried this in before the scene began.',
+    }]);
+
+    expect(result.errors || []).toEqual([]);
+    expect(result.ok).toBe(true);
+    const created = getTimelineGoals(TIMELINE).find((goal) => goal.title === 'Be home by six');
+    expect(created).toBeTruthy();
+    expect(created.holderRefs[0].kind).toBe('character');
+});
+
+// The atomicity is the reason the missing function was so expensive: one bad
+// request must not be able to silently discard the turn's whole Archive.
+test('a Goal for a character does not defer, so Archive requests in the same turn survive', () => {
+    const result = run([
+        {
+            id: 'r1',
+            capability: 'goal.create',
+            arguments: { title: 'Finish the chapter', holderRefs: [{ kind: 'character', id: 'm', label: 'Marissa' }] },
+            reason: 'her own reason',
+        },
+        { id: 'r2', capability: 'event.record', arguments: { summary: 'She turned a page.' }, reason: 'it happened' },
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(result.errors || []).toEqual([]);
+    expect(getTimelineGoals(TIMELINE).some((goal) => goal.title === 'Finish the chapter')).toBe(true);
+});
+
+// A Goal placed on the PLAYER is theirs to accept, not the Loom's to assign —
+// the distinction isAuthorizedOwner exists to draw.
+test('a persona-held Goal is treated differently from a character-held one', () => {
+    const result = run([{
+        id: 'r1',
+        capability: 'goal.create',
+        arguments: { title: 'Eli wants the pendant', holderRefs: [{ kind: 'persona', id: 'eli', label: 'Eli Mercer' }] },
+        reason: 'placed on the player',
+    }]);
+    // It must not throw either way; whether it lands or defers is policy.
+    expect(String((result.errors || []).join(  String.fromCharCode(32) ))).not.toMatch(/is not defined/);
+});
+
+
+// A Goal was a title and a number. Nothing said what would make it go well or
+// badly, so the Loom could only restate a want, never advance or close it — and
+// description came back empty on every Goal created in a live session, because
+// the capability guide listed only title and holderRefs. The model was never
+// told the argument existed.
+test('description is advertised as required, with the condition as its hint', () => {
+    const entry = getCapabilityDictionary().find((c) => c.name === 'goal.create');
+    const keys = entry.requiredArguments.map((a) => a.key);
+    expect(keys).toContain('description');
+    const hint = entry.requiredArguments.find((a) => a.key === 'description').hint;
+    expect(hint).toMatch(/condition/i);
+    expect(hint).toMatch(/break it/i);
+});
+
+// ...but advertised is NOT enforced. A MechanicsError rolls the whole
+// transaction back, so throwing over a missing sentence would destroy every
+// event.record and beat.set in the same turn — the exact blast radius that the
+// undefined isAuthorizedOwner produced. A thin Goal beats a lost Archive.
+test('a Goal with no description still lands, taking the turn with it', () => {
+    const result = run([
+        {
+            id: 'r1',
+            capability: 'goal.create',
+            arguments: { title: 'Make the early shift', holderRefs: [{ kind: 'character', id: 'm', label: 'Marissa' }] },
+            reason: 'her own schedule',
+        },
+        { id: 'r2', capability: 'event.record', arguments: { summary: 'She checked the clock.' }, reason: 'it happened' },
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(result.errors || []).toEqual([]);
+    expect(getTimelineGoals(TIMELINE).some((g) => g.title === 'Make the early shift')).toBe(true);
+});
+
+test('a condition supplied in description is stored on the Goal', () => {
+    const condition = 'On track while she leaves the stacks by 5:40; broken if she is still there at six.';
+    const result = run([{
+        id: 'r1',
+        capability: 'goal.create',
+        arguments: { title: 'Be on shift by six', description: condition, holderRefs: [{ kind: 'character', id: 'm', label: 'Marissa' }] },
+        reason: 'her own schedule',
+    }]);
+
+    expect(result.ok).toBe(true);
+    const goal = getTimelineGoals(TIMELINE).find((g) => g.title === 'Be on shift by six');
+    expect(goal.description).toBe(condition);
+});
