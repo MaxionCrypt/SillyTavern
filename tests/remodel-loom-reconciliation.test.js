@@ -1,5 +1,5 @@
 import { __setExtensionSettings } from './util/st-context-stub.js';
-import { usesLoomReconciliation, buildLoomPrompt, parseLoomReply, readLoomProse, applySwaps } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js';
+import { usesLoomReconciliation, buildLoomPrompt, parseLoomReply, readLoomProse, applySwaps , describeLoomReply, LOOM_OUTPUT_CONTRACT_PATCH, LOOM_POLICY_PATCH } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js';
 import { setLiveDirectionMode } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { createArc, createScene, createTimeline, getScene } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/timeline-state.js';
 import { buildGoalObjectives } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/narrator-prompt.js';
@@ -99,4 +99,95 @@ test('applySwaps skips a swap whose find is not in the draft — never corrupts 
 test('applySwaps with no swaps returns the draft untouched', () => {
     const draft = 'Nothing was rolled, so nothing changes.';
     expect(applySwaps(draft, [])).toEqual({ prose: draft, applied: 0 });
+});
+
+// describeLoomReply exists to tell apart three failures that all surface as the
+// same symptom — an Archive that quietly did not advance.
+test('a reply with no state fence is reported as having none', () => {
+    const reply = describeLoomReply('Just the prose, no fence at all.');
+    expect(reply.hasFence).toBe(false);
+    expect(reply.fenceParsed).toBe(false);
+    expect(reply.capabilities).toEqual([]);
+    expect(reply.tail).toContain('no fence at all');
+});
+
+test('a malformed fence is distinguished from a missing one', () => {
+    const reply = describeLoomReply('Prose.\n\n```state\n{"requests":[{,,,}]}\n```');
+    expect(reply.hasFence).toBe(true);
+    expect(reply.fenceParsed).toBe(false);
+    expect(reply.capabilities).toEqual([]);
+});
+
+test('a valid fence reports the capabilities it named', () => {
+    const fence = JSON.stringify({ requests: [
+        { id: 'r1', capability: 'event.record', arguments: { summary: 'x' } },
+        { id: 'r2', capability: 'goal.reach', arguments: {} },
+    ], flow: { continue: false } });
+    const reply = describeLoomReply(`Prose.\n\n\`\`\`state\n${fence}\n\`\`\``);
+    expect(reply.hasFence).toBe(true);
+    expect(reply.fenceParsed).toBe(true);
+    expect(reply.capabilities).toEqual(['event.record', 'goal.reach']);
+    expect(reply.requestCount).toBe(2);
+});
+
+test('a request with no capability name is still counted, not silently dropped', () => {
+    const fence = JSON.stringify({ requests: [{ id: 'r1', arguments: {} }] });
+    const reply = describeLoomReply(`Prose.\n\n\`\`\`state\n${fence}\n\`\`\``);
+    expect(reply.capabilities).toEqual(['(missing)']);
+});
+
+test('the summary is bounded so a long turn cannot bury the journal', () => {
+    const long = 'x'.repeat(50000);
+    const reply = describeLoomReply(long, { tailChars: 100 });
+    expect(reply.length).toBe(50000);
+    expect(reply.tail.length).toBe(100);
+});
+
+// THE PATCH CONTRACT. Under the default contract the Loom had to re-emit the
+// whole turn before it could write its state fence — 17 to 94 seconds per turn
+// on the live session, re-typing prose that already existed. Here it names only
+// the spans a ruling changes and applySwaps() patches the draft in code.
+const FENCE = `${String.fromCharCode(96, 96, 96)}state`;
+const FENCE_END = String.fromCharCode(96, 96, 96);
+const fenceOnly = (payload) => `${FENCE}\n${JSON.stringify(payload)}\n${FENCE_END}`;
+
+test('the patch contract forbids restating the prose', () => {
+    expect(LOOM_OUTPUT_CONTRACT_PATCH).toMatch(/Output NOTHING except one state fence/);
+    expect(LOOM_OUTPUT_CONTRACT_PATCH).toMatch(/swaps/);
+    expect(LOOM_OUTPUT_CONTRACT_PATCH).not.toMatch(/complete final scene prose/);
+    expect(LOOM_POLICY_PATCH).toMatch(/do NOT rewrite or reproduce it/);
+});
+
+// The whole saving depends on this: a reply that is ONLY a fence must leave
+// prose empty, so the caller falls through to applySwaps against the draft.
+test('a fence-only reply yields no prose, so the draft is what gets patched', () => {
+    const draft = 'She crossed the room and opened the window.';
+    const raw = fenceOnly({
+        swaps: [{ find: 'opened the window', replace: 'failed to open the window' }],
+        requests: [],
+    });
+    const parsed = parseLoomReply(raw);
+    expect(parsed.prose).toBe('');
+    expect(parsed.swaps).toHaveLength(1);
+    const committed = parsed.prose || applySwaps(draft, parsed.swaps).prose;
+    expect(committed).toBe('She crossed the room and failed to open the window.');
+});
+
+test('a fence-only reply with no swaps leaves the draft exactly as written', () => {
+    const draft = 'Nothing in the fiction needed correcting.';
+    const raw = fenceOnly({ swaps: [], requests: [{ id: 'r1', capability: 'event.record', arguments: {} }] });
+    const parsed = parseLoomReply(raw);
+    expect(parsed.prose).toBe('');
+    expect(parsed.requests).toHaveLength(1);
+    expect(parsed.prose || applySwaps(draft, parsed.swaps).prose).toBe(draft);
+});
+
+// A swap whose anchor the model paraphrased must never corrupt the prose.
+test('a patch whose find is not in the draft is skipped, leaving the draft intact', () => {
+    const draft = 'She crossed the room.';
+    const raw = fenceOnly({ swaps: [{ find: 'walked across the room', replace: 'stumbled' }], requests: [] });
+    const parsed = parseLoomReply(raw);
+    const result = applySwaps(draft, parsed.swaps);
+    expect(result.applied).toBe(0);
+    expect(result.prose).toBe(draft);
 });

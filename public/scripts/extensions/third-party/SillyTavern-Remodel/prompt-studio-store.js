@@ -1,9 +1,9 @@
 import { getContext } from '../../../st-context.js';
-import { LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT, LOOM_POLICY_V12 } from './loom-reconciliation.js';
+import { LOOM_OUTPUT_CONTRACT_PATCH, LOOM_POLICY_PATCH, LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT, LOOM_POLICY_V12 } from './loom-reconciliation.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 14;
+const STORE_VERSION = 15;
 
 export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
@@ -371,6 +371,36 @@ function defaultStoryBlocks() {
     ];
 }
 
+const PATCH_LOOM_RECIPE_NAME = 'Loom · Patch (fast)';
+
+/**
+ * The Loom blocks for the PATCH contract.
+ *
+ * Identical to the default set except for the policy and the output contract:
+ * the Loom names only the spans a ruling changes instead of re-emitting the
+ * whole turn. applySwaps() applies them in code, and a reply with no swaps
+ * leaves the draft untouched — which is most turns.
+ *
+ * WHY: measured on a live session, the default contract cost 17-94 seconds per
+ * turn re-typing prose that already existed, against 28-47 for the Narrator
+ * that wrote it.
+ */
+function patchLoomBlocks() {
+    return [
+        createPromptBlock({ kind: 'message', role: 'system', content: LOOM_POLICY_PATCH }),
+        createPromptBlockFromTemplate('loom', 'archiveState'),
+        createPromptBlockFromTemplate('loom', 'mechanicsBoard'),
+        createPromptBlockFromTemplate('loom', 'narratorDraft'),
+        createPromptBlockFromTemplate('loom', 'narratorReasoning'),
+        createPromptBlock({
+            kind: 'message',
+            role: 'system',
+            content: LOOM_OUTPUT_CONTRACT_PATCH,
+            advancedWarning: 'Changing the state fence or swap schema can prevent the Loom reply from being parsed or applied.',
+        }),
+    ];
+}
+
 /** The default editable recipe for the post-draft Loom request. */
 function defaultLoomBlocks() {
     return [
@@ -536,6 +566,28 @@ function normalizeStore(store, seed) {
         if (previousVersion < 2 && recipe.mode === 'story' && migrateStoryWorldInfoSources(recipe)) changed = true;
         recipe.blocks = normalizeBlocks(recipe.blocks, recipe.mode, recipe.apiType);
         store.recipes[id] = recipe;
+    }
+
+    // v15: the Loom stops re-typing the turn it was given.
+    //
+    // The user's existing Loom recipe is NOT modified and stays selectable — it
+    // may carry their own edits. A new patch-contract recipe is seeded and made
+    // active, so the change is one dropdown away from being undone.
+    if (previousVersion < 15 && !store.recipeIds.some((id) => store.recipes[id]?.name === PATCH_LOOM_RECIPE_NAME)) {
+        const patchRecipe = createPromptRecipeWithoutSave(store, {
+            name: PATCH_LOOM_RECIPE_NAME,
+            description: 'The Loom names only the spans a ruling changes; code patches the draft. Much faster than re-emitting the whole turn.',
+            mode: 'loom',
+            apiType: 'chat',
+            blocks: patchLoomBlocks(),
+            transport: null,
+        });
+        if (patchRecipe?.id) {
+            store.active = store.active && typeof store.active === 'object' ? store.active : {};
+            store.active.loom ??= {};
+            store.active.loom.chat = patchRecipe.id;
+        }
+        changed = true;
     }
 
     if (previousVersion < 14 && !store.recipeIds.some((id) => store.recipes[id]?.name === CURATED_NARRATOR_RECIPE_NAME)) {

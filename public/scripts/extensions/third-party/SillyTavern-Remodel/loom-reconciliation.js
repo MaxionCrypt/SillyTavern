@@ -10,6 +10,32 @@ STEP 1 - Archive. Keep the Archive caught up with only the fiction that this res
 STEP 2 - Mechanics. Record warranted Goal and Variable changes. Only request goal.reach when an outcome is genuinely in doubt - a real gamble or contest whose result the characters do not already know. Code rolls the dice, never you. Routine actions do not need rolls.
 STEP 3 - Reconcile. Produce the complete version that may become accepted fiction. Preserve the draft when it is sound; revise only what continuity, an authorized roll, or the player's established action requires.`;
 
+// --- The PATCH contract -----------------------------------------------------
+//
+// WHY IT EXISTS: under the default contract the Loom must re-emit the ENTIRE
+// turn before it may write its state fence. Measured on the owner's session
+// that cost 17-94 seconds per turn, on top of the Narrator's own 28-47 - the
+// Loom was re-typing prose that already existed.
+//
+// The draft is already canonical here: applySwaps() patches it in code, and a
+// reply with no swaps leaves it untouched. So the Loom only has to name the
+// spans a ruling actually changes, which on most turns is none of them - a few
+// hundred characters instead of a few thousand.
+export const LOOM_POLICY_PATCH = `You are the Loom: the final continuity editor and mechanical referee. You receive the Narrator's draft before anything becomes visible. The draft is already canonical - do NOT rewrite or reproduce it.
+
+STEP 1 - Archive. Keep the Archive caught up with only the fiction this response makes canonical. Record each distinct new event with event.record. Update durable scene facts with scene.set, changed character facets with char_state.set, hidden truths with secret.set, and the unresolved forward beat with beat.set. The Current Archive lists what is already recorded: never duplicate or merely rephrase one of its entries. Do not invent state the prose does not establish.
+STEP 2 - Mechanics. Record warranted Goal and Variable changes. Only request goal.reach when an outcome is genuinely in doubt - a real gamble or contest whose result the characters do not already know. Code rolls the dice, never you. Routine actions do not need rolls.
+STEP 3 - Patch. If, and ONLY if, continuity or an authorized roll contradicts the draft, name the exact span to replace. Quote the draft verbatim in "find". Most turns need no patch at all.`;
+
+export const LOOM_OUTPUT_CONTRACT_PATCH = `Output NOTHING except one state fence. Do not restate the prose.
+\`\`\`state
+{"swaps":[],"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"},{"id":"r2","capability":"beat.set","arguments":{"directive":"the unresolved next beat"},"reason":"why, one line"}],"flow":{"continue":false}}
+\`\`\`
+
+Every request is its own object. Close one with } and open the next with {, exactly as above. Never repeat "id" inside a single object.
+
+Each swap is {"find":"exact text from the draft","replace":"what it becomes"}. A find that is not present verbatim in the draft is discarded, so copy it exactly.`;
+
 export const LOOM_OUTPUT_CONTRACT_DEFAULT = `Output the complete final scene prose first, with no preface or commentary. Then output exactly one state fence:
 \`\`\`state
 {"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"}],"flow":{"continue":false}}
@@ -37,12 +63,14 @@ export function buildLoomRecipeSources({ draft, draftReasoning = '', narrativeSt
 }
 
 /**
- * The Loom prompt. The Loom is a purely MECHANICAL referee: it
- * reads the narrator's draft, resolves the dice, and records what happened. It
- * NEVER reproduces or rewrites the draft — preserve-and-patch is done in code.
- * The draft is kept verbatim; the Loom only names the exact span(s) a roll
- * changed, as find/replace swaps the code applies. On a turn where nothing was
- * rolled (the common case), it emits no swaps and the draft stands untouched.
+ * The Loom prompt. The Loom is the final continuity editor and mechanical
+ * referee: it reads the Narrator's private draft, records the state the fiction
+ * now warrants, and returns the COMPLETE final prose that may become accepted
+ * fiction — preserving the draft closely except where continuity or an
+ * authorized roll requires a correction. Dice are rolled by code, never by the
+ * model. The older preserve-and-patch contract, in which the draft was kept
+ * verbatim and the model named only find/replace spans, survives as a
+ * compatibility fallback for owner-authored recipes — see parseLoomReply.
  *
  * @param {{draft: string, draftReasoning?: string, narrativeState?: string, mechanicsSkill?: string}} input
  * @returns {{role: string, content: string}[]}
@@ -75,15 +103,18 @@ export function readLoomProse(raw, { final = false } = {}) {
     return final ? prose.trimEnd() : prose;
 }
 
+
 /**
- * Parse the Loom's reply. The reply is a single ```state fence whose
- * JSON carries preserve-and-patch swaps (find/replace spans the code applies to
- * the draft) and the mechanics requests to execute. Any prose the model leaks
- * outside the fence is ignored — the draft, not the model, owns the narration.
- * A missing or malformed fence is not an error: no swaps, no requests.
+ * Parse the Loom's reply: the complete final prose, followed by a single
+ * ```state fence whose JSON carries the mechanics requests to execute and
+ * the flow decision. The returned prose is what the caller commits.
+ * Owner-authored recipes still on the older preserve-and-patch contract instead
+ * return swaps (find/replace spans against the draft); those apply only when
+ * the model returned no prose at all. A missing or malformed fence is not an
+ * error: no prose changes, no requests.
  *
  * @param {string} raw
- * @returns {{ swaps: {find: string, replace: string}[], requests: object[], flow: {continueAfter: boolean, hardPauseAfter: boolean}|null }}
+ * @returns {{ prose: string, swaps: {find: string, replace: string}[], requests: object[], flow: {continueAfter: boolean, hardPauseAfter: boolean}|null }}
  */
 export function parseLoomReply(raw) {
     const text = String(raw ?? '');
@@ -110,6 +141,44 @@ export function parseLoomReply(raw) {
         } catch { swaps = []; requests = []; flow = null; }
     }
     return { prose, swaps, requests, flow };
+}
+
+/**
+ * A bounded, diagnostic view of one Loom reply.
+ *
+ * WHY THIS EXISTS: an Archive that does not advance looks identical from the
+ * outside no matter which of three things went wrong — the model emitted no
+ * state fence at all, it emitted one whose JSON does not parse, or it emitted
+ * valid requests naming capabilities the Archive filter drops. Each needs a
+ * different fix, and `archive.catchup.empty` distinguishes none of them.
+ *
+ * Deliberately a SUMMARY rather than the raw reply: the prose is already the
+ * chat message, and re-journaling every turn in full would bury the signal in
+ * the thing it is meant to explain. The tail is kept because that is where a
+ * fence belongs, so its absence is visible rather than inferred.
+ *
+ * @param {string} raw
+ * @param {{tailChars?: number, fenceChars?: number}} [options]
+ */
+export function describeLoomReply(raw, { tailChars = 400, fenceChars = 2000 } = {}) {
+    const text = String(raw ?? '');
+    const fenceMatch = text.match(STATE_FENCE);
+    const parsed = parseLoomReply(text);
+    let fenceParsed = false;
+    if (fenceMatch) {
+        try { JSON.parse(fenceMatch[1]); fenceParsed = true; } catch { fenceParsed = false; }
+    }
+    return {
+        length: text.length,
+        proseLength: parsed.prose.length,
+        hasFence: Boolean(fenceMatch),
+        fenceParsed,
+        fenceJson: fenceMatch ? fenceMatch[1].slice(0, fenceChars) : '',
+        capabilities: parsed.requests.map((request) => String(request?.capability || '(missing)')),
+        requestCount: parsed.requests.length,
+        swapCount: parsed.swaps.length,
+        tail: text.slice(-tailChars),
+    };
 }
 
 /**

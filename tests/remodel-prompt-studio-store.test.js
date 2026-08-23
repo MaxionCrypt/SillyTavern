@@ -68,7 +68,7 @@ test('v13 stores migrate old hidden grounding into an editable recipe policy and
 
     const store = initializePromptStudioStore();
     const recipe = store.recipes.rp;
-    expect(store.version).toBe(14);
+    expect(store.version).toBe(15);
     expect(recipe.blocks.some((block) => block.content === '{{loom.context}}')).toBe(false);
     expect(recipe.blocks).toEqual(expect.arrayContaining([
         expect.objectContaining({ content: NARRATOR_POLICY_DEFAULT, locked: false }),
@@ -76,4 +76,54 @@ test('v13 stores migrate old hidden grounding into an editable recipe policy and
     ]));
     expect(store.recipeIds.map((id) => store.recipes[id]?.name)).toContain('Narrator · Archive-Grounded');
     expect(settings.remodel.promptStudioV1.active.roleplay.chat).toBe('rp');
+});
+
+
+// v15: the Loom stops re-typing the turn it was handed. Measured on a live
+// session, the full-prose contract cost 17-94s per turn reproducing prose that
+// already existed. The user's own Loom recipe must survive — it may carry their
+// edits — so the migration seeds a new one and switches to it rather than
+// rewriting theirs.
+test('v15 seeds the patch Loom recipe, activates it, and leaves the existing one intact', () => {
+    __setExtensionSettings({
+        remodel: {
+            promptStudioV1: {
+                version: 14,
+                recipeIds: ['mine'],
+                recipes: {
+                    mine: {
+                        id: 'mine', name: 'My Loom', mode: 'loom', apiType: 'chat',
+                        blocks: [{ id: 'b1', kind: 'message', role: 'system', content: 'my own carefully edited policy' }],
+                    },
+                },
+                active: { loom: { chat: 'mine' } },
+            },
+        },
+    });
+    const store = initializePromptStudioStore();
+
+    expect(store.version).toBe(15);
+    // The user's recipe is untouched and still selectable.
+    expect(store.recipes.mine).toBeTruthy();
+    expect(store.recipes.mine.blocks[0].content).toBe('my own carefully edited policy');
+
+    // ...and a patch recipe now exists and is the active one.
+    const patchId = store.recipeIds.find((id) => store.recipes[id]?.name === 'Loom · Patch (fast)');
+    expect(patchId).toBeTruthy();
+    expect(store.active.loom.chat).toBe(patchId);
+    expect(store.active.loom.chat).not.toBe('mine');
+
+    // The seeded recipe really carries the patch contract, not the old one.
+    const blocks = store.recipes[patchId].blocks.map((b) => b.content).join(String.fromCharCode(10));
+    expect(blocks).toMatch(/Output NOTHING except one state fence/);
+    expect(blocks).not.toMatch(/complete final scene prose/);
+});
+
+test('v15 does not seed a second patch recipe on a store that already has one', () => {
+    __setExtensionSettings({});
+    const first = initializePromptStudioStore();
+    const count = () => first.recipeIds.filter((id) => first.recipes[id]?.name === 'Loom · Patch (fast)').length;
+    const again = initializePromptStudioStore();
+    expect(again.recipeIds.filter((id) => again.recipes[id]?.name === 'Loom · Patch (fast)').length).toBeLessThanOrEqual(1);
+    expect(count()).toBeLessThanOrEqual(1);
 });

@@ -1585,6 +1585,12 @@ export async function runLoomReconciliation({
     // Preserve-and-patch: the draft is canonical. The Loom only names the
     // exact span(s) a roll changed; code applies them. No swaps → draft stands.
     if (token?.controller?.signal?.aborted) return { committedProse: '', requests: [], result: null, flow: null, aborted: true };
+    // The Loom must reproduce the whole turn AND close a state fence on the
+    // same ceiling as the draft, so it runs out sooner. A truncated Loom reply
+    // loses the fence entirely, which surfaces only as an Archive that quietly
+    // did not advance — name the real cause here instead.
+    await checkGenerationBudget({ text: raw, reasoning: '', label: 'The Loom pass', directionId: null });
+    journalLoomReply(raw, 'loom-pass', scene?.id || null);
     const { prose, swaps, requests, flow } = parseLoomReply(raw);
     // Full-prose replies are the v12 contract. Preserve-and-patch remains a
     // compatibility fallback for owner-authored recipes using the old fence.
@@ -2012,6 +2018,34 @@ function applyPendingRequests(run) {
 }
 
 /**
+ * Record what a Loom-shaped reply actually contained.
+ *
+ * Logged at `warn` when it carries no Archive operation, because that is the
+ * case where the scene silently stops remembering: the prose lands, the turn
+ * reads as complete, and nothing says the Archive did not move.
+ */
+function journalLoomReply(raw, phase, sceneId, directionId = null) {
+    try {
+        const reply = describeLoomReply(raw);
+        const archiveCount = reply.capabilities.filter((name) => ARCHIVE_CAPABILITIES.has(name)).length;
+        const reason = !reply.hasFence
+            ? 'no state fence in the reply'
+            : (!reply.fenceParsed
+                ? 'the state fence is not valid JSON'
+                : (!archiveCount
+                    ? 'the fence carried no Archive operation'
+                    : ''));
+        journal('loom.reply', { phase, sceneId, directionId, archiveCount, ...reply }, {
+            correlationId: directionId || undefined,
+            severity: reason ? 'warn' : 'info',
+            summary: reason
+                ? `Loom reply (${phase}): ${reason}.`
+                : `Loom reply (${phase}): ${archiveCount} Archive operation(s).`,
+        });
+    } catch { /* diagnostics must never break a turn */ }
+}
+
+/**
  * Reconcile accepted prose into the Archive when the visible Loom pass could
  * not supply a trustworthy state fence (most importantly, an interruption).
  * This deliberately reuses the selected Loom recipe and connection profile;
@@ -2058,6 +2092,7 @@ async function catchUpArchive(run, reason) {
         return;
     }
 
+    journalLoomReply(raw, `archive-catchup:${reason}`, run.sceneId, run.directionId);
     const requests = parseLoomReply(raw).requests.filter((request) => ARCHIVE_CAPABILITIES.has(request?.capability));
     if (!requests.length) {
         journal('archive.catchup.empty', { directionId: run.directionId, reason }, { correlationId: run.directionId, severity: 'warn' });
