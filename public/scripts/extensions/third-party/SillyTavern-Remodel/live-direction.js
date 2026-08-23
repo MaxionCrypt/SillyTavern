@@ -1041,7 +1041,7 @@ function ownedByEmptyRetry(directionId) {
     return Boolean(directionId) && retryingEmpty.has(directionId);
 }
 
-async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0 }) {
+async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0, previousReasoningLength = 0 }) {
     activeRun = {
         directionId: envelope.directionId,
         sceneId: scene.id,
@@ -1086,11 +1086,22 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     // with the Loom's readable Archive state resolved into the recipe-owned
     // Narrator Grounding macro. Placement and policy remain user-authored.
     const archivistState = buildNarratorArchivistSections(scene.timelineId, scene.id);
-    const groundingRouted = hooks.setNativePromptContent('narratorGrounding', archivistState);
+    // A retry must not re-send the request that just failed. The empty-response
+    // path was re-issuing a byte-identical body — verified on the wire — so the
+    // nudge rides the grounding channel, which is the one injection point already
+    // proven to reach the request (notes.bridge reports its length every turn).
+    const retryNudge = buildEmptyResponseNudge(Number(emptyRetries) + 1, {
+        // Passed in, not read back: activeRun.messageId is only assigned when
+        // MESSAGE_RECEIVED lands, so at this point it names nothing.
+        reasoningLength: Number(previousReasoningLength) || 0,
+    });
+    const groundedState = [archivistState, retryNudge].filter(Boolean).join('\n\n');
+    const groundingRouted = hooks.setNativePromptContent('narratorGrounding', groundedState);
     journal('notes.bridge', {
         directionId: envelope.directionId,
         routed: groundingRouted ? 'recipe-macro' : 'recipe-macro-disabled',
-        groundingChars: archivistState.length,
+        groundingChars: groundedState.length,
+        retryNudged: Boolean(retryNudge),
         hasArchivist: Boolean(String(archivistState || '').trim()),
     }, { correlationId: envelope.directionId });
     // The user message was inserted explicitly above. Native normal
@@ -1819,6 +1830,7 @@ async function failEmptyVisibleRun(run) {
                 autonomousSequence: run.autonomousSequence,
                 token: retryToken,
                 emptyRetries: run.emptyRetries + 1,
+                previousReasoningLength: reasoning.length,
             });
         } catch (error) {
             // Nothing awaits this function. completeVisibleRun is driven by the
