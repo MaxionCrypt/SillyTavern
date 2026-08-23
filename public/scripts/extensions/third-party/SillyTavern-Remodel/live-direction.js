@@ -13,12 +13,13 @@ import { resolveByName } from './direction-address.js';
 import { resolveDirectionActions } from './turn-chrome.js';
 import { deriveBeats } from './direction-beats.js';
 import { captureLoomPromptLog, capturePromptLog, compilePromptRecipe, getCurrentPromptStudioRecipe } from './prompt-studio.js';
-import { filterNarratorHistory, repairDirectedNarratorRoles } from './narrator-history.js';
+import { repairDirectedNarratorRoles } from './narrator-history.js';
 import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
 import { streamChatPrompt } from './story-stream.js';
-import { buildNarratorArchivistSections, buildGoalObjectives } from './narrator-prompt.js';
-import { applySwaps, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
+import { buildEmptyResponseNudge, buildNarratorArchivistSections, buildGoalObjectives } from './narrator-prompt.js';
+import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
+import { describeBudgetWarning, describeGenerationBudget } from './generation-budget.js';
 import { createLoomTurnEnvelope } from './loom-turn.js';
 import { updateScene } from './timeline-state.js';
 import { recordDebugEvent } from './debug-console.js';
@@ -207,7 +208,24 @@ export function initLiveDirection(options = {}) {
     context.eventSource.on(context.eventTypes.CHAT_COMPLETION_PROMPT_READY, (eventData) => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
         if (!eventData || !Array.isArray(eventData.chat)) return;
-        eventData.chat = filterNarratorHistory(eventData.chat, { narratorName: activeRun.performer?.label || '' });
+        // NOTHING IS REWRITTEN HERE, and two hard-won facts explain why.
+        //
+        // 1. filterNarratorHistory used to be applied by REASSIGNING
+        //    eventData.chat. That is inert: openai.js holds `chat` in a const and
+        //    returns its own reference, so every user message the filter claimed
+        //    to drop went out on the wire regardless. Confirmed by capturing the
+        //    request body. A rewrite here must splice IN PLACE to have any effect.
+        //
+        // 2. Hoisting the trailing system blocks above the last spoken turn was
+        //    tried, to stop the model echoing them back. It made things worse: on
+        //    a Continue there is no new user message, so the request then ended on
+        //    the assistant's OWN previous prose and the model returned 12-94
+        //    character fragments. Those trailing blocks are not noise — on a
+        //    Continue they are the only thing instructing the model to write.
+        //
+        // Whether the Narrator should see the user at all, and how to stop the
+        // echo, are live questions. Neither is answered by silently reshaping
+        // every prompt.
     });
     const finish = () => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
