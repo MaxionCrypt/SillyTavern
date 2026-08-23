@@ -11,7 +11,11 @@ export function buildGoalObjectives(sceneId) {
     if (!goals.length) return '';
     const lines = goals.map((goal) => {
         const desc = String(goal.description || '').trim();
-        return `- ${goal.title}${desc ? `: ${desc}` : ''}`;
+        const holders = (Array.isArray(goal.holderRefs) ? goal.holderRefs : [])
+            .map((holder) => String(holder?.label || holder?.id || '').trim())
+            .filter(Boolean);
+        const owner = holders.length ? holders.join(', ') : 'Unassigned';
+        return `- ${owner} — ${goal.title}${desc ? `: ${desc}` : ''}`;
     });
     return `## Objectives\n${lines.join('\n')}`;
 }
