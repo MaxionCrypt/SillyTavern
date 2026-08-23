@@ -69,7 +69,7 @@ const CAPABILITIES = Object.freeze({
     'event.record': capability('Append one thing that has just happened to the permanent event log. Append-only — the Narrator reads this as "already written, do not restate".', ['narrative'], 'hybrid'),
     'char_state.set': capability("Set one facet of a character's current state — mood, injury, stance. Overwrites that facet.", ['narrative'], 'hybrid'),
     'char_state.clear': capability("Remove one facet of a character's current state that no longer applies.", ['narrative'], 'hybrid'),
-    'beat.set': capability("Set the current beat — what should happen next. Replaces the previous beat. This is the Narrator's forward instruction.", ['narrative'], 'hybrid'),
+    'beat.set': capability('Set the current unresolved thread. Replaces the previous thread. This is provisional momentum, never a guaranteed outcome and never stronger than the latest accepted action.', ['narrative'], 'hybrid'),
     'secret.set': capability('Store knowledge the Narrator must not see — a twist or hidden motive. Overwriting the same key replaces it.', ['narrative'], 'hybrid'),
     'secret.clear': capability('Remove a secret, e.g. once it has been revealed.', ['narrative'], 'hybrid'),
 });
@@ -140,7 +140,7 @@ export function getMechanicsRequestSchema() {
                                     fromGoalRef: { type: 'string', description: 'goal.relate only: the Goal the relationship starts from, addressed the same way as goalRef.' },
                                     toGoalRef: { type: 'string', description: 'goal.relate only: the Goal the relationship points to, addressed the same way as goalRef.' },
                                     title: { type: 'string', description: 'goal.create and goal.edit: the Goal\'s title.' },
-                                    description: { type: 'string', description: 'goal.create: the CONDITION this Goal is measured against — what has to be true for it to still be on track, and what would break it. A want with no condition cannot be advanced or closed, only restated. variable.create: what this new Variable means in the fiction, in one line — you are shown it again every time the Variable is retrieved, so write it for your future self.' },
+                                    description: { type: 'string', description: 'goal.create: the CONDITION this Goal is measured against — what has to be true for it to still be on track, and what would break it. A Goal with no condition cannot be advanced or closed, only restated. variable.create: what this new Variable means in the fiction, in one line — you are shown it again every time the Variable is retrieved, so write it for your future self.' },
                                     visibility: { type: 'string', enum: ['public', 'secret'], description: 'goal.create and goal.edit: whether the user can see this Goal exists. Use secret for a twist or a threat the user has not discovered.' },
                                     holderRefs: { type: 'array', items: ownerRefSchema(), description: 'goal.create only: who holds this Goal — at least one typed owner is required.' },
                                     targetRefs: { type: 'array', items: ownerRefSchema(), description: 'goal.create only: who or what the Goal is directed at, if it has a target. Optional.' },
@@ -167,7 +167,7 @@ export function getMechanicsRequestSchema() {
                                     summary: { type: 'string', description: 'event.record only: what just happened, one line. Appended to the permanent log the Narrator reads as already-written.' },
                                     charId: { type: 'string', description: 'char_state.set / char_state.clear: which character, by cast name.' },
                                     facet: { type: 'string', description: 'char_state.set / char_state.clear: which facet of the character\'s current state, e.g. "mood", "injury", "stance".' },
-                                    directive: { type: 'string', description: 'beat.set only: what should happen next — the Narrator\'s forward instruction.' },
+                                    directive: { type: 'string', description: 'beat.set only: the unresolved thread that may develop next; provisional and subordinate to the latest accepted action.' },
                                     tone: { type: 'string', description: 'beat.set only, optional: the emotional register of the next beat, e.g. "tense", "tender".' },
                                 },
                             },
@@ -703,7 +703,7 @@ export const REQUIRED_ARGUMENTS = Object.freeze({
     'event.record': Object.freeze([['summary', 'what just happened, one line']]),
     'char_state.set': Object.freeze([['charId', 'the character, by cast name'], ['facet', 'which facet, e.g. "mood"'], ['value', 'the new value, e.g. "desperate"']]),
     'char_state.clear': Object.freeze([['charId', 'the character, by cast name'], ['facet', 'which facet to remove']]),
-    'beat.set': Object.freeze([['directive', 'what should happen next, one or two lines']]),
+    'beat.set': Object.freeze([['directive', 'the unresolved thread that may develop next, one or two lines; never a guaranteed outcome']]),
     'secret.set': Object.freeze([['key', 'the secret name'], ['value', 'the secret itself']]),
     'secret.clear': Object.freeze([['key', 'the secret name to remove']]),
 });
@@ -745,8 +745,8 @@ function isAuthorizedVariable(variable, ref, runtime) {
  * ReferenceError. It stayed invisible because nothing ever asked the Loom to
  * create a Goal — the mechanics board defined a Goal as a gamble and told it to
  * create one "only when the fiction has raised the stakes itself", so it never
- * did. The moment the v17 policy asked for standing wants, every turn that
- * proposed one failed.
+ * did. Once policy began actively proposing goal.create, every attempted
+ * creation failed.
  *
  * And it failed LOUDLY WRONG: requests execute as one atomic transaction, so a
  * ReferenceError inside goal.create took every event.record, scene.set and

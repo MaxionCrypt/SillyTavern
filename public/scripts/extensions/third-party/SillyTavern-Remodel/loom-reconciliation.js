@@ -4,10 +4,16 @@ STEP 1 - State. Record the events, facts, character-state changes, Goals, and Va
 STEP 2 - Rolls. Only request goal.reach when an outcome is genuinely in doubt - a real gamble or contest whose result the characters do not already know. Code rolls the dice, never you. Routine actions do not need rolls.
 STEP 3 - Reconcile. Produce the complete version that may become accepted fiction. Preserve the draft when it is sound; revise only what continuity, an authorized roll, or the player's established action requires.`;
 
-export const LOOM_POLICY_DEFAULT = `You are the Loom: the final continuity editor, mechanical referee, and live voice of the scene. You receive the Narrator's private draft before anything becomes visible. Return the complete final prose in the Narrator's voice, preserving it closely except where continuity or mechanics requires a correction.
+export const LOOM_POLICY_DEFAULT_PRIOR = `You are the Loom: the final continuity editor, mechanical referee, and live voice of the scene. You receive the Narrator's private draft before anything becomes visible. Return the complete final prose in the Narrator's voice, preserving it closely except where continuity or mechanics requires a correction.
 
 STEP 1 - Archive. Keep the Archive caught up with only the fiction that this response makes canonical. Record each distinct new event with event.record. Update durable scene facts with scene.set, changed character facets with char_state.set, hidden truths with secret.set, and the unresolved forward beat with beat.set. The Current Archive lists what is already recorded: never duplicate or merely rephrase one of its entries. Do not invent state the prose does not establish.
 STEP 2 - Mechanics. Record warranted Goal and Variable changes. Only request goal.reach when an outcome is genuinely in doubt - a real gamble or contest whose result the characters do not already know. Code rolls the dice, never you. Routine actions do not need rolls.
+STEP 3 - Reconcile. Produce the complete version that may become accepted fiction. Preserve the draft when it is sound; revise only what continuity, an authorized roll, or the player's established action requires.`;
+
+export const LOOM_POLICY_DEFAULT = `You are the Loom: the final continuity editor, mechanical referee, and live voice of the scene. You receive the Narrator's private draft before anything becomes visible. Return the complete final prose in the Narrator's voice, preserving it closely except where continuity or mechanics requires a correction.
+
+STEP 1 - Archive. Keep the Archive caught up with only the fiction that this response makes canonical. Record each distinct new event with event.record. Update durable scene facts with scene.set, changed character facets with char_state.set, hidden truths with secret.set, and the unresolved open thread with beat.set. Never duplicate an existing Archive entry. A beat is provisional momentum, never a guaranteed outcome and never stronger than the latest accepted action.
+STEP 2 - Consequences. Goals describe outcomes their holders are trying to achieve, never outcomes the story must protect. Ask what materially changed because this turn happened. A Goal's description guides measurement but is not an exhaustive whitelist: if new fiction reveals that its condition is incomplete, refine the description with goal.edit rather than declaring the action irrelevant. When fiction helps or obstructs an open Goal, use goal.edit to set its Success Rate to the holder's new chance, even when no roll is needed. Close achieved, abandoned, or impossible Goals. Create a Goal only for a meaningful unresolved outcome worth tracking, never merely because a named character lacks one. Use goal.reach only for a decisive attempt whose outcome is genuinely uncertain. Code rolls the dice, never you.
 STEP 3 - Reconcile. Produce the complete version that may become accepted fiction. Preserve the draft when it is sound; revise only what continuity, an authorized roll, or the player's established action requires.`;
 
 // --- The PATCH contract -----------------------------------------------------
@@ -21,34 +27,35 @@ STEP 3 - Reconcile. Produce the complete version that may become accepted fictio
 // reply with no swaps leaves it untouched. So the Loom only has to name the
 // spans a ruling actually changes, which on most turns is none of them - a few
 // hundred characters instead of a few thousand.
-/** The v15 patch policy, kept ONLY so the v16 migration can tell an untouched
- *  block from an owner-edited one. Not used at runtime. */
-const LOOM_POLICY_PATCH_V15 = `You are the Loom: the final continuity editor and mechanical referee. You receive the Narrator's draft before anything becomes visible. The draft is already canonical - do NOT rewrite or reproduce it.
+const SUPERSEDED_PATCH_POLICY_FINGERPRINTS = Object.freeze(new Set([
+    '1132:31eaf52a',
+    '1469:6933aef9',
+    '1747:83c9ce7a',
+]));
 
-STEP 1 - Archive. Keep the Archive caught up with only the fiction this response makes canonical. Record each distinct new event with event.record. Update durable scene facts with scene.set, changed character facets with char_state.set, hidden truths with secret.set, and the unresolved forward beat with beat.set. The Current Archive lists what is already recorded: never duplicate or merely rephrase one of its entries. Do not invent state the prose does not establish.
-STEP 2 - Mechanics. Record warranted Goal and Variable changes. Only request goal.reach when an outcome is genuinely in doubt - a real gamble or contest whose result the characters do not already know. Code rolls the dice, never you. Routine actions do not need rolls.
-STEP 3 - Patch. If, and ONLY if, continuity or an authorized roll contradicts the draft, name the exact span to replace. Quote the draft verbatim in "find". Most turns need no patch at all.`;
+function policyFingerprint(value) {
+    const text = String(value || '');
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return `${text.length}:${hash.toString(16).padStart(8, '0')}`;
+}
 
-const LOOM_POLICY_PATCH_V16 = `You are the Loom: the final continuity editor and mechanical referee. You receive the Narrator's draft before anything becomes visible. The draft is already canonical - do NOT rewrite or reproduce it.
-
-STEP 1 - Archive. Keep the Archive caught up with only the fiction this response makes canonical. Record each distinct new event with event.record. Update durable scene facts with scene.set, changed character facets with char_state.set, hidden truths with secret.set, and the unresolved forward beat with beat.set. The Current Archive lists what is already recorded: never duplicate or merely rephrase one of its entries. Do not invent state the prose does not establish.
-STEP 2 - Agency. Every named character other than the player must have a standing objective of their own. If one has none, create it with goal.create: what that person is trying to get for their own reasons, which was true before this scene and stays true whether or not the player helps. Prefer objectives that can collide with the player's. Record warranted changes to existing Goals and Variables. Only request goal.reach when an outcome is genuinely in doubt - a real gamble or contest whose result the characters do not already know. Code rolls the dice, never you. Routine actions do not need rolls.
-STEP 3 - Patch. If, and ONLY if, continuity or an authorized roll contradicts the draft, name the exact span to replace. Quote the draft verbatim in "find". Most turns need no patch at all.`;
-
-/** Every superseded patch policy, newest last. A migration replaces a block
- *  ONLY when it still matches one of these verbatim, so an owner-edited Loom
- *  is never overwritten. Not used at runtime. */
-export const LOOM_POLICY_PATCH_PRIOR = Object.freeze([LOOM_POLICY_PATCH_V15, LOOM_POLICY_PATCH_V16]);
+export function isSupersededLoomPatchPolicy(value) {
+    return SUPERSEDED_PATCH_POLICY_FINGERPRINTS.has(policyFingerprint(value));
+}
 
 export const LOOM_POLICY_PATCH = `You are the Loom: the final continuity editor and mechanical referee. You receive the Narrator's draft before anything becomes visible. The draft is already canonical - do NOT rewrite or reproduce it.
 
-STEP 1 - Archive. Keep the Archive caught up with only the fiction this response makes canonical. Record each distinct new event with event.record. Update durable scene facts with scene.set, changed character facets with char_state.set, hidden truths with secret.set, and the unresolved forward beat with beat.set. The Current Archive lists what is already recorded: never duplicate or merely rephrase one of its entries. Do not invent state the prose does not establish.
-STEP 2 - Agency. Every named character other than the player must have a standing want of their own: what that person is trying to get for their own reasons, true before this scene began and true whether or not the player helps. Create the missing ones with goal.create, and prefer wants that can collide with the player's. Then close what the fiction has overtaken: an open Goal that events have put out of reach becomes impossible, one its holder has given up becomes abandoned, and one they got becomes achieved - all through goal.edit. A want nobody can still pursue is noise you will be shown every turn afterwards. Record warranted changes to existing Goals and Variables. Only request goal.reach when an outcome is genuinely in doubt - a real gamble or contest whose result the characters do not already know. Code rolls the dice, never you. Routine actions do not need rolls.
+STEP 1 - Archive. Keep the Archive caught up with only the fiction this response makes canonical. Record each distinct new event with event.record. Update durable scene facts with scene.set, changed character facets with char_state.set, hidden truths with secret.set, and the unresolved open thread with beat.set. The Current Archive lists what is already recorded: never duplicate or merely rephrase one of its entries. Do not invent state the prose does not establish. A beat is provisional momentum, never a guaranteed outcome and never stronger than the latest accepted action.
+STEP 2 - Consequences. Goals describe outcomes their holders are trying to achieve, never outcomes the story must protect. Ask what materially changed because this turn happened. A Goal's description guides measurement but is not an exhaustive whitelist: if new fiction reveals that its condition is incomplete, refine the description with goal.edit rather than declaring the action irrelevant. When the fiction helps or obstructs an open Goal, use goal.edit to set its Success Rate to the holder's new chance of achieving it, even when no roll is needed. Small pressure may move it a few points; a meaningful reversal should move it substantially. Close a Goal with goal.edit when it becomes achieved, abandoned, or impossible. Use goal.create only when the fiction establishes a meaningful unresolved outcome worth tracking, never merely because a named character lacks one. Use goal.reach only for a decisive attempt whose outcome is genuinely uncertain; routine or already-established consequences need no roll. Code rolls the dice, never you.
 STEP 3 - Patch. If, and ONLY if, continuity or an authorized roll contradicts the draft, name the exact span to replace. Quote the draft verbatim in "find". Most turns need no patch at all.`;
 
 export const LOOM_OUTPUT_CONTRACT_PATCH = `Output NOTHING except one state fence. Do not restate the prose.
 \`\`\`state
-{"swaps":[],"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"},{"id":"r2","capability":"goal.create","arguments":{"title":"what this person wants","description":"why they want it","holderRefs":["Marissa"],"successRate":30},"reason":"why, one line"},{"id":"r3","capability":"beat.set","arguments":{"directive":"the unresolved next beat"},"reason":"why, one line"}],"flow":{"continue":false}}
+{"swaps":[],"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"},{"id":"r2","capability":"goal.edit","arguments":{"goalRef":"the exact Goal name","successRate":23},"reason":"how this turn changed its holder's position"},{"id":"r3","capability":"beat.set","arguments":{"directive":"the unresolved thread after this turn"},"reason":"why, one line"}],"flow":{"continue":false}}
 \`\`\`
 
 Every request is its own object. Close one with } and open the next with {, exactly as above. Never repeat "id" inside a single object.
@@ -69,7 +76,7 @@ export function usesLoomReconciliation(scene) {
 export function buildLoomRecipeSources({ draft, draftReasoning = '', narrativeState = '', mechanicsSkill = '' }) {
     return {
         archiveState: String(narrativeState || '').trim()
-            ? `Current Archive and objectives:\n${String(narrativeState).trim()}`
+            ? `Current Archive, Goals, and open thread:\n${String(narrativeState).trim()}`
             : '',
         mechanicsBoard: String(mechanicsSkill || '').trim()
             ? `Mechanical board (Variables and Goals, with their numbers):\n${String(mechanicsSkill).trim()}`

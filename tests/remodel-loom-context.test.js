@@ -15,6 +15,9 @@ test('buildLoomContext exposes the mechanical board without a character-card rol
     expect(sources.mechanicsSkill).toContain('VARIABLES');
     expect(sources.mechanicsSkill).toContain('Trust: 4');
     expect(sources.mechanicsSkill).toContain('Escape');
+    expect(sources.mechanicsSkill).toMatch(/materially helps or obstructs/i);
+    expect(sources.mechanicsSkill).toContain('goal.edit');
+    expect(sources.mechanicsSkill).toMatch(/not an exhaustive whitelist/i);
     expect(sources).not.toHaveProperty('loomCard');
     expect(sources).not.toHaveProperty('loomSnapshot');
 });

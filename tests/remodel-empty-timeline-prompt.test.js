@@ -30,6 +30,14 @@ test('a Timeline with no Variables reaches the prompt as an invitation, not a de
     expect(mechanicsSkill).toContain('variable.create');
 });
 
+test('an empty Goal board creates only fictionally meaningful unresolved outcomes', async () => {
+    const snapshot = await buildMechanicalSnapshot(scene, 'Wren scans the room.', [], null, []);
+    const { mechanicsSkill } = buildLoomContext({ mechanics: snapshot }, { mechanicsEnabled: true });
+    expect(mechanicsSkill).toContain('meaningful unresolved outcome');
+    expect(mechanicsSkill).toMatch(/never merely because a named character lacks one/i);
+    expect(mechanicsSkill).not.toMatch(/standing want/i);
+});
+
 test('once a Variable exists, an unmatched turn says so instead', async () => {
     // Lore-linked and `corroborated` on purpose. The store refuses an unlinked
     // Variable in any mode but `always`, and `always` would retrieve — so this

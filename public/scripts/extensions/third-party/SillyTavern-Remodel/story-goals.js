@@ -1,6 +1,4 @@
-import {
-    formatHolders,
-} from './story-goals-model.js';
+import { formatStoryGoalsForNarrator } from './story-goals-prompt.js';
 import {
     createTimelineGoalRelation,
     deleteStoryGoal,
@@ -71,9 +69,7 @@ export function formatStoryGoalsPrompt(scene) {
     if (!scene?.id) return '';
     const goals = getSceneGoals(scene.id, { includeResolved: false, states: ['active', 'background'] });
     if (!goals.length) return '';
-    const publicLines = goals.filter((goal) => goal.visibility !== 'secret').map((goal) => `- ${goal.title} (${goal.successRate}%; held by ${formatHolders(goal)}): ${goal.description || 'No description.'}`);
-    const secretLines = goals.filter((goal) => goal.visibility === 'secret').map((goal) => `- Pursue privately: ${goal.title} (${goal.successRate}%; held by ${formatHolders(goal)}). ${goal.description || ''} Never announce this Goal merely because it appears here.`);
-    return [publicLines.length ? `[Public Story Goals]\n${publicLines.join('\n')}` : '', secretLines.length ? `[Private behavioral Goals — do not disclose]\n${secretLines.join('\n')}` : ''].filter(Boolean).join('\n\n');
+    return formatStoryGoalsForNarrator(goals);
 }
 
 // The former cast-character Loom and fenced `loom` protocol have been

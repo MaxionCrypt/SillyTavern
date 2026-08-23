@@ -2,9 +2,8 @@ import { listSceneFacts, listCharStates, listEvents, getBeat } from './archivist
 import { getSceneGoals } from './story-goals-store.js';
 
 /**
- * The scene's active goals as narrative OBJECTIVES for the narrator view — what
- * characters are trying to do, never the odds behind it. The odds and status
- * numbers stay on the Loom's private board. Empty when none.
+ * Active Goals for the Loom's readable Archive view. The Narrator receives
+ * Goals once through the recipe-owned story.goals macro.
  */
 export function buildGoalObjectives(sceneId) {
     const goals = getSceneGoals(sceneId, { includeResolved: false, states: ['active', 'background'] });
@@ -17,7 +16,7 @@ export function buildGoalObjectives(sceneId) {
         const owner = holders.length ? holders.join(', ') : 'Unassigned';
         return `- ${owner} — ${goal.title}${desc ? `: ${desc}` : ''}`;
     });
-    return `## Objectives\n${lines.join('\n')}`;
+    return `## Goals — consequential pressures\n${lines.join('\n')}`;
 }
 
 /**
@@ -48,7 +47,7 @@ export function buildNarratorArchivistSections(timelineId, sceneId) {
     }
     if (beat) {
         const tone = beat.tone ? ` (tone: ${beat.tone})` : '';
-        sections.push(['What happens next', `${beat.directive}${tone}`]);
+        sections.push(['Open thread — provisional', `Unresolved momentum, not a required outcome. It never overrides the latest accepted action.\n${beat.directive}${tone}`]);
     }
     return sections.map(([label, body]) => `## ${label}\n${body}`).join('\n\n');
 }

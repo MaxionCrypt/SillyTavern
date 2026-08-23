@@ -1,9 +1,9 @@
 import { getContext } from '../../../st-context.js';
-import { LOOM_POLICY_PATCH_PRIOR, LOOM_OUTPUT_CONTRACT_PATCH, LOOM_POLICY_PATCH, LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT, LOOM_POLICY_V12 } from './loom-reconciliation.js';
+import { isSupersededLoomPatchPolicy, LOOM_POLICY_DEFAULT_PRIOR, LOOM_OUTPUT_CONTRACT_PATCH, LOOM_POLICY_PATCH, LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT, LOOM_POLICY_V12 } from './loom-reconciliation.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 17;
+const STORE_VERSION = 18;
 
 export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
@@ -35,7 +35,7 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         template('scenario', 'Scenario', 'system', 'scene.scenario', { nativeIdentifier: 'scenario' }),
         template('worldInfoAfter', 'World Info (after)', 'system', 'world.info.after', { nativeIdentifier: 'worldInfoAfter' }),
         template('dialogueExamples', 'Dialogue Examples', 'user', 'character.examples', { nativeIdentifier: 'dialogueExamples' }),
-        template('storyGoals', 'Story Goals', 'system', 'story.goals', { nativeIdentifier: 'remodel_story_goals' }),
+        template('storyGoals', 'Story Goals', 'system', 'story.goals', { nativeIdentifier: 'remodel_story_goals', description: 'Active Goals framed as consequential pressures, never protected outcomes.' }),
         // Rendered by Remodel as the Narrator's dynamic Archive grounding,
         // same as storyGoals above — not resolved from a card or lorebook.
         // `nativeIdentifier` is required, not decorative: a roleplay recipe is
@@ -46,7 +46,7 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         // this is the storyGoals precedent, followed exactly.
         template('narratorGrounding', 'Narrator Grounding', 'system', 'narrator.grounding', {
             nativeIdentifier: 'remodel_narrator_grounding',
-            description: 'The current Narrator-visible Loom Archive, resolved when the request is assembled.',
+            description: 'The current Narrator-visible Loom Archive and provisional open thread, resolved when the request is assembled.',
             advancedWarning: NARRATOR_GROUNDING_WARNING,
         }),
         template('chatHistory', 'Chat History', 'user', 'chat.history', { nativeIdentifier: 'chatHistory', structured: true }),
@@ -57,7 +57,7 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         template('nativeContext', 'Native Roleplay Context', 'system', 'roleplay.native', { textOnly: true, locked: true }),
     ]),
     loom: Object.freeze([
-        template('archiveState', 'Archive & Objectives', 'system', 'loom.archive', { description: 'The Loom-readable scene facts, character state, recorded events, next beat, and active objectives.' }),
+        template('archiveState', 'Archive, Goals & Open Thread', 'system', 'loom.archive', { description: 'The Loom-readable scene facts, character state, recorded events, provisional open thread, and active Goals.' }),
         template('mechanicsBoard', 'Archive Operations & Mechanics', 'system', 'loom.mechanics', { description: 'The Archive operations always available to the Loom, plus the current Goals and Variables board when mechanics are enabled.' }),
         template('narratorDraft', 'Narrator Draft', 'user', 'narrator.draft', { description: 'The held Narrator prose being reconciled before it becomes visible.' }),
         template('narratorReasoning', 'Narrator Reasoning', 'user', 'narrator.reasoning', { description: 'The Narrator model\'s private reasoning for this draft, when the provider supplies it.' }),
@@ -580,18 +580,23 @@ function normalizeStore(store, seed) {
     //
     // Replaces the policy ONLY where it is still the untouched v15 text — the
     // same rule the v13 migration used. An owner-edited Loom is left alone.
-    // v17: Goals now cover standing WANTS as well as contests, and the policy
-    // is responsible for closing the ones the fiction has overtaken. Widening
-    // them without that closing rule would remove the only brake on goal spam.
+    // v18: Goals are consequential outcomes, not protected narration and not a
+    // mandatory per-character inventory. Their rates move whenever accepted
+    // fiction materially helps or obstructs the holder's position.
     //
     // Replaces the policy ONLY where it still matches a superseded version
     // verbatim — an owner-edited Loom is left exactly as authored.
-    if (previousVersion < 17) {
+    if (previousVersion < 18) {
         for (const id of store.recipeIds) {
             const recipe = store.recipes[id];
             if (!recipe || recipe.mode !== 'loom') continue;
             for (const block of recipe.blocks || []) {
-                if (LOOM_POLICY_PATCH_PRIOR.includes(block.content)) {
+                if (block.content === LOOM_POLICY_DEFAULT_PRIOR) {
+                    block.content = LOOM_POLICY_DEFAULT;
+                    changed = true;
+                    continue;
+                }
+                if (isSupersededLoomPatchPolicy(block.content)) {
                     block.content = LOOM_POLICY_PATCH;
                     changed = true;
                 }

@@ -209,7 +209,7 @@ test('a persona-held Goal is treated differently from a character-held one', () 
 
 
 // A Goal was a title and a number. Nothing said what would make it go well or
-// badly, so the Loom could only restate a want, never advance or close it — and
+// badly, so the Loom could only restate it, never advance or close it — and
 // description came back empty on every Goal created in a live session, because
 // the capability guide listed only title and holderRefs. The model was never
 // told the argument existed.

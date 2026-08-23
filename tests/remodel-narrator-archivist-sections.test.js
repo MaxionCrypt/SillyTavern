@@ -4,6 +4,7 @@ import {
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { buildGoalObjectives, buildNarratorArchivistSections } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/narrator-prompt.js';
 import { createTimelineGoal, linkGoalToScene } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js';
+import { formatStoryGoalsForNarrator } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-prompt.js';
 
 const T = 'tl-n';
 const S = 'sc-n';
@@ -23,8 +24,9 @@ test('renders scene, characters, events, and beat as labelled sections', () => {
     expect(text).toContain('Marcus lunges');
     // the event log must be framed as already-written
     expect(text.toLowerCase()).toContain('already');
-    // the beat must be framed as what happens next
-    expect(text.toLowerCase()).toContain('next');
+    // The beat is momentum, never a railroad over the latest player action.
+    expect(text).toContain('Open thread — provisional');
+    expect(text).toContain('never overrides the latest accepted action');
 });
 
 test('secrets never appear in the Narrator sections (fail-closed)', () => {
@@ -52,6 +54,20 @@ test('Narrator Objectives identify who holds each Goal without exposing its odds
     expect(text).toContain('Marissa — Leave the library before six');
     expect(text).toContain('On track while the stacks can be cleared by 5:40.');
     expect(text).not.toMatch(/\b30%?\b/);
+});
+
+test('Narrator Story Goals are framed as pressures that actions may defeat', () => {
+    const text = formatStoryGoalsForNarrator([{
+        title: 'Keep the study break undisturbed',
+        description: 'Marissa wants to finish her chapter.',
+        holderRefs: [{ kind: 'character', id: 'marissa', label: 'Marissa' }],
+        successRate: 30,
+        visibility: 'public',
+    }]);
+    expect(text).toContain('pressures, not guarantees');
+    expect(text).toContain('never protected outcomes');
+    expect(text).toContain('help, obstruct, redirect, or defeat');
+    expect(text.match(/Keep the study break undisturbed/g)).toHaveLength(1);
 });
 
 test('Narrator Objectives keep multiple holders explicit', () => {

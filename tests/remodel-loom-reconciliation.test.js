@@ -46,7 +46,8 @@ test('the Loom prompt asks for complete final prose followed by the state fence'
     expect(system).toMatch(/complete final prose/i);
     expect(system).toMatch(/state fence/i);
     expect(system).toMatch(/goal\.reach/i);                                // rolls via goal.reach
-    expect(system).toMatch(/even the characters|genuinely.*doubt|routine/i); // rare uncertainty
+    expect(system).toMatch(/genuinely uncertain|routine/i); // rare uncertainty
+    expect(system).toMatch(/not an exhaustive whitelist/i);
     expect(system).toContain('```state');
     expect(system).toContain('Win Marissa over');                          // mechanical state (with numbers)
     expect(user).toContain('Eli leans in and Marissa melts into him.');    // the draft
