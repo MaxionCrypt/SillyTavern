@@ -51,7 +51,6 @@ import {
 } from './story-world-info.js';
 import {
     applyPromptStudioRuntimeRecipe,
-    capturePromptLog,
     capturePromptStudioRuntimeSettings,
     compilePromptRecipe,
     formatPromptStudioPreview,
@@ -701,10 +700,6 @@ function bindTimelineEvents(drawer) {
     });
 
     drawer.addEventListener('wheel', (event) => {
-        // Prompt Log owns its own scroll surface. The Timeline chrome gesture
-        // must never consume its wheel events, including at either boundary.
-        if (event.target instanceof Element && event.target.closest('.remodel-prompt-log-view')) return;
-
         const main = event.target instanceof Element
             ? event.target.closest('[data-remodel-route-main]')
             : null;
@@ -9833,7 +9828,6 @@ function bindRoleplayGenerationFeedback() {
         if (!isRealRoleplayWorkspaceActive() || dryRun || !STORY_GENERATION_TYPES.has(type)) {
             return;
         }
-        if (!ownsLiveDirectionGeneration()) capturePromptLog('chat');
         setRoleplayGenerating(true);
         showRoleplayTypingIndicator();
     });

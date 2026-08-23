@@ -32,6 +32,7 @@ import {
     updatePromptRecipe,
     withRemodelSources,
 } from './prompt-studio-store.js';
+import { recordApiTranscript } from './debug-console.js';
 
 const CHAT_PROMPT_ORDER_ID = 100001;
 const roleLabels = Object.freeze({
@@ -47,7 +48,6 @@ const state = {
     apiType: 'chat',
     search: '',
     selectedRecipeId: null,
-    showLog: false,
     requestRender: () => {},
     getRuntimeMode: () => 'roleplay',
     getRuntimeRecipeId: () => null,
@@ -64,8 +64,6 @@ const state = {
     boundRecipeId: null,
     advancedUnlockedBlocks: new Set(),
 };
-
-const promptLog = { loom: null, narrator: null, chat: null, latest: null };
 
 let saveLabelTimer = null;
 let transportFeedbackTimer = null;
@@ -109,7 +107,7 @@ export function initPromptStudio({
         const runtimeMode = normalizeMode(state.getRuntimeMode());
         const mode = runtimeMode === 'roleplay' ? 'narrator' : 'chat';
         const recipe = getCurrentPromptStudioRecipe(runtimeMode, getPromptApiType());
-        captureSentPromptLog(mode, {
+        recordSentPromptTranscript(mode, {
             recipeName: recipe?.name || capitalize(runtimeMode),
             messages: Array.isArray(generateData.prompt) ? generateData.prompt : [],
             text: typeof generateData.prompt === 'string' ? generateData.prompt : '',
@@ -476,9 +474,6 @@ export function renderPromptStudioWorkspace() {
                         <h2>Recipes</h2>
                     </div>
                     <div class="remodel-prompt-library-actions">
-                        <button type="button" class="remodel-prompt-icon-button ${state.showLog ? 'is-active' : ''}" data-remodel-prompt-log-toggle title="Prompt Log" aria-label="Prompt Log" aria-pressed="${state.showLog ? 'true' : 'false'}">
-                            <i class="fa-solid fa-clipboard-list" aria-hidden="true"></i>
-                        </button>
                         <button type="button" class="remodel-prompt-icon-button" data-remodel-prompt-create title="New prompt" aria-label="New prompt">
                             <i class="fa-solid fa-plus" aria-hidden="true"></i>
                         </button>
@@ -499,7 +494,7 @@ export function renderPromptStudioWorkspace() {
                 </div>
             </aside>
             <div class="remodel-prompt-editor">
-                ${state.showLog ? renderPromptLogView() : (selected ? renderRecipeEditor(selected) : renderEmptyEditor())}
+                ${selected ? renderRecipeEditor(selected) : renderEmptyEditor()}
             </div>
         </section>
     `;
@@ -761,75 +756,6 @@ function renderTransportTextarea(path, label, value) {
     return `<label class="is-wide"><span>${escapeHtml(label)}</span><textarea data-remodel-prompt-transport="${path}">${escapeHtml(value || '')}</textarea></label>`;
 }
 
-function renderPromptLogView() {
-    const modes = [
-        { key: 'loom', label: 'Loom', icon: 'fa-wave-square' },
-        { key: 'narrator', label: 'Narrator', icon: 'fa-book-open' },
-        { key: 'chat', label: 'Chat', icon: 'fa-comments' },
-    ];
-    const sections = modes
-        .sort((a, b) => (promptLog[b.key]?.timestamp || 0) - (promptLog[a.key]?.timestamp || 0))
-        .map(({ key, label, icon }) => {
-        const entry = promptLog[key];
-        if (!entry) {
-            return `<section class="remodel-prompt-log-section">
-                <h3><i class="fa-solid ${icon}" aria-hidden="true"></i> ${label}</h3>
-                <p class="remodel-prompt-log-empty">No generation recorded yet.</p>
-            </section>`;
-        }
-        const ago = formatTimeAgo(entry.timestamp);
-        const blockRows = entry.blocks.map((block) => {
-            const roleClass = `role-${escapeAttribute(block.role)}`;
-            const roleBadge = escapeHtml(roleLabels[block.role] || block.role || 'system');
-            const blockLabel = escapeHtml(block.label);
-            const kindTag = block.kind === 'source'
-                ? '<span class="remodel-prompt-log-kind"><i class="fa-solid fa-link"></i></span>'
-                : '';
-            let body;
-            if (block.marker) {
-                body = '<em class="remodel-prompt-log-marker">Linked source — resolved by SillyTavern</em>';
-            } else if (!block.content) {
-                body = '<em class="remodel-prompt-log-marker">Empty</em>';
-            } else {
-                body = `<pre class="remodel-prompt-log-pre">${escapeHtml(block.content)}</pre>`;
-            }
-            return `<article class="remodel-prompt-log-block ${roleClass}">
-                <div class="remodel-prompt-log-block-head">
-                    <span class="remodel-prompt-log-role">${roleBadge}</span>
-                    <span class="remodel-prompt-log-label">${kindTag} ${blockLabel}</span>
-                </div>
-                ${body}
-            </article>`;
-        }).join('');
-        const requestDump = entry.request
-            ? `<details class="remodel-prompt-log-request"><summary>Complete request payload</summary><pre class="remodel-prompt-log-pre">${escapeHtml(safePromptJson(entry.request))}</pre></details>`
-            : '';
-        return `<details class="remodel-prompt-log-section" ${promptLog.latest === entry ? 'open' : ''}>
-            <summary><i class="fa-solid ${icon}" aria-hidden="true"></i> ${escapeHtml(label)} <small>${escapeHtml(entry.recipeName)} · ${ago}</small></summary>
-            ${blockRows}
-            ${requestDump}
-        </details>`;
-    }).join('');
-    return `<div class="remodel-prompt-log-view">
-        <header class="remodel-prompt-log-head">
-            <div>
-                <span class="remodel-prompt-kicker">Prompt Studio</span>
-                <h2>Prompt Log</h2>
-            </div>
-            <p>The complete most-recent request sent by each generation path. Newest is shown first.</p>
-        </header>
-        ${sections}
-    </div>`;
-}
-
-function formatTimeAgo(ts) {
-    const diff = Date.now() - ts;
-    if (diff < 60_000) return 'just now';
-    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-    return new Date(ts).toLocaleTimeString();
-}
-
 function renderEmptyEditor() {
     return `<div class="remodel-prompt-editor-empty"><i class="fa-solid fa-wand-magic-sparkles"></i><h2>Select a prompt recipe</h2><p>Create a recipe or choose one from the library to edit its message stack.</p></div>`;
 }
@@ -868,11 +794,6 @@ function bindPromptStudioEvents() {
         const select = target.closest('[data-remodel-prompt-select]');
         if (select) {
             state.selectedRecipeId = select.dataset.remodelPromptSelect;
-            state.requestRender();
-            return;
-        }
-        if (target.closest('[data-remodel-prompt-log-toggle]')) {
-            state.showLog = !state.showLog;
             state.requestRender();
             return;
         }
@@ -1198,35 +1119,7 @@ export function setRemodelNativePromptContent(sourceKey, content) {
     return true;
 }
 
-export function capturePromptLog(mode) {
-    const recipeMode = mode === 'loom' ? 'loom' : 'roleplay';
-    const recipe = getCurrentPromptStudioRecipe(recipeMode, 'chat');
-    if (!recipe) return;
-    const blocks = (recipe.blocks || []).filter((b) => b.enabled !== false).map((block) => {
-        const source = parseWholeRecipeMacro(recipe, block.content || '');
-        const identifier = block.nativeIdentifier || source?.nativeIdentifier;
-        const nativePrompt = identifier
-            ? (oai_settings.prompts || []).find((p) => p?.identifier === identifier)
-            : null;
-        let content = '';
-        if (source?.nativeIdentifier) {
-            content = nativePrompt?.marker ? '' : (nativePrompt?.content || '');
-        } else {
-            content = substituteParams(block.content || '');
-        }
-        return {
-            label: source?.label || nativePrompt?.name || 'Message',
-            role: nativePrompt?.role || (block.role === 'instruction' ? 'system' : block.role),
-            kind: 'message',
-            sourceKey: source?.key || null,
-            marker: Boolean(nativePrompt?.marker),
-            content,
-        };
-    });
-    promptLog[mode] = { mode, recipeName: recipe.name, timestamp: Date.now(), blocks };
-}
-
-export function captureLoomPromptLog(recipeName, traceBlocks) {
+export function recordLoomPromptTranscript(recipeName, traceBlocks) {
     if (!Array.isArray(traceBlocks)) return;
     const looksCompiled = traceBlocks.every((entry) => entry && typeof entry.role === 'string' && Object.prototype.hasOwnProperty.call(entry, 'content'));
     const messages = looksCompiled
@@ -1234,7 +1127,7 @@ export function captureLoomPromptLog(recipeName, traceBlocks) {
         : traceBlocks.flatMap((entry) => Array.isArray(entry.parts)
             ? entry.parts.map((part) => ({ role: part.role, content: part.content }))
             : [{ role: entry.role || 'system', content: entry.text || '' }]);
-    captureSentPromptLog('loom', {
+    recordSentPromptTranscript('loom', {
         recipeName: recipeName || 'Loom',
         messages,
         request: { prompt: messages, transport: 'chat', purpose: 'loom-reconciliation' },
@@ -1243,19 +1136,16 @@ export function captureLoomPromptLog(recipeName, traceBlocks) {
 }
 
 /**
- * Record the Narrator's ACTUAL streamed prompt for the Prompt Log view.
+ * Record the Narrator's actual compiled prompt in the Debug transcript.
  *
- * The custom Narrator path compiles its own message array and bypasses core's
- * prompt assembly, so `capturePromptLog('narrator')` — which reads the roleplay
- * recipe and oai_settings.prompts — would show a stale prompt nobody sent. This
- * stores the compiled messages the way captureLoomPromptLog stores the
- * Loom's, so the Narrator section shows exactly what went out.
+ * The custom Narrator path can bypass core prompt assembly, so this accepts the
+ * final message array rather than reconstructing one from recipe state.
  *
  * @param {{label?: string, role?: string, content?: string}[]} blocks
  */
-export function captureNarratorPromptLog(blocks) {
+export function recordNarratorPromptTranscript(blocks) {
     if (!Array.isArray(blocks)) return;
-    captureSentPromptLog('narrator', {
+    recordSentPromptTranscript('narrator', {
         recipeName: 'Narrator (custom stream)',
         messages: blocks,
         request: { prompt: blocks, transport: 'chat', purpose: 'narrator' },
@@ -1263,7 +1153,7 @@ export function captureNarratorPromptLog(blocks) {
     });
 }
 
-export function captureSentPromptLog(mode, { recipeName = '', messages = [], text = '', request = null, transport = '' } = {}) {
+export function recordSentPromptTranscript(mode, { recipeName = '', messages = [], text = '', request = null, transport = '' } = {}) {
     if (!['loom', 'narrator', 'chat'].includes(mode)) return;
     const normalizedMessages = Array.isArray(messages) ? messages.map((entry, index) => ({
         label: entry?.name || `Message ${index + 1}`,
@@ -1282,9 +1172,16 @@ export function captureSentPromptLog(mode, { recipeName = '', messages = [], tex
         blocks: normalizedMessages,
         request: redactPromptSecrets(request),
     };
-    promptLog[mode] = entry;
-    promptLog.latest = entry;
-    if (state.showLog) state.requestRender();
+    recordApiTranscript('prompt', {
+        mode,
+        recipeName: entry.recipeName,
+        transport,
+        messages: normalizedMessages.map(({ label, role, content }) => ({ label, role, content })),
+        request: entry.request,
+    }, {
+        type: `api.prompt.${mode}`,
+        summary: `${capitalize(mode)} prompt sent via ${entry.recipeName}`,
+    });
 }
 
 function redactPromptSecrets(value, seen = new WeakSet()) {
@@ -1299,14 +1196,6 @@ function redactPromptSecrets(value, seen = new WeakSet()) {
             : redactPromptSecrets(item, seen);
     }
     return copy;
-}
-
-function safePromptJson(value) {
-    try { return JSON.stringify(value, null, 2); } catch { return String(value || ''); }
-}
-
-export function getPromptLog() {
-    return { ...promptLog };
 }
 
 function applyRoleplayChatRecipe(recipe) {

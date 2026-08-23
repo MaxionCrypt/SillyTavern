@@ -20,6 +20,10 @@ export function recordDebugEvent(category, type, detail = {}, options = {}) {
     events.push({ category, type, detail, ...options });
 }
 
+export function recordApiTranscript(kind, detail = {}, options = {}) {
+    events.push({ category: kind, type: options.type || `api.${kind}`, detail, ...options });
+}
+
 /** Test-only: every journal entry recorded since the last clear. */
 export function __getDebugEvents() {
     return [...events];

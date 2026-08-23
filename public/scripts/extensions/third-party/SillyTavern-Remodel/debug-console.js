@@ -56,6 +56,7 @@ const settings = {
     source: 'all',
     search: '',
     selectedId: '',
+    splitPercent: 46,
 };
 
 function now() {
@@ -170,6 +171,7 @@ function persist() {
             recording: settings.recording,
             captureSensitive: settings.captureSensitive,
             recordDom: settings.recordDom,
+            splitPercent: settings.splitPercent,
         }));
     } catch (error) {
         originalConsole?.warn?.('Remodel debug journal could not persist.', error);
@@ -241,6 +243,46 @@ export function recordDebugEvent(category, type, detail = {}, options = {}) {
     scheduleBroadcast(record);
     scheduleWorkspaceRefresh();
     return record;
+}
+
+/** Keep complete API transcripts in memory while still redacting secrets. */
+export function recordApiTranscript(kind, detail = {}, options = {}) {
+    if (!['prompt', 'response'].includes(kind)) return null;
+    if (!settings.recording && !options.force) return null;
+    const record = {
+        id: createId(),
+        sequence: records.length ? records[records.length - 1].sequence + 1 : 1,
+        at: now(),
+        elapsedMs: Math.round(performance.now()),
+        category: kind,
+        type: String(options.type || `api.${kind}`),
+        severity: String(options.severity || 'info'),
+        correlationId: options.correlationId || null,
+        source: currentSource(),
+        summary: truncate(options.summary || (kind === 'prompt' ? 'Prompt sent' : 'Response received')),
+        detail: sanitizeTranscript(detail),
+    };
+    records.push(record);
+    if (records.length > MAX_RECORDS) records.splice(0, records.length - MAX_RECORDS);
+    schedulePersist();
+    scheduleBroadcast(record);
+    scheduleWorkspaceRefresh();
+    return record;
+}
+
+function sanitizeTranscript(value, key = '', seen = new WeakSet()) {
+    if (value == null) return value;
+    if (SECRET_KEY.test(key)) return '[redacted secret]';
+    if (typeof value === 'number' || typeof value === 'boolean') return value;
+    if (typeof value === 'string') return value;
+    if (typeof value === 'bigint') return String(value);
+    if (typeof value !== 'object') return String(value);
+    if (seen.has(value)) return '[circular]';
+    seen.add(value);
+    if (Array.isArray(value)) return value.map((item) => sanitizeTranscript(item, key, seen));
+    const copy = {};
+    for (const [childKey, childValue] of Object.entries(value)) copy[childKey] = sanitizeTranscript(childValue, childKey, seen);
+    return copy;
 }
 
 function acceptRemoteRecords(incoming) {
@@ -428,6 +470,41 @@ function installUiRecorder() {
     }, true);
 }
 
+function installDebugResizer() {
+    let activeGrid = null;
+    const setSplit = (grid, clientX) => {
+        const bounds = grid.getBoundingClientRect();
+        if (!bounds.width) return;
+        settings.splitPercent = Math.max(24, Math.min(76, ((clientX - bounds.left) / bounds.width) * 100));
+        grid.style.setProperty('--remodel-debug-split', `${settings.splitPercent}%`);
+    };
+    document.addEventListener('pointerdown', (event) => {
+        const handle = event.target instanceof Element ? event.target.closest('[data-remodel-debug-resizer]') : null;
+        if (!handle || matchMedia('(max-width: 900px)').matches) return;
+        activeGrid = handle.closest('.remodel-debug-grid');
+        handle.setPointerCapture?.(event.pointerId);
+        document.body.classList.add('remodel-debug-resizing');
+        event.preventDefault();
+    }, true);
+    document.addEventListener('pointermove', (event) => {
+        if (activeGrid) setSplit(activeGrid, event.clientX);
+    }, true);
+    document.addEventListener('pointerup', () => {
+        if (!activeGrid) return;
+        activeGrid = null;
+        document.body.classList.remove('remodel-debug-resizing');
+        persist();
+    }, true);
+    document.addEventListener('keydown', (event) => {
+        const handle = event.target instanceof Element ? event.target.closest('[data-remodel-debug-resizer]') : null;
+        if (!handle || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+        settings.splitPercent = Math.max(24, Math.min(76, settings.splitPercent + (event.key === 'ArrowLeft' ? -2 : 2)));
+        handle.closest('.remodel-debug-grid')?.style.setProperty('--remodel-debug-split', `${settings.splitPercent}%`);
+        persist();
+        event.preventDefault();
+    }, true);
+}
+
 /**
  * The DOM recorder, which is off unless `recordDom` is switched on.
  *
@@ -518,6 +595,7 @@ export function initDebugConsole() {
     installFetchRecorder();
     installXhrRecorder();
     installUiRecorder();
+    installDebugResizer();
     installMutationRecorder();
     installSillyTavernEvents();
     recordDebugEvent('debug', 'journal.started', {
@@ -585,6 +663,38 @@ function escapeHtml(value) {
     return node.innerHTML;
 }
 
+function prettyText(value) {
+    const text = String(value ?? '');
+    const trimmed = text.trim();
+    if (!trimmed) return text;
+    try { return JSON.stringify(JSON.parse(trimmed), null, 2); } catch { /* prose */ }
+    return text.replace(/```json\s*([\s\S]*?)```/gi, (match, json) => {
+        try { return `\`\`\`json\n${JSON.stringify(JSON.parse(json.trim()), null, 2)}\n\`\`\``; } catch { return match; }
+    });
+}
+
+function renderTranscriptDetail(record) {
+    const detail = record.detail || {};
+    const messages = Array.isArray(detail.messages) ? detail.messages : [];
+    const messageCards = messages.map((message, index) => `
+        <article class="remodel-debug-transcript-message">
+            <header><b>${escapeHtml(message.role || 'message')}</b><span>${escapeHtml(message.label || `Message ${index + 1}`)}</span></header>
+            <pre>${escapeHtml(prettyText(message.content))}</pre>
+        </article>`).join('');
+    const responseParts = ['reasoning', 'text', 'raw'].filter((key) => detail[key] != null && String(detail[key]) !== '').map((key) => `
+        <article class="remodel-debug-transcript-message is-${key}">
+            <header><b>${escapeHtml(key)}</b></header>
+            <pre>${escapeHtml(prettyText(detail[key]))}</pre>
+        </article>`).join('');
+    const request = detail.request == null ? '' : `
+        <details class="remodel-debug-payload">
+            <summary>Complete request payload</summary>
+            <pre>${escapeHtml(JSON.stringify(detail.request, null, 2))}</pre>
+        </details>`;
+    const metadata = Object.fromEntries(Object.entries(detail).filter(([key]) => !['messages', 'request', 'reasoning', 'text', 'raw'].includes(key)));
+    return `<div class="remodel-debug-transcript-meta"><pre>${escapeHtml(JSON.stringify(metadata, null, 2))}</pre></div>${messageCards}${responseParts}${request}`;
+}
+
 function renderRows() {
     return filteredRecords().slice(-750).reverse().map((record) => `
         <button type="button" class="remodel-debug-row ${record.id === settings.selectedId ? 'is-selected' : ''} is-${escapeHtml(record.severity)}" data-remodel-debug-select="${escapeHtml(record.id)}">
@@ -600,11 +710,14 @@ function renderDetail() {
     const record = records.find((item) => item.id === settings.selectedId) || filteredRecords().at(-1);
     if (!record) return '<p class="remodel-debug-empty">Select an event to inspect its structured record.</p>';
     settings.selectedId = record.id;
-    return `<div class="remodel-debug-detail-heading"><span>${escapeHtml(record.category)}</span><strong>${escapeHtml(record.type)}</strong><time>${escapeHtml(record.at)}</time></div><pre>${escapeHtml(JSON.stringify(record, null, 2))}</pre>`;
+    const body = ['prompt', 'response'].includes(record.category)
+        ? renderTranscriptDetail(record)
+        : `<pre>${escapeHtml(JSON.stringify(record, null, 2))}</pre>`;
+    return `<div class="remodel-debug-detail-heading"><span>${escapeHtml(record.category)}</span><strong>${escapeHtml(record.type)}</strong><time>${escapeHtml(record.at)}</time></div>${body}`;
 }
 
 export function renderDebugConsoleWorkspace() {
-    const categories = ['all', ...new Set(records.map((record) => record.category))];
+    const categories = ['all', 'prompt', 'response', ...new Set(records.map((record) => record.category).filter((category) => !['prompt', 'response'].includes(category)))];
     const sources = [...new Map(records.filter((record) => record.source?.tabId).map((record) => [record.source.tabId, record.source])).values()];
     return `
         <section class="remodel-debug-workspace">
@@ -619,8 +732,8 @@ export function renderDebugConsoleWorkspace() {
                 </div>
             </header>
             <div class="remodel-debug-safety ${settings.captureSensitive ? 'is-sensitive' : ''}">
-                <label><input type="checkbox" data-remodel-debug-sensitive ${settings.captureSensitive ? 'checked' : ''}> Capture prompt, message, request, and response bodies</label>
-                <span>Secrets, cookies, authorization headers, and password fields are always redacted.</span>
+                <label><input type="checkbox" data-remodel-debug-sensitive ${settings.captureSensitive ? 'checked' : ''}> Capture additional network and event bodies</label>
+                <span>API prompt/response transcripts are always recorded here. Secrets and credentials are always redacted.</span>
             </div>
             ${renderMechanicsProfile()}
             <div class="remodel-debug-filters">
@@ -630,8 +743,9 @@ export function renderDebugConsoleWorkspace() {
                 <input type="search" data-remodel-debug-search value="${escapeHtml(settings.search)}" placeholder="Search event types, summaries, and JSON...">
                 <output><b>LIVE</b> · ${new Set(records.map((record) => record.source?.tabId).filter(Boolean)).size || 1} tab${new Set(records.map((record) => record.source?.tabId).filter(Boolean)).size === 1 ? '' : 's'} · ${filteredRecords().length} / ${records.length}</output>
             </div>
-            <div class="remodel-debug-grid">
+            <div class="remodel-debug-grid" style="--remodel-debug-split:${Number(settings.splitPercent) || 46}%">
                 <div class="remodel-debug-stream" data-remodel-debug-stream>${renderRows()}</div>
+                <div class="remodel-debug-resizer" data-remodel-debug-resizer role="separator" tabindex="0" aria-label="Resize log list and detail" aria-orientation="vertical"></div>
                 <aside class="remodel-debug-detail" data-remodel-debug-detail>${renderDetail()}</aside>
             </div>
         </section>`;

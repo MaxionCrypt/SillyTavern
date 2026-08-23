@@ -12,7 +12,7 @@ import { buildLoomContext } from './loom-context.js';
 import { resolveByName } from './direction-address.js';
 import { resolveDirectionActions } from './turn-chrome.js';
 import { deriveBeats } from './direction-beats.js';
-import { captureLoomPromptLog, capturePromptLog, compilePromptRecipe, getCurrentPromptStudioRecipe } from './prompt-studio.js';
+import { compilePromptRecipe, getCurrentPromptStudioRecipe, recordLoomPromptTranscript } from './prompt-studio.js';
 import { repairDirectedNarratorRoles } from './narrator-history.js';
 import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
@@ -22,7 +22,7 @@ import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources,
 import { describeBudgetWarning, describeGenerationBudget } from './generation-budget.js';
 import { createLoomTurnEnvelope } from './loom-turn.js';
 import { updateScene } from './timeline-state.js';
-import { recordDebugEvent } from './debug-console.js';
+import { recordApiTranscript, recordDebugEvent } from './debug-console.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const PACING = Object.freeze({
@@ -107,6 +107,18 @@ function journal(type, detail = {}, { severity = 'info', correlationId = null, s
             severity,
             correlationId: correlationId || directionInFlight?.id || activeRun?.directionId || null,
             summary: summary || type,
+        });
+    } catch {
+        // Diagnostics must never be able to break a generation.
+    }
+}
+
+function journalResponse(mode, detail, { correlationId = null, purpose = mode } = {}) {
+    try {
+        recordApiTranscript('response', { mode, purpose, ...detail }, {
+            type: `api.response.${mode}`,
+            correlationId: correlationId || directionInFlight?.id || activeRun?.directionId || null,
+            summary: `${mode === 'loom' ? 'Loom' : 'Narrator'} response received${purpose !== mode ? ` (${purpose})` : ''}`,
         });
     } catch {
         // Diagnostics must never be able to break a generation.
@@ -1157,7 +1169,6 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             throw new Error(`${performer.label || 'The selected performer'} is not a loaded character card in this group, so no native index could be resolved for it.`);
         }
         const options = context.groupId ? { force_chid: performer.characterId } : {};
-        capturePromptLog('narrator');
         journal('generation.start', {
             directionId: envelope.directionId,
             performerLabel: performer.label,
@@ -1324,6 +1335,12 @@ async function beginLoomVisibleStream(run, scene) {
         await failEmptyVisibleRun(run);
         return false;
     }
+    journalResponse('narrator', {
+        text: String(run.rawBufferedText || message?.mes || ''),
+        renderedText: draft,
+        reasoning: narratorReasoning(run),
+        streamed: true,
+    }, { correlationId: run.directionId });
 
     // Before the draft becomes the Loom's input: if the provider cut it off at
     // the ceiling, every downstream stage inherits a half-sentence, and the Loom
@@ -1580,8 +1597,10 @@ export async function runLoomReconciliation({
     const prompt = compiled.messages.length
         ? compiled.messages
         : buildLoomPrompt({ draft, draftReasoning, narrativeState, mechanicsSkill });
-    if (compiled.messages.length) captureLoomPromptLog(recipe?.name, compiled.messages);
+    recordLoomPromptTranscript(recipe?.name, prompt);
     let raw = '';
+    let responseReasoning = '';
+    let responseStreamed = false;
     try {
         if (testAdapters?.loomReconciliation) {
             let emitted = false;
@@ -1606,6 +1625,8 @@ export async function runLoomReconciliation({
                 onChunk: ({ text, reasoning }) => onChunk?.({ text: readLoomProse(text), reasoning }),
             });
             raw = String(out?.text || '');
+            responseReasoning = String(out?.reasoning || '');
+            responseStreamed = Boolean(out?.streamed);
         }
     } catch (error) {
         journal('loom.failed', { phase: 'generate', error: String(error?.message || error) }, { severity: 'warn' });
@@ -1614,6 +1635,10 @@ export async function runLoomReconciliation({
     // Preserve-and-patch: the draft is canonical. The Loom only names the
     // exact span(s) a roll changed; code applies them. No swaps → draft stands.
     if (token?.controller?.signal?.aborted) return { committedProse: '', requests: [], result: null, flow: null, aborted: true };
+    journalResponse('loom', { text: raw, reasoning: responseReasoning, streamed: responseStreamed }, {
+        correlationId: directionInFlight?.id || activeRun?.directionId || null,
+        purpose: 'loom-pass',
+    });
     // The Loom must reproduce the whole turn AND close a state fence on the
     // same ceiling as the draft, so it runs out sooner. A truncated Loom reply
     // loses the fence entirely, which surfaces only as an Archive that quietly
@@ -2104,9 +2129,11 @@ async function catchUpArchive(run, reason) {
     const prompt = compiled.messages.length
         ? compiled.messages
         : buildLoomPrompt({ draft: prose, draftReasoning: narratorReasoning(run), narrativeState, mechanicsSkill });
-    if (compiled.messages.length) captureLoomPromptLog(recipe?.name, compiled.messages);
+    recordLoomPromptTranscript(recipe?.name, prompt);
 
     let raw = '';
+    let responseReasoning = '';
+    let responseStreamed = false;
     try {
         if (testAdapters?.archiveCatchup) {
             raw = String(await testAdapters.archiveCatchup({ run, prose, prompt, reason }) || '');
@@ -2116,12 +2143,18 @@ async function catchUpArchive(run, reason) {
                 profileId: run.loomProfileId || undefined,
             });
             raw = String(out?.text || '');
+            responseReasoning = String(out?.reasoning || '');
+            responseStreamed = Boolean(out?.streamed);
         }
     } catch (error) {
         journal('archive.catchup.failed', { directionId: run.directionId, reason, phase: 'generate', error: String(error?.message || error) }, { correlationId: run.directionId, severity: 'warn' });
         return;
     }
 
+    journalResponse('loom', { text: raw, reasoning: responseReasoning, streamed: responseStreamed }, {
+        correlationId: run.directionId,
+        purpose: `archive-catchup:${reason}`,
+    });
     journalLoomReply(raw, `archive-catchup:${reason}`, run.sceneId, run.directionId);
     const requests = parseLoomReply(raw).requests.filter((request) => ARCHIVE_CAPABILITIES.has(request?.capability));
     if (!requests.length) {

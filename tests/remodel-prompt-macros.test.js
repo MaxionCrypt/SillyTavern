@@ -1,9 +1,9 @@
 import {
-    captureSentPromptLog,
     compilePromptRecipe,
-    getPromptLog,
     parseMacroArguments,
+    recordSentPromptTranscript,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/prompt-studio.js';
+import { __clearDebugEvents, __getDebugEvents } from './util/debug-console-stub.js';
 
 function recipe(blocks) {
     return { id: 'macro-recipe', mode: 'story', apiType: 'chat', blocks };
@@ -49,16 +49,18 @@ test('unknown SillyTavern macros remain available to the native macro engine', (
     expect(compiled.messages[0].content).toContain('{{char}}');
 });
 
-test('Prompt Log stores every final message and the complete redacted request payload', () => {
-    captureSentPromptLog('narrator', {
+test('Debug transcripts store every final prompt message and the complete redacted request payload', () => {
+    __clearDebugEvents();
+    recordSentPromptTranscript('narrator', {
         recipeName: 'Native Narrator',
         messages: [{ role: 'system', content: 'Rules' }, { role: 'user', content: 'Continue' }],
         request: { prompt: [{ role: 'system', content: 'Rules' }, { role: 'user', content: 'Continue' }], temperature: 0.8, api_key: 'hidden' },
         transport: 'chat',
     });
-    const entry = getPromptLog().narrator;
-    expect(entry.blocks.map((block) => block.content)).toEqual(['Rules', 'Continue']);
-    expect(entry.request.temperature).toBe(0.8);
-    expect(entry.request.api_key).toBe('[redacted]');
-    expect(getPromptLog().latest).toBe(entry);
+    const entry = __getDebugEvents().at(-1);
+    expect(entry.category).toBe('prompt');
+    expect(entry.type).toBe('api.prompt.narrator');
+    expect(entry.detail.messages.map((message) => message.content)).toEqual(['Rules', 'Continue']);
+    expect(entry.detail.request.temperature).toBe(0.8);
+    expect(entry.detail.request.api_key).toBe('[redacted]');
 });

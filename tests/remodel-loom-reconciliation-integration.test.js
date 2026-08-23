@@ -8,11 +8,13 @@ import {
 import { listEvents } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { createVariableValue, getVariableValue, updateMechanicsProfile } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
 import { __setExtensionSettings } from './util/st-context-stub.js';
+import { __clearDebugEvents, __getDebugEvents } from './util/debug-console-stub.js';
 
 const scene = { id: 'sc-ed', timelineId: 'tl-ed' };
 let trustId = '';
 
 beforeEach(() => {
+    __clearDebugEvents();
     __setExtensionSettings({});
     updateMechanicsProfile({ enabled: true });
     trustId = createVariableValue({
@@ -52,6 +54,9 @@ test('runLoomReconciliation applies the swap to the draft and records the state'
     expect(listEvents(scene.timelineId, scene.id).map((e) => e.summary)).toEqual(['Eli tried to kiss Marissa; she pulled back']);
     // …and the mechanics resolved against the address book — Trust 20 → 18.
     expect(Number(getVariableValue(trustId, 'tl-ed')?.value)).toBe(18);
+    const response = __getDebugEvents().find((entry) => entry.category === 'response');
+    expect(response.type).toBe('api.response.loom');
+    expect(response.detail.text).toContain(fence);
 });
 
 test('with final prose and no requests, runLoomReconciliation keeps the Loom version and records nothing', async () => {

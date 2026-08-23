@@ -7382,92 +7382,6 @@ body.remodel-storydoc-active .remodel-storydoc-check input {
 .remodel-prompt-editor-empty h2 { margin:13px 0 4px; color:#e7e0d2; font:20px var(--remodel-serif,Georgia); }
 .remodel-prompt-editor-empty p { margin:0; font-size:11px; }
 
-/* ── Prompt Log view ────────────────────────────────────────────────── */
-.remodel-prompt-log-view {
-  padding:20px 28px 30px;
-  overflow-y:auto;
-  height:100%;
-}
-.remodel-prompt-log-head { margin-bottom:18px; }
-.remodel-prompt-log-head h2 { margin:0; color:#e7e0d2; font:20px var(--remodel-serif,Georgia); }
-.remodel-prompt-log-head p { margin:4px 0 0; font-size:11px; color:#77747d; }
-.remodel-prompt-log-section {
-  margin-bottom:14px;
-  border:1px solid rgba(215,200,0,.15);
-  border-radius:6px;
-  background:rgba(20,18,14,.45);
-}
-.remodel-prompt-log-section > summary,
-.remodel-prompt-log-section > h3 {
-  display:flex;
-  align-items:center;
-  gap:8px;
-  padding:10px 14px;
-  margin:0;
-  font:600 13px/1.3 var(--remodel-sans,system-ui);
-  color:#e7e0d2;
-  cursor:pointer;
-  user-select:none;
-}
-.remodel-prompt-log-section > summary small,
-.remodel-prompt-log-section > h3 small {
-  margin-left:auto;
-  font-weight:400;
-  font-size:11px;
-  color:#77747d;
-}
-.remodel-prompt-log-section > summary i,
-.remodel-prompt-log-section > h3 i { color:#aa9f00; font-size:12px; width:16px; text-align:center; }
-.remodel-prompt-log-empty { padding:8px 14px 12px; font-size:11px; color:#77747d; margin:0; }
-.remodel-prompt-log-block {
-  border-top:1px solid rgba(215,200,0,.08);
-  padding:8px 14px 10px;
-}
-.remodel-prompt-log-block-head {
-  display:flex;
-  align-items:center;
-  gap:6px;
-  margin-bottom:5px;
-}
-.remodel-prompt-log-role {
-  display:inline-block;
-  padding:1px 6px;
-  border-radius:3px;
-  font:600 10px/1.4 var(--remodel-sans,system-ui);
-  text-transform:uppercase;
-  letter-spacing:.04em;
-  color:#14120e;
-  background:#aa9f00;
-}
-.remodel-prompt-log-block.role-user .remodel-prompt-log-role { background:#5b9bd5; }
-.remodel-prompt-log-block.role-assistant .remodel-prompt-log-role { background:#70ad47; }
-.remodel-prompt-log-label {
-  font:500 11px/1.3 var(--remodel-sans,system-ui);
-  color:#bfb99a;
-  display:flex;
-  align-items:center;
-  gap:4px;
-}
-.remodel-prompt-log-kind { font-size:9px; color:#77747d; }
-.remodel-prompt-log-marker { font-size:11px; color:#77747d; }
-.remodel-prompt-log-pre {
-  margin:0;
-  padding:8px 10px;
-  background:rgba(10,9,7,.5);
-  border:1px solid rgba(215,200,0,.08);
-  border-radius:4px;
-  font:11px/1.5 var(--remodel-mono,'Cascadia Mono',monospace);
-  color:#d4cebe;
-  white-space:pre-wrap;
-  word-break:break-word;
-  max-height:240px;
-  overflow-y:auto;
-}
-.remodel-prompt-log-request { margin:8px 14px 12px; border-top:1px solid rgba(215,200,0,.1); padding-top:8px; }
-.remodel-prompt-log-request > summary { cursor:pointer; color:#aaa38e; font:600 10px/1.4 var(--remodel-sans,system-ui); text-transform:uppercase; letter-spacing:.06em; }
-.remodel-prompt-log-request .remodel-prompt-log-pre { margin-top:7px; max-height:420px; }
-.remodel-prompt-icon-button.is-active { color:#aa9f00 !important; }
-
 @media (max-width:900px) {
   .remodel-prompt-studio {
     grid-template-columns:1fr;
@@ -11270,7 +11184,13 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
 }
 /* Application-wide Debug Console ----------------------------------------- */
 .remodel-tavern-viewport.is-debug-workspace .remodel-tavern-body {
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: none;
+}
+
+.remodel-tavern-viewport.is-debug-workspace .remodel-tavern-body::-webkit-scrollbar {
+    display: none;
 }
 
 /* Column of auto-height bars above one filling pane. Deliberately flex rather
@@ -11279,8 +11199,7 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
    1fr track, collapsed it to 0px, and drew it on top of the stream. */
 .remodel-debug-workspace {
     width: 100%;
-    height: 100%;
-    min-height: 0;
+    min-height: 100%;
     display: flex;
     flex-direction: column;
     color: #e7e4dc;
@@ -11485,10 +11404,11 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
 }
 
 .remodel-debug-grid {
-    flex: 1;
-    min-height: 0;
+    flex: none;
+    height: max(560px, calc(100dvh - 92px));
+    min-height: 560px;
     display: grid;
-    grid-template-columns: minmax(430px, 58%) minmax(300px, 42%);
+    grid-template-columns: minmax(260px, var(--remodel-debug-split, 46%)) 9px minmax(280px, 1fr);
     overflow: hidden;
 }
 
@@ -11501,8 +11421,34 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
 }
 
 .remodel-debug-stream {
-    border-right: 1px solid rgba(201, 190, 0, .28);
     background: rgba(4, 4, 8, .42);
+}
+
+.remodel-debug-resizer {
+    position: relative;
+    cursor: col-resize;
+    background: rgba(4, 4, 8, .75);
+    border-inline: 1px solid rgba(201, 190, 0, .18);
+    touch-action: none;
+}
+
+.remodel-debug-resizer::after {
+    content: "";
+    position: absolute;
+    inset: 0 3px;
+    background: rgba(201, 190, 0, .22);
+}
+
+.remodel-debug-resizer:hover::after,
+.remodel-debug-resizer:focus-visible::after,
+.remodel-debug-resizing .remodel-debug-resizer::after {
+    background: rgba(226, 215, 20, .78);
+}
+
+.remodel-debug-resizing,
+.remodel-debug-resizing * {
+    cursor: col-resize !important;
+    user-select: none !important;
 }
 
 .remodel-debug-row {
@@ -11575,6 +11521,57 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     font: 11px/1.55 Consolas, monospace;
 }
 
+.remodel-debug-transcript-meta pre {
+    color: #87837a;
+}
+
+.remodel-debug-transcript-message {
+    margin: 14px 0;
+    border: 1px solid rgba(255, 255, 255, .08);
+    border-left: 2px solid rgba(201, 190, 0, .48);
+    background: rgba(3, 3, 7, .34);
+}
+
+.remodel-debug-transcript-message > header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, .06);
+    color: #8d8980;
+    font: 9px/1.2 Consolas, monospace;
+}
+
+.remodel-debug-transcript-message > header b {
+    color: #d7ce32;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+}
+
+.remodel-debug-transcript-message > pre,
+.remodel-debug-payload > pre {
+    margin: 0;
+    padding: 11px 12px 14px;
+}
+
+.remodel-debug-transcript-message.is-reasoning {
+    border-left-color: rgba(115, 155, 207, .65);
+}
+
+.remodel-debug-payload {
+    margin: 16px 0 28px;
+    border-top: 1px solid rgba(201, 190, 0, .2);
+}
+
+.remodel-debug-payload > summary {
+    padding: 10px 0;
+    color: #bdb8aa;
+    cursor: pointer;
+    font: 10px/1.2 Consolas, monospace;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+}
+
 .remodel-debug-empty {
     margin: 0;
     padding: 28px;
@@ -11589,6 +11586,7 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     .remodel-debug-filters { grid-template-columns: 1fr 1fr; }
     .remodel-debug-filters input { grid-column: 1 / -1; }
     .remodel-debug-grid { grid-template-columns: 1fr; grid-template-rows: minmax(260px, 55%) minmax(180px, 45%); }
+    .remodel-debug-resizer { display: none; }
     .remodel-debug-stream { border-right: 0; border-bottom: 1px solid rgba(201, 190, 0, .28); }
     .remodel-debug-row { grid-template-columns: 68px 48px 70px minmax(100px, .8fr) minmax(120px, 1.2fr); }
 }
