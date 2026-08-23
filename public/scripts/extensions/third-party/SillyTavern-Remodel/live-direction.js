@@ -1,4 +1,4 @@
-import { main_api, online_status, sendMessageAsUser } from '../../../../script.js';
+import { getMaxResponseTokens, main_api, online_status, sendMessageAsUser } from '../../../../script.js';
 import { getContext } from '../../../st-context.js';
 import { generateGroupWrapper, is_group_generating } from '../../../group-chats.js';
 import {
@@ -1236,6 +1236,50 @@ function acceptNativeBuffer(text) {
     scheduleReveal(0);
 }
 
+/**
+ * Was this generation cut off by its own token ceiling?
+ *
+ * A provider stops at max_tokens exactly, and SillyTavern never surfaces
+ * finish_reason — it appears nowhere in the repository — so the ceiling and
+ * the returned text are all there is to go on. See generation-budget.js.
+ *
+ * WHY THIS IS WORTH A ROUND-TRIP: without it a truncated turn is stored as
+ * `state: 'complete', cutShort: false, interrupted: false` and is
+ * indistinguishable from a clean one. The turn that prompted this ended
+ * mid-word, recorded nothing to the Archive, and raised no error anywhere —
+ * the journal showed a perfect turn.
+ *
+ * Never throws and never blocks the turn: a tokenizer that is unavailable or
+ * slow must not be able to hold up prose that has already arrived.
+ */
+async function checkGenerationBudget({ text, reasoning, label, directionId }) {
+    try {
+        const countTokens = getContext()?.getTokenCountAsync;
+        if (typeof countTokens !== 'function') return null;
+        const [visibleTokens, reasoningTokens] = await Promise.all([
+            countTokens(String(text || '')),
+            countTokens(String(reasoning || '')),
+        ]);
+        const budget = describeGenerationBudget({
+            visibleTokens, reasoningTokens, maxTokens: getMaxResponseTokens(),
+        });
+        if (!budget.exhausted) return budget;
+        const warning = describeBudgetWarning(budget, label);
+        journal('generation.truncated', {
+            directionId: directionId || null,
+            usedTokens: budget.used,
+            maxTokens: budget.max,
+            visibleTokens: budget.visible,
+            reasoningTokens: budget.reasoning,
+            reasoningShare: Number(budget.reasoningShare.toFixed(3)),
+        }, { correlationId: directionId || undefined, severity: 'warn', summary: warning });
+        return budget;
+    } catch (error) {
+        journal('generation.truncated.unchecked', { error: String(error?.message || error) }, { severity: 'info' });
+        return null;
+    }
+}
+
 /** Move one finished private Narrator draft into the only visible generation:
  * the Loom's cumulative final-prose stream. */
 async function beginLoomVisibleStream(run, scene) {
@@ -1250,6 +1294,28 @@ async function beginLoomVisibleStream(run, scene) {
         run.generationSettled = true;
         await failEmptyVisibleRun(run);
         return false;
+    }
+
+    // Before the draft becomes the Loom's input: if the provider cut it off at
+    // the ceiling, every downstream stage inherits a half-sentence, and the Loom
+    // — which must reproduce the whole turn AND emit a state fence on the same
+    // budget — will not reach its fence either. Recording it here names the
+    // cause once, at the point it happened.
+    const draftBudget = await checkGenerationBudget({
+        text: draft,
+        reasoning: narratorReasoning(run),
+        label: 'The Narrator draft',
+        directionId: run.directionId,
+    });
+    // The tokenizer call is a round-trip; the run can have been replaced or
+    // stopped while it was out.
+    if (activeRun !== run) return false;
+    if (draftBudget?.exhausted) {
+        run.truncated = true;
+        run.checkpointDiagnostics = [
+            ...(run.checkpointDiagnostics || []),
+            describeBudgetWarning(draftBudget, 'The Narrator draft'),
+        ];
     }
 
     run.narratorDraft = draft;
@@ -1884,6 +1950,8 @@ async function finalizeRunMessage(run, { state }) {
         // performer's unspoken intention for the Loom to rule on.
         discardedLength: Math.max(0, run.rawBufferedText.length - run.rawOffset),
         interrupted: Boolean(run.interrupted),
+        // A provider-truncated turn must not read back as a clean one.
+        truncated: Boolean(run.truncated),
         cutShort: Boolean(interruption),
         unspokenLength: interruption?.unspokenRemainder.length ?? 0,
     }, { correlationId: run.directionId });
@@ -2229,6 +2297,9 @@ function serializeRun(run, state) {
         checkpointTransactionIds: [...run.checkpointTransactionIds],
         pendingRequestsApplied: Boolean(run.pendingRequestsApplied),
         interrupted: Boolean(run.interrupted),
+        // A provider-truncated turn must not read back as a clean one: Retry
+        // and reload-recovery both reconstruct from this record.
+        truncated: Boolean(run.truncated),
         // What the user cut off, and what the performer had not said yet. Null
         // on every turn nobody cut into — see describeRunInterruption.
         interruption: describeRunInterruption(run),
