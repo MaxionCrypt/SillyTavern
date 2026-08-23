@@ -82,6 +82,26 @@ test('readLoomProse exposes prose while withholding partial and complete state f
     expect(readLoomProse('The guard reaches.\n```state\n{"requests":[]')).toBe('The guard reaches.');
 });
 
+test('a whole json-fenced Loom envelope is recovered without becoming visible prose', () => {
+    const raw = '```json\n{"swaps":[],"requests":[{"id":"r1","capability":"goal.create","arguments":{"title":"Marissa investigates"}}],"flow":{"continue":false}}\n```';
+    const parsed = parseLoomReply(raw);
+    expect(readLoomProse(raw)).toBe('');
+    expect(parsed.prose).toBe('');
+    expect(parsed.requests).toHaveLength(1);
+    expect(parsed.requests[0].capability).toBe('goal.create');
+    expect(describeLoomReply(raw).fenceFormat).toBe('json-fence-recovered');
+});
+
+test('a bare whole-reply Loom envelope is recovered but incidental prose JSON is not', () => {
+    const raw = '{"swaps":[],"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"The pendant warmed."}}]}';
+    expect(readLoomProse(raw)).toBe('');
+    expect(parseLoomReply(raw).requests[0].capability).toBe('event.record');
+    expect(describeLoomReply(raw).fenceFormat).toBe('bare-json-recovered');
+
+    const prose = 'The terminal displayed {"requests":[]} and went dark.';
+    expect(parseLoomReply(prose)).toEqual({ prose, swaps: [], requests: [], flow: null });
+});
+
 test('applySwaps patches only the named span and keeps the rest of the draft verbatim', () => {
     const draft = 'Eli leans in and Marissa melts into him. The room holds its breath.';
     const { prose, applied } = applySwaps(draft, [{ find: 'Marissa melts into him', replace: 'Marissa turns her cheek' }]);

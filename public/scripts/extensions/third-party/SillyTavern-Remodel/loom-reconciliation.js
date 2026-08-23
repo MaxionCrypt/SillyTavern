@@ -106,6 +106,44 @@ export function buildLoomPrompt({ draft, draftReasoning = '', narrativeState = '
 
 const STATE_FENCE = /```state\s*\n([\s\S]*?)\n?```/i;
 const STATE_FENCE_START = /(?:^|\n)```state\b/i;
+const WHOLE_JSON_FENCE = /^\s*```(?:json)?\s*\n([\s\S]*?)\n?```\s*$/i;
+
+/** Providers occasionally preserve the JSON but rename ```state to ```json
+ * (or drop the fence altogether). Recover only when the WHOLE reply is a
+ * Loom-shaped action envelope. This must never fish JSON out of scene prose. */
+function readLoomEnvelope(text) {
+    const stateMatch = String(text || '').match(STATE_FENCE);
+    if (stateMatch) {
+        try {
+            return { present: true, parsed: true, format: 'state', json: stateMatch[1], value: JSON.parse(stateMatch[1]) };
+        } catch {
+            return { present: true, parsed: false, format: 'state', json: stateMatch[1], value: null };
+        }
+    }
+
+    const source = String(text || '');
+    const jsonFence = source.match(WHOLE_JSON_FENCE);
+    const candidate = jsonFence ? jsonFence[1] : source.trim();
+    if (!candidate.startsWith('{') || !candidate.endsWith('}')) {
+        return { present: false, parsed: false, format: '', json: '', value: null };
+    }
+    try {
+        const value = JSON.parse(candidate);
+        const loomShaped = value && typeof value === 'object' && !Array.isArray(value)
+            && (Array.isArray(value.requests) || Array.isArray(value.swaps)
+                || (value.flow && typeof value.flow === 'object' && !Array.isArray(value.flow)));
+        if (!loomShaped) return { present: false, parsed: false, format: '', json: '', value: null };
+        return {
+            present: true,
+            parsed: true,
+            format: jsonFence ? 'json-fence-recovered' : 'bare-json-recovered',
+            json: candidate,
+            value,
+        };
+    } catch {
+        return { present: false, parsed: false, format: '', json: '', value: null };
+    }
+}
 
 /** Return only the prose portion of a cumulative Loom response. While the
  * response is still streaming, withhold a partial state-fence opener so its
@@ -114,6 +152,11 @@ export function readLoomProse(raw, { final = false } = {}) {
     const text = String(raw ?? '');
     const match = STATE_FENCE_START.exec(text);
     let prose = match ? text.slice(0, match.index) : text;
+    if (!match && final && readLoomEnvelope(text).parsed) prose = '';
+    // A patch-contract response contains no visible prose. Withhold leading
+    // JSON while it streams so a provider's altered fence cannot flash its
+    // internal requests into the manuscript before the final parse recovers it.
+    if (!match && !final && /^\s*(?:```(?:json)?\s*(?:\n|$)|\{)/i.test(text)) prose = '';
     if (!match && !final) {
         const partialFence = prose.match(/\n?`{1,3}(?:s(?:t(?:a(?:t(?:e)?)?)?)?)?$/i);
         if (partialFence) prose = prose.slice(0, -partialFence[0].length);
@@ -138,13 +181,13 @@ export function readLoomProse(raw, { final = false } = {}) {
 export function parseLoomReply(raw) {
     const text = String(raw ?? '');
     const prose = readLoomProse(text, { final: true });
-    const match = text.match(STATE_FENCE);
+    const envelope = readLoomEnvelope(text);
     let swaps = [];
     let requests = [];
     let flow = null;
-    if (match) {
+    if (envelope.parsed) {
         try {
-            const parsed = JSON.parse(match[1]);
+            const parsed = envelope.value;
             if (Array.isArray(parsed?.requests)) requests = parsed.requests;
             if (parsed?.flow && typeof parsed.flow === 'object') {
                 flow = {
@@ -181,18 +224,15 @@ export function parseLoomReply(raw) {
  */
 export function describeLoomReply(raw, { tailChars = 400, fenceChars = 2000 } = {}) {
     const text = String(raw ?? '');
-    const fenceMatch = text.match(STATE_FENCE);
+    const envelope = readLoomEnvelope(text);
     const parsed = parseLoomReply(text);
-    let fenceParsed = false;
-    if (fenceMatch) {
-        try { JSON.parse(fenceMatch[1]); fenceParsed = true; } catch { fenceParsed = false; }
-    }
     return {
         length: text.length,
         proseLength: parsed.prose.length,
-        hasFence: Boolean(fenceMatch),
-        fenceParsed,
-        fenceJson: fenceMatch ? fenceMatch[1].slice(0, fenceChars) : '',
+        hasFence: envelope.present,
+        fenceParsed: envelope.parsed,
+        fenceFormat: envelope.format,
+        fenceJson: envelope.present ? envelope.json.slice(0, fenceChars) : '',
         capabilities: parsed.requests.map((request) => String(request?.capability || '(missing)')),
         requestCount: parsed.requests.length,
         swapCount: parsed.swaps.length,
