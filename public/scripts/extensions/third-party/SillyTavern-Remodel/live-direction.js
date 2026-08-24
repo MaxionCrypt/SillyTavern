@@ -29,7 +29,8 @@ import {
     describeDirectionProgress,
     settleDirectionProgress,
 } from './direction-progress.js';
-import { resolveWorldSense, scheduleWorldSensePrefetch } from './world-sense-runtime.js';
+import { activateWorldSenseSelection } from './world-sense-activation.js';
+import { previewWorldSense, resolveWorldSense, scheduleWorldSensePrefetch } from './world-sense-runtime.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const PACING = Object.freeze({
@@ -117,6 +118,26 @@ function journal(type, detail = {}, { severity = 'info', correlationId = null, s
         });
     } catch {
         // Diagnostics must never be able to break a generation.
+    }
+}
+
+function journalWorldSenseActivation(activation, correlationId = null) {
+    try {
+        recordDebugEvent('world-sense', `activation.${activation.phase || 'unknown'}`, {
+            requested: activation.requested,
+            activated: activation.activated,
+            missing: activation.missing,
+            failedOpen: !activation.ok,
+            error: activation.error,
+        }, {
+            severity: activation.ok ? 'info' : 'warn',
+            correlationId: correlationId || directionInFlight?.id || activeRun?.directionId || null,
+            summary: activation.ok
+                ? `World Sense activated ${activation.activated} native lore entr${activation.activated === 1 ? 'y' : 'ies'} for ${activation.phase}`
+                : `World Sense ${activation.phase} activation fell back to native keywords`,
+        });
+    } catch {
+        // Native activation must not depend on Debug being available.
     }
 }
 
@@ -484,17 +505,28 @@ export function handleLiveDirectionDraft(value) {
  * only when the complete bounded query hashes identically. */
 export function prefetchLiveDirectionLore(scene, action) {
     if (!isDirectedLiveScene(scene)) return;
+    scheduleWorldSensePrefetch(scene, buildLiveDirectionLoreOptions(action));
+}
+
+/** Resolve the same lore packet for Prompt Preview without saving a receipt,
+ * changing continuity, or consuming the composer prefetch Send may reuse. */
+export async function previewLiveDirectionLore(scene, action) {
+    if (!isDirectedLiveScene(scene)) return null;
+    return previewWorldSense(scene, buildLiveDirectionLoreOptions(action));
+}
+
+function buildLiveDirectionLoreOptions(action) {
     const history = (getContext().chat || []).slice(-12).map((message) => ({
         role: message.is_user ? 'user' : 'assistant',
         name: message.name || '',
         content: sanitizeDirectionText(message.extra?.remodelDirection?.acceptedText ?? message.mes ?? ''),
     })).filter((message) => message.content.trim());
-    scheduleWorldSensePrefetch(scene, {
+    return {
         action,
         history,
         cast: hooks.getCast() || [],
         persona: hooks.getPersona() || null,
-    });
+    };
 }
 
 export function continueLiveDirection() {
@@ -846,6 +878,10 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // without paying for a second retrieval after the turn. A distinct field:
         // envelope.mechanics is the Loom's pending-requests payload.
         normalized.mechanicsSnapshot = snapshot.mechanics;
+        // The dry-run consumed the first native force-activation. Keep only
+        // the identity receipt so generation can apply the same selection
+        // again immediately before core performs its real World Info scan.
+        normalized.worldSense = snapshot.worldSense;
         if (token.aborted) return abandonPass(token, 'normalized');
         // Set BEFORE the call, not after: from here the performer has been
         // asked, so the turn is live even if generation then fails. The
@@ -973,9 +1009,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     const cutOff = effectiveChat[effectiveChat.length - 1];
     const cutOffRecord = recentChat[recentChat.length - 1] === cutOff ? readInterruptionRecord(cutOff) : null;
     const performingCast = cast.filter((member) => !member.disabled);
-    // Commit 5 ranks beside native preparation but cannot activate anything.
-    // Nothing in direction-sources.js reads this receipt into either prompt.
-    const worldSensePromise = preview ? Promise.resolve(null) : resolveWorldSense(scene, {
+    const worldSensePromise = (preview ? previewWorldSense : resolveWorldSense)(scene, {
         action,
         history,
         cast: performingCast,
@@ -984,6 +1018,9 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         journal('world-sense.failed-open', { error: String(error?.message || error) }, { severity: 'warn' });
         return null;
     });
+    const worldSense = await worldSensePromise;
+    const activation = await activateWorldSenseSelection(context, worldSense, { phase: preview ? 'preview' : 'dry-run' });
+    journalWorldSenseActivation(activation, directionInFlight?.id || worldSense?.receipt?.id || null);
     let lore = {};
     try {
         const scan = [action, ...history.slice(-12).reverse().map((message) => message.content)];
@@ -1009,7 +1046,6 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
             activatedEntries,
             correlationId: directionInFlight?.id || null,
         });
-    const worldSense = await worldSensePromise;
     return {
         scene: { id: scene.id, timelineId: scene.timelineId, title: scene.title },
         currentAction: action,
@@ -1018,7 +1054,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         narratorRef: scene.liveDirection?.narratorRef || null,
         persona,
         acceptedHistory: history,
-        worldSense: worldSense?.receipt || null,
+        worldSense: worldSense?.receipt || (preview ? worldSense : null),
         // What the user cut into, in the performer's own words — the half that
         // reached them (already in acceptedHistory, ending exactly where the
         // reveal froze) and the half that did not. Null on an ordinary turn.
@@ -1234,6 +1270,8 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         if (narratorProfileId) {
             await hooks.activateConnectionProfile(narratorProfileId);
         }
+        const loreActivation = await activateWorldSenseSelection(context, envelope.worldSense, { phase: 'generation' });
+        journalWorldSenseActivation(loreActivation, envelope.directionId);
         // force_chid is read by generateGroupWrapper as `typeof … == 'number'`,
         // and NaN passes that test — a member with no resolvable index would
         // activate character NaN rather than falling back. Refuse instead.

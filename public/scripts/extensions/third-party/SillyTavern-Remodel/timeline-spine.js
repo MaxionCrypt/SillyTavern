@@ -109,6 +109,7 @@ import {
     isDirectedLiveScene,
     ownsLiveDirectionGeneration,
     prefetchLiveDirectionLore,
+    previewLiveDirectionLore,
     regenerateLastDirectedResponse,
     requestNextDirection,
     retryLiveStep,
@@ -122,6 +123,7 @@ import {
     stopLiveDirection,
     submitDirectedRoleplay,
 } from './live-direction.js';
+import { activateWorldSenseSelection } from './world-sense-activation.js';
 import { sanitizeDirectionText } from './live-direction-markers.js';
 import { buildNarratorArchivistSections } from './narrator-prompt.js';
 import { resolveRoleplayMessageIds } from './roleplay-message-list.js';
@@ -2351,7 +2353,7 @@ function registerAllInsertedTextSlotMacros() {
 // promptPreviewInFlight now lives in session-state.js's panels domain — see
 // getPanelsState()/setPromptPreviewInFlight() imported above.
 
-async function runPromptPreviewDryRun(generationType, { composerText: composerTextOverride, narratorGrounding } = {}) {
+async function runPromptPreviewDryRun(generationType, { composerText: composerTextOverride, narratorGrounding, worldSense } = {}) {
     const context = getContext();
     const previousCharacterId = context.characterId;
     const previousCharacterName = context.name2;
@@ -2426,6 +2428,30 @@ async function runPromptPreviewDryRun(generationType, { composerText: composerTe
         if (groupPreviewSpeaker) {
             setCharacterId(groupPreviewSpeaker.characterId);
             setCharacterName(groupPreviewSpeaker.name);
+        }
+
+        const loreActivation = await activateWorldSenseSelection(context, worldSense, { phase: 'preview' });
+        try {
+            recordDebugEvent('world-sense', 'activation.preview', {
+                requested: loreActivation.requested,
+                activated: loreActivation.activated,
+                missing: loreActivation.missing,
+                failedOpen: !loreActivation.ok,
+                error: loreActivation.error,
+            }, {
+                severity: loreActivation.ok ? 'info' : 'warn',
+                correlationId: worldSense?.queryHash || null,
+                summary: loreActivation.ok
+                    ? `World Sense activated ${loreActivation.activated} native lore entr${loreActivation.activated === 1 ? 'y' : 'ies'} for Preview`
+                    : 'World Sense Preview activation fell back to native keywords',
+            });
+        } catch {
+            // Prompt Preview must not depend on Debug being available.
+        }
+        if (!loreActivation.ok) {
+            toastrErrors.push(`World Sense preview fell back to native keywords: ${loreActivation.error}`);
+        } else if (loreActivation.missing.length) {
+            toastrErrors.push(`${loreActivation.missing.length} selected Living Lore entr${loreActivation.missing.length === 1 ? 'y was' : 'ies were'} changed before Preview and could not be activated.`);
         }
 
         await context.generate(generationType, groupPreviewSpeaker
@@ -8890,7 +8916,17 @@ async function openRoleplayPromptPreview() {
         const narratorGrounding = directed && activeScene
             ? buildNarratorArchivistSections(activeScene.timelineId, activeScene.id)
             : undefined;
-        const { generateData, warnings } = await runPromptPreviewDryRun('normal', { composerText, narratorGrounding });
+        let worldSense = null;
+        let worldSenseWarning = '';
+        if (directed && activeScene) {
+            try {
+                worldSense = await previewLiveDirectionLore(activeScene, composerText);
+            } catch (error) {
+                worldSenseWarning = `World Sense preview fell back to native keywords: ${String(error?.message || error)}`;
+            }
+        }
+        const { generateData, warnings } = await runPromptPreviewDryRun('normal', { composerText, narratorGrounding, worldSense });
+        if (worldSenseWarning) warnings.push(worldSenseWarning);
         const attachedGoalIntents = activeScene ? getStoryGoalComposerIntents(activeScene.id) : [];
         if (attachedGoalIntents.length) {
             warnings.push(`${attachedGoalIntents.length} attached Story Goal attempt${attachedGoalIntents.length === 1 ? '' : 's'} will be assessed by the Loom after the Narrator drafts; preview never rolls or mutates.`);

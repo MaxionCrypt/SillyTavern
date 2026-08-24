@@ -1,5 +1,7 @@
+import { jest } from '@jest/globals';
 import { benchmarkWorldSense, ensureWorldSenseIndex, queryWorldSense } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-embeddings.js';
 import { invalidateTimelineLoreCache } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-lore.js';
+import { previewWorldSense, resolveWorldSense } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-runtime.js';
 import {
     DEFAULT_WORLD_SENSE_MODEL,
     getWorldSenseContinuity,
@@ -96,6 +98,22 @@ test('stores inspectable receipts and scene retrieval continuity', () => {
     });
     expect(listWorldSenseReceipts({ sceneId: 'scene-1' })).toHaveLength(1);
     expect(getWorldSenseContinuity('scene-1')).toEqual([{ book: 'Living Book', uid: '1' }]);
+});
+
+test('Preview ranks the same deterministic lore without saving receipt or continuity', async () => {
+    global.fetch = jest.fn(async () => { throw new Error('local model unavailable'); });
+    const scene = { id: 'scene-preview', timelineId: TIMELINE };
+
+    const preview = await previewWorldSense(scene, { action: 'Approach the harbor.' });
+
+    expect(preview.selected).toEqual([expect.objectContaining({ book: 'Living Book', uid: '1' })]);
+    expect(preview.receipt).toBeNull();
+    expect(listWorldSenseReceipts({ sceneId: scene.id })).toHaveLength(0);
+    expect(getWorldSenseContinuity(scene.id)).toEqual([]);
+
+    const turn = await resolveWorldSense(scene, { action: 'Approach the harbor.' });
+    expect(turn.receipt).toEqual(expect.objectContaining({ sceneId: scene.id }));
+    expect(listWorldSenseReceipts({ sceneId: scene.id })).toHaveLength(1);
 });
 
 function response(body, status = 200) {

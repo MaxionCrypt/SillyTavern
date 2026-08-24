@@ -45,6 +45,16 @@ export async function prefetchWorldSense(scene, options = {}) {
 }
 
 export async function resolveWorldSense(scene, options = {}) {
+    return resolveWorldSenseForPhase(scene, options, { persist: true, consumePrefetch: true });
+}
+
+/** Preview shares the exact resolver and composer cache, but cannot create a
+ * receipt, advance continuity, or consume the prefetched result Send may use. */
+export async function previewWorldSense(scene, options = {}) {
+    return resolveWorldSenseForPhase(scene, options, { persist: false, consumePrefetch: false });
+}
+
+async function resolveWorldSenseForPhase(scene, options, { persist, consumePrefetch }) {
     const prepared = prepareQuery(scene, options);
     if (!prepared) return null;
     const cached = prefetches.get(prepared.sceneId);
@@ -63,9 +73,9 @@ export async function resolveWorldSense(scene, options = {}) {
         }
     }
     if (!result) result = await executeRetrieval(scene, prepared, { phase: 'turn', skipSemantic: prefetchTimedOut });
-    const receipt = saveReceipt(scene, result, { reusedPrefetch });
-    prefetches.delete(prepared.sceneId);
-    return { ...result, receipt };
+    const receipt = persist ? saveReceipt(scene, result, { reusedPrefetch }) : null;
+    if (consumePrefetch) prefetches.delete(prepared.sceneId);
+    return { ...result, receipt, reusedPrefetch };
 }
 
 function prepareQuery(scene, options) {

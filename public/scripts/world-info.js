@@ -412,6 +412,12 @@ class WorldInfoBuffer {
         return WorldInfoBuffer.externalActivations.get(`${entry.world}.${entry.uid}`);
     }
 
+    /** Entries supplied for books outside the ordinary global/character/chat/
+     * persona scope. Native scanning still owns every later policy check. */
+    getExternalActivations() {
+        return [...WorldInfoBuffer.externalActivations.values()];
+    }
+
     /**
      * Clean-up the external effects for entries.
      */
@@ -911,6 +917,10 @@ export async function getWorldInfoPrompt(chat, maxContext, isDryRun, globalScanD
         anBefore: activatedWorldInfo.ANBeforeEntries ?? [],
         anAfter: activatedWorldInfo.ANAfterEntries ?? [],
         outletEntries: activatedWorldInfo.outletEntries ?? {},
+        // Additive inspection surface for callers that perform a native dry
+        // run before a second generation scan. Entries remain native objects;
+        // prompt placement and activation policy are still owned here.
+        allActivatedEntries: activatedWorldInfo.allActivatedEntries ?? new Set(),
     };
 }
 
@@ -4512,14 +4522,7 @@ export async function getSortedEntries() {
         // Chat lore always goes first, then persona lore, then the rest
         entries = [...chatLore.sort(sortFn), ...personaLore.sort(sortFn), ...entries];
 
-        // Calculate hash and parse decorators. Split maps to preserve old hashes.
-        entries = entries.map((entry) => {
-            const [decorators, content] = parseDecorators(entry.content || '');
-            return { ...entry, decorators, content };
-        }).map((entry) => {
-            const hash = getStringHash(JSON.stringify(entry));
-            return { ...entry, hash };
-        });
+        entries = prepareWorldInfoEntries(entries);
 
         console.debug(`[WI] Found ${entries.length} world lore entries. Sorted by strategy`, Object.entries(world_info_insertion_strategy).find((x) => x[1] === world_info_character_strategy));
 
@@ -4529,6 +4532,27 @@ export async function getSortedEntries() {
         console.error(e);
         return [];
     }
+}
+
+/** Prepare one named book exactly as the native scanner prepares its ordinary
+ * sources. This does not select the book globally or mutate chat metadata. */
+export async function getWorldInfoEntriesForBook(name) {
+    const world = String(name || '').trim();
+    if (!world) return [];
+    const data = await loadWorldInfo(world);
+    const entries = data ? Object.values(data.entries || {}).map(({ uid, ...rest }) => ({ uid, world, ...rest })).sort(sortFn) : [];
+    return structuredClone(prepareWorldInfoEntries(entries));
+}
+
+function prepareWorldInfoEntries(entries) {
+    // Split maps preserve the historical hash calculation order.
+    return entries.map((entry) => {
+        const [decorators, content] = parseDecorators(entry.content || '');
+        return { ...entry, decorators, content };
+    }).map((entry) => {
+        const hash = getStringHash(JSON.stringify(entry));
+        return { ...entry, hash };
+    });
 }
 
 
@@ -4630,6 +4654,19 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
 
     console.debug(`[WI] Context size: ${maxContext}; WI budget: ${budget} (max% = ${world_info_budget}%, cap = ${world_info_budget_cap})`);
     const sortedEntries = await getSortedEntries();
+    const presentEntries = new Set(sortedEntries.map((entry) => `${entry.world}.${entry.uid}`));
+    const externalEntries = [];
+    for (const externalEntry of buffer.getExternalActivations()) {
+        const key = `${externalEntry.world}.${externalEntry.uid}`;
+        if (!presentEntries.has(key)) {
+            externalEntries.push(structuredClone(externalEntry));
+            presentEntries.add(key);
+        }
+    }
+    // A Timeline book is the Scene's chat-scoped lore source. If its chat
+    // binding has not settled yet, retain chat-lore priority while preserving
+    // the entries' own configured order.
+    sortedEntries.unshift(...externalEntries.sort(sortFn));
     const timedEffects = new WorldInfoTimedEffects(chat, sortedEntries, isDryRun);
 
     timedEffects.checkTimedEffects();
