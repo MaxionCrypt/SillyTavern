@@ -12,8 +12,13 @@ import {
     handleLiveDirectionDraft,
     stopLiveDirection,
     clearLiveDirectionFailure,
+    regenerateLastDirectedResponse,
+    DIRECTION_PROTOCOL,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { listEvents, recordEvent } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
+import { invalidateLivingLoreProposals, listLivingLoreProposals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-mutations.js';
+import { upsertLivingLoreMetadata } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
+import { buildLivingLorePacket } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-proposals.js';
 import { __setContextOverrides, __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
 import { __setOnlineStatus } from './util/script-stub.js';
 
@@ -30,10 +35,31 @@ const scene = {
 };
 const cast = [{ ref: { kind: 'character', id: 'char-narrator', label: 'Wren' }, label: 'Wren', characterId: 0 }];
 const RESPONSE = 'Wren steps between them. The blade catches her forearm.';
+const LORE_BOOK = 'Lifecycle Lore';
+let nativeLore;
+
+function livingLorePacket() {
+    return buildLivingLorePacket({
+        timelineId: scene.timelineId,
+        book: LORE_BOOK,
+        bookHash: 'lifecycle-hash',
+        entries: [{ book: LORE_BOOK, uid: '42', name: 'Wren', keys: ['Wren'], secondaryKeys: [], content: 'Current\nWren watches the gate.' }],
+        selected: [{ book: LORE_BOOK, uid: '42', reasons: [{ channel: 'history.primary' }] }],
+        metadata: [{ book: LORE_BOOK, uid: '42', revision: 1, entryType: 'entity' }],
+    });
+}
+
+function loreProposal(id, value, evidence = 'Wren steps between them.') {
+    return {
+        id, operation: 'current.set', target: { book: LORE_BOOK, uid: '42', revision: 1 },
+        entryType: 'entity', section: 'Current', value, evidence,
+        confidence: 0.9, reason: 'Accepted fiction changed Wren’s current state.',
+    };
+}
 
 async function speak() {
     const chat = __getChat();
-    chat.push({ name: 'Wren', is_user: false, mes: RESPONSE, extra: {} });
+    chat.push({ name: 'Wren', is_user: false, mes: RESPONSE, extra: {}, swipes: [RESPONSE], swipe_id: 0, swipe_info: [{ extra: {} }] });
     await __emit('MESSAGE_RECEIVED', chat.length - 1);
 }
 
@@ -49,6 +75,12 @@ async function until(predicate, timeoutMs = 3000) {
 
 beforeEach(() => {
     __setExtensionSettings({});
+    nativeLore = { entries: { 42: { uid: 42, key: ['Wren'], keysecondary: [], comment: 'Wren', content: 'Current\nWren watches the gate.', disable: false } } };
+    __setContextOverrides({
+        async loadWorldInfo() { return structuredClone(nativeLore); },
+        async saveWorldInfo(_book, data) { nativeLore = structuredClone(data); },
+    });
+    upsertLivingLoreMetadata(scene.timelineId, { book: LORE_BOOK, uid: 42 }, { entryType: 'entity', revision: 1 });
     __setOnlineStatus('connected');
     initLiveDirection({
         getActiveScene: () => scene,
@@ -81,6 +113,122 @@ test('a Loom turn commits the Narrator draft and waits for the user', async () =
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     // The Narrator's held draft became the committed message.
     expect(__getChat().at(-1).mes).toBe(RESPONSE);
+});
+
+test('a completed turn queues its evidence-backed lore suggestion exactly once and persists its identity', async () => {
+    const proposal = loreProposal('wren-moved', 'Wren stands between the fighters.');
+    setLiveDirectionTestAdapters({
+        generatePerformer: speak,
+        livingLorePacket: livingLorePacket(),
+        loomReconciliation: async () => `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [proposal], flow: { continue: false } })}\n\`\`\``,
+    });
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    const suggestions = listLivingLoreProposals({ timelineId: scene.timelineId });
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0]).toMatchObject({ status: 'suggested', proposal });
+    expect(__getChat().at(-1).extra.remodelDirection.loreProposalIds).toEqual([suggestions[0].id]);
+    expect(__getChat().at(-1).swipe_info[0].extra.remodelDirection.directionId).toBe(suggestions[0].source.directionId);
+
+    invalidateLivingLoreProposals({ timelineId: scene.timelineId, directionIds: [suggestions[0].source.directionId], reason: 'simulate-crash-gap' });
+    await __emit('CHAT_LOADED');
+    expect(await until(() => listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' }).length === 1)).toBe(true);
+    expect(listLivingLoreProposals({ timelineId: scene.timelineId })).toHaveLength(1);
+});
+
+test('Retry invalidates the superseded suggestion and queues the retake once', async () => {
+    let take = 0;
+    setLiveDirectionTestAdapters({
+        generatePerformer: speak,
+        livingLorePacket: livingLorePacket(),
+        loomReconciliation: async () => {
+            take += 1;
+            const proposal = loreProposal(`take-${take}`, take === 1 ? 'First take.' : 'Second take.');
+            return `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [proposal], flow: { continue: false } })}\n\`\`\``;
+        },
+    });
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    await regenerateLastDirectedResponse(scene);
+    expect(await until(() => take === 2 && getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'invalidated' })).toHaveLength(1);
+    expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })).toEqual([
+        expect.objectContaining({ proposal: expect.objectContaining({ id: 'take-2' }) }),
+    ]);
+});
+
+test('switching native swipes invalidates the superseded proposal set and restores only the selected set', async () => {
+    const first = loreProposal('swipe-one', 'First swipe state.');
+    setLiveDirectionTestAdapters({
+        generatePerformer: speak,
+        livingLorePacket: livingLorePacket(),
+        loomReconciliation: async () => `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [first], flow: { continue: false } })}\n\`\`\``,
+    });
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+
+    const message = __getChat().at(-1);
+    const firstSaved = structuredClone(message.extra.remodelDirection);
+    const secondSaved = structuredClone(firstSaved);
+    secondSaved.directionId = 'direction-second-swipe';
+    secondSaved.acceptedText = RESPONSE;
+    secondSaved.loreProposalIds = [];
+    secondSaved.envelope.loreProposals = [loreProposal('swipe-two', 'Second swipe state.')];
+    message.extra.remodelDirection = secondSaved;
+    await __emit('MESSAGE_SWIPED', __getChat().length - 1);
+
+    expect(await until(() => listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })
+        .some((record) => record.proposal.id === 'swipe-two'))).toBe(true);
+    expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'invalidated' })).toEqual([
+        expect.objectContaining({ proposal: expect.objectContaining({ id: 'swipe-one' }) }),
+    ]);
+
+    message.extra.remodelDirection = firstSaved;
+    await __emit('MESSAGE_SWIPED', __getChat().length - 1);
+    expect(await until(() => listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })
+        .some((record) => record.proposal.id === 'swipe-one'))).toBe(true);
+    expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })).toHaveLength(1);
+});
+
+test('reload recovery queues only proposals evidenced by the prefix saved before a crash', async () => {
+    const directionId = 'direction-crash-prefix';
+    const accepted = 'Wren reaches the gate.';
+    const envelope = {
+        protocol: DIRECTION_PROTOCOL,
+        directionId,
+        sceneId: scene.id,
+        flow: { continueAfter: false, hardPauseAfter: true },
+        mechanics: { pendingRequests: [] },
+        livingLore: livingLorePacket(),
+        loreProposals: [
+            loreProposal('crash-accepted', 'Wren is at the gate.', accepted),
+            loreProposal('crash-hidden', 'The gate has opened.', 'The gate opens.'),
+        ],
+    };
+    __getChat().push({
+        name: 'Wren', is_user: false, mes: accepted, extra: { remodelDirection: {
+            protocol: DIRECTION_PROTOCOL,
+            directionId,
+            sceneId: scene.id,
+            timelineId: scene.timelineId,
+            state: 'speaking',
+            acceptedText: accepted,
+            performerRef: cast[0].ref,
+            envelope,
+            checkpointTransactionIds: [],
+            loreProposalIds: [],
+        } },
+    });
+
+    await __emit('CHAT_LOADED');
+    expect(await until(() => listLivingLoreProposals({ timelineId: scene.timelineId }).length === 1)).toBe(true);
+    expect(listLivingLoreProposals({ timelineId: scene.timelineId })).toEqual([
+        expect.objectContaining({ proposal: expect.objectContaining({ id: 'crash-accepted' }) }),
+    ]);
+    expect(__getChat()[0].mes).toBe(accepted);
 });
 
 test('Narrator Archive grounding resolves through the recipe macro and is cleared after assembly', async () => {
@@ -193,14 +341,22 @@ test('an intervention stores only the visible Loom prefix and never the private 
     let archivePrompt = '';
     setLiveDirectionTestAdapters({
         generatePerformer: speak,
+        livingLorePacket: livingLorePacket(),
         loomReconciliation: ({ onChunk, signal }) => new Promise((resolve) => {
             onChunk(visible);
             pushTail = () => onChunk(full);
-            signal.addEventListener('abort', () => resolve(`${full}\n\n\`\`\`state\n{"requests":[],"flow":{"continue":false}}\n\`\`\``), { once: true });
+            signal.addEventListener('abort', () => resolve(`${full}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [loreProposal('hidden-tail', 'The alarm is sounding.', 'presses it')], flow: { continue: false } })}\n\`\`\``), { once: true });
         }),
         archiveCatchup: async ({ prompt }) => {
             archivePrompt = prompt.map((message) => message.content).join('\n');
-            return `${visible}\n\n\`\`\`state\n{"requests":[{"id":"archive-1","capability":"event.record","arguments":{"summary":"The guard reached for the alarm"},"reason":"This is the accepted interrupted prefix."}],"flow":{"continue":false}}\n\`\`\``;
+            return `${visible}\n\n\`\`\`state\n${JSON.stringify({
+                requests: [{ id: 'archive-1', capability: 'event.record', arguments: { summary: 'The guard reached for the alarm' }, reason: 'This is the accepted interrupted prefix.' }],
+                loreProposals: [
+                    loreProposal('accepted-prefix', 'Wren sees the guard reach for the alarm.', 'The guard reaches for the alarm'),
+                    loreProposal('rejected-tail', 'The alarm is sounding.', 'presses it'),
+                ],
+                flow: { continue: false },
+            })}\n\`\`\``;
         },
     });
 
@@ -218,8 +374,12 @@ test('an intervention stores only the visible Loom prefix and never the private 
     expect(await until(() => listEvents(scene.timelineId, scene.id).length === 1)).toBe(true);
     expect(listEvents(scene.timelineId, scene.id)[0].summary).toBe('The guard reached for the alarm');
     expect(archivePrompt).toContain(visible);
+    expect(archivePrompt).toContain('Selected Living Lore');
     expect(archivePrompt).not.toContain('presses it');
     expect(archivePrompt).not.toContain(RESPONSE);
+    expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })).toEqual([
+        expect.objectContaining({ proposal: expect.objectContaining({ id: 'accepted-prefix' }) }),
+    ]);
 });
 
 

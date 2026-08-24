@@ -1,6 +1,7 @@
 import { beforeEach, expect, jest, test } from '@jest/globals';
 import {
     applyLivingLoreProposals,
+    invalidateLivingLoreProposals,
     listLivingLoreHistory,
     listLivingLoreProposals,
     queueLivingLoreProposals,
@@ -247,4 +248,44 @@ test('a revision changed after queueing makes the complete apply transaction sta
     expect(result).toMatchObject({ ok: false, code: 'stale-revision', proposalId: 'becomes-stale' });
     expect(saves).toHaveLength(0);
     expect(nativeBook.entries[42].content).toContain('Current\nAt rest.');
+});
+
+test('recovery is idempotent by direction and proposal identity', async () => {
+    const input = {
+        timelineId: TIMELINE, packet: packet(),
+        proposals: [proposal('current.set', 'Awake beneath the hill.', { id: 'stable-proposal' })],
+        acceptedProse: 'The bell rang twice.',
+        source: { directionId: 'direction-1', messageId: 7, phase: 'complete' },
+    };
+    const first = await queueLivingLoreProposals(input);
+    const recovered = await queueLivingLoreProposals(input);
+
+    expect(first.queued[0].id).toBe(recovered.queued[0].id);
+    expect(listLivingLoreProposals({ timelineId: TIMELINE })).toHaveLength(1);
+
+    await applyLivingLoreProposals({ timelineId: TIMELINE, proposalIds: [first.queued[0].id] });
+    const recoveredAfterApply = await queueLivingLoreProposals(input);
+    expect(recoveredAfterApply).toMatchObject({ ok: true, rejected: [], queued: [{ id: first.queued[0].id, status: 'applied' }] });
+    expect(listLivingLoreProposals({ timelineId: TIMELINE })).toHaveLength(1);
+});
+
+test('a superseded suggestion invalidates without touching applied history', async () => {
+    const first = await queueLivingLoreProposals({
+        timelineId: TIMELINE, packet: packet(),
+        proposals: [proposal('current.set', 'First take.', { id: 'first-take' })],
+        acceptedProse: 'The bell rang twice.',
+        source: { directionId: 'direction-old', messageId: 7 },
+    });
+    const second = await queueLivingLoreProposals({
+        timelineId: TIMELINE, packet: packet(),
+        proposals: [proposal('current.set', 'Second take.', { id: 'second-take' })],
+        acceptedProse: 'The bell rang twice.',
+        source: { directionId: 'direction-kept', messageId: 7 },
+    });
+    await applyLivingLoreProposals({ timelineId: TIMELINE, proposalIds: [second.queued[0].id] });
+
+    const result = invalidateLivingLoreProposals({ timelineId: TIMELINE, directionIds: ['direction-old', 'direction-kept'], reason: 'swipe' });
+    expect(result.invalidated).toEqual([first.queued[0].id]);
+    expect(listLivingLoreProposals({ timelineId: TIMELINE, status: 'invalidated' })).toHaveLength(1);
+    expect(listLivingLoreProposals({ timelineId: TIMELINE, status: 'applied' })).toHaveLength(1);
 });

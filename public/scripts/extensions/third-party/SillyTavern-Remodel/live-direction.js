@@ -20,6 +20,11 @@ import { streamChatPrompt } from './story-stream.js';
 import { buildEmptyResponseNudge, buildNarratorArchivistSections, buildGoalObjectives } from './narrator-prompt.js';
 import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
 import { formatLivingLorePacket } from './living-lore-proposals.js';
+import {
+    invalidateLivingLoreProposals,
+    listLivingLoreProposals,
+    queueLivingLoreProposals,
+} from './living-lore-mutations.js';
 import { describeBudgetWarning, describeGenerationBudget } from './generation-budget.js';
 import { createLoomTurnEnvelope } from './loom-turn.js';
 import { updateScene } from './timeline-state.js';
@@ -341,8 +346,11 @@ export function initLiveDirection(options = {}) {
     context.eventSource.on(context.eventTypes.GENERATION_ENDED, finish);
     context.eventSource.on(context.eventTypes.GENERATION_STOPPED, finish);
     const recover = () => setTimeout(recoverLiveDirectionMessages, 0);
+    const reconcileLore = () => setTimeout(() => reconcileCurrentChatLoreProposals(), 0);
     context.eventSource.on(context.eventTypes.CHAT_LOADED, recover);
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, recover);
+    context.eventSource.on(context.eventTypes.MESSAGE_SWIPED, reconcileLore);
+    context.eventSource.on(context.eventTypes.MESSAGE_DELETED, reconcileLore);
     recoverLiveDirectionMessages();
 }
 
@@ -734,6 +742,15 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
         }, { severity: 'warn' });
         return requestNextDirection(scene);
     }
+    // A background catch-up may still be creating suggestions for this take.
+    // Join it before invalidating, otherwise it can land after the invalidation
+    // and resurrect lore based on fiction Retry is about to remove.
+    await waitForArchiveCatchup(scene.id);
+    invalidateLivingLoreProposals({
+        timelineId: scene.timelineId,
+        directionIds: [saved.directionId],
+        reason: 'retry-superseded-generation',
+    });
     const transactionIds = [...(saved.checkpointTransactionIds || [])].reverse();
     const transactions = listMechanicsTransactions({ timelineId: scene.timelineId, sceneId: scene.id });
     for (const id of transactionIds) {
@@ -1096,7 +1113,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         persona,
         acceptedHistory: history,
         worldSense: worldSense?.receipt || (preview ? worldSense : null),
-        livingLore: worldSense?.loomPacket || null,
+        livingLore: testAdapters?.livingLorePacket || worldSense?.loomPacket || null,
         // What the user cut into, in the performer's own words — the half that
         // reached them (already in acceptedHistory, ending exactly where the
         // reveal froze) and the half that did not. Null on an ordinary turn.
@@ -1238,6 +1255,8 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         state: 'Speaking',
         openingLabel: '',
         checkpointTransactionIds: [],
+        loreProposalIds: [],
+        committedArchiveFacts: [],
         generationFinished: false,
         generationSettled: false,
         interrupted: false,
@@ -1572,6 +1591,8 @@ async function beginLoomVisibleStream(run, scene) {
     // canonical buffer and one interruption offset.
     run.rawBufferedText = String(result?.committedProse || draft);
     run.envelope.mechanics.pendingRequests = [...(result?.requests || [])];
+    run.envelope.loreProposals = structuredClone(result?.loreProposals || []);
+    run.envelope.loreProposalRejections = structuredClone(result?.loreProposalRejections || []);
     if (result?.flow) run.envelope.flow = result.flow;
     run.generationFinished = true;
     run.generationSettled = true;
@@ -2119,6 +2140,11 @@ async function interruptLiveDirection({ preserveForIntervention }) {
     // unrevealed tail. Once the user cuts that tail off, none of its requests
     // may become canon. Archive the accepted prefix afresh below instead.
     run.envelope.mechanics.pendingRequests = [];
+    // These proposals were authored against the completed hidden tail. The
+    // accepted-prefix catch-up below must derive a fresh set; filtering the old
+    // set by confidence would still let hidden evidence become canon.
+    run.envelope.loreProposals = [];
+    run.envelope.loreProposalRejections = [];
     run.archiveRequestsApplied = false;
 
     // Loom mode: Stop CUTS OFF, it does not delete. The reveal lags the buffer
@@ -2205,6 +2231,7 @@ async function persistFinalizedRunMessage(run, state) {
     // marker to preserve: only fiction the user actually read may change
     // stored state.
     applyPendingRequests(run);
+    await queueAcceptedLoreProposals(run, { phase: state });
     const interruption = describeRunInterruption(run);
     journal('finalize', {
         directionId: run.directionId,
@@ -2224,8 +2251,7 @@ async function persistFinalizedRunMessage(run, state) {
     }, { correlationId: run.directionId });
     message.mes = accepted;
     if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)) message.swipes[message.swipe_id] = accepted;
-    message.extra ??= {};
-    message.extra.remodelDirection = serializeRun(run, state);
+    writeDirectionMetadata(message, serializeRun(run, state));
     await context.saveChat();
 }
 
@@ -2264,7 +2290,10 @@ function applyPendingRequests(run) {
         transactionId: result.transaction?.id || null,
     }, { correlationId: run.directionId, severity: result.ok ? 'info' : 'error' });
     if (result.transaction?.id) run.checkpointTransactionIds.push(result.transaction.id);
-    if (result.ok && archiveRequestCount) run.archiveRequestsApplied = true;
+    if (result.ok && archiveRequestCount) {
+        run.archiveRequestsApplied = true;
+        run.committedArchiveFacts = mergeStrings(run.committedArchiveFacts, archiveEvidenceFromRequests(pending));
+    }
     // unresolvedReasons carries the specific reason (unknown vs. duplicated
     // name) that addressRequestsByName already worked out; folded in even on
     // an otherwise-ok result, since one request can name an unresolvable
@@ -2276,6 +2305,75 @@ function applyPendingRequests(run) {
             ...(result.unresolvedReasons || []),
         ];
     }
+}
+
+/**
+ * Turn detached Loom proposals into persistent suggestions only after their
+ * evidence has become visible fiction (or a committed Archive delta). Native
+ * lore is never written here; Commit 8's queue remains Suggest-only.
+ */
+async function queueAcceptedLoreProposals(run, { proposals = null, phase = 'complete', reactivate = false } = {}) {
+    const packet = run?.envelope?.livingLore;
+    const candidates = Array.isArray(proposals) ? proposals : run?.envelope?.loreProposals;
+    if (!packet?.book || !Array.isArray(candidates) || !candidates.length || !acceptedProse(run)) return { ok: true, queued: [], rejected: [] };
+    try {
+        const result = await queueLivingLoreProposals({
+            timelineId: run.timelineId,
+            packet,
+            proposals: candidates,
+            acceptedProse: acceptedProse(run),
+            archiveFacts: run.committedArchiveFacts || [],
+            source: {
+                directionId: run.directionId,
+                messageId: run.messageId,
+                sceneId: run.sceneId,
+                phase,
+                reactivate,
+            },
+        });
+        run.loreProposalIds = mergeStrings(run.loreProposalIds, result.queued.map((record) => record.id));
+        if (result.rejected.length) {
+            run.checkpointDiagnostics = [
+                ...(run.checkpointDiagnostics || []),
+                ...result.rejected.map((item) => `Living Lore proposal rejected: ${item.code}.`),
+            ];
+        }
+        journal('lore.proposals.lifecycle', {
+            directionId: run.directionId,
+            messageId: run.messageId,
+            phase,
+            proposed: candidates.length,
+            queued: result.queued.length,
+            rejected: result.rejected.map((item) => ({ index: item.index, code: item.code })),
+            proposalIds: run.loreProposalIds,
+        }, {
+            correlationId: run.directionId,
+            severity: result.rejected.length ? 'warn' : 'info',
+            summary: `Living Lore bound ${result.queued.length}/${candidates.length} proposal(s) to accepted fiction`,
+        });
+        return result;
+    } catch (error) {
+        journal('lore.proposals.lifecycle.failed', {
+            directionId: run.directionId,
+            messageId: run.messageId,
+            phase,
+            error: String(error?.message || error),
+        }, { correlationId: run.directionId, severity: 'warn' });
+        return { ok: false, queued: [], rejected: [{ code: 'queue-failed' }] };
+    }
+}
+
+function archiveEvidenceFromRequests(requests) {
+    const facts = [];
+    for (const request of Array.isArray(requests) ? requests : []) {
+        if (!ARCHIVE_CAPABILITIES.has(request?.capability)) continue;
+        const args = request.arguments || {};
+        for (const value of [args.summary, args.value, args.directive]) {
+            const text = String(value || '').trim();
+            if (text) facts.push(text);
+        }
+    }
+    return facts;
 }
 
 /**
@@ -2329,12 +2427,19 @@ async function catchUpArchive(run, reason) {
         draftReasoning: narratorReasoning(run),
         narrativeState,
         mechanicsSkill,
+        livingLore: formatLivingLorePacket(run.envelope?.livingLore),
     });
     const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
     const compiled = compilePromptRecipe(recipe, sources, { trace: true });
     const prompt = compiled.messages.length
         ? compiled.messages
-        : buildLoomPrompt({ draft: prose, draftReasoning: narratorReasoning(run), narrativeState, mechanicsSkill });
+        : buildLoomPrompt({
+            draft: prose,
+            draftReasoning: narratorReasoning(run),
+            narrativeState,
+            mechanicsSkill,
+            livingLore: formatLivingLorePacket(run.envelope?.livingLore),
+        });
     recordLoomPromptTranscript(recipe?.name, prompt);
 
     let raw = '';
@@ -2362,21 +2467,26 @@ async function catchUpArchive(run, reason) {
         purpose: `archive-catchup:${reason}`,
     });
     journalLoomReply(raw, `archive-catchup:${reason}`, run.sceneId, run.directionId);
-    const requests = parseLoomReply(raw).requests.filter((request) => ARCHIVE_CAPABILITIES.has(request?.capability));
-    if (!requests.length) {
+    const parsed = parseLoomReply(raw, { livingLorePacket: run.envelope?.livingLore });
+    const requests = parsed.requests.filter((request) => ARCHIVE_CAPABILITIES.has(request?.capability));
+    const freshLoreProposals = parsed.loreProposals.filter((proposal) =>
+        !(run.envelope?.loreProposals || []).some((existing) => sameLoreProposal(existing, proposal)));
+    if (!requests.length && !freshLoreProposals.length) {
         journal('archive.catchup.empty', { directionId: run.directionId, reason }, { correlationId: run.directionId, severity: 'warn' });
         return;
     }
     try {
-        const result = executeDirectionRequests(requests, {
-            scene,
-            directionId: `${run.directionId}:archive`,
-            messageId: run.messageId,
-            addressBook: run.addressBook,
-            variableRefs: run.variableRefs,
-            goalRefs: run.goalRefs,
-            authorizedGoalIds: [],
-        });
+        const result = requests.length
+            ? executeDirectionRequests(requests, {
+                scene,
+                directionId: `${run.directionId}:archive`,
+                messageId: run.messageId,
+                addressBook: run.addressBook,
+                variableRefs: run.variableRefs,
+                goalRefs: run.goalRefs,
+                authorizedGoalIds: [],
+            })
+            : { ok: true, transaction: null, errors: [] };
         // The catch-up writes state on behalf of THIS turn, so Retry has to be
         // able to undo it. Two separate reasons it used to survive Retry, and
         // repairing either one alone leaves the bug intact:
@@ -2404,10 +2514,21 @@ async function catchUpArchive(run, reason) {
                 saved.checkpointTransactionIds = [...run.checkpointTransactionIds];
             }
         }
+        if (result.ok && requests.length) {
+            run.committedArchiveFacts = mergeStrings(run.committedArchiveFacts, archiveEvidenceFromRequests(requests));
+        }
+        run.envelope.loreProposals = mergeLoreProposals(run.envelope.loreProposals, freshLoreProposals);
+        run.envelope.loreProposalRejections = [
+            ...(run.envelope.loreProposalRejections || []),
+            ...(parsed.loreProposalRejections || []),
+        ];
+        await queueAcceptedLoreProposals(run, { proposals: freshLoreProposals, phase: `archive-catchup:${reason}` });
+        await amendSavedLoreLifecycle(run);
         journal('archive.catchup', {
             directionId: run.directionId,
             reason,
             requestCount: requests.length,
+            loreProposalCount: freshLoreProposals.length,
             ok: result.ok,
             errors: result.errors || [],
         }, { correlationId: run.directionId, severity: result.ok ? 'info' : 'warn', summary: 'Loom caught the Archive up to accepted prose' });
@@ -2426,6 +2547,21 @@ function queueArchiveCatchup(run, reason) {
         if (archiveCatchups.get(key) === task) archiveCatchups.delete(key);
     });
     return task;
+}
+
+async function amendSavedLoreLifecycle(run) {
+    const message = getContext().chat?.[run.messageId];
+    const saved = message && !message.is_user ? message.extra?.remodelDirection : null;
+    if (!saved || saved.directionId !== run.directionId) return false;
+    saved.envelope ??= {};
+    saved.envelope.loreProposals = structuredClone(run.envelope?.loreProposals || []);
+    saved.envelope.loreProposalRejections = structuredClone(run.envelope?.loreProposalRejections || []);
+    saved.loreProposalIds = [...(run.loreProposalIds || [])];
+    saved.checkpointTransactionIds = [...(run.checkpointTransactionIds || [])];
+    saved.updatedAt = new Date().toISOString();
+    writeDirectionMetadata(message, saved);
+    await getContext().saveChat();
+    return true;
 }
 
 async function waitForArchiveCatchup(sceneId) {
@@ -2448,6 +2584,17 @@ function buildLoomSkill(mechanics) {
     return `[ARCHIVE OPERATIONS — always available]\n${guide}`;
 }
 
+/** Keep Remodel metadata with the active native swipe as well as the message. */
+function writeDirectionMetadata(message, metadata) {
+    if (!message || message.is_user) return;
+    message.extra ??= {};
+    message.extra.remodelDirection = structuredClone(metadata);
+    if (Array.isArray(message.swipe_info) && Number.isInteger(message.swipe_id) && message.swipe_info[message.swipe_id]) {
+        message.swipe_info[message.swipe_id].extra ??= {};
+        message.swipe_info[message.swipe_id].extra.remodelDirection = structuredClone(metadata);
+    }
+}
+
 function persistRun(run, immediate) {
     clearTimeout(persistTimer);
     const commit = async () => {
@@ -2456,8 +2603,7 @@ function persistRun(run, immediate) {
         // Metadata only. The visible body stays core's until the run finishes,
         // so this never competes with the streaming writer; recovery reads
         // acceptedText from here rather than from message.mes.
-        message.extra ??= {};
-        message.extra.remodelDirection = serializeRun(run, run.state.toLowerCase().replaceAll(' ', '-'));
+        writeDirectionMetadata(message, serializeRun(run, run.state.toLowerCase().replaceAll(' ', '-')));
         await getContext().saveChat();
     };
     if (immediate) commit();
@@ -2496,6 +2642,7 @@ async function recoverLiveDirectionMessages() {
         changed = true;
     }
     if (changed) await context.saveChat();
+    await reconcileCurrentChatLoreProposals();
     const scene = hooks.getActiveScene();
     if (recovered && scene?.id === recovered.metadata.sceneId && isDirectedLiveScene(scene)) {
         const performer = resolvePerformer(recovered.metadata.performerRef, scene);
@@ -2513,6 +2660,8 @@ async function recoverLiveDirectionMessages() {
                 lastBreathOffset: String(recovered.metadata.acceptedText || '').length,
                 holdReason: 'hard', state: 'Waiting for you', openingLabel: '',
                 checkpointTransactionIds: [...(recovered.metadata.checkpointTransactionIds || [])],
+                loreProposalIds: [...(recovered.metadata.loreProposalIds || [])],
+                committedArchiveFacts: [],
                 variableRefs: new Map(Object.entries(recovered.metadata.variableRefs || {})),
                 goalRefs: new Map(Object.entries(recovered.metadata.goalRefs || {})),
                 addressBook: recovered.metadata.addressBook || { entries: [], duplicates: [] },
@@ -2536,6 +2685,63 @@ async function recoverLiveDirectionMessages() {
             notifyState();
         }
     }
+}
+
+/**
+ * Reconcile the current native swipe selection with the Suggest queue. This is
+ * also the reload recovery path: a crash after message save but before queue
+ * persistence replays the same direction/proposal identity without duplicates.
+ */
+async function reconcileCurrentChatLoreProposals() {
+    const scene = hooks.getActiveScene();
+    if (!scene?.id || !scene.timelineId) return;
+    const context = getContext();
+    const currentDirections = new Set();
+    let messageChanged = false;
+    for (const [messageId, message] of (context.chat || []).entries()) {
+        const saved = message?.extra?.remodelDirection;
+        if (!saved || message.is_user || saved.sceneId !== scene.id) continue;
+        const directionId = String(saved.directionId || '').trim();
+        if (!directionId) continue;
+        currentDirections.add(directionId);
+        const proposals = saved.envelope?.loreProposals;
+        const packet = saved.envelope?.livingLore;
+        if (!packet?.book || !Array.isArray(proposals) || !proposals.length) continue;
+        const recoveryRun = {
+            directionId,
+            sceneId: scene.id,
+            timelineId: saved.timelineId || scene.timelineId,
+            messageId,
+            envelope: saved.envelope,
+            acceptedVisibleText: sanitizeDirectionText(saved.acceptedText ?? message.mes ?? ''),
+            rawBufferedText: sanitizeDirectionText(saved.acceptedText ?? message.mes ?? ''),
+            rawOffset: String(saved.acceptedText ?? message.mes ?? '').length,
+            loreProposalIds: [...(saved.loreProposalIds || [])],
+            committedArchiveFacts: [],
+            checkpointDiagnostics: [],
+        };
+        // eslint-disable-next-line no-await-in-loop
+        await queueAcceptedLoreProposals(recoveryRun, { proposals, phase: 'reload-or-swipe-recovery', reactivate: true });
+        if (!sameStrings(saved.loreProposalIds, recoveryRun.loreProposalIds)) {
+            saved.loreProposalIds = [...recoveryRun.loreProposalIds];
+            saved.updatedAt = new Date().toISOString();
+            writeDirectionMetadata(message, saved);
+            messageChanged = true;
+        }
+    }
+
+    const superseded = listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })
+        .filter((record) => record.source?.sceneId === scene.id)
+        .map((record) => String(record.source?.directionId || ''))
+        .filter((directionId) => directionId && !currentDirections.has(directionId));
+    if (superseded.length) {
+        invalidateLivingLoreProposals({
+            timelineId: scene.timelineId,
+            directionIds: superseded,
+            reason: 'message-deleted-or-swipe-superseded',
+        });
+    }
+    if (messageChanged) await context.saveChat();
 }
 
 /**
@@ -2593,12 +2799,14 @@ function serializeRun(run, state) {
         protocol: DIRECTION_PROTOCOL,
         directionId: run.directionId,
         sceneId: run.sceneId,
+        timelineId: run.timelineId,
         state,
         acceptedText: acceptedProse(run),
         revealOffset: run.rawOffset,
         performerRef: run.performer.ref,
         ...stored,
         checkpointTransactionIds: [...run.checkpointTransactionIds],
+        loreProposalIds: [...(run.loreProposalIds || [])],
         pendingRequestsApplied: Boolean(run.pendingRequestsApplied),
         interrupted: Boolean(run.interrupted),
         // A provider-truncated turn must not read back as a clean one: Retry
@@ -2796,6 +3004,11 @@ function normalizeEnvelope(value, scene) {
         reasoning: String(value.reasoning || ''),
         flow: { continueAfter: Boolean(value.flow?.continueAfter), hardPauseAfter: Boolean(value.flow?.hardPauseAfter) },
         mechanics: { pendingRequests },
+        mechanicsSnapshot: value.mechanicsSnapshot ? structuredClone(value.mechanicsSnapshot) : null,
+        worldSense: value.worldSense ? structuredClone(value.worldSense) : null,
+        livingLore: value.livingLore ? structuredClone(value.livingLore) : null,
+        loreProposals: Array.isArray(value.loreProposals) ? structuredClone(value.loreProposals) : [],
+        loreProposalRejections: Array.isArray(value.loreProposalRejections) ? structuredClone(value.loreProposalRejections) : [],
         sceneId: scene.id,
     };
 }
@@ -2834,4 +3047,38 @@ function waitFor(predicate, timeoutMs) {
 
 function createId(prefix) {
     return `${prefix}-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+}
+
+function mergeStrings(left, right) {
+    return [...new Set([...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])]
+        .map((value) => String(value || '').trim()).filter(Boolean))];
+}
+
+function sameStrings(left, right) {
+    const a = Array.isArray(left) ? left : [];
+    const b = Array.isArray(right) ? right : [];
+    return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function mergeLoreProposals(left, right) {
+    const result = [];
+    const seen = new Set();
+    for (const proposal of [...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])]) {
+        const key = String(proposal?.id || JSON.stringify(proposal));
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push(structuredClone(proposal));
+    }
+    return result;
+}
+
+function sameLoreProposal(left, right) {
+    const normalize = (value) => String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+    return normalize(left?.operation) === normalize(right?.operation)
+        && normalize(left?.target?.book) === normalize(right?.target?.book)
+        && normalize(left?.target?.uid) === normalize(right?.target?.uid)
+        && Number(left?.target?.revision || 0) === Number(right?.target?.revision || 0)
+        && normalize(left?.section) === normalize(right?.section)
+        && normalize(typeof left?.value === 'string' ? left.value : JSON.stringify(left?.value))
+            === normalize(typeof right?.value === 'string' ? right.value : JSON.stringify(right?.value));
 }

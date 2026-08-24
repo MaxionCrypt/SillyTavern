@@ -52,6 +52,21 @@ export async function queueLivingLoreProposals({
             rejected.push({ index, code: parsed.rejected[0].code, proposal: clone(proposal) });
             continue;
         }
+        const proposalIdentity = String(proposal.id || '').trim() || stableHash(proposal);
+        const idempotencyKey = String(source?.directionId || '').trim()
+            ? `${String(source.directionId).trim()}:${proposalIdentity}`
+            : '';
+        const existing = idempotencyKey
+            ? Object.values(bucket.proposals).find((record) => record.idempotencyKey === idempotencyKey)
+            : null;
+        // A completed identity is already settled. In particular, a proposal
+        // that was applied at revision 1 must not be reclassified as stale
+        // when reload sees the entry at revision 2.
+        if (existing && existing.status !== 'invalidated') {
+            existing.source = { ...existing.source, ...clone(source), proposalId: proposalIdentity };
+            queued.push(clone(existing));
+            continue;
+        }
         const code = validateSuggestion(proposal, { timelineId, bucket, data, acceptedProse, archiveFacts });
         if (code) {
             rejected.push({ index, code, proposal: clone(proposal) });
@@ -60,6 +75,17 @@ export async function queueLivingLoreProposals({
         const preview = previewProposal(data, bucket, proposal);
         if (!preview.ok) {
             rejected.push({ index, code: preview.code, proposal: clone(proposal) });
+            continue;
+        }
+        if (existing) {
+            existing.source = { ...existing.source, ...clone(source), proposalId: proposalIdentity };
+            if (existing.status === 'invalidated' && source?.reactivate) {
+                existing.status = 'suggested';
+                existing.invalidatedAt = null;
+                existing.invalidationReason = '';
+                existing.updatedAt = now();
+            }
+            queued.push(clone(existing));
             continue;
         }
         const timestamp = now();
@@ -71,10 +97,11 @@ export async function queueLivingLoreProposals({
             timelineId: String(timelineId),
             book: String(packet.book),
             packetBookHash: String(packet.bookHash || ''),
+            idempotencyKey,
             proposal: clone(proposal),
             diff: preview.diff,
             evidence: { matched: true, source: evidenceSource(proposal.evidence, acceptedProse, archiveFacts) },
-            source: clone(source),
+            source: { ...clone(source), proposalId: proposalIdentity },
             createdAt: timestamp,
             updatedAt: timestamp,
         };
@@ -86,6 +113,33 @@ export async function queueLivingLoreProposals({
     saveLivingLoreStore();
     debug('proposal.queued', { timelineId, book: packet.book, queued: queued.length, rejected }, rejected.length ? 'warn' : 'info');
     return { ok: rejected.length === 0, queued, rejected };
+}
+
+/** Invalidate only unapplied suggestions belonging to superseded fiction. */
+export function invalidateLivingLoreProposals({ timelineId = '', directionIds = [], messageIds = [], reason = 'superseded' } = {}) {
+    const bucket = getTimelineLivingLoreState(timelineId, { create: false });
+    if (!bucket) return { invalidated: [] };
+    const directions = new Set(uniqueStrings(directionIds));
+    const messages = new Set((Array.isArray(messageIds) ? messageIds : []).map((value) => String(value)));
+    const invalidated = [];
+    const timestamp = now();
+    for (const record of Object.values(bucket.proposals || {})) {
+        if (record.status !== 'suggested') continue;
+        const matchesDirection = directions.size && directions.has(String(record.source?.directionId || ''));
+        const matchesMessage = messages.size && messages.has(String(record.source?.messageId ?? ''));
+        if (!matchesDirection && !matchesMessage) continue;
+        record.status = 'invalidated';
+        record.invalidationReason = String(reason || 'superseded');
+        record.invalidatedAt = timestamp;
+        record.updatedAt = timestamp;
+        invalidated.push(record.id);
+    }
+    if (invalidated.length) {
+        bucket.updatedAt = timestamp;
+        saveLivingLoreStore();
+        debug('proposal.invalidated', { timelineId, directionIds: [...directions], messageIds: [...messages], reason, proposalIds: invalidated }, 'warn');
+    }
+    return { invalidated };
 }
 
 export function listLivingLoreProposals({ timelineId = '', status = '' } = {}) {
@@ -450,6 +504,15 @@ function normalized(value) { return String(value ?? '').toLowerCase().replace(/^
 function uniqueStrings(values) { return [...new Set((Array.isArray(values) ? values : []).map((value) => String(value ?? '').trim()).filter(Boolean))]; }
 function strings(values) { return (Array.isArray(values) ? values : []).map((value) => String(value ?? '').trim()).filter(Boolean); }
 function sameData(left, right) { return JSON.stringify(left ?? null) === JSON.stringify(right ?? null); }
+function stableHash(value) {
+    const text = JSON.stringify(value ?? null);
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+}
 function clone(value) { return value == null ? value : structuredClone(value); }
 function now() { return new Date().toISOString(); }
 function makeId(prefix) { return `${prefix}-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`; }
