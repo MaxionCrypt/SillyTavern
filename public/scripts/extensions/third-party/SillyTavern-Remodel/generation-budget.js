@@ -87,3 +87,31 @@ export function describeBudgetWarning(budget, label = 'The response') {
     }
     return parts.join(' ');
 }
+
+/**
+ * Detect a substantial prose response that never reached a plausible terminal
+ * boundary. Some compatible providers close a successful stream without
+ * forwarding finish_reason and far below the configured token ceiling. That
+ * leaves token-budget inference blind, while the returned prose still ends on
+ * a bare word, contraction, comma, or colon.
+ *
+ * Sentence punctuation, closing quotes/brackets, ellipses, and a deliberate
+ * em-dash cliff edge are accepted. Short fragments are ignored because this
+ * guard is for Narrator passages, not UI labels or intentionally terse beats.
+ *
+ * @param {string} text
+ * @param {{minimumLength?: number}} [options]
+ * @returns {{incomplete: boolean, ending: string}}
+ */
+export function describeIncompleteProse(text, { minimumLength = 80 } = {}) {
+    const prose = String(text || '').trim();
+    if (prose.length < Math.max(1, Number(minimumLength) || 80)) {
+        return { incomplete: false, ending: prose.slice(-80) };
+    }
+
+    // Markdown wrappers may legally follow the terminal punctuation.
+    const ending = prose.replace(/(?:\*\*|__|[*_`])+$/u, '').trimEnd();
+    const complete = /(?:[.!?…]|\.{3}|[—–])(?:["'’”»)\]}]+)?$/u.test(ending)
+        || /["'’”»)\]}]$/u.test(ending);
+    return { incomplete: !complete, ending: ending.slice(-80) };
+}

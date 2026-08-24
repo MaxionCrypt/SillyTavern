@@ -35,7 +35,7 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         template('scenario', 'Scenario', 'system', 'scene.scenario', { nativeIdentifier: 'scenario' }),
         template('worldInfoAfter', 'World Info (after)', 'system', 'world.info.after', { nativeIdentifier: 'worldInfoAfter' }),
         template('dialogueExamples', 'Dialogue Examples', 'user', 'character.examples', { nativeIdentifier: 'dialogueExamples' }),
-        template('storyGoals', 'Story Goals', 'system', 'story.goals', { nativeIdentifier: 'remodel_story_goals', description: 'Active Goals framed as consequential pressures, never protected outcomes.' }),
+        template('storyGoals', 'Story Goals', 'system', 'story.goals', { nativeIdentifier: 'remodel_story_goals', description: 'Active Goals framed as consequential pressures, never protected outcomes.', arguments: 'limit=N keeps the newest N active Goals.' }),
         // Rendered by Remodel as the Narrator's dynamic Archive grounding,
         // same as storyGoals above — not resolved from a card or lorebook.
         // `nativeIdentifier` is required, not decorative: a roleplay recipe is
@@ -48,8 +48,9 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
             nativeIdentifier: 'remodel_narrator_grounding',
             description: 'The current Narrator-visible Loom Archive and provisional open thread, resolved when the request is assembled.',
             advancedWarning: NARRATOR_GROUNDING_WARNING,
+            arguments: 'events=N keeps the newest N “What happened” records; events=0 hides that section.',
         }),
-        template('chatHistory', 'Chat History', 'user', 'chat.history', { nativeIdentifier: 'chatHistory', structured: true }),
+        template('chatHistory', 'Chat History', 'user', 'chat.history', { nativeIdentifier: 'chatHistory', structured: true, arguments: 'messages=N keeps the newest N native chat messages.' }),
         // Native Chat Completion keeps the latest input inside chatHistory;
         // exposing it as an alias preserves that real marker boundary.
         template('currentInput', 'Current Input (via history)', 'user', 'chat.input', { nativeIdentifier: 'chatHistory', structured: true }),
@@ -57,7 +58,7 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         template('nativeContext', 'Native Roleplay Context', 'system', 'roleplay.native', { textOnly: true, locked: true }),
     ]),
     loom: Object.freeze([
-        template('archiveState', 'Archive, Goals & Open Thread', 'system', 'loom.archive', { description: 'The Loom-readable scene facts, character state, recorded events, provisional open thread, and active Goals.' }),
+        template('archiveState', 'Archive, Goals & Open Thread', 'system', 'loom.archive', { description: 'The Loom-readable scene facts, character state, recorded events, provisional open thread, and active Goals.', arguments: 'events=N limits “What happened”; goals=N limits active Goals. Zero hides that section.' }),
         template('mechanicsBoard', 'Archive Operations & Mechanics', 'system', 'loom.mechanics', { description: 'The Archive operations always available to the Loom, plus the current Goals and Variables board when mechanics are enabled.' }),
         template('livingLore', 'Selected Living Lore', 'system', 'loom.lore', { description: 'The bounded, revisioned Timeline lore entries selected by World Sense, plus the typed proposal contract. Proposals do not write directly.' }),
         template('narratorDraft', 'Narrator Draft', 'user', 'narrator.draft', { description: 'The held Narrator prose being reconciled before it becomes visible.' }),

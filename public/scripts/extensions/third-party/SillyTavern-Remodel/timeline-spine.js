@@ -64,6 +64,8 @@ import {
     renderPromptStudioWorkspace,
     syncPromptStudioForCurrentMode,
 } from './prompt-studio.js';
+import { positionPopover } from './popover-position.js';
+import { limitBoundedChatHistory } from './prompt-history-limit.js';
 import {
     decorateStoryGoalStream,
     formatStoryGoalsPrompt,
@@ -107,10 +109,13 @@ import {
     initLiveDirection,
     describeNativeGenerationBlock,
     isDirectedLiveScene,
+    isLatestUserMessage,
     ownsLiveDirectionGeneration,
     prefetchLiveDirectionLore,
     previewLiveDirectionLore,
+    previewLoomPrompt,
     regenerateLastDirectedResponse,
+    rerunDirectedRoleplayFromUserMessage,
     requestNextDirection,
     retryLiveStep,
     continueLiveStep,
@@ -2399,8 +2404,10 @@ async function runPromptPreviewDryRun(generationType, { composerText: composerTe
     const captureListener = (generateData) => {
         capturedPrompt = generateData;
     };
+    const historyLimitListener = (eventData) => limitBoundedChatHistory(eventData?.chat);
 
     context.eventSource.once(context.eventTypes.GENERATE_AFTER_DATA, captureListener);
+    context.eventSource.once(context.eventTypes.CHAT_COMPLETION_PROMPT_READY, historyLimitListener);
 
     // Core's prompt assembly (prepareOpenAIMessages in openai.js) catches
     // its own token-budget/character-name errors internally and reports them
@@ -2459,6 +2466,7 @@ async function runPromptPreviewDryRun(generationType, { composerText: composerTe
             : {}, true);
     } finally {
         context.eventSource.removeListener(context.eventTypes.GENERATE_AFTER_DATA, captureListener);
+        context.eventSource.removeListener(context.eventTypes.CHAT_COMPLETION_PROMPT_READY, historyLimitListener);
 
         restoreGroupPreviewName();
         setCharacterId(previousCharacterId);
@@ -6274,10 +6282,49 @@ function renderScenePromptChoice(scene = getActiveScene(), compact = false, requ
     `;
 }
 
-function openScenePromptRecipeMenu(anchor) {
+function renderRoleplayPromptChoice(scene = getActiveScene()) {
+    const narrator = getScenePromptChoice(scene, 'roleplay');
+    const loom = getScenePromptChoice(scene, 'loom');
+    const inherited = narrator.inherited && loom.inherited;
+    return `
+        <button type="button" class="remodel-scene-prompt-choice is-compact" data-remodel-scene-prompt-choice data-prompt-mode="pipeline" title="Choose the Narrator or Loom recipe for this Scene">
+            <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+            <span class="remodel-scene-prompt-choice-copy">
+                <small>Narrator &amp; Loom · ${inherited ? 'defaults' : 'scene recipes'}</small>
+                <strong>${escapeHtml(narrator.recipe?.name || 'No Narrator recipe')} · ${escapeHtml(loom.recipe?.name || 'No Loom recipe')}</strong>
+            </span>
+            <i class="fa-solid fa-chevron-down remodel-scene-prompt-choice-caret" aria-hidden="true"></i>
+        </button>
+    `;
+}
+
+function openRoleplayPromptJobMenu(anchor) {
     const scene = getActiveScene();
     if (!scene) return;
-    const requestedMode = anchor?.dataset?.promptMode || scene.mode;
+    const narrator = getScenePromptChoice(scene, 'roleplay');
+    const loom = getScenePromptChoice(scene, 'loom');
+    openRoleplayMenu(anchor, [
+        {
+            id: 'roleplay',
+            label: 'Narrator recipe',
+            sublabel: narrator.recipe?.name || 'No recipe selected',
+        },
+        {
+            id: 'loom',
+            label: 'Loom recipe',
+            sublabel: loom.recipe?.name || 'No recipe selected',
+        },
+    ], (mode) => openScenePromptRecipeMenu(anchor, mode));
+}
+
+function openScenePromptRecipeMenu(anchor, requestedModeOverride = null) {
+    const scene = getActiveScene();
+    if (!scene) return;
+    const requestedMode = requestedModeOverride || anchor?.dataset?.promptMode || scene.mode;
+    if (requestedMode === 'pipeline') {
+        openRoleplayPromptJobMenu(anchor);
+        return;
+    }
     const { mode, apiType, recipe: current, inherited } = getScenePromptChoice(scene, requestedMode);
     const defaultRecipe = getDefaultPromptStudioRecipe(mode, apiType);
     const recipes = getPromptStudioRecipes(mode, apiType);
@@ -8510,7 +8557,7 @@ function renderRoleplayComposer(root) {
             <button type="button" class="remodel-rp-command remodel-rp-act" data-remodel-rp-action="connections" title="Choose Narrator and Loom API connections">
                 <span class="remodel-rp-command-icon"><i class="fa-solid fa-plug" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Connections</span>
             </button>
-            <span class="remodel-rp-command-prompt">${renderScenePromptChoice(getActiveScene(), true, 'roleplay')}</span>
+            <span class="remodel-rp-command-prompt">${renderRoleplayPromptChoice(getActiveScene())}</span>
             <span class="remodel-live-flow-actions">
                 <button type="button" data-remodel-live-stop${directionUi.canStop ? '' : ' hidden'}><i class="fa-solid fa-stop"></i> Stop</button>
             </span>
@@ -8715,10 +8762,10 @@ function openRoleplayMenu(anchor, items, onPick) {
     const rect = anchor.getBoundingClientRect();
     menu.style.visibility = 'hidden';
     requestAnimationFrame(() => {
-        const mh = menu.offsetHeight;
-        const top = rect.top - mh - 8;
-        menu.style.left = `${Math.max(8, rect.left)}px`;
-        menu.style.top = `${top > 8 ? top : rect.bottom + 8}px`;
+        const viewport = window.visualViewport || { width: window.innerWidth, height: window.innerHeight };
+        const position = positionPopover(rect, { width: menu.offsetWidth, height: menu.offsetHeight }, viewport);
+        menu.style.left = `${position.left}px`;
+        menu.style.top = `${position.top}px`;
         menu.style.visibility = 'visible';
         menu.classList.add('remodel-rp-menu-in');
     });
@@ -8843,7 +8890,7 @@ async function triggerRoleplaySpeaker(name) {
 // Prompt preview: assembles (but never sends) the exact prompts a normal turn
 // would produce right now, and shows them in a read-only modal split into two
 // tabs — Directed Roleplay sends two separately-authored prompts on a turn,
-// the hidden Loom and the visible Narrator, and a user should be able to
+// the private Narrator draft followed by Loom reconciliation, and a user should be able to
 // see what each one will actually be sent.
 //
 // Narrator tab: reuses the same dry-run + formatter the Story workspace's
@@ -8856,7 +8903,11 @@ const ROLEPLAY_PREVIEW_ID = 'remodel-rp-preview-modal';
 // swapped by setRoleplayPreviewTab.
 const PREVIEW_TAB_HINTS = Object.freeze({
     narrator: 'What the Narrator will receive on the next turn — nothing is sent.',
+    loom: 'What the Loom will receive after the private Narrator draft — nothing is sent.',
 });
+
+const previewTab = (id, label, active) =>
+    `<button type="button" data-remodel-rp-preview-tab="${id}" class="${active === id ? 'is-active' : ''}">${label}</button>`;
 
 // Both panels get the same BY SOURCE / RAW PROMPT toggle and the same pair of
 // containers, under the same attribute names. Every lookup below is scoped to
@@ -8899,7 +8950,12 @@ async function openRoleplayPromptPreview() {
                 </div>
                 <button type="button" class="remodel-rp-picker-x" data-remodel-rp-preview-close aria-label="Close">×</button>
             </div>
+            <div class="remodel-rp-preview-tabs" data-remodel-rp-preview-tabs>
+                ${previewTab('narrator', 'Narrator', defaultTab)}
+                ${previewTab('loom', 'Loom', defaultTab)}
+            </div>
             ${previewPanel('narrator', defaultTab, `<div class="remodel-rp-preview-note">The Narrator Policy and prompt order are editable in Prompt Studio. <strong>{{narrator.grounding}}</strong> resolves the current Narrator-visible Loom Archive at request time.</div>`)}
+            ${previewPanel('loom', defaultTab, '<div class="remodel-rp-preview-note">The private Narrator draft and reasoning do not exist until Narrator runs, so those two values are shown as explicit placeholders. Every other Loom recipe block is resolved from the current scene and composer draft.</div>')}
         </div>
     `;
     document.body.appendChild(overlay);
@@ -8909,12 +8965,13 @@ async function openRoleplayPromptPreview() {
     // view toggle, so every lookup has to be scoped to its own panel — an
     // overlay-wide querySelector would find whichever panel comes first.
     const narratorPanel = overlay.querySelector('[data-remodel-rp-preview-panel="narrator"]');
+    fillLoomPreviewPanel(overlay.querySelector('[data-remodel-rp-preview-panel="loom"]'), activeScene, directed);
 
     try {
         const visibleComposer = getRealRoleplayRoot()?.querySelector('[data-remodel-rp-input]');
         const composerText = visibleComposer instanceof HTMLTextAreaElement ? visibleComposer.value : '';
         const narratorGrounding = directed && activeScene
-            ? buildNarratorArchivistSections(activeScene.timelineId, activeScene.id)
+            ? (args = {}) => buildNarratorArchivistSections(activeScene.timelineId, activeScene.id, { events: args.events })
             : undefined;
         let worldSense = null;
         let worldSenseWarning = '';
@@ -8962,6 +9019,34 @@ async function openRoleplayPromptPreview() {
         if (bodyEl) {
             bodyEl.textContent = `Could not assemble a preview.\n\n${String(err)}`;
         }
+    }
+}
+
+async function fillLoomPreviewPanel(panel, scene, directed) {
+    const bodyEl = panel?.querySelector('[data-remodel-rp-preview-body]');
+    const warnEl = panel?.querySelector('[data-remodel-rp-preview-warn]');
+    if (!bodyEl) return;
+    if (!directed) {
+        bodyEl.textContent = '(This Scene is on Free play — no Loom request is made. Turn Live Direction on to preview it.)';
+        return;
+    }
+    try {
+        const { prompt, trace, usedFallback } = await previewLoomPrompt(scene);
+        bodyEl.textContent = formatPromptStudioPreview({ apiType: 'chat', messages: prompt });
+        if (usedFallback && warnEl) {
+            warnEl.textContent = '⚠ The selected Loom recipe compiled to no messages, so this shows the built-in fallback prompt.';
+            warnEl.hidden = false;
+        }
+        const sourcesEl = panel.querySelector('[data-remodel-rp-preview-sources]');
+        const viewsEl = panel.querySelector('[data-remodel-rp-preview-views]');
+        if (Array.isArray(trace) && trace.length && sourcesEl && viewsEl) {
+            sourcesEl.innerHTML = await renderPromptTraceSections(trace, prompt);
+            sourcesEl.hidden = false;
+            viewsEl.hidden = false;
+            bodyEl.hidden = true;
+        }
+    } catch (error) {
+        bodyEl.textContent = `Could not assemble a Loom preview.\n\n${String(error)}`;
     }
 }
 
@@ -10241,9 +10326,10 @@ function buildRoleplayMessage(mesId, message, { messagesSince = 0 } = {}) {
     return row;
 }
 
-// The hover control strip for one bubble. Edit + Delete are available on
-// every real message; Swipe only on the last message and only when it's an
-// AI/character line (swiping the user's own text isn't a thing in core).
+// The hover control strip for one bubble. Only the newest user-authored line
+// can be edited: changing it rewinds and reruns everything that followed.
+// Delete remains available on real messages; Swipe is only for the final AI
+// line (swiping the user's own text isn't a thing in core).
 function buildRoleplayBubbleControls(mesId, message, kind) {
     const context = getContext();
     const controls = document.createElement('div');
@@ -10265,13 +10351,16 @@ function buildRoleplayBubbleControls(mesId, message, kind) {
         controls.appendChild(swipeWrap);
     }
 
-    const edit = document.createElement('button');
-    edit.type = 'button';
-    edit.className = 'remodel-rp-ctrl';
-    edit.dataset.remodelRpBubble = 'edit';
-    edit.title = 'Edit';
-    edit.innerHTML = '<i class="fa-solid fa-pencil" aria-hidden="true"></i>';
-    controls.appendChild(edit);
+    if (isLatestUserMessage(mesId, context.chat)) {
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'remodel-rp-ctrl';
+        edit.dataset.remodelRpBubble = 'edit';
+        edit.title = 'Edit and rerun from here';
+        edit.setAttribute('aria-label', 'Edit latest user message and rerun');
+        edit.innerHTML = '<i class="fa-solid fa-pencil" aria-hidden="true"></i>';
+        controls.appendChild(edit);
+    }
 
     const del = document.createElement('button');
     del.type = 'button';
@@ -10332,6 +10421,10 @@ async function handleRoleplayBubbleControl(action, mesId, row) {
 function beginRoleplayBubbleEdit(mesId, row) {
     const context = getContext();
     const message = context.chat[mesId];
+    if (!isLatestUserMessage(mesId, context.chat)) {
+        showRoleplayToast('Only your latest message can be edited and rerun.');
+        return;
+    }
     const bubble = row?.querySelector('.remodel-rp-bubble');
     const body = bubble?.querySelector('.remodel-rp-body');
     if (!bubble || !body || row.querySelector('.remodel-rp-edit')) {
@@ -10374,15 +10467,48 @@ async function commitRoleplayBubbleEdit(mesId, row) {
     const context = getContext();
     const original = context.chat[mesId]?.mes ?? '';
 
+    if (!isLatestUserMessage(mesId, context.chat)) {
+        showRoleplayToast('Only your latest message can be edited and rerun.');
+        renderRoleplayScene();
+        return;
+    }
+
+    if (!newValue.trim()) {
+        showRoleplayToast('The edited message cannot be empty.');
+        return;
+    }
+
     if (newValue === original) {
         renderRoleplayScene();
         return;
     }
 
+    textarea.disabled = true;
     try {
-        await openEditCloseWith(mesId, '.mes_edit_done', newValue);
+        const scene = getActiveScene();
+        if (isDirectedLiveScene(scene)) {
+            const reran = await rerunDirectedRoleplayFromUserMessage({ scene, messageId: mesId, text: newValue });
+            if (!reran) throw new Error('The edited turn could not be rerun while another direction is active.');
+        } else {
+            // Free play has no Archive/mechanics transaction to unwind, but the
+            // causal rule is the same: remove every response to the old line,
+            // persist its replacement, then ask native generation again.
+            for (let index = context.chat.length - 1; index > mesId; index -= 1) {
+                // eslint-disable-next-line no-await-in-loop
+                await context.deleteMessage(index);
+            }
+            const message = context.chat[mesId];
+            message.mes = newValue;
+            if (message.extra?.display_text !== undefined) delete message.extra.display_text;
+            await context.eventSource?.emit?.(context.eventTypes.MESSAGE_EDITED, mesId);
+            await context.eventSource?.emit?.(context.eventTypes.MESSAGE_UPDATED, mesId);
+            await context.saveChat();
+            await context.generate('normal');
+        }
     } catch (err) {
         console.error('Roleplay bubble edit failed:', err);
+        showRoleplayToast(err?.message || 'The edited turn could not be rerun.');
+        textarea.disabled = false;
     }
     renderRoleplayScene();
 }
@@ -10471,7 +10597,7 @@ function renderRoleplayScene() {
     const activeRoleplayScene = getActiveScene();
     // Written onto the native prompt rather than injected at a chat depth, so
     // the recipe's own ordering places it. See setRemodelNativePromptContent.
-    setRemodelNativePromptContent('storyGoals', formatStoryGoalsPrompt(activeRoleplayScene));
+    setRemodelNativePromptContent('storyGoals', (args = {}) => formatStoryGoalsPrompt(activeRoleplayScene, { limit: args.limit }));
     // Narrator Grounding is dynamic recipe content. Keep its persistent native
     // prompt object empty between requests; live generation and Preview resolve
     // the current Archive into it only while assembling their request.

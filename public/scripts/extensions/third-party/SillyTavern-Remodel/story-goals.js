@@ -66,11 +66,13 @@ export function getStoryGoalComposerIntents(sceneId = '') {
     return [...(uiState.composerIntents.get(String(sceneId || '')) || [])];
 }
 
-export function formatStoryGoalsPrompt(scene) {
+export function formatStoryGoalsPrompt(scene, { limit = null } = {}) {
     if (!scene?.id) return '';
     const goals = getSceneGoals(scene.id, { includeResolved: false, states: ['active', 'background'] });
-    if (!goals.length) return '';
-    return formatStoryGoalsForNarrator(goals);
+    const count = limit === null || limit === undefined || limit === '' ? goals.length : Math.max(0, Math.floor(Number(limit) || 0));
+    const selected = count > 0 ? goals.slice(-count) : [];
+    if (!selected.length) return '';
+    return formatStoryGoalsForNarrator(selected);
 }
 
 // The former cast-character Loom and fenced `loom` protocol have been

@@ -33,6 +33,7 @@ import {
     withRemodelSources,
 } from './prompt-studio-store.js';
 import { recordApiTranscript } from './debug-console.js';
+import { chatHistoryBoundary } from './prompt-history-limit.js';
 
 const CHAT_PROMPT_ORDER_ID = 100001;
 const roleLabels = Object.freeze({
@@ -627,7 +628,7 @@ function renderMacroReference(recipe) {
     if (!definitions.length) return '';
     return `<details class="remodel-prompt-macro-reference">
         <summary><i class="fa-solid fa-braces" aria-hidden="true"></i> Available macros <small>Named arguments supported</small></summary>
-        <div>${definitions.map((item) => `<span><code>{{${escapeHtml(item.macro)}}}</code><small>${escapeHtml(item.label)}</small></span>`).join('')}</div>
+        <div>${definitions.map((item) => `<span><code>{{${escapeHtml(item.macro)}}}</code><small>${escapeHtml(item.label)}${item.arguments ? ` · ${escapeHtml(item.arguments)}` : ''}</small></span>`).join('')}</div>
         <p>Arguments use <code>name=value</code>, for example <code>{{world.info.depth messages=3}}</code>. Structural macros such as chat history should remain alone in their message so their original roles and ordering are preserved.</p>
     </details>`;
 }
@@ -1115,7 +1116,9 @@ export function setRemodelNativePromptContent(sourceKey, content) {
     // marker here means the text silently reaches nothing.
     prompt.marker = false;
     prompt.role = 'system';
-    prompt.content = String(content || '');
+    const invocation = parseWholeRecipeMacro(recipe, block.content || '');
+    const resolved = typeof content === 'function' ? content(invocation?.args || {}) : content;
+    prompt.content = String(resolved || '');
     return true;
 }
 
@@ -1205,12 +1208,31 @@ function applyRoleplayChatRecipe(recipe) {
     // are not part of the v14 recipe and keeping them around makes native
     // preset capture resurrect obsolete names and identifiers.
     oai_settings.prompts = oai_settings.prompts.filter((prompt) =>
-        !['remodel_loom_context', 'remodel_director_notes'].includes(prompt?.identifier));
+        !['remodel_loom_context', 'remodel_director_notes'].includes(prompt?.identifier)
+        && !String(prompt?.identifier || '').startsWith('remodel-chat-history-'));
     const promptMap = new Map(oai_settings.prompts.filter(Boolean).map((prompt) => [prompt.identifier, prompt]));
     const order = [];
+    const appendHistoryBoundary = (identifier, content) => {
+        const prompt = {
+            identifier,
+            name: 'Remodel chat history boundary',
+            marker: false,
+            system_prompt: false,
+            role: 'system',
+            content,
+        };
+        oai_settings.prompts.push(prompt);
+        promptMap.set(identifier, prompt);
+        order.push({ identifier, enabled: true });
+    };
     for (const recipeBlock of recipe.blocks || []) {
         for (const block of expandRoleplayNativeBlock(recipe, recipeBlock)) {
         const source = parseWholeRecipeMacro(recipe, block.content || '');
+        const historyMessages = source?.key === 'chatHistory' && source.args?.messages !== undefined && block.enabled !== false
+            ? Math.max(0, Math.floor(Number(source.args.messages) || 0))
+            : null;
+        const historyBoundary = historyMessages === null ? null : chatHistoryBoundary(historyMessages);
+        if (historyBoundary) appendHistoryBoundary(`remodel-chat-history-start-${block.id}`, historyBoundary.start);
         const identifier = source?.nativeIdentifier || block.nativeIdentifier || `remodel-${block.id}`;
         block.nativeIdentifier = identifier;
         let prompt = promptMap.get(identifier);
@@ -1252,6 +1274,7 @@ function applyRoleplayChatRecipe(recipe) {
             prompt.system_prompt = ['main', 'nsfw', 'jailbreak', 'enhanceDefinitions'].includes(identifier);
         }
         order.push({ identifier, enabled: block.enabled !== false });
+        if (historyBoundary) appendHistoryBoundary(`remodel-chat-history-end-${block.id}`, historyBoundary.end);
         }
     }
     let globalOrder = oai_settings.prompt_order.find((entry) => String(entry.character_id) === String(CHAT_PROMPT_ORDER_ID));
@@ -1290,7 +1313,7 @@ function expandRoleplayNativeBlock(recipe, block) {
             ? {
                 ...block,
                 id: `${block.id}-macro-${index}`,
-                content: `{{${part.invocation.macro}}}`,
+                content: part.content,
                 nativeIdentifier: part.invocation.nativeIdentifier,
                 locked: true,
             }

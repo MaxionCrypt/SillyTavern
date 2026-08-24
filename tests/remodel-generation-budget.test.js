@@ -1,5 +1,5 @@
 import { test, expect } from '@jest/globals';
-import { describeGenerationBudget, describeBudgetWarning } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/generation-budget.js';
+import { describeGenerationBudget, describeBudgetWarning, describeIncompleteProse } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/generation-budget.js';
 
 // The observed failure, from the debug journal on 2026-08-23: a 2000-token
 // ceiling, reasoning_effort "high", 7780 characters of reasoning (~1950 tokens)
@@ -72,4 +72,25 @@ test('token counts are floored to whole tokens', () => {
     expect(budget.visible).toBe(10);
     expect(budget.reasoning).toBe(5);
     expect(budget.used).toBe(15);
+});
+
+test('provider cutoffs far below the token ceiling are recognized at the prose boundary', () => {
+    expect(describeIncompleteProse("Her mouth was fuller now, a pouty little cocksucker's", { minimumLength: 1 })).toMatchObject({ incomplete: true });
+    expect(describeIncompleteProse("Those eyes had gone huge and dark-lashed, the kind that looked like they'd", { minimumLength: 1 })).toMatchObject({ incomplete: true });
+});
+
+test('normal prose terminals and deliberate cliff edges are accepted', () => {
+    for (const prose of [
+        'The latch clicked shut behind her.',
+        'She looked back. “Are you coming?”',
+        'His hand stopped above the switch…',
+        'The answer arrived all at once—',
+        'The final word landed **hard.**',
+    ]) {
+        expect(describeIncompleteProse(prose, { minimumLength: 1 }).incomplete).toBe(false);
+    }
+});
+
+test('short UI fragments are not mistaken for truncated narration', () => {
+    expect(describeIncompleteProse('A beat')).toMatchObject({ incomplete: false });
 });

@@ -5,10 +5,11 @@ import { getSceneGoals } from './story-goals-store.js';
  * Active Goals for the Loom's readable Archive view. The Narrator receives
  * Goals once through the recipe-owned story.goals macro.
  */
-export function buildGoalObjectives(sceneId) {
+export function buildGoalObjectives(sceneId, { limit = null } = {}) {
     const goals = getSceneGoals(sceneId, { includeResolved: false, states: ['active', 'background'] });
-    if (!goals.length) return '';
-    const lines = goals.map((goal) => {
+    const selected = boundedTail(goals, limit);
+    if (!selected.length) return '';
+    const lines = selected.map((goal) => {
         const desc = String(goal.description || '').trim();
         const holders = (Array.isArray(goal.holderRefs) ? goal.holderRefs : [])
             .map((holder) => String(holder?.label || holder?.id || '').trim())
@@ -26,10 +27,10 @@ export function buildGoalObjectives(sceneId) {
  * store, so a secret cannot leak through a formatting mistake. Returns '' when
  * the scene has no state yet.
  */
-export function buildNarratorArchivistSections(timelineId, sceneId) {
+export function buildNarratorArchivistSections(timelineId, sceneId, { events: eventLimit = null } = {}) {
     const facts = listSceneFacts(timelineId, sceneId);
     const charStates = listCharStates(timelineId, sceneId);
-    const events = listEvents(timelineId, sceneId);
+    const events = boundedTail(listEvents(timelineId, sceneId), eventLimit);
     const beat = getBeat(timelineId, sceneId);
     const sections = [];
     if (facts.length) {
@@ -52,6 +53,12 @@ export function buildNarratorArchivistSections(timelineId, sceneId) {
     return sections.map(([label, body]) => `## ${label}\n${body}`).join('\n\n');
 }
 
+function boundedTail(items, requested) {
+    if (requested === null || requested === undefined || requested === '') return items;
+    const count = Math.max(0, Math.floor(Number(requested) || 0));
+    return count > 0 ? items.slice(-count) : [];
+}
+
 /**
  * The extra instruction a Narrator retry carries after an empty response.
  *
@@ -72,15 +79,24 @@ export function buildNarratorArchivistSections(timelineId, sceneId) {
  * @param {number} attempt 1 for the first try; 2+ for a retry
  * @param {{reasoningLength?: number}} [previous] what the failed attempt returned
  */
-export function buildEmptyResponseNudge(attempt, { reasoningLength = 0 } = {}) {
+export function buildEmptyResponseNudge(attempt, { reasoningLength = 0, failureCause = '' } = {}) {
     const n = Number(attempt);
     if (!Number.isFinite(n) || n < 2) return '';
-    const thought = Number(reasoningLength) > 0
+    const malformed = ['reasoning-in-content', 'instruction-echo', 'protocol-output'].includes(String(failureCause));
+    const thought = failureCause === 'reasoning-in-content'
+        ? 'The previous attempt exposed private planning in the visible content channel.'
+        : failureCause === 'instruction-echo'
+            ? 'The previous attempt copied prompt instructions into the response.'
+            : failureCause === 'protocol-output'
+                ? 'The previous attempt returned state or protocol JSON instead of narration.'
+                : Number(reasoningLength) > 0
         ? 'The previous attempt spent its entire response on private reasoning and returned no prose.'
         : 'The previous attempt returned an empty response.';
     return [
         '## Output required',
         thought,
-        'Write the scene prose itself in your reply, as visible text. Do not answer with reasoning alone, and do not return an empty message.',
+        malformed
+            ? 'Return only the scene prose. Do not explain your approach, repeat any instruction, quote the prompt, or emit JSON/protocol data.'
+            : 'Write the scene prose itself in your reply, as visible text. Do not answer with reasoning alone, and do not return an empty message.',
     ].join('\n');
 }

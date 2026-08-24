@@ -62,3 +62,13 @@ test('later attempts keep nudging', () => {
     expect(buildEmptyResponseNudge(3, { reasoningLength: 100 })).not.toBe('');
     expect(buildEmptyResponseNudge(4)).not.toBe('');
 });
+
+test('a malformed-output retry explicitly forbids reasoning and prompt echo', () => {
+    const reasoningLeak = buildEmptyResponseNudge(2, { failureCause: 'reasoning-in-content' });
+    expect(reasoningLeak).toMatch(/private planning/i);
+    expect(reasoningLeak).toMatch(/only the scene prose/i);
+
+    const echoed = buildEmptyResponseNudge(2, { failureCause: 'instruction-echo' });
+    expect(echoed).toMatch(/copied prompt instructions/i);
+    expect(echoed).toMatch(/repeat any instruction/i);
+});

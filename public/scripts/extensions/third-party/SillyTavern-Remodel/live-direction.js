@@ -25,7 +25,7 @@ import {
     listLivingLoreProposals,
     queueLivingLoreProposals,
 } from './living-lore-mutations.js';
-import { describeBudgetWarning, describeGenerationBudget } from './generation-budget.js';
+import { describeBudgetWarning, describeGenerationBudget, describeIncompleteProse } from './generation-budget.js';
 import { createLoomTurnEnvelope } from './loom-turn.js';
 import { updateScene } from './timeline-state.js';
 import { recordApiTranscript, recordDebugEvent } from './debug-console.js';
@@ -38,6 +38,8 @@ import {
 import { activateWorldSenseSelection } from './world-sense-activation.js';
 import { previewWorldSense, resolveWorldSense, scheduleWorldSensePrefetch } from './world-sense-runtime.js';
 import { applyNarratorRetryPolicy } from './narrator-retry-policy.js';
+import { describeNarratorOutput } from './narrator-output-contract.js';
+import { limitBoundedChatHistory } from './prompt-history-limit.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const PACING = Object.freeze({
@@ -293,7 +295,19 @@ export function initLiveDirection(options = {}) {
     context.eventSource.on(context.eventTypes.CHAT_COMPLETION_PROMPT_READY, (eventData) => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
         if (!eventData || !Array.isArray(eventData.chat)) return;
-        // NOTHING IS REWRITTEN HERE, and two hard-won facts explain why.
+        const limitedHistory = limitBoundedChatHistory(eventData.chat);
+        if (limitedHistory.applied) {
+            journal('history.bounded', {
+                directionId: activeRun.directionId,
+                limit: limitedHistory.limit,
+                removed: limitedHistory.removed,
+            }, {
+                correlationId: activeRun.directionId,
+                summary: `Narrator chat history limited to ${limitedHistory.limit} messages`,
+            });
+        }
+        // Outside the explicit {{chat.history messages=N}} boundary consumed
+        // above, NOTHING IS REWRITTEN HERE, and two hard-won facts explain why.
         //
         // 1. filterNarratorHistory used to be applied by REASSIGNING
         //    eventData.chat. That is inert: openai.js holds `chat` in a const and
@@ -771,6 +785,108 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     return requestNextDirection(scene, { notebookTurn: savedTurn });
 }
 
+/**
+ * Whether `messageId` names the newest user-authored line in the current chat.
+ * The response(s) after it are deliberately ignored: those are exactly the
+ * fiction an edit invalidates and replaces.
+ */
+export function isLatestUserMessage(messageId, chat = getContext().chat || []) {
+    const id = Number(messageId);
+    if (!Number.isInteger(id) || !chat[id]?.is_user || chat[id]?.is_system) return false;
+    for (let index = chat.length - 1; index > id; index -= 1) {
+        if (chat[index]?.is_user && !chat[index]?.is_system) return false;
+    }
+    return true;
+}
+
+/**
+ * Replace the newest user action and re-run everything causally downstream.
+ *
+ * This is intentionally not a cosmetic message edit. Narration, Archive and
+ * mechanics transactions, and pending Living Lore proposals after the action
+ * all describe the old wording. Rewind them together, persist the replacement
+ * user line, then start a user-priority direction pass without posting that
+ * line a second time.
+ */
+export async function rerunDirectedRoleplayFromUserMessage({
+    scene = hooks.getActiveScene(), messageId, text,
+} = {}) {
+    if (!isDirectedLiveScene(scene) || directionInFlight) return false;
+    if (activeRun && !['Waiting for you', 'Complete'].includes(activeRun.state)) return false;
+
+    const context = getContext();
+    const id = Number(messageId);
+    const action = String(text ?? '');
+    if (!action.trim() || !isLatestUserMessage(id, context.chat || [])) return false;
+    const postedMessage = context.chat[id];
+    if (action === String(postedMessage.mes ?? '')) return false;
+
+    cancelAutoplay('user-message-edited');
+    await waitForArchiveCatchup(scene.id);
+
+    const supersededMessages = context.chat.slice(id + 1);
+    const savedDirections = supersededMessages
+        .map((message) => message?.extra?.remodelDirection)
+        .filter((saved) => saved && (!saved.sceneId || saved.sceneId === scene.id));
+    const directionIds = [...new Set(savedDirections.map((saved) => saved.directionId).filter(Boolean))];
+    if (directionIds.length) {
+        invalidateLivingLoreProposals({
+            timelineId: scene.timelineId,
+            directionIds,
+            reason: 'edited-user-message-superseded-generation',
+        });
+    }
+
+    const transactions = listMechanicsTransactions({ timelineId: scene.timelineId, sceneId: scene.id });
+    const transactionById = new Map(transactions.map((transaction) => [transaction.id, transaction]));
+    const rolledBack = [];
+    const seenTransactions = new Set();
+    for (const saved of [...savedDirections].reverse()) {
+        for (const transactionId of [...(saved.checkpointTransactionIds || [])].reverse()) {
+            if (seenTransactions.has(transactionId)) continue;
+            seenTransactions.add(transactionId);
+            const transaction = transactionById.get(transactionId);
+            if (transaction && undoMechanicsTransaction(transaction)) rolledBack.push(transactionId);
+        }
+    }
+
+    // Release every runtime pointer before indexes start moving. A settled run
+    // otherwise still names the final row that this loop is about to delete.
+    activeRun = null;
+    pendingFailure = null;
+    for (let index = context.chat.length - 1; index > id; index -= 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await context.deleteMessage(index);
+    }
+
+    postedMessage.mes = action;
+    if (postedMessage.extra?.display_text !== undefined) delete postedMessage.extra.display_text;
+    await context.eventSource?.emit?.(context.eventTypes.MESSAGE_EDITED, id);
+    await context.eventSource?.emit?.(context.eventTypes.MESSAGE_UPDATED, id);
+    await context.saveChat();
+
+    const firstSaved = savedDirections[0] || null;
+    const notebookTurn = toTurnNumber(firstSaved?.envelope?.notebookTurn);
+    const authorizedGoalIds = [...(firstSaved?.envelope?.authorizedGoalIds || firstSaved?.authorizedGoalIds || [])];
+    journal('user-edit.rerun', {
+        messageId: id,
+        removedMessages: supersededMessages.length,
+        supersededDirectionIds: directionIds,
+        rolledBackTransactionIds: rolledBack,
+        actionLength: action.length,
+    }, { severity: 'warn', summary: 'Edited the latest user action and rewound its consequences' });
+
+    return beginDirection({
+        scene,
+        action,
+        insertUser: true,
+        postedMessage,
+        authorizedGoalIds,
+        autonomousSequence: 0,
+        notebookTurn,
+    });
+}
+
 async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, postedMessage = null } = {}) {
     // Checked before the Loom call, not after: the Loom costs a real
     // request and ~17s, and there is no point spending either when the
@@ -1234,7 +1350,7 @@ function ownedByEmptyRetry(directionId) {
     return Boolean(directionId) && retryingEmpty.has(directionId);
 }
 
-async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0, previousReasoningLength = 0 }) {
+async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0, previousReasoningLength = 0, previousFailureCause = '' }) {
     activeRun = {
         directionId: envelope.directionId,
         sceneId: scene.id,
@@ -1270,6 +1386,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         pendingRequestsApplied: false,
         emptyRetries: Number(emptyRetries) || 0,
         previousReasoningLength: Number(previousReasoningLength) || 0,
+        previousFailureCause: String(previousFailureCause || ''),
         progress: token?.progress || createDirectionProgress(envelope.directionId),
     };
     if (token) runPassTokens.set(activeRun, token);
@@ -1293,11 +1410,15 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         // Passed in, not read back: activeRun.messageId is only assigned when
         // MESSAGE_RECEIVED lands, so at this point it names nothing.
         reasoningLength: Number(previousReasoningLength) || 0,
+        failureCause: String(previousFailureCause || ''),
     });
     // Goals travel once through the recipe-owned story.goals macro. Duplicating
     // them here made one objective look like two independent constraints.
     const groundedState = [archivistState, retryNudge].filter(Boolean).join('\n\n');
-    const groundingRouted = hooks.setNativePromptContent('narratorGrounding', groundedState);
+    const groundingRouted = hooks.setNativePromptContent('narratorGrounding', (args = {}) => [
+        buildNarratorArchivistSections(scene.timelineId, scene.id, { events: args.events }),
+        retryNudge,
+    ].filter(Boolean).join('\n\n'));
     journal('notes.bridge', {
         directionId: envelope.directionId,
         routed: groundingRouted ? 'recipe-macro' : 'recipe-macro-disabled',
@@ -1537,6 +1658,48 @@ async function beginLoomVisibleStream(run, scene) {
         ];
     }
 
+    // A provider can close a nominally successful stream far below the
+    // configured ceiling. Reject an unterminated private draft before the Loom
+    // can canonize it or use it to arm autoplay.
+    const proseBoundary = describeIncompleteProse(draft);
+    if (draftBudget?.exhausted || proseBoundary.incomplete) {
+        run.truncated = true;
+        const diagnosis = draftBudget?.exhausted
+            ? describeBudgetWarning(draftBudget, 'The Narrator draft')
+            : 'The Narrator provider closed the stream before the draft reached a complete prose boundary.';
+        if (!draftBudget?.exhausted) {
+            run.checkpointDiagnostics = [...(run.checkpointDiagnostics || []), diagnosis];
+            journal('generation.truncated.boundary', {
+                directionId: run.directionId,
+                ending: proseBoundary.ending,
+                visibleLength: draft.length,
+                reasoningLength: narratorReasoning(run).length,
+            }, {
+                correlationId: run.directionId,
+                severity: 'warn',
+                summary: diagnosis,
+            });
+        }
+        await failEmptyVisibleRun(run, { cause: 'incomplete', diagnosis });
+        return false;
+    }
+
+    const outputContract = describeNarratorOutput(draft);
+    if (outputContract.malformed) {
+        journal('generation.invalid-output', {
+            directionId: run.directionId,
+            cause: outputContract.cause,
+            visibleLength: draft.length,
+            opening: draft.slice(0, 180),
+        }, {
+            correlationId: run.directionId,
+            severity: 'warn',
+            summary: outputContract.diagnosis,
+        });
+        await failEmptyVisibleRun(run, { cause: outputContract.cause, diagnosis: outputContract.diagnosis });
+        return false;
+    }
+
     run.narratorDraft = draft;
     advancePassStage(run, 'loom');
     run.phase = 'loom';
@@ -1755,6 +1918,47 @@ export async function __buildLoomSnapshot(scene) {
     return { mechanics };
 }
 
+function compileLoomRequest({ scene, snapshot, draft, draftReasoning = '' }) {
+    const resolveArchive = (args = {}) => [
+        buildNarratorArchivistSections(scene.timelineId, scene.id, { events: args.events }),
+        buildGoalObjectives(scene.id, { limit: args.goals }),
+    ].filter((part) => String(part || '').trim()).join('\n\n');
+    const narrativeState = resolveArchive();
+    const mechanicsSkill = buildLoomSkill(snapshot?.mechanics);
+    const livingLore = formatLivingLorePacket(snapshot?.livingLore);
+    const sources = buildLoomRecipeSources({ draft, draftReasoning, narrativeState, mechanicsSkill, livingLore });
+    sources.archiveState = (args = {}) => buildLoomRecipeSources({ narrativeState: resolveArchive(args) }).archiveState;
+    const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
+    const compiled = compilePromptRecipe(recipe, sources, { trace: true });
+    const usedFallback = !compiled.messages.length;
+    const prompt = usedFallback
+        ? buildLoomPrompt({ draft, draftReasoning, narrativeState, mechanicsSkill, livingLore })
+        : compiled.messages;
+    return { prompt, recipe, trace: usedFallback ? [] : compiled.trace, usedFallback, sources };
+}
+
+/**
+ * Compile the next Loom request without sending, rolling, or mutating state.
+ * The completed private Narrator draft does not exist yet, so preview names
+ * that one unavoidable future value explicitly while resolving every other
+ * recipe source from the same dry-run snapshot a real turn uses.
+ */
+export async function previewLoomPrompt(scene, { action = '', draft = '', draftReasoning = '' } = {}) {
+    if (!scene) return { prompt: [], recipe: null, snapshot: null, trace: [], usedFallback: false };
+    const previewAction = String(action || hooks.getComposerDraft() || '').trim()
+        || '[Continue the scene from accepted history.]';
+    const previewDraft = String(draft || '').trim()
+        || '[PREVIEW PLACEHOLDER: the completed private Narrator draft will be inserted here before the Loom request is sent.]';
+    const previewReasoning = String(draftReasoning || '').trim()
+        || '[PREVIEW PLACEHOLDER: private Narrator reasoning will be inserted here when the selected model provides it.]';
+    const snapshot = await buildDirectionSnapshot(scene, previewAction, [], { preview: true });
+    return {
+        ...compileLoomRequest({ scene, snapshot, draft: previewDraft, draftReasoning: previewReasoning }),
+        snapshot,
+        previewAction,
+    };
+}
+
 /**
  * Loom mode — reconcile the Narrator's DRAFT: build
  * the Loom prompt (draft + reasoning + readable narrative state + the
@@ -1766,18 +1970,7 @@ export async function __buildLoomSnapshot(scene) {
 export async function runLoomReconciliation({
     scene, snapshot, draft, draftReasoning = '', token = null, onChunk = null, deferRequests = false,
 }) {
-    const narrativeState = [
-        buildNarratorArchivistSections(scene.timelineId, scene.id),
-        buildGoalObjectives(scene.id),
-    ].filter((part) => String(part || '').trim()).join('\n\n');
-    const mechanicsSkill = buildLoomSkill(snapshot?.mechanics);
-    const livingLore = formatLivingLorePacket(snapshot?.livingLore);
-    const sources = buildLoomRecipeSources({ draft, draftReasoning, narrativeState, mechanicsSkill, livingLore });
-    const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
-    const compiled = compilePromptRecipe(recipe, sources, { trace: true });
-    const prompt = compiled.messages.length
-        ? compiled.messages
-        : buildLoomPrompt({ draft, draftReasoning, narrativeState, mechanicsSkill, livingLore });
+    const { prompt, recipe } = compileLoomRequest({ scene, snapshot, draft, draftReasoning });
     recordLoomPromptTranscript(recipe?.name, prompt);
     let raw = '';
     let responseReasoning = '';
@@ -1983,7 +2176,7 @@ async function completeVisibleRun(run) {
  * presented as a completed response — so the empty message is removed, the
  * chain is stopped, and the reason is named precisely enough to act on.
  */
-async function failEmptyVisibleRun(run) {
+async function failEmptyVisibleRun(run, { cause = 'empty', diagnosis = '' } = {}) {
     const context = getContext();
     const message = Number.isInteger(run.messageId) ? context.chat?.[run.messageId] : null;
     // Core stores the provider's reasoning on the message, so the empty-text
@@ -1991,14 +2184,27 @@ async function failEmptyVisibleRun(run) {
     // listener for the reasoning stream.
     const reasoning = String(message?.extra?.reasoning || '').trim();
     const attempt = (run.emptyRetries || 0) + 1;
-    journal('complete.empty', {
+    const incomplete = cause === 'incomplete';
+    const malformed = ['reasoning-in-content', 'instruction-echo', 'protocol-output'].includes(cause);
+    const eventKind = incomplete ? 'complete.incomplete' : malformed ? 'complete.invalid-output' : 'complete.empty';
+    journal(eventKind, {
         directionId: run.directionId,
         messageId: run.messageId,
         attempt,
         bufferedLength: run.rawBufferedText.length,
         reasoningLength: reasoning.length,
         performerLabel: run.performer?.label || '',
-    }, { correlationId: run.directionId, severity: 'warn', summary: `direction.complete: no visible text (attempt ${attempt})` });
+        cause,
+        diagnosis,
+    }, {
+        correlationId: run.directionId,
+        severity: 'warn',
+        summary: incomplete
+            ? `direction.complete: unfinished Narrator draft (attempt ${attempt})`
+            : malformed
+                ? `direction.complete: invalid Narrator output (attempt ${attempt})`
+            : `direction.complete: no visible text (attempt ${attempt})`,
+    });
 
     // WAIT FOR THE CALL THIS IS REPLACING TO ACTUALLY END.
     //
@@ -2039,7 +2245,9 @@ async function failEmptyVisibleRun(run) {
     // are reused verbatim, so a retry is one native call and the user sees a
     // continuous "Speaking" state rather than an error they must clear.
     if (sceneIntact && run.emptyRetries < EMPTY_RESPONSE_RETRIES) {
-        journal('retry.empty', { directionId: run.directionId, attempt, of: EMPTY_RESPONSE_RETRIES + 1 }, { correlationId: run.directionId, severity: 'warn' });
+        journal(incomplete ? 'retry.incomplete' : malformed ? 'retry.invalid-output' : 'retry.empty', {
+            directionId: run.directionId, attempt, of: EMPTY_RESPONSE_RETRIES + 1,
+        }, { correlationId: run.directionId, severity: 'warn' });
         // Held as a normal in-flight pass rather than dropping to idle: the
         // pipeline is still working on the user's turn, so the chrome must keep
         // saying so and Send must stay refused across the pause. Marked
@@ -2056,7 +2264,7 @@ async function failEmptyVisibleRun(run) {
             await new Promise((resolve) => setTimeout(resolve, EMPTY_RESPONSE_RETRY_DELAY_MS));
             const current = hooks.getActiveScene();
             if (retryToken.aborted || !current || current.id !== run.sceneId) {
-                journal('retry.empty.dropped', {
+                journal(incomplete ? 'retry.incomplete.dropped' : 'retry.empty.dropped', {
                     directionId: run.directionId,
                     reason: retryToken.aborted ? 'superseded during the retry pause' : 'the Scene changed during the retry pause',
                 }, { correlationId: run.directionId, severity: 'warn' });
@@ -2072,6 +2280,7 @@ async function failEmptyVisibleRun(run) {
                 token: retryToken,
                 emptyRetries: run.emptyRetries + 1,
                 previousReasoningLength: reasoning.length,
+                previousFailureCause: cause,
             });
         } catch (error) {
             // Nothing awaits this function. completeVisibleRun is driven by the
@@ -2094,12 +2303,25 @@ async function failEmptyVisibleRun(run) {
     }
 
     const performer = run.performer?.label || 'The performer';
-    const exhausted = `${attempt} attempt${attempt === 1 ? '' : 's'} produced no visible text`;
-    const detail = reasoning.length > 200
-        ? `${exhausted}. The last reply spent its whole output on the model's reasoning channel (${reasoning.length} characters) and returned empty content. Lowering the reasoning effort, or using a model that returns reasoning alongside content rather than in place of it, will make this rarer.`
-        : `${exhausted}, and the provider returned empty content each time. This is usually transient — Retry asks again. If it persists, the model or provider is refusing this prompt.`;
+    const exhausted = incomplete
+        ? `${attempt} attempt${attempt === 1 ? '' : 's'} ended before completing the Narrator draft`
+        : malformed
+            ? `${attempt} attempt${attempt === 1 ? '' : 's'} returned non-story output`
+        : `${attempt} attempt${attempt === 1 ? '' : 's'} produced no visible text`;
+    const detail = incomplete
+        ? `${exhausted}. ${diagnosis || 'The provider closed the response stream mid-sentence.'} The incomplete text was not sent to the Loom or stored as canon. Try again, change provider/model, or revise content that may be causing the route to stop.`
+        : malformed
+            ? `${exhausted}. ${diagnosis} The malformed text was not sent to the Loom or stored as canon. Try again or switch to a model that reliably separates reasoning from its answer.`
+        : reasoning.length > 200
+            ? `${exhausted}. The last reply spent its whole output on the model's reasoning channel (${reasoning.length} characters) and returned empty content. Lowering the reasoning effort, or using a model that returns reasoning alongside content rather than in place of it, will make this rarer.`
+            : `${exhausted}, and the provider returned empty content each time. This is usually transient — Retry asks again. If it persists, the model or provider is refusing this prompt.`;
+    const failureLabel = malformed
+        ? `${performer} returned invalid output`
+        : incomplete
+            ? `${performer}'s response was cut off`
+            : `${performer} was directed but rendered nothing`;
     activeRun = null;
-    directionFailure(new Error(`${performer} was directed but rendered nothing: ${detail}`), {
+    directionFailure(new Error(`${failureLabel}: ${detail}`), {
         scene,
         action: '[Continue the scene from accepted history.]',
         insertUser: false,

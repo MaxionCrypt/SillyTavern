@@ -41,6 +41,17 @@ test('an empty scene renders as an empty string', () => {
     expect(buildNarratorArchivistSections(T, S)).toBe('');
 });
 
+test('Archive event arguments keep only the newest requested records', () => {
+    recordEvent(T, S, 'First event');
+    recordEvent(T, S, 'Second event');
+    recordEvent(T, S, 'Third event');
+    const bounded = buildNarratorArchivistSections(T, S, { events: 2 });
+    expect(bounded).not.toContain('First event');
+    expect(bounded).toContain('Second event');
+    expect(bounded).toContain('Third event');
+    expect(buildNarratorArchivistSections(T, S, { events: 0 })).not.toContain('What has happened');
+});
+
 test('Narrator Objectives identify who holds each Goal without exposing its odds', () => {
     const goal = createTimelineGoal(T, {
         title: 'Leave the library before six',
@@ -81,4 +92,13 @@ test('Narrator Objectives keep multiple holders explicit', () => {
     linkGoalToScene(S, goal.id);
 
     expect(buildGoalObjectives(S)).toContain('Marissa, Teo — Keep the society hidden');
+});
+
+test('Goal archive arguments keep only the newest requested Goals', () => {
+    createTimelineGoal(T, { title: 'Older goal', holderRefs: [{ kind: 'character', id: 'a', label: 'A' }] }, { sceneId: S });
+    createTimelineGoal(T, { title: 'Newest goal', holderRefs: [{ kind: 'character', id: 'b', label: 'B' }] }, { sceneId: S });
+    const bounded = buildGoalObjectives(S, { limit: 1 });
+    expect(bounded).not.toContain('Older goal');
+    expect(bounded).toContain('Newest goal');
+    expect(buildGoalObjectives(S, { limit: 0 })).toBe('');
 });
