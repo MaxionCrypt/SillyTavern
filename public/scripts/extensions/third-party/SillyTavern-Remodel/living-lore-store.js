@@ -100,7 +100,7 @@ function emptyStore() {
 
 function timelineBucket(timelineId) {
     const timestamp = now();
-    return { timelineId, book: '', entries: {}, createdAt: timestamp, updatedAt: timestamp };
+    return { timelineId, book: '', entries: {}, proposals: {}, history: [], createdAt: timestamp, updatedAt: timestamp };
 }
 
 function normalizeStore(store) {
@@ -120,10 +120,17 @@ function normalizeStore(store) {
             timelineId,
             book: String(bucket.book ?? '').trim(),
             entries: normalized,
+            proposals: normalizeRecords(bucket.proposals),
+            history: (Array.isArray(bucket.history) ? bucket.history : []).filter(isObject).map(clone).slice(-500),
             createdAt: String(bucket.createdAt ?? '').trim() || fallbackTime,
             updatedAt: String(bucket.updatedAt ?? '').trim() || fallbackTime,
         };
     }
+}
+
+function normalizeRecords(value) {
+    if (!isObject(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter(([, record]) => isObject(record)).map(([id, record]) => [String(id), clone(record)]));
 }
 
 function isObject(value) {
