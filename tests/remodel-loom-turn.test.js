@@ -13,7 +13,10 @@ test('isLoomMode is true only when the scene opts in', () => {
 });
 
 test('createLoomTurnEnvelope builds the shared turn envelope', () => {
-    const snapshot = { mechanics: { addressBook: { entries: [] }, variableRefs: new Map(), goalRefs: new Map() } };
+    const snapshot = {
+        mechanics: { addressBook: { entries: [] }, variableRefs: new Map(), goalRefs: new Map() },
+        archiveProjection: { version: 1, entries: [{ id: 'evt-1' }] },
+    };
     const { envelope, storedTurn } = createLoomTurnEnvelope({ id: 's1', timelineId: 't1' }, snapshot, 3);
     expect(storedTurn).toBe(null);
     expect(envelope.reasoning).toBe('');
@@ -21,6 +24,7 @@ test('createLoomTurnEnvelope builds the shared turn envelope', () => {
     expect(envelope.flow).toEqual({ continueAfter: false, hardPauseAfter: true });
     expect(envelope.notebookTurn).toBe(3);
     expect(envelope.mechanicsSnapshot).toBe(snapshot.mechanics);
+    expect(envelope.archiveProjection).toBe(snapshot.archiveProjection);
     expect(typeof envelope.directionId).toBe('string');
     expect(envelope.directionId.length).toBeGreaterThan(0);
 });

@@ -8971,7 +8971,10 @@ async function openRoleplayPromptPreview() {
         const visibleComposer = getRealRoleplayRoot()?.querySelector('[data-remodel-rp-input]');
         const composerText = visibleComposer instanceof HTMLTextAreaElement ? visibleComposer.value : '';
         const narratorGrounding = directed && activeScene
-            ? (args = {}) => buildNarratorArchivistSections(activeScene.timelineId, activeScene.id, { events: args.events })
+            ? (args = {}) => buildNarratorArchivistSections(activeScene.timelineId, activeScene.id, {
+                events: args.events,
+                archiveQuery: [composerText],
+            })
             : undefined;
         let worldSense = null;
         let worldSenseWarning = '';

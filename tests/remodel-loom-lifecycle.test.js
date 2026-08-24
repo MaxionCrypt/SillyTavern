@@ -25,6 +25,7 @@ import { upsertLivingLoreMetadata } from '../public/scripts/extensions/third-par
 import { buildLivingLorePacket } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-proposals.js';
 import { __setContextOverrides, __setExtensionSettings, __getChat, __emit, __onEvent } from './util/st-context-stub.js';
 import { __setOnlineStatus } from './util/script-stub.js';
+import { __clearDebugEvents, __getDebugEvents } from './util/debug-console-stub.js';
 
 globalThis.document ??= { getElementById: () => null };
 globalThis.HTMLTextAreaElement ??= class HTMLTextAreaElement {};
@@ -78,6 +79,7 @@ async function until(predicate, timeoutMs = 3000) {
 }
 
 beforeEach(() => {
+    __clearDebugEvents();
     __setExtensionSettings({});
     nativeLore = { entries: { 42: { uid: 42, key: ['Wren'], keysecondary: [], comment: 'Wren', content: 'Current\nWren watches the gate.', disable: false } } };
     __setContextOverrides({
@@ -117,6 +119,18 @@ test('a Loom turn commits the Narrator draft and waits for the user', async () =
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     // The Narrator's held draft became the committed message.
     expect(__getChat().at(-1).mes).toBe(RESPONSE);
+});
+
+test('a turn records an inspectable Archive projection receipt', async () => {
+    recordEvent(scene.timelineId, scene.id, 'Wren hid the gate key under the sundial.');
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    expect(__getDebugEvents()).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+            type: 'archive.projection',
+            detail: expect.objectContaining({ storedCount: 1, projectedCount: 1, recentIds: expect.any(Array) }),
+        }),
+    ]));
 });
 
 test('a completed turn queues its evidence-backed lore suggestion exactly once and persists its identity', async () => {
@@ -314,8 +328,9 @@ test('Narrator Archive grounding resolves through the recipe macro and is cleare
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
     const grounding = promptContent.filter(([key]) => key === 'narratorGrounding');
-    expect(grounding[0]?.[1]).toContain('Wren entered the courtyard.');
-    expect(grounding[0]?.[1]).not.toMatch(/Continue the scene forward/i);
+    const resolvedGrounding = typeof grounding[0]?.[1] === 'function' ? grounding[0][1]({}) : grounding[0]?.[1];
+    expect(resolvedGrounding).toContain('Wren entered the courtyard.');
+    expect(resolvedGrounding).not.toMatch(/Continue the scene forward/i);
     expect(grounding.at(-1)?.[1]).toBe('');
 });
 
@@ -436,7 +451,10 @@ test('visible reasoning or echoed commands are retried before the Loom sees them
     let loomCalls = 0;
     const grounding = [];
     initLiveDirection({
-        setNativePromptContent: (_slot, content) => { grounding.push(content); return true; },
+        setNativePromptContent: (_slot, content) => {
+            grounding.push(typeof content === 'function' ? content({}) : content);
+            return true;
+        },
     });
     setLiveDirectionTestAdapters({
         generatePerformer: async () => {

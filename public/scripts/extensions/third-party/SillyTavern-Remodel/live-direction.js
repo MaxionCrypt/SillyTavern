@@ -40,6 +40,7 @@ import { previewWorldSense, resolveWorldSense, scheduleWorldSensePrefetch } from
 import { applyNarratorRetryPolicy } from './narrator-retry-policy.js';
 import { describeNarratorOutput } from './narrator-output-contract.js';
 import { limitBoundedChatHistory } from './prompt-history-limit.js';
+import { buildSceneArchiveProjection } from './archive-projection.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const PACING = Object.freeze({
@@ -1044,6 +1045,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // again immediately before core performs its real World Info scan.
         normalized.worldSense = snapshot.worldSense;
         normalized.livingLore = snapshot.livingLore;
+        normalized.archiveProjection = snapshot.archiveProjection;
         if (token.aborted) return abandonPass(token, 'normalized');
         // Set BEFORE the call, not after: from here the performer has been
         // asked, so the turn is live even if generation then fails. The
@@ -1220,6 +1222,17 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
             activatedEntries,
             correlationId: directionInFlight?.id || null,
         });
+    const archiveQuery = [
+        action,
+        ...history.map((message) => `${message.name || message.role}: ${message.content}`),
+        ...performingCast.flatMap((member) => [member.label || member.name || '', member.description || '', member.scenario || '']),
+        ...(mechanics?.goals || []).flatMap((goal) => [goal.title || goal.name || '', goal.description || '']),
+    ];
+    const archiveProjection = buildSceneArchiveProjection(scene.timelineId, scene.id, { query: archiveQuery });
+    journal('archive.projection', archiveProjection.receipt, {
+        correlationId: directionInFlight?.id || null,
+        summary: `Archive projected ${archiveProjection.receipt.projectedCount}/${archiveProjection.receipt.storedCount} entries`,
+    });
     return {
         scene: { id: scene.id, timelineId: scene.timelineId, title: scene.title },
         currentAction: action,
@@ -1242,6 +1255,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         interruption: cutOffRecord ? { performer: String(cutOff.name || '').trim(), ...cutOffRecord } : null,
         lore: { before: lore.worldInfoBefore || '', after: lore.worldInfoAfter || '', examples: lore.worldInfoExamples || [], depth: lore.worldInfoDepth || [] },
         mechanics,
+        archiveProjection,
         // Receipts carry before/after snapshots of whole records, which is how
         // persistent Variable and Goal ids used to reach the model even though
         // everything else addresses them by ref. The model needs what changed,
@@ -1401,7 +1415,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     // prompt, card, persona, world info, author's notes, examples, history) —
     // with the Loom's readable Archive state resolved into the recipe-owned
     // Narrator Grounding macro. Placement and policy remain user-authored.
-    const archivistState = buildNarratorArchivistSections(scene.timelineId, scene.id);
+    const archivistState = buildNarratorArchivistSections(scene.timelineId, scene.id, { archiveProjection: envelope.archiveProjection });
     // A retry must not re-send the request that just failed. The empty-response
     // path was re-issuing a byte-identical body — verified on the wire — so the
     // nudge rides the grounding channel, which is the one injection point already
@@ -1416,7 +1430,11 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     // them here made one objective look like two independent constraints.
     const groundedState = [archivistState, retryNudge].filter(Boolean).join('\n\n');
     const groundingRouted = hooks.setNativePromptContent('narratorGrounding', (args = {}) => [
-        buildNarratorArchivistSections(scene.timelineId, scene.id, { events: args.events }),
+        buildNarratorArchivistSections(scene.timelineId, scene.id, {
+            events: args.events,
+            archiveProjection: envelope.archiveProjection,
+            archiveQuery: envelope.archiveProjection?.queryTerms || [],
+        }),
         retryNudge,
     ].filter(Boolean).join('\n\n'));
     journal('notes.bridge', {
@@ -1732,6 +1750,7 @@ async function beginLoomVisibleStream(run, scene) {
     const snapshot = {
         ...await __buildLoomSnapshot({ id: run.sceneId, timelineId: run.timelineId }),
         livingLore: run.envelope?.livingLore || null,
+        archiveProjection: run.envelope?.archiveProjection || null,
     };
     const token = { controller: run.loomController };
     const result = await runLoomReconciliation({
@@ -1920,7 +1939,11 @@ export async function __buildLoomSnapshot(scene) {
 
 function compileLoomRequest({ scene, snapshot, draft, draftReasoning = '' }) {
     const resolveArchive = (args = {}) => [
-        buildNarratorArchivistSections(scene.timelineId, scene.id, { events: args.events }),
+        buildNarratorArchivistSections(scene.timelineId, scene.id, {
+            events: args.events,
+            archiveProjection: snapshot?.archiveProjection,
+            archiveQuery: snapshot?.archiveProjection?.queryTerms || [snapshot?.currentAction || '', ...(snapshot?.acceptedHistory || []).map((item) => item.content || '')],
+        }),
         buildGoalObjectives(scene.id, { limit: args.goals }),
     ].filter((part) => String(part || '').trim()).join('\n\n');
     const narrativeState = resolveArchive();
@@ -2641,7 +2664,10 @@ async function catchUpArchive(run, reason) {
     const mechanics = run.envelope?.mechanicsSnapshot || null;
     const mechanicsSkill = buildLoomSkill(mechanics);
     const narrativeState = [
-        buildNarratorArchivistSections(run.timelineId, run.sceneId),
+        buildNarratorArchivistSections(run.timelineId, run.sceneId, {
+            archiveProjection: run.envelope?.archiveProjection,
+            archiveQuery: run.envelope?.archiveProjection?.queryTerms || [prose],
+        }),
         buildGoalObjectives(run.sceneId),
     ].filter((part) => String(part || '').trim()).join('\n\n');
     const sources = buildLoomRecipeSources({
@@ -3229,6 +3255,7 @@ function normalizeEnvelope(value, scene) {
         mechanicsSnapshot: value.mechanicsSnapshot ? structuredClone(value.mechanicsSnapshot) : null,
         worldSense: value.worldSense ? structuredClone(value.worldSense) : null,
         livingLore: value.livingLore ? structuredClone(value.livingLore) : null,
+        archiveProjection: value.archiveProjection ? structuredClone(value.archiveProjection) : null,
         loreProposals: Array.isArray(value.loreProposals) ? structuredClone(value.loreProposals) : [],
         loreProposalRejections: Array.isArray(value.loreProposalRejections) ? structuredClone(value.loreProposalRejections) : [],
         sceneId: scene.id,

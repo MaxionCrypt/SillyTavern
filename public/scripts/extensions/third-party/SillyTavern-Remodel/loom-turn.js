@@ -28,6 +28,7 @@ export function createLoomTurnEnvelope(scene, snapshot, turn) {
             flow: { continueAfter: false, hardPauseAfter: true },
             requests: [],
             mechanicsSnapshot: snapshot.mechanics,
+            archiveProjection: snapshot.archiveProjection,
         },
     };
 }

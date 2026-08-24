@@ -1,5 +1,6 @@
-import { listSceneFacts, listCharStates, listEvents, getBeat } from './archivist-store.js';
+import { listSceneFacts, listCharStates, getBeat } from './archivist-store.js';
 import { getSceneGoals } from './story-goals-store.js';
+import { buildSceneArchiveProjection, renderArchiveProjection } from './archive-projection.js';
 
 /**
  * Active Goals for the Loom's readable Archive view. The Narrator receives
@@ -27,10 +28,12 @@ export function buildGoalObjectives(sceneId, { limit = null } = {}) {
  * store, so a secret cannot leak through a formatting mistake. Returns '' when
  * the scene has no state yet.
  */
-export function buildNarratorArchivistSections(timelineId, sceneId, { events: eventLimit = null } = {}) {
+export function buildNarratorArchivistSections(timelineId, sceneId, { events: eventLimit = null, archiveProjection = null, archiveQuery = [] } = {}) {
     const facts = listSceneFacts(timelineId, sceneId);
     const charStates = listCharStates(timelineId, sceneId);
-    const events = boundedTail(listEvents(timelineId, sceneId), eventLimit);
+    const projection = archiveProjection && (eventLimit === null || eventLimit === undefined || eventLimit === '')
+        ? archiveProjection
+        : buildSceneArchiveProjection(timelineId, sceneId, { query: archiveQuery, maxEntries: eventLimit });
     const beat = getBeat(timelineId, sceneId);
     const sections = [];
     if (facts.length) {
@@ -43,8 +46,8 @@ export function buildNarratorArchivistSections(timelineId, sceneId, { events: ev
         });
         sections.push(['Characters', lines.join('\n')]);
     }
-    if (events.length) {
-        sections.push(['What has happened (already written — do NOT narrate this again)', events.map((e) => `- ${e.summary}`).join('\n')]);
+    if (projection.entries.length) {
+        sections.push(['What has happened (already written — do NOT narrate this again)', renderArchiveProjection(projection)]);
     }
     if (beat) {
         const tone = beat.tone ? ` (tone: ${beat.tone})` : '';

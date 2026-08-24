@@ -503,6 +503,20 @@ This is the first commit that changes what the Narrator can see.
 - reload recovery without duplicate application;
 - recorder-driven browser scenarios.
 
+### Commit 9.5 - Archive projection and compaction
+
+`perf(remodel): retrieve and compact Archive history`
+
+- preserve the accepted raw event ledger as the audit and rollback authority;
+- project a bounded recent window plus relevant older events for each turn;
+- deterministically deduplicate repeated event records;
+- compact remaining older sequences into concise summaries linked to their
+  source event ids;
+- share the projection across Narrator, Loom, Prompt Preview, and Debug;
+- make `events=N` a projection budget instead of a last-N-only slice;
+- add selection receipts for recent, retrieved, summarized, duplicate, and
+  omitted event ids with no additional remote-model call.
+
 ### Commit 10 - Lorebooks workspace UI
 
 `feat(remodel): add World Sense to Lorebooks`
