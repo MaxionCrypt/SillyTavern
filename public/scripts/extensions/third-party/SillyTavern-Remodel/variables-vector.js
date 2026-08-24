@@ -4,6 +4,7 @@ import { getStringHash } from '../../../utils.js';
 import { WebLlmVectorProvider } from '../../vectors/webllm.js';
 import { listLoreEntries } from './variables-lore.js';
 import { getVariableValue, getVectorIndexState, listVariableValues, updateVectorIndexState } from './variables-store.js';
+import { getWorldSenseProfile } from './world-sense-store.js';
 
 const webllm = new WebLlmVectorProvider();
 const SUPPORTED_SOURCES = new Set([
@@ -13,8 +14,9 @@ const SUPPORTED_SOURCES = new Set([
 
 export async function ensureVariableVectorIndex(timelineId, { force = false } = {}) {
     const state = getVectorIndexState(timelineId);
-    if (!force && !state.dirty && !state.deleted) return { ok: !state.degraded, state };
     const source = vectorSettings().source || 'transformers';
+    const modelId = providerOptions(source, vectorSettings()).model || '';
+    if (!force && !state.dirty && !state.deleted && state.source === source && state.modelId === modelId) return { ok: !state.degraded, state };
     if (!SUPPORTED_SOURCES.has(source)) return degrade(timelineId, `Vector source “${source}” is not available to Remodel; deterministic retrieval is active.`);
     try {
         if (state.deleted) {
@@ -31,7 +33,7 @@ export async function ensureVariableVectorIndex(timelineId, { force = false } = 
         const insert = documents.filter((document) => !savedHashes.has(String(document.hash))).map(({ hash, text }) => ({ hash, text }));
         if (remove.length) await vectorRequest('/api/vector/delete', { collectionId: state.collectionId, hashes: remove }, source);
         if (insert.length) await vectorRequest('/api/vector/insert', { collectionId: state.collectionId, items: insert }, source, insert.map((item) => item.text));
-        updateVectorIndexState(timelineId, { dirty: false, deleted: false, degraded: false, error: '', source, hashes: desired, indexedAt: new Date().toISOString() });
+        updateVectorIndexState(timelineId, { dirty: false, deleted: false, degraded: false, error: '', source, modelId, hashes: desired, indexedAt: new Date().toISOString() });
         return { ok: true, state: getVectorIndexState(timelineId), inserted: insert.length, removed: remove.length };
     } catch (error) {
         return degrade(timelineId, String(error?.message || error));
@@ -147,7 +149,11 @@ async function vectorRequest(path, input, source, texts = []) {
 function providerOptions(source, settings) {
     const modelKey = `${source}_model`;
     const options = {};
-    if (settings[modelKey]) options.model = settings[modelKey];
+    // Remodel's semantic consumers share one local model. Otherwise Variables
+    // and World Sense would repeatedly dispose and reload different
+    // feature-extraction pipelines during the same turn.
+    if (source === 'transformers') options.model = getWorldSenseProfile().modelId;
+    else if (settings[modelKey]) options.model = settings[modelKey];
     if (source === 'extras') {
         const root = extension_settings;
         options.extrasUrl = root.apiUrl;

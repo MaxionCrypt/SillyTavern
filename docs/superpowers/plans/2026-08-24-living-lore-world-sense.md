@@ -62,6 +62,15 @@ SillyTavern's existing Transformers/vector infrastructure. The exact default is
 accepted only after a local benchmark; the adapter and saved model id must be
 configurable so the architecture does not depend on one model name.
 
+The Commit 3 spike accepted that candidate on 2026-08-24. On the development
+Windows machine, a fresh quantized load took 5,779 ms, indexing 99 additional
+representative entries took 11,766 ms, and five warm semantic queries measured
+24 ms p50 / 29 ms p95. The process RSS delta was 139.3 MB (18.8 MB JavaScript
+heap). The initial supported-book setting is therefore 250 entries with the
+existing 500 ms warm p95 gate. These are a hardware checkpoint, not a promise:
+the Debug benchmark records the active machine and selected model, and a failed
+or over-target result leaves deterministic World Info active.
+
 The local model does **not** freely overwrite entries, invent canon in the
 background, resolve mechanics, or decide that speculative model reasoning is
 true.
@@ -574,10 +583,8 @@ Answered now:
 - **Does local retrieval wait for Send?** No. Background composer prefetch is
   the default, with query-hash validation preventing stale reuse.
 
-Deferred until the model spike or first UI review:
+Deferred until the first UI review:
 
-- final default Hugging Face model after real hardware measurements;
-- initial supported lorebook size for the 500 ms warm-query target;
 - default semantic/top-K thresholds after recorder evidence;
 - whether Auto-safe ships enabled as an option in the first public release or
   remains behind an experimental switch;

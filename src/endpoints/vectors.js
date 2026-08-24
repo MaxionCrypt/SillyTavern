@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { performance } from 'node:perf_hooks';
 
 import vectra from 'vectra';
 import express from 'express';
@@ -64,7 +65,7 @@ async function getVector(source, sourceSettings, text, isQuery, directories) {
         case 'openrouter':
             return getOpenAIVector(text, source, directories, sourceSettings.model);
         case 'transformers':
-            return getTransformersVector(text);
+            return getTransformersVector(text, sourceSettings.model);
         case 'extras':
             return getExtrasVector(text, sourceSettings.extrasUrl, sourceSettings.extrasKey);
         case 'palm':
@@ -127,7 +128,7 @@ async function getBatchVector(source, sourceSettings, texts, isQuery, directorie
                 results.push(...await getOpenAIBatchVector(batch, source, directories, sourceSettings.model));
                 break;
             case 'transformers':
-                results.push(...await getTransformersBatchVector(batch));
+                results.push(...await getTransformersBatchVector(batch, sourceSettings.model));
                 break;
             case 'extras':
                 results.push(...await getExtrasBatchVector(batch, sourceSettings.extrasUrl, sourceSettings.extrasKey));
@@ -226,7 +227,7 @@ function getSourceSettings(source, request) {
             };
         case 'transformers':
             return {
-                model: getConfigValue('extensions.models.embedding', ''),
+                model: String(request.body.model || getConfigValue('extensions.models.embedding', '')).trim().slice(0, 200),
             };
         case 'palm':
         case 'vertexai':
@@ -468,6 +469,50 @@ async function regenerateCorruptedIndexErrorHandler(req, res, error) {
 }
 
 export const router = express.Router();
+
+router.post('/benchmark', async (req, res) => {
+    try {
+        const source = String(req.body.source || 'transformers');
+        if (source !== 'transformers') return res.status(400).json({ error: 'The local benchmark only supports Transformers embeddings.' });
+        const texts = (Array.isArray(req.body.texts) ? req.body.texts : []).slice(0, 500).map(text => String(text).slice(0, 8000)).filter(Boolean);
+        const queries = (Array.isArray(req.body.queries) ? req.body.queries : []).slice(0, 10).map(text => String(text).slice(0, 2000)).filter(Boolean);
+        if (!texts.length || !queries.length) return res.status(400).json({ error: 'Benchmark texts and queries are required.' });
+        const sourceSettings = getSourceSettings(source, req);
+        const memoryBefore = process.memoryUsage();
+        const coldStarted = performance.now();
+        const firstVector = await getVector(source, sourceSettings, texts[0], false, req.user.directories);
+        const coldLoadMs = performance.now() - coldStarted;
+        const indexStarted = performance.now();
+        const remainingVectors = texts.length > 1 ? await getBatchVector(source, sourceSettings, texts.slice(1), false, req.user.directories) : [];
+        const documentVectors = [firstVector, ...remainingVectors];
+        const indexMs = performance.now() - indexStarted;
+        const warmQueryMs = [];
+        for (const query of queries) {
+            const started = performance.now();
+            // eslint-disable-next-line no-await-in-loop
+            const queryVector = await getVector(source, sourceSettings, query, true, req.user.directories);
+            documentVectors.map(vector => vector.reduce((score, value, index) => score + value * queryVector[index], 0)).sort((left, right) => right - left).slice(0, 12);
+            warmQueryMs.push(performance.now() - started);
+        }
+        const memoryAfter = process.memoryUsage();
+        const sorted = [...warmQueryMs].sort((left, right) => left - right);
+        const percentile = value => sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * value) - 1)] || 0;
+        return res.json({
+            modelId: sourceSettings.model,
+            coldLoadMs: Math.round(coldLoadMs),
+            indexMs: Math.round(indexMs),
+            warmQueryP50Ms: Math.round(percentile(0.5)),
+            warmQueryP95Ms: Math.round(percentile(0.95)),
+            memoryRssDeltaBytes: memoryAfter.rss - memoryBefore.rss,
+            memoryHeapDeltaBytes: memoryAfter.heapUsed - memoryBefore.heapUsed,
+            sampleCount: texts.length,
+            queryCount: queries.length,
+        });
+    } catch (error) {
+        console.error('Local embedding benchmark failed', error);
+        return res.status(503).json({ error: String(error?.message || error) });
+    }
+});
 
 router.post('/query', async (req, res) => {
     try {
