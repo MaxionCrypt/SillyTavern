@@ -1,3 +1,5 @@
+import { parseLivingLoreProposals } from './living-lore-proposals.js';
+
 export const LOOM_POLICY_V12 = `You are the Loom: the final continuity editor, mechanical referee, and live voice of the scene. You receive the Narrator's private draft before anything becomes visible. Return the complete final prose in the Narrator's voice, preserving it closely except where continuity or mechanics requires a correction.
 
 STEP 1 - State. Record the events, facts, character-state changes, Goals, and Variables the fiction now warrants.
@@ -55,7 +57,7 @@ STEP 3 - Patch. If, and ONLY if, continuity or an authorized roll contradicts th
 
 export const LOOM_OUTPUT_CONTRACT_PATCH = `Output NOTHING except one state fence. Do not restate the prose.
 \`\`\`state
-{"swaps":[],"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"},{"id":"r2","capability":"goal.edit","arguments":{"goalRef":"the exact Goal name","successRate":23},"reason":"how this turn changed its holder's position"},{"id":"r3","capability":"beat.set","arguments":{"directive":"the unresolved thread after this turn"},"reason":"why, one line"}],"flow":{"continue":false}}
+{"swaps":[],"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"},{"id":"r2","capability":"goal.edit","arguments":{"goalRef":"the exact Goal name","successRate":23},"reason":"how this turn changed its holder's position"},{"id":"r3","capability":"beat.set","arguments":{"directive":"the unresolved thread after this turn"},"reason":"why, one line"}],"loreProposals":[],"flow":{"continue":false}}
 \`\`\`
 
 Every request is its own object. Close one with } and open the next with {, exactly as above. Never repeat "id" inside a single object.
@@ -64,7 +66,7 @@ Each swap is {"find":"exact text from the draft","replace":"what it becomes"}. A
 
 export const LOOM_OUTPUT_CONTRACT_DEFAULT = `Output the complete final scene prose first, with no preface or commentary. Then output exactly one state fence:
 \`\`\`state
-{"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"}],"flow":{"continue":false}}
+{"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"}],"loreProposals":[],"flow":{"continue":false}}
 \`\`\``;
 
 /** True when a scene uses the Narrator draft -> Loom reconciliation pipeline. */
@@ -73,7 +75,7 @@ export function usesLoomReconciliation(scene) {
 }
 
 /** Dynamic context blocks available to every Loom recipe. */
-export function buildLoomRecipeSources({ draft, draftReasoning = '', narrativeState = '', mechanicsSkill = '' }) {
+export function buildLoomRecipeSources({ draft, draftReasoning = '', narrativeState = '', mechanicsSkill = '', livingLore = '' }) {
     return {
         archiveState: String(narrativeState || '').trim()
             ? `Current Archive, Goals, and open thread:\n${String(narrativeState).trim()}`
@@ -81,6 +83,7 @@ export function buildLoomRecipeSources({ draft, draftReasoning = '', narrativeSt
         mechanicsBoard: String(mechanicsSkill || '').trim()
             ? `Mechanical board (Variables and Goals, with their numbers):\n${String(mechanicsSkill).trim()}`
             : '',
+        livingLore: String(livingLore || '').trim(),
         narratorDraft: `The Narrator's private draft of this turn. Return its complete final version before the state fence:\n${String(draft || '')}`,
         narratorReasoning: String(draftReasoning || '').trim()
             ? `The Narrator's private reasoning:\n${String(draftReasoning).trim()}`
@@ -98,12 +101,12 @@ export function buildLoomRecipeSources({ draft, draftReasoning = '', narrativeSt
  * verbatim and the model named only find/replace spans, survives as a
  * compatibility fallback for owner-authored recipes — see parseLoomReply.
  *
- * @param {{draft: string, draftReasoning?: string, narrativeState?: string, mechanicsSkill?: string}} input
+ * @param {{draft: string, draftReasoning?: string, narrativeState?: string, mechanicsSkill?: string, livingLore?: string}} input
  * @returns {{role: string, content: string}[]}
  */
-export function buildLoomPrompt({ draft, draftReasoning = '', narrativeState = '', mechanicsSkill = '' }) {
-    const sources = buildLoomRecipeSources({ draft, draftReasoning, narrativeState, mechanicsSkill });
-    const system = [LOOM_POLICY_DEFAULT, sources.archiveState, sources.mechanicsBoard, LOOM_OUTPUT_CONTRACT_DEFAULT].filter(Boolean).join('\n\n');
+export function buildLoomPrompt({ draft, draftReasoning = '', narrativeState = '', mechanicsSkill = '', livingLore = '' }) {
+    const sources = buildLoomRecipeSources({ draft, draftReasoning, narrativeState, mechanicsSkill, livingLore });
+    const system = [LOOM_POLICY_DEFAULT, sources.archiveState, sources.mechanicsBoard, sources.livingLore, LOOM_OUTPUT_CONTRACT_DEFAULT].filter(Boolean).join('\n\n');
     const user = [sources.narratorDraft, sources.narratorReasoning].filter(Boolean).join('\n\n');
     return [
         { role: 'system', content: system },
@@ -137,7 +140,7 @@ function readLoomEnvelope(text) {
     try {
         const value = JSON.parse(candidate);
         const loomShaped = value && typeof value === 'object' && !Array.isArray(value)
-            && (Array.isArray(value.requests) || Array.isArray(value.swaps)
+            && (Array.isArray(value.requests) || Array.isArray(value.swaps) || Array.isArray(value.loreProposals)
                 || (value.flow && typeof value.flow === 'object' && !Array.isArray(value.flow)));
         if (!loomShaped) return { present: false, parsed: false, format: '', json: '', value: null };
         return {
@@ -183,19 +186,24 @@ export function readLoomProse(raw, { final = false } = {}) {
  * error: no prose changes, no requests.
  *
  * @param {string} raw
- * @returns {{ prose: string, swaps: {find: string, replace: string}[], requests: object[], flow: {continueAfter: boolean, hardPauseAfter: boolean}|null }}
+ * @returns {{ prose: string, swaps: {find: string, replace: string}[], requests: object[], flow: {continueAfter: boolean, hardPauseAfter: boolean}|null, loreProposals: object[], loreProposalRejections: object[] }}
  */
-export function parseLoomReply(raw) {
+export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
     const text = String(raw ?? '');
     const prose = readLoomProse(text, { final: true });
     const envelope = readLoomEnvelope(text);
     let swaps = [];
     let requests = [];
     let flow = null;
+    let loreProposals = [];
+    let loreProposalRejections = [];
     if (envelope.parsed) {
         try {
             const parsed = envelope.value;
             if (Array.isArray(parsed?.requests)) requests = parsed.requests;
+            const proposals = parseLivingLoreProposals(parsed?.loreProposals, livingLorePacket);
+            loreProposals = proposals.accepted;
+            loreProposalRejections = proposals.rejected;
             if (parsed?.flow && typeof parsed.flow === 'object') {
                 flow = {
                     continueAfter: Boolean(parsed.flow.continue ?? parsed.flow.continueAfter),
@@ -207,9 +215,9 @@ export function parseLoomReply(raw) {
                     && typeof s.find === 'string' && s.find.length > 0
                     && typeof s.replace === 'string');
             }
-        } catch { swaps = []; requests = []; flow = null; }
+        } catch { swaps = []; requests = []; flow = null; loreProposals = []; loreProposalRejections = []; }
     }
-    return { prose, swaps, requests, flow };
+    return { prose, swaps, requests, flow, loreProposals, loreProposalRejections };
 }
 
 /**
@@ -243,6 +251,8 @@ export function describeLoomReply(raw, { tailChars = 400, fenceChars = 2000 } = 
         capabilities: parsed.requests.map((request) => String(request?.capability || '(missing)')),
         requestCount: parsed.requests.length,
         swapCount: parsed.swaps.length,
+        loreProposalCount: parsed.loreProposals.length,
+        loreProposalRejectedCount: parsed.loreProposalRejections.length,
         tail: text.slice(-tailChars),
     };
 }

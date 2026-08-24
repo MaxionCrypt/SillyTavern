@@ -107,12 +107,17 @@ test('Preview ranks the same deterministic lore without saving receipt or contin
     const preview = await previewWorldSense(scene, { action: 'Approach the harbor.' });
 
     expect(preview.selected).toEqual([expect.objectContaining({ book: 'Living Book', uid: '1' })]);
+    expect(preview.loomPacket.entries).toEqual([expect.objectContaining({
+        target: { book: 'Living Book', uid: '1', revision: 1 },
+    })]);
     expect(preview.receipt).toBeNull();
     expect(listWorldSenseReceipts({ sceneId: scene.id })).toHaveLength(0);
     expect(getWorldSenseContinuity(scene.id)).toEqual([]);
 
     const turn = await resolveWorldSense(scene, { action: 'Approach the harbor.' });
     expect(turn.receipt).toEqual(expect.objectContaining({ sceneId: scene.id }));
+    expect(turn.receipt).not.toHaveProperty('loomPacket');
+    expect(turn.loomPacket.entries[0].content).toBe('A tidal port.');
     expect(listWorldSenseReceipts({ sceneId: scene.id })).toHaveLength(1);
 });
 

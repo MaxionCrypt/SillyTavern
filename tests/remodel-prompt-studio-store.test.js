@@ -68,7 +68,7 @@ test('v13 stores migrate old hidden grounding into an editable recipe policy and
 
     const store = initializePromptStudioStore();
     const recipe = store.recipes.rp;
-    expect(store.version).toBe(18);
+    expect(store.version).toBe(19);
     expect(recipe.blocks.some((block) => block.content === '{{loom.context}}')).toBe(false);
     expect(recipe.blocks).toEqual(expect.arrayContaining([
         expect.objectContaining({ content: NARRATOR_POLICY_DEFAULT, locked: false }),
@@ -102,7 +102,7 @@ test('v15 seeds the patch Loom recipe, activates it, and leaves the existing one
     });
     const store = initializePromptStudioStore();
 
-    expect(store.version).toBe(18);
+    expect(store.version).toBe(19);
     // The user's recipe is untouched and still selectable.
     expect(store.recipes.mine).toBeTruthy();
     expect(store.recipes.mine.blocks[0].content).toBe('my own carefully edited policy');
@@ -152,7 +152,26 @@ test('v18 migrates the untouched full policy and never an edited one', async () 
     __setExtensionSettings({ remodel: { promptStudioV1: { version: 17, recipeIds: ids, recipes, active: { loom: { chat: 'full' } } } } });
 
     const store = initializePromptStudioStore();
-    expect(store.version).toBe(18);
+    expect(store.version).toBe(19);
     expect(store.recipes.full.blocks[0].content).toBe(LOOM_POLICY_DEFAULT);
     expect(store.recipes.edited.blocks[0].content).toBe('my own policy');
+});
+
+test('v19 adds the editable selected-lore macro without changing authored Loom text', () => {
+    __setExtensionSettings({ remodel: { promptStudioV1: {
+        version: 18,
+        recipeIds: ['mine'],
+        recipes: { mine: { id: 'mine', name: 'Mine', mode: 'loom', apiType: 'chat', blocks: [
+            { id: 'policy', kind: 'message', role: 'system', content: 'my authored policy', enabled: true },
+            { id: 'draft', kind: 'message', role: 'user', content: '{{narrator.draft}}', enabled: true },
+        ] } },
+        active: { loom: { chat: 'mine' } },
+    } } });
+
+    const store = initializePromptStudioStore();
+    const contents = store.recipes.mine.blocks.map((block) => block.content);
+    expect(store.version).toBe(19);
+    expect(contents).toContain('my authored policy');
+    expect(contents).toContain('{{loom.lore}}');
+    expect(contents.indexOf('{{loom.lore}}')).toBeLessThan(contents.indexOf('{{narrator.draft}}'));
 });

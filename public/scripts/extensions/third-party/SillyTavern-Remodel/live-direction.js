@@ -19,6 +19,7 @@ import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from
 import { streamChatPrompt } from './story-stream.js';
 import { buildEmptyResponseNudge, buildNarratorArchivistSections, buildGoalObjectives } from './narrator-prompt.js';
 import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
+import { formatLivingLorePacket } from './living-lore-proposals.js';
 import { describeBudgetWarning, describeGenerationBudget } from './generation-budget.js';
 import { createLoomTurnEnvelope } from './loom-turn.js';
 import { updateScene } from './timeline-state.js';
@@ -904,6 +905,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // the identity receipt so generation can apply the same selection
         // again immediately before core performs its real World Info scan.
         normalized.worldSense = snapshot.worldSense;
+        normalized.livingLore = snapshot.livingLore;
         if (token.aborted) return abandonPass(token, 'normalized');
         // Set BEFORE the call, not after: from here the performer has been
         // asked, so the turn is live even if generation then fails. The
@@ -1077,6 +1079,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         persona,
         acceptedHistory: history,
         worldSense: worldSense?.receipt || (preview ? worldSense : null),
+        livingLore: worldSense?.loomPacket || null,
         // What the user cut into, in the performer's own words — the half that
         // reached them (already in acceptedHistory, ending exactly where the
         // reveal froze) and the half that did not. Null on an ordinary turn.
@@ -1526,7 +1529,10 @@ async function beginLoomVisibleStream(run, scene) {
     await waitForArchiveCatchup(run.sceneId);
     if (activeRun !== run || run.loomController.signal.aborted) return false;
 
-    const snapshot = await __buildLoomSnapshot({ id: run.sceneId, timelineId: run.timelineId });
+    const snapshot = {
+        ...await __buildLoomSnapshot({ id: run.sceneId, timelineId: run.timelineId }),
+        livingLore: run.envelope?.livingLore || null,
+    };
     const token = { controller: run.loomController };
     const result = await runLoomReconciliation({
         scene: { ...scene, id: run.sceneId, timelineId: run.timelineId },
@@ -1726,12 +1732,13 @@ export async function runLoomReconciliation({
         buildGoalObjectives(scene.id),
     ].filter((part) => String(part || '').trim()).join('\n\n');
     const mechanicsSkill = buildLoomSkill(snapshot?.mechanics);
-    const sources = buildLoomRecipeSources({ draft, draftReasoning, narrativeState, mechanicsSkill });
+    const livingLore = formatLivingLorePacket(snapshot?.livingLore);
+    const sources = buildLoomRecipeSources({ draft, draftReasoning, narrativeState, mechanicsSkill, livingLore });
     const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
     const compiled = compilePromptRecipe(recipe, sources, { trace: true });
     const prompt = compiled.messages.length
         ? compiled.messages
-        : buildLoomPrompt({ draft, draftReasoning, narrativeState, mechanicsSkill });
+        : buildLoomPrompt({ draft, draftReasoning, narrativeState, mechanicsSkill, livingLore });
     recordLoomPromptTranscript(recipe?.name, prompt);
     let raw = '';
     let responseReasoning = '';
@@ -1780,11 +1787,27 @@ export async function runLoomReconciliation({
     // did not advance — name the real cause here instead.
     await checkGenerationBudget({ text: raw, reasoning: '', label: 'The Loom pass', directionId: null });
     journalLoomReply(raw, 'loom-pass', scene?.id || null);
-    const { prose, swaps, requests, flow } = parseLoomReply(raw);
+    const { prose, swaps, requests, flow, loreProposals, loreProposalRejections } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
+    if (loreProposals.length || loreProposalRejections.length) {
+        try {
+            recordDebugEvent('world-sense', 'lore.proposals.parsed', {
+                proposals: loreProposals,
+                rejections: loreProposalRejections,
+                book: snapshot?.livingLore?.book || '',
+                bookHash: snapshot?.livingLore?.bookHash || '',
+            }, {
+                severity: loreProposalRejections.length ? 'warn' : 'info',
+                correlationId: directionInFlight?.id || activeRun?.directionId || null,
+                summary: `Loom proposed ${loreProposals.length} typed lore change${loreProposals.length === 1 ? '' : 's'}; ${loreProposalRejections.length} rejected`,
+            });
+        } catch {
+            // A Debug viewer cannot be allowed to break reconciliation.
+        }
+    }
     // Full-prose replies are the v12 contract. Preserve-and-patch remains a
     // compatibility fallback for owner-authored recipes using the old fence.
     const committedProse = prose || applySwaps(draft, swaps).prose;
-    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow };
+    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections };
     try {
         const result = executeDirectionRequests(requests, {
             scene: { id: scene.id, timelineId: scene.timelineId },
@@ -1794,10 +1817,10 @@ export async function runLoomReconciliation({
             authorizedGoalIds: [],
         });
         journal('loom', { requestCount: requests.length, ok: result.ok, patched: committedProse !== draft }, { summary: 'Loom reconciled and recorded the turn' });
-        return { committedProse, requests, result, flow };
+        return { committedProse, requests, result, flow, loreProposals, loreProposalRejections };
     } catch (error) {
         journal('loom.failed', { phase: 'apply', error: String(error?.message || error) }, { severity: 'warn' });
-        return { committedProse, requests, result: null, flow };
+        return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections };
     }
 }
 

@@ -3,7 +3,7 @@ import { isSupersededLoomPatchPolicy, LOOM_POLICY_DEFAULT_PRIOR, LOOM_OUTPUT_CON
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 18;
+const STORE_VERSION = 19;
 
 export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
@@ -59,6 +59,7 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
     loom: Object.freeze([
         template('archiveState', 'Archive, Goals & Open Thread', 'system', 'loom.archive', { description: 'The Loom-readable scene facts, character state, recorded events, provisional open thread, and active Goals.' }),
         template('mechanicsBoard', 'Archive Operations & Mechanics', 'system', 'loom.mechanics', { description: 'The Archive operations always available to the Loom, plus the current Goals and Variables board when mechanics are enabled.' }),
+        template('livingLore', 'Selected Living Lore', 'system', 'loom.lore', { description: 'The bounded, revisioned Timeline lore entries selected by World Sense, plus the typed proposal contract. Proposals do not write directly.' }),
         template('narratorDraft', 'Narrator Draft', 'user', 'narrator.draft', { description: 'The held Narrator prose being reconciled before it becomes visible.' }),
         template('narratorReasoning', 'Narrator Reasoning', 'user', 'narrator.reasoning', { description: 'The Narrator model\'s private reasoning for this draft, when the provider supplies it.' }),
     ]),
@@ -390,6 +391,7 @@ function patchLoomBlocks() {
         createPromptBlock({ kind: 'message', role: 'system', content: LOOM_POLICY_PATCH }),
         createPromptBlockFromTemplate('loom', 'archiveState'),
         createPromptBlockFromTemplate('loom', 'mechanicsBoard'),
+        createPromptBlockFromTemplate('loom', 'livingLore'),
         createPromptBlockFromTemplate('loom', 'narratorDraft'),
         createPromptBlockFromTemplate('loom', 'narratorReasoning'),
         createPromptBlock({
@@ -407,6 +409,7 @@ function defaultLoomBlocks() {
         createPromptBlock({ kind: 'message', role: 'system', content: LOOM_POLICY_DEFAULT }),
         createPromptBlockFromTemplate('loom', 'archiveState'),
         createPromptBlockFromTemplate('loom', 'mechanicsBoard'),
+        createPromptBlockFromTemplate('loom', 'livingLore'),
         createPromptBlockFromTemplate('loom', 'narratorDraft'),
         createPromptBlockFromTemplate('loom', 'narratorReasoning'),
         createPromptBlock({
@@ -604,6 +607,16 @@ function normalizeStore(store, seed) {
         }
     }
 
+    // v19 exposes the bounded World Sense selection to every Loom recipe as
+    // an ordinary, removable macro block. Existing authored policy and output
+    // text remain untouched; only the new dynamic source is inserted.
+    if (previousVersion < 19) {
+        for (const id of store.recipeIds) {
+            const recipe = store.recipes[id];
+            if (recipe?.mode === 'loom' && ensureLivingLoreSource(recipe.blocks)) changed = true;
+        }
+    }
+
     if (previousVersion < 15 && !store.recipeIds.some((id) => store.recipes[id]?.name === PATCH_LOOM_RECIPE_NAME)) {
         const patchRecipe = createPromptRecipeWithoutSave(store, {
             name: PATCH_LOOM_RECIPE_NAME,
@@ -667,6 +680,14 @@ function ensureStoryGoalsSource(blocks) {
     const source = createPromptBlockFromTemplate('roleplay', 'storyGoals');
     const historyIndex = blocks.findIndex((block) => /{{chat\.(history|input)\b/i.test(block.content || ''));
     blocks.splice(historyIndex >= 0 ? historyIndex : blocks.length, 0, source);
+    return true;
+}
+
+function ensureLivingLoreSource(blocks) {
+    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*loom\.lore\b/i.test(block.content || ''))) return false;
+    const source = createPromptBlockFromTemplate('loom', 'livingLore');
+    const draftIndex = blocks.findIndex((block) => /\{\{\s*narrator\.draft\b/i.test(block.content || ''));
+    blocks.splice(draftIndex >= 0 ? draftIndex : blocks.length, 0, source);
     return true;
 }
 

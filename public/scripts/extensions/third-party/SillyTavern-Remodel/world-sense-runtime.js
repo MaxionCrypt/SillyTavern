@@ -4,6 +4,7 @@ import { getSceneGoals } from './story-goals-store.js';
 import { getTimelineStore } from './timeline-state.js';
 import { listVariableValues } from './variables-store.js';
 import { recordDebugEvent } from './debug-console.js';
+import { buildLivingLorePacket } from './living-lore-proposals.js';
 import { queryWorldSense } from './world-sense-embeddings.js';
 import { loadTimelineLore } from './world-sense-lore.js';
 import { buildWorldSenseQueryPacket, canReuseWorldSensePrefetch, rankLivingLore } from './world-sense-retrieval.js';
@@ -142,6 +143,15 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         semanticThreshold: profile.semanticThreshold,
         semanticOnlyLimit: profile.semanticOnlyLimit,
     });
+    const loomPacket = buildLivingLorePacket({
+        timelineId: scene.timelineId,
+        book: lore.book,
+        bookHash: lore.hash,
+        entries: lore.entries,
+        selected: ranking.selected,
+        metadata,
+        limits: { maxEntries: profile.maxEntries },
+    });
     return {
         phase,
         sceneId: String(scene.id),
@@ -155,6 +165,7 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         degraded: Boolean(semantic.degraded),
         error: semantic.error || '',
         elapsedMs: Math.round(performance.now() - startedAt),
+        loomPacket,
         ...ranking,
     };
 }
