@@ -17,6 +17,20 @@ export function escapeAttribute(value) {
     return escapeHtml(value).replaceAll('`', '&#096;');
 }
 
+/** The shared tarot-card face used by both the deck and Goal detail view. */
+export function renderGoalCardFaceMarkup(goal, numeral) {
+    const secret = goal.visibility === 'secret';
+    const multipleHolders = (goal.holderRefs?.length || goal.holders?.length || 0) > 1;
+    const glyph = secret ? 'fa-user-secret' : multipleHolders ? 'fa-people-group' : 'fa-bullseye';
+    return `
+        <span class="remodel-goal-card-numeral">${escapeHtml(numeral)}</span>
+        <span class="remodel-goal-card-glyph"><i class="fa-solid ${glyph}" aria-hidden="true"></i></span>
+        <span class="remodel-goal-card-plate">
+            <span class="remodel-goal-card-rate">${escapeHtml(goal.successRate)}<small>%</small></span>
+            <span class="remodel-goal-card-holder">${escapeHtml(formatHolders(goal))}</span>
+        </span>`;
+}
+
 /**
  * The owner's edit form: every attribute the record holds, in one place.
  *

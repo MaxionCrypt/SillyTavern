@@ -1,4 +1,4 @@
-import { renderGoalEditFormMarkup, renderGoalRelationsMarkup } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-markup.js';
+import { renderGoalCardFaceMarkup, renderGoalEditFormMarkup, renderGoalRelationsMarkup } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-markup.js';
 import { STORY_GOAL_STATUSES, STORY_GOAL_VISIBILITIES } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-model.js';
 
 // The deck could create a Goal and then never touch it again: edit, delete,
@@ -14,6 +14,13 @@ const goal = {
     visibility: 'public',
     holderRefs: [{ kind: 'character', id: 'char-wren', label: 'Wren' }],
 };
+
+test('the deck card renders its holder and rate through the real shared face builder', () => {
+    const markup = renderGoalCardFaceMarkup(goal, 'I');
+    expect(markup).toContain('remodel-goal-card-numeral">I');
+    expect(markup).toContain('remodel-goal-card-rate">40<small>%');
+    expect(markup).toContain('remodel-goal-card-holder">Wren');
+});
 
 test('the edit form carries every attribute the record holds', () => {
     const markup = renderGoalEditFormMarkup(goal);

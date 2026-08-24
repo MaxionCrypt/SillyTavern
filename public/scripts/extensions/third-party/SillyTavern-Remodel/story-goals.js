@@ -11,7 +11,8 @@ import {
     updateSceneGoalState,
     updateStoryGoal,
 } from './story-goals-store.js';
-import { escapeAttribute, escapeHtml, renderGoalEditFormMarkup, renderGoalRelationsMarkup } from './story-goals-markup.js';
+import { formatHolders } from './story-goals-model.js';
+import { escapeAttribute, escapeHtml, renderGoalCardFaceMarkup, renderGoalEditFormMarkup, renderGoalRelationsMarkup } from './story-goals-markup.js';
 import { registerStoryStatMacros } from './story-stats-macros.js';
 
 // Story Goals — the roleplay-facing surface.
@@ -176,19 +177,6 @@ function renderGoalDeckMarkup(goals, unlinked = []) {
         </div>`;
 }
 
-// The face of a tarot goal card (numeral, glyph, rate plate) — shared by the
-// clickable deck card and the large display card in the detail view.
-function goalCardFace(goal, numeral) {
-    const secret = goal.visibility === 'secret';
-    return `
-        <span class="remodel-goal-card-numeral">${numeral}</span>
-        <span class="remodel-goal-card-glyph"><i class="fa-solid ${secret ? 'fa-user-secret' : goalGlyph(goal)}" aria-hidden="true"></i></span>
-        <span class="remodel-goal-card-plate">
-            <span class="remodel-goal-card-rate">${goal.successRate}<small>%</small></span>
-            <span class="remodel-goal-card-holder">${escapeHtml(formatHolders(goal))}</span>
-        </span>`;
-}
-
 // A self-contained tarot goal card (does NOT depend on timeline-card internals).
 // Per-goal hue derived from the id so the deck varies.
 function renderGoalTarotCard(goal, index) {
@@ -197,7 +185,7 @@ function renderGoalTarotCard(goal, index) {
         <button type="button" class="remodel-goal-card${secret ? ' is-secret' : ''}" style="--goal-hue:${goalHue(goal)}"
             data-remodel-goal-card="${escapeAttribute(goal.id)}" data-remodel-goal-name="${escapeAttribute(secret ? 'A hidden goal' : goal.title)}"
             aria-label="${escapeAttribute(secret ? 'Secret goal' : goal.title)}">
-            ${goalCardFace(goal, toRomanNumeral(index + 1))}
+            ${renderGoalCardFaceMarkup(goal, toRomanNumeral(index + 1))}
         </button>`;
 }
 
@@ -218,7 +206,7 @@ function renderGoalDetailMarkup(goal, goals, { editing = false, relations = [] }
         <div class="remodel-goal-detail-view">
             <div class="remodel-goal-detail-layout">
                 <article class="remodel-goal-card is-display" style="--goal-hue:${goalHue(goal)}">
-                    ${goalCardFace(goal, toRomanNumeral(index + 1))}
+                    ${renderGoalCardFaceMarkup(goal, toRomanNumeral(index + 1))}
                 </article>
                 <div class="remodel-goal-detail-info">
                     <div class="remodel-goal-detail-topline">
@@ -246,12 +234,6 @@ function renderGoalDetailMarkup(goal, goals, { editing = false, relations = [] }
                 </div>
             </div>
         </div>`;
-}
-
-// Choose a minimal glyph per goal so cards read as varied symbols.
-function goalGlyph(goal) {
-    if ((goal.holderRefs?.length || goal.holders?.length || 0) > 1) return 'fa-people-group';
-    return 'fa-bullseye';
 }
 
 // Deterministic per-goal hue (0–360) from the id, so the deck's card colors are
