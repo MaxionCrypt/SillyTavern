@@ -127,6 +127,7 @@ test('STOP during a new private Narrator pass keeps the preceding completed outp
 
     const pending = requestNextDirection(scene);
     expect(await until(() => getLiveDirectionRun()?.phase === 'narrator' && rejectGeneration)).toBe(true);
+    expect(getLiveDirectionRun()).not.toHaveProperty('passToken');
     await stopLiveDirection();
     await pending;
 

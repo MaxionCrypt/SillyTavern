@@ -74,6 +74,11 @@ const hooks = {
 
 let initialized = false;
 let activeRun = null;
+// Cancellation authority is deliberately private. AbortController cannot be
+// structured-cloned in browsers, while getLiveDirectionRun clones the public
+// run on every render. Keeping the token in a WeakMap prevents pipeline state
+// from ever becoming renderer data.
+const runPassTokens = new WeakMap();
 let revealTimer = null;
 let persistTimer = null;
 let pendingFailure = null;
@@ -1246,9 +1251,9 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         pendingRequestsApplied: false,
         emptyRetries: Number(emptyRetries) || 0,
         previousReasoningLength: Number(previousReasoningLength) || 0,
-        passToken: token,
         progress: token?.progress || createDirectionProgress(envelope.directionId),
     };
+    if (token) runPassTokens.set(activeRun, token);
     advancePassStage(activeRun, 'narrator');
     // A visible run now exists, so activeRun is the authoritative guard and the
     // hidden-phase lock has done its job. Releasing it here — rather than when
@@ -2103,7 +2108,7 @@ async function interruptLiveDirection({ preserveForIntervention }) {
     // The hidden-phase lock has already been released, but its token still
     // follows beginDirection to the provider boundary. Mark it cancelled so
     // the provider's expected abort rejection cannot become a failure notice.
-    abortDirectionPass(run.passToken);
+    abortDirectionPass(runPassTokens.get(run));
     if (run.phase === 'loom') {
         try { run.loomController?.abort(); } catch { /* already aborted */ }
     } else if (!run.narratorGenerationFinished && ownsLiveDirectionGeneration()) {
