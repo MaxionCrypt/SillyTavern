@@ -34,6 +34,11 @@ ordinary turn.
   links. That sidecar is an index and audit record, not a second source of lore.
 - Existing user-authored entries remain valid. Living Lore recommends a format;
   it does not rewrite a whole book merely to impose one.
+- Goals remain mechanical objects with holders, status, odds, and history.
+  Optional typed links (`subject`, `context`, `stake`, `origin`, and
+  `consequence`) connect them to durable lore entries without duplicating Goal
+  state into lore content. Variables keep their existing linked-but-separate
+  relationship to lore entries.
 
 ### 2.2 What local AI does
 
@@ -45,6 +50,12 @@ The local model performs semantic attention:
 4. combine those candidates with deterministic keyword, continuity, pinned,
    location, cast, Goal, and Archive evidence;
 5. rank a small lore packet for native World Info and the Loom.
+
+The model stays warm while a directed Scene is open. Composer input is queried
+after a short debounce, cached by query hash, and reused by Preview or Send when
+the submitted text still matches. A changed hash invalidates the prefetched
+result. This makes background prefetch an optimization, never a source of stale
+lore.
 
 Default candidate for the spike: `Xenova/all-MiniLM-L6-v2`, quantized, through
 SillyTavern's existing Transformers/vector infrastructure. The exact default is
@@ -186,6 +197,8 @@ Retrieval is hybrid and inspectable:
 4. **Structural evidence:** boost entries linked to present cast, current
    location, active Goals, recent Archive changes, one-turn pins, and recent
    retrieval continuity.
+   A relevant lore entry boosts its linked Goals and Variables; an active Goal
+   or retrieved Variable contributes its linked entries back to lore ranking.
 5. **Deduplicate:** identity is always `book + uid`; native and semantic matches
    merge into one candidate with multiple reasons.
 6. **Budget:** rank into a configurable entry and token budget. Constant and
@@ -195,6 +208,11 @@ Retrieval is hybrid and inspectable:
    position and role.
 8. **Receipt:** record selected and rejected entries, evidence channels, model,
    index revision, elapsed time, and budget decision in Debug.
+
+Lore entries use the native World Info token budget. Goals and Variables retain
+their shared mechanics retrieval budget. The evidence graph is shared, but the
+delivery budgets are separate so a long lore entry cannot evict a mechanically
+essential Goal or Variable.
 
 The existing native Vectors extension already demonstrates the correct
 `WORLDINFO_FORCE_ACTIVATE` seam. Remodel will own a Timeline-scoped index and
@@ -312,6 +330,20 @@ Required surfaces:
   from scene` pointed actions;
 - a dry-run panel showing the lore packet that Preview/Narrator/Loom will see.
 
+The Roleplay composer area also shows explicit, non-blocking turn stages:
+
+- `Preparing context`;
+- `Retrieving lore`;
+- `Narrator drafting`;
+- `Loom reconciling`;
+- `Revealing`;
+- `Saving world`.
+
+Only the currently active stage is emphasized. Completed stages collapse to a
+subtle check, failures name the failed stage, and Stop remains available. The
+labels describe progress without exposing hidden Narrator prose or private
+reasoning.
+
 The ordinary native entry editor remains the source editor. World Sense augments
 it with metadata and proposals rather than replacing it.
 
@@ -333,6 +365,8 @@ controls.
 Performance rules:
 
 - index only changed entry hashes and do it after edits or while idle;
+- keep the selected local model warm while a directed Scene is open;
+- debounce composer queries and reuse them only when their query hash matches;
 - one query embedding per turn, shared by retrieval consumers;
 - cap candidates before any Loom prompt is assembled;
 - cache by query hash for Preview followed by Send;
@@ -382,17 +416,29 @@ Each stage is intended to be independently reviewable and revertible.
 - deterministic fallback and explicit model-unavailable state;
 - accept or replace the proposed MiniLM default based on measured results.
 
-### Commit 4 - Hybrid retrieval and receipts
+### Commit 4 - Roleplay stage feedback
+
+`feat(remodel): show directed turn progress`
+
+- one run-scoped stage state machine for context, lore, Narrator, Loom, reveal,
+  and save;
+- compact composer-area feedback with duration diagnostics and Stop preserved;
+- recovery and failure states cannot leave a stale stage on screen;
+- no generation or prompt behavior changes.
+
+### Commit 5 - Hybrid retrieval and receipts
 
 `feat(remodel): rank Living Lore for each scene`
 
 - bounded query packet;
 - keyword, semantic, cast/location, Archive, Goal, pin, and continuity evidence;
+- typed Goal-to-lore and existing Variable-to-lore relevance propagation;
+- background composer prefetch with strict query-hash reuse;
 - one ranking/token budget and pure diagnostics;
 - tests for deduplication, ranking, budget, fallback, and Continue queries;
 - Debug receipts, still with no prompt activation.
 
-### Commit 5 - Native World Info activation
+### Commit 6 - Native World Info activation
 
 `feat(remodel): activate World Sense lore natively`
 
@@ -404,7 +450,7 @@ Each stage is intended to be independently reviewable and revertible.
 
 This is the first commit that changes what the Narrator can see.
 
-### Commit 6 - Loom lore packet and proposal schema
+### Commit 7 - Loom lore packet and proposal schema
 
 `feat(remodel): let Loom propose typed lore changes`
 
@@ -414,7 +460,7 @@ This is the first commit that changes what the Narrator can see.
 - prompt-log and Debug visibility;
 - tests rejecting arbitrary replacement, wrong books, and stale refs.
 
-### Commit 7 - Transactional lore mutations
+### Commit 8 - Transactional lore mutations
 
 `feat(remodel): validate and apply Living Lore proposals`
 
@@ -424,7 +470,7 @@ This is the first commit that changes what the Narrator can see.
 - before/after audit history and rollback;
 - Suggest mode only.
 
-### Commit 8 - Roleplay lifecycle safety
+### Commit 9 - Roleplay lifecycle safety
 
 `fix(remodel): bind lore commits to accepted fiction`
 
@@ -434,7 +480,7 @@ This is the first commit that changes what the Narrator can see.
 - reload recovery without duplicate application;
 - recorder-driven browser scenarios.
 
-### Commit 9 - Lorebooks workspace UI
+### Commit 10 - Lorebooks workspace UI
 
 `feat(remodel): add World Sense to Lorebooks`
 
@@ -444,7 +490,7 @@ This is the first commit that changes what the Narrator can see.
 - proposal review, field diff, history, and rollback;
 - responsive and keyboard-accessible browser validation.
 
-### Commit 10 - Seed cultivation tools
+### Commit 11 - Seed cultivation tools
 
 `feat(remodel): grow Living Lore from authored seeds`
 
@@ -454,7 +500,7 @@ This is the first commit that changes what the Narrator can see.
 - contradiction checks and duplicate candidate warnings;
 - no automatic remote-model dependency.
 
-### Commit 11 - Auto-safe and hardening
+### Commit 12 - Auto-safe and hardening
 
 `feat(remodel): add guarded automatic lore upkeep`
 
@@ -508,6 +554,11 @@ Answered now:
   the intended plot.
 - **Can searches and edits be specific?** Yes. Search returns entry-level
   reasons; mutations target one field/section with a revision and diff.
+- **How do Goals join Living Lore?** Through typed links while remaining the
+  sole home of live odds and status. Relevance flows both ways; state is never
+  duplicated into lorebook prose.
+- **Does local retrieval wait for Send?** No. Background composer prefetch is
+  the default, with query-hash validation preventing stale reuse.
 
 Deferred until the model spike or first UI review:
 
