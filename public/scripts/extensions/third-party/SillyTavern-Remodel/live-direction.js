@@ -23,6 +23,12 @@ import { describeBudgetWarning, describeGenerationBudget } from './generation-bu
 import { createLoomTurnEnvelope } from './loom-turn.js';
 import { updateScene } from './timeline-state.js';
 import { recordApiTranscript, recordDebugEvent } from './debug-console.js';
+import {
+    advanceDirectionProgress,
+    createDirectionProgress,
+    describeDirectionProgress,
+    settleDirectionProgress,
+} from './direction-progress.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const PACING = Object.freeze({
@@ -141,6 +147,7 @@ function acquireDirectionLock({ scene, insertUser, autonomousSequence }) {
         // the request running to completion and merely discarded its answer.
         controller: new AbortController(),
     };
+    token.progress = createDirectionProgress(token.id, token.startedAt);
     directionInFlight = token;
     return token;
 }
@@ -162,7 +169,39 @@ function abortDirectionPass(token) {
 
 /** Idempotent, and never releases a lock some later pass already took. */
 function releaseDirectionLock(token) {
-    if (token && directionInFlight === token) directionInFlight = null;
+    if (token && directionInFlight === token) {
+        directionInFlight = null;
+        notifyState();
+    }
+}
+
+function advancePassStage(owner, stage) {
+    if (!owner?.progress) return;
+    const previous = owner.progress;
+    owner.progress = advanceDirectionProgress(previous, stage);
+    if (owner.progress === previous) return;
+    const progress = describeDirectionProgress(owner.progress);
+    journal('stage', { stage: progress.id, label: progress.label, totalMs: progress.totalMs }, {
+        correlationId: owner.directionId || owner.id,
+        summary: `direction.stage: ${progress.label}`,
+    });
+    notifyState();
+}
+
+function settlePassProgress(owner, status) {
+    if (!owner?.progress) return;
+    const previous = owner.progress;
+    owner.progress = settleDirectionProgress(previous, status);
+    if (owner.progress === previous) return;
+    const progress = describeDirectionProgress(owner.progress);
+    journal('stage.settled', {
+        status: progress.status,
+        totalMs: progress.totalMs,
+        stages: progress.completed.map(({ id, durationMs }) => ({ id, durationMs })),
+    }, {
+        correlationId: owner.directionId || owner.id,
+        summary: `direction stages settled (${progress.status}, ${progress.totalMs}ms)`,
+    });
 }
 
 function cancelAutoplay(reason = 'superseded') {
@@ -304,6 +343,8 @@ export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
     // one-shot push, and any re-render (onSettled calls renderRoleplayScene)
     // repainted this idle state straight over it.
     const directing = Boolean(directionInFlight && !activeRun);
+    const describedProgress = describeDirectionProgress(activeRun?.progress || directionInFlight?.progress);
+    const progress = describedProgress?.status === 'running' ? describedProgress : null;
     return {
         active: true,
         state: activeRun?.state || (directing ? 'Directing' : 'Ready'),
@@ -314,6 +355,7 @@ export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
         canSend: !directing,
         canStop: directing || Boolean(activeRun && !['Ready', 'Complete'].includes(activeRun.state)),
         performerLabel: activeRun?.performer?.label || '',
+        progress,
         // True when the last turn's Narrator produced no reasoning — extraction
         // ran on prose alone, which is less accurate. The toolbar surfaces this
         // as a prompt to enable thinking or switch to a reasoning-capable model.
@@ -375,6 +417,7 @@ export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = 
         }
         journal('submit.supersedes-autonomous', { supersededPassId: directionInFlight.id });
         abortDirectionPass(directionInFlight);
+        settlePassProgress(directionInFlight, 'superseded');
         directionInFlight = null;
     }
     pendingSubmission = submissionKey;
@@ -458,6 +501,7 @@ export async function stopLiveDirection() {
     if (directionInFlight) {
         journal('stopped.in-flight', { passId: directionInFlight.id });
         abortDirectionPass(directionInFlight);
+        settlePassProgress(directionInFlight, 'stopped');
         directionInFlight = null;
         notifyState();
         hooks.onSettled();
@@ -722,6 +766,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             hooks.clearComposer();
         }
         if (token.aborted) return abandonPass(token, 'insert-user');
+        advancePassStage(token, 'lore');
         const snapshot = await buildDirectionSnapshot(scene, action, authorizedGoalIds, { excludeFromHistory: postedMessage });
         journal('snapshot', {
             passId: token.id,
@@ -829,6 +874,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
 
 /** A pass cancelled before it spent a native generation. Leaves no wreckage. */
 function abandonPass(token, stage) {
+    settlePassProgress(token, 'abandoned');
     journal('abandoned', { passId: token.id, stage }, { correlationId: token.id, severity: 'warn', summary: `direction.abandoned (${stage})` });
     releaseDirectionLock(token);
     notifyState();
@@ -1095,7 +1141,9 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         addressBook: envelope.addressBook || { entries: [], duplicates: [] },
         pendingRequestsApplied: false,
         emptyRetries: Number(emptyRetries) || 0,
+        progress: token?.progress || createDirectionProgress(envelope.directionId),
     };
+    advancePassStage(activeRun, 'narrator');
     // A visible run now exists, so activeRun is the authoritative guard and the
     // hidden-phase lock has done its job. Releasing it here — rather than when
     // beginDirection returns — is what keeps interruption working: the user must
@@ -1358,6 +1406,7 @@ async function beginLoomVisibleStream(run, scene) {
     }
 
     run.narratorDraft = draft;
+    advancePassStage(run, 'loom');
     run.phase = 'loom';
     run.rawBufferedText = '';
     run.acceptedVisibleText = '';
@@ -1410,6 +1459,7 @@ async function beginLoomVisibleStream(run, scene) {
     if (result?.flow) run.envelope.flow = result.flow;
     run.generationFinished = true;
     run.generationSettled = true;
+    advancePassStage(run, 'reveal');
     scheduleReveal(0);
     return true;
 }
@@ -1688,6 +1738,7 @@ async function completeVisibleRun(run) {
         await failEmptyVisibleRun(run);
         return;
     }
+    advancePassStage(run, 'save');
     // Loom mode: the accepted Narrator text is a DRAFT. Run Loom reconciliation
     // over it and commit its reconciled version instead — the draft is never
     // stored (the reveal-hold that keeps the draft off screen is Task 7).
@@ -1948,6 +1999,18 @@ async function interruptLiveDirection({ preserveForIntervention }) {
 }
 
 async function finalizeRunMessage(run, { state }) {
+    advancePassStage(run, 'save');
+    try {
+        return await persistFinalizedRunMessage(run, state);
+    } finally {
+        // Saving, deleting an empty reservation, or failing to find the native
+        // row must all terminate the visual stage. A thrown save is reported by
+        // the caller, but it must not leave "Saving turn" ticking forever.
+        settlePassProgress(run, state === 'complete' ? 'complete' : state);
+    }
+}
+
+async function persistFinalizedRunMessage(run, state) {
     // Before the first await, and here rather than at each caller: this is the
     // one funnel every run passes through, so a path added later is covered by
     // construction instead of by remembering. See clearPersistTimer.
@@ -2470,7 +2533,11 @@ function publicRun(run) {
 }
 
 function notifyTransient(state) {
-    hooks.onStateChange({ state, acceptedVisibleText: activeRun?.acceptedVisibleText || '' });
+    hooks.onStateChange({
+        state,
+        acceptedVisibleText: activeRun?.acceptedVisibleText || '',
+        progress: directionInFlight?.progress || activeRun?.progress || null,
+    });
 }
 
 function notifyState() {
@@ -2491,6 +2558,7 @@ function directionFailure(error, retry) {
     }, { severity: 'error', summary: `direction.failed: ${String(error?.message || error).slice(0, 80)}` });
     cancelAutoplay('failed');
     pendingFailure = retry;
+    settlePassProgress(activeRun || directionInFlight, 'failed');
     activeRun = null;
     notifyState();
     hooks.onFailure(error);

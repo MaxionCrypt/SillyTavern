@@ -1621,6 +1621,23 @@ body.remodel-roleplay-workspace-active .remodel-live-state::before {
 }
 
 body.remodel-roleplay-workspace-active .remodel-live-flow small { opacity:.58 !important; font-size:7px !important; }
+body.remodel-roleplay-workspace-active .remodel-live-progress {
+  display:inline-flex !important;
+  align-items:center !important;
+  gap:4px !important;
+  color:rgba(255,247,172,.86) !important;
+  opacity:.86 !important;
+  font-variant-numeric:tabular-nums !important;
+}
+body.remodel-roleplay-workspace-active .remodel-live-progress[hidden] { display:none !important; }
+body.remodel-roleplay-workspace-active .remodel-live-progress i {
+  font-size:7px !important;
+  animation:remodel-live-progress-spin 1.4s linear infinite !important;
+}
+@keyframes remodel-live-progress-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  body.remodel-roleplay-workspace-active .remodel-live-progress i { animation:none !important; }
+}
 body.remodel-roleplay-workspace-active .remodel-live-flow em {
   min-width:0 !important;
   overflow:hidden !important;

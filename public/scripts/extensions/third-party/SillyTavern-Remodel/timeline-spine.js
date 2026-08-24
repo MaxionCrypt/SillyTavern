@@ -185,6 +185,7 @@ const CONTENT_ID = 'remodel-timeline-content';
 const LEGACY_OUTLET_ID = 'remodel-tavern-legacy-outlet';
 const timelineChromeStages = new Map();
 const timelineScrollIntent = new Map();
+let liveProgressRefreshTimer = null;
 
 // View state for the Loom's Archive panel (a Timeline-focus surface, same
 // family as codexOpen in session-state.js, but kept local here rather than
@@ -8496,6 +8497,7 @@ function renderRoleplayComposer(root) {
                 <span>${directionUi.active ? 'Directed' : 'Free play'}</span>
             </button>
             ${directionUi.active ? `<small class="remodel-live-state" data-remodel-live-state>${escapeHtml(directionUi.state)}</small>` : ''}
+            ${directionUi.active ? `<small class="remodel-live-progress" data-remodel-live-progress role="status" aria-live="polite"${directionUi.progress ? ` title="${escapeAttribute(formatLiveProgressDiagnostics(directionUi.progress))}"` : ' hidden'}><i class="fa-solid fa-circle-notch" aria-hidden="true"></i><span>${directionUi.progress ? escapeHtml(formatLiveProgress(directionUi.progress)) : ''}</span></small>` : ''}
             ${directionUi.performerLabel ? `<small>${escapeHtml(directionUi.performerLabel)}</small>` : ''}
             <em data-remodel-live-opening${directionUi.openingLabel ? '' : ' hidden'}><i class="fa-regular fa-lightbulb"></i> <span>${escapeHtml(directionUi.openingLabel || '')}</span></em>
         </div>
@@ -9217,6 +9219,8 @@ function dismissDirectionFailureOnOutsideClick(panel) {
 }
 
 function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
+    clearTimeout(liveProgressRefreshTimer);
+    liveProgressRefreshTimer = null;
     const root = getRealRoleplayRoot();
     if (!root) return;
     const body = root.querySelector('[data-remodel-rp-typing-body]');
@@ -9241,6 +9245,16 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
         // with the transient run state, which is what used to make it
         // impossible to tell whether Live Direction was on.
         flow.querySelector('[data-remodel-live-state]')?.replaceChildren(document.createTextNode(run?.state || ui.state || ''));
+        const progress = flow.querySelector('[data-remodel-live-progress]');
+        if (progress && ui.progress) {
+            progress.hidden = false;
+            progress.querySelector('span')?.replaceChildren(document.createTextNode(formatLiveProgress(ui.progress)));
+            progress.setAttribute('title', formatLiveProgressDiagnostics(ui.progress));
+            liveProgressRefreshTimer = setTimeout(() => refreshLiveDirectionChrome(), 1000);
+        } else if (progress) {
+            progress.hidden = true;
+            progress.removeAttribute('title');
+        }
         flow.querySelector('[data-remodel-live-mode]')?.setAttribute('title', liveModeTitle({ ...ui, state: run?.state || ui.state }));
         const opening = flow.querySelector('[data-remodel-live-opening]');
         if (opening) {
@@ -9300,6 +9314,19 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
         removeRoleplayTypingIndicator();
         ensureLoomReviewIndicator(root, run?.phase);
     }
+}
+
+function formatLiveProgress(progress) {
+    return `${progress.label} · ${(Math.max(0, progress.elapsedMs) / 1000).toFixed(1)}s`;
+}
+
+function formatLiveProgressDiagnostics(progress) {
+    const completed = (progress.completed || [])
+        .map((stage) => `${stage.label}: ${(Math.max(0, stage.durationMs) / 1000).toFixed(1)}s`)
+        .join('\n');
+    return [`Current: ${formatLiveProgress(progress)}`, completed, `Turn total: ${(Math.max(0, progress.totalMs) / 1000).toFixed(1)}s`]
+        .filter(Boolean)
+        .join('\n');
 }
 
 /** Show the hidden post-draft pass without exposing its private reply. */
