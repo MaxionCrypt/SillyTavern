@@ -17,8 +17,32 @@ import {
 
 const prefetches = new Map();
 const prefetchTimers = new Map();
+const turnOverrides = new Map();
 const PREFETCH_DELAY_MS = 350;
 const PREFETCH_TTL_MS = 120000;
+
+export function setWorldSenseTurnOverride(sceneId, ref, disposition = '') {
+    const id = String(sceneId || '').trim();
+    const key = loreKey(ref);
+    if (!id || !key) return false;
+    const current = turnOverrides.get(id) || { pins: new Map(), excludes: new Map() };
+    current.pins.delete(key);
+    current.excludes.delete(key);
+    if (disposition === 'pin') current.pins.set(key, { book: String(ref.book), uid: String(ref.uid), name: String(ref.name || '') });
+    if (disposition === 'exclude') current.excludes.set(key, { book: String(ref.book), uid: String(ref.uid), name: String(ref.name || '') });
+    if (current.pins.size || current.excludes.size) turnOverrides.set(id, current);
+    else turnOverrides.delete(id);
+    prefetches.delete(id);
+    return true;
+}
+
+export function getWorldSenseTurnOverrides(sceneId) {
+    const current = turnOverrides.get(String(sceneId || ''));
+    return {
+        pins: [...(current?.pins?.values() || [])].map((item) => ({ ...item })),
+        excludes: [...(current?.excludes?.values() || [])].map((item) => ({ ...item })),
+    };
+}
 
 export function scheduleWorldSensePrefetch(scene, options = {}) {
     const sceneId = String(scene?.id || '');
@@ -75,7 +99,10 @@ async function resolveWorldSenseForPhase(scene, options, { persist, consumePrefe
     }
     if (!result) result = await executeRetrieval(scene, prepared, { phase: 'turn', skipSemantic: prefetchTimedOut });
     const receipt = persist ? saveReceipt(scene, result, { reusedPrefetch }) : null;
-    if (consumePrefetch) prefetches.delete(prepared.sceneId);
+    if (consumePrefetch) {
+        prefetches.delete(prepared.sceneId);
+        turnOverrides.delete(prepared.sceneId);
+    }
     return { ...result, receipt, reusedPrefetch };
 }
 
@@ -93,7 +120,8 @@ function prepareQuery(scene, options) {
         ...events.map((event) => ({ label: 'Event', summary: event.summary })),
     ];
     const location = facts.find((fact) => /location|place|where/i.test(fact.key))?.value || scene.location || '';
-    const pins = Array.isArray(options.pins) ? options.pins : [];
+    const overrides = getWorldSenseTurnOverrides(scene.id);
+    const pins = [...(Array.isArray(options.pins) ? options.pins : []), ...overrides.pins];
     const packet = buildWorldSenseQueryPacket({
         action: options.action,
         openThread: beat?.directive || '',
@@ -106,13 +134,35 @@ function prepareQuery(scene, options) {
         searchTerms: options.searchTerms || [],
         pins,
     });
-    return { sceneId: String(scene.id), goals, pins, packet };
+    return { sceneId: String(scene.id), goals, pins, excludes: overrides.excludes, packet };
 }
 
 async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }) {
     const startedAt = performance.now();
     const lore = await loadTimelineLore(scene.timelineId);
     const profile = getWorldSenseProfile();
+    if (profile.mode === 'off') {
+        const metadata = listLivingLoreMetadata({ timelineId: scene.timelineId, book: lore.book || '' });
+        return {
+            phase,
+            sceneId: String(scene.id),
+            timelineId: String(scene.timelineId),
+            book: lore.book,
+            bookHash: lore.hash,
+            queryHash: prepared.packet.hash,
+            queryLength: prepared.packet.length,
+            modelId: profile.modelId,
+            indexRevision: getWorldSenseIndexState(scene.timelineId)?.bookHash || '',
+            degraded: false,
+            error: '',
+            elapsedMs: Math.round(performance.now() - startedAt),
+            loomPacket: buildLivingLorePacket({ timelineId: scene.timelineId, book: lore.book, bookHash: lore.hash, entries: lore.entries, selected: [], metadata, limits: { maxEntries: 0 } }),
+            selected: [],
+            rejected: [],
+            propagation: { goalIds: [], variableIds: [] },
+            budget: { maxEntries: 0, maxTokens: 0, usedEntries: 0, usedTokens: 0, overflow: false },
+        };
+    }
     let semantic = { ok: true, degraded: false, matches: [] };
     if (prepared.packet.text && !skipSemantic) {
         const timeoutMs = phase === 'prefetch' ? 20000 : Math.max(250, profile.warmQueryTargetMs * 2);
@@ -132,7 +182,7 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
     const variables = listVariableValues({ timelineId: scene.timelineId });
     const ranking = rankLivingLore({
         packet: prepared.packet,
-        entries: lore.entries,
+        entries: lore.entries.filter((entry) => !prepared.excludes.some((excluded) => loreKey(excluded) === loreKey(entry))),
         semanticMatches: semantic.matches || [],
         metadata,
         goals: prepared.goals,
@@ -168,6 +218,12 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         loomPacket,
         ...ranking,
     };
+}
+
+function loreKey(value) {
+    const book = String(value?.book || '').trim();
+    const uid = String(value?.uid ?? '').trim();
+    return book && uid ? `${book}.${uid}` : '';
 }
 
 function withTimeout(promise, timeoutMs, message) {

@@ -4,6 +4,7 @@ const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'worldSenseV1';
 const STORE_VERSION = 1;
 export const DEFAULT_WORLD_SENSE_MODEL = 'Xenova/all-MiniLM-L6-v2';
+export const WORLD_SENSE_MODES = Object.freeze(['off', 'observe', 'suggest', 'auto-safe']);
 
 export function getWorldSenseStore() {
     const context = getContext();
@@ -21,6 +22,7 @@ export function getWorldSenseProfile() { return getWorldSenseStore().profile; }
 
 export function updateWorldSenseProfile(patch = {}) {
     const store = getWorldSenseStore();
+    if (patch.mode !== undefined) store.profile.mode = WORLD_SENSE_MODES.includes(patch.mode) ? patch.mode : 'suggest';
     if (patch.modelId !== undefined) store.profile.modelId = String(patch.modelId || '').trim().slice(0, 200) || DEFAULT_WORLD_SENSE_MODEL;
     if (patch.warmQueryTargetMs !== undefined) store.profile.warmQueryTargetMs = clamp(patch.warmQueryTargetMs, 50, 5000, 500);
     if (patch.supportedBookSize !== undefined) store.profile.supportedBookSize = clamp(patch.supportedBookSize, 10, 5000, 250);
@@ -78,7 +80,7 @@ export function getWorldSenseContinuity(sceneId) {
 function emptyStore() {
     return {
         version: STORE_VERSION,
-        profile: { modelId: DEFAULT_WORLD_SENSE_MODEL, warmQueryTargetMs: 500, supportedBookSize: 250, maxEntries: 12, maxTokens: 1800, semanticThreshold: 0.30, semanticOnlyLimit: 3, updatedAt: now() },
+        profile: { mode: 'suggest', modelId: DEFAULT_WORLD_SENSE_MODEL, warmQueryTargetMs: 500, supportedBookSize: 250, maxEntries: 12, maxTokens: 1800, semanticThreshold: 0.30, semanticOnlyLimit: 3, updatedAt: now() },
         indexes: {},
         benchmark: null,
         receipts: [],
@@ -94,6 +96,7 @@ function normalizeStore(store) {
     const defaults = emptyStore();
     store.version = STORE_VERSION;
     store.profile = { ...defaults.profile, ...(isObject(store.profile) ? store.profile : {}) };
+    store.profile.mode = WORLD_SENSE_MODES.includes(store.profile.mode) ? store.profile.mode : 'suggest';
     store.profile.modelId = String(store.profile.modelId || DEFAULT_WORLD_SENSE_MODEL).trim().slice(0, 200) || DEFAULT_WORLD_SENSE_MODEL;
     store.profile.warmQueryTargetMs = clamp(store.profile.warmQueryTargetMs, 50, 5000, 500);
     store.profile.supportedBookSize = clamp(store.profile.supportedBookSize, 10, 5000, 250);

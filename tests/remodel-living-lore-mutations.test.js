@@ -1,10 +1,12 @@
 import { beforeEach, expect, jest, test } from '@jest/globals';
 import {
     applyLivingLoreProposals,
+    editLivingLoreProposalValue,
     invalidateLivingLoreProposals,
     listLivingLoreHistory,
     listLivingLoreProposals,
     queueLivingLoreProposals,
+    rejectLivingLoreProposal,
     rollbackLivingLoreTransaction,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-mutations.js';
 import {
@@ -89,6 +91,21 @@ test('Suggest mode queues a field-level diff without writing native lore', async
     })]);
     expect(listLivingLoreProposals({ timelineId: TIMELINE, status: 'suggested' })).toHaveLength(1);
     expect(nativeBook.entries[42].content).toContain('At rest.');
+    expect(saves).toHaveLength(0);
+});
+
+test('owner can edit and reject queued suggestions without mutating native lore', async () => {
+    const queued = await queueLivingLoreProposals({
+        timelineId: TIMELINE, packet: packet(),
+        proposals: [proposal('current.set', 'Awake beneath the hill.', { id: 'owner-review' })],
+        acceptedProse: 'The bell rang twice.',
+    });
+    const edited = await editLivingLoreProposalValue({ timelineId: TIMELINE, proposalId: queued.queued[0].id, value: 'Listening beneath the hill.' });
+    expect(edited).toMatchObject({ ok: true, proposal: { diff: [expect.objectContaining({ after: 'Listening beneath the hill.' })] } });
+    expect(saves).toHaveLength(0);
+
+    expect(rejectLivingLoreProposal({ timelineId: TIMELINE, proposalId: queued.queued[0].id })).toEqual({ ok: true, proposalId: queued.queued[0].id });
+    expect(listLivingLoreProposals({ timelineId: TIMELINE, status: 'rejected' })).toHaveLength(1);
     expect(saves).toHaveLength(0);
 });
 

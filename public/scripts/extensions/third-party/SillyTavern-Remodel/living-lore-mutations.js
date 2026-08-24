@@ -11,6 +11,7 @@ import {
 } from './living-lore-store.js';
 import { parseLivingLoreProposals } from './living-lore-proposals.js';
 import { invalidateTimelineLoreCache } from './world-sense-lore.js';
+import { getWorldSenseProfile } from './world-sense-store.js';
 
 const MODE = 'suggest';
 const MAX_PROPOSALS_PER_TRANSACTION = 12;
@@ -37,6 +38,10 @@ const PROTECTED_BY_OPERATION = Object.freeze({
 export async function queueLivingLoreProposals({
     timelineId = '', packet = null, proposals = [], acceptedProse = '', archiveFacts = [], source = {},
 } = {}) {
+    const automationMode = getWorldSenseProfile().mode || 'suggest';
+    if (automationMode === 'off' || automationMode === 'observe') {
+        return { ok: true, queued: [], rejected: [], observed: automationMode === 'observe' };
+    }
     const bucket = getTimelineLivingLoreState(timelineId);
     if (!bucket || !packet?.book) return { ok: false, queued: [], rejected: [{ index: -1, code: 'missing-context' }] };
     const context = getContext();
@@ -150,6 +155,44 @@ export function listLivingLoreProposals({ timelineId = '', status = '' } = {}) {
 
 export function listLivingLoreHistory({ timelineId = '' } = {}) {
     return (getTimelineLivingLoreState(timelineId, { create: false })?.history || []).map(clone);
+}
+
+export function rejectLivingLoreProposal({ timelineId = '', proposalId = '', reason = 'owner-rejected' } = {}) {
+    const bucket = getTimelineLivingLoreState(timelineId, { create: false });
+    const record = bucket?.proposals?.[String(proposalId)];
+    if (!record || record.status !== 'suggested') return failure('proposal-unavailable');
+    record.status = 'rejected';
+    record.rejectionReason = String(reason || 'owner-rejected');
+    record.updatedAt = now();
+    bucket.updatedAt = record.updatedAt;
+    saveLivingLoreStore();
+    debug('proposal.rejected', { timelineId, proposalId: record.id, reason: record.rejectionReason });
+    return { ok: true, proposalId: record.id };
+}
+
+/** Owner edits only the typed value. The operation, target, evidence and
+ * revision remain fixed; the edited value is re-previewed against native lore
+ * before it can replace the queued diff. */
+export async function editLivingLoreProposalValue({ timelineId = '', proposalId = '', value } = {}) {
+    const bucket = getTimelineLivingLoreState(timelineId, { create: false });
+    const record = bucket?.proposals?.[String(proposalId)];
+    if (!bucket || !record || record.status !== 'suggested') return failure('proposal-unavailable');
+    const context = getContext();
+    const data = await context.loadWorldInfo?.(record.book);
+    if (!data?.entries) return failure('book-unavailable');
+    const proposal = { ...clone(record.proposal), value: clone(value) };
+    if (String(typeof value === 'string' ? value : JSON.stringify(value ?? '')).length > MAX_VALUE_CHARS) return failure('value-too-large');
+    const validationCode = validateApply(proposal, bucket, data);
+    if (validationCode) return failure(validationCode);
+    const preview = previewProposal(data, bucket, proposal);
+    if (!preview.ok) return failure(preview.code);
+    record.proposal = proposal;
+    record.diff = preview.diff;
+    record.updatedAt = now();
+    bucket.updatedAt = record.updatedAt;
+    saveLivingLoreStore();
+    debug('proposal.edited', { timelineId, proposalId: record.id });
+    return { ok: true, proposal: clone(record) };
 }
 
 /** Apply an owner-selected suggestion set as one native World Info save. */

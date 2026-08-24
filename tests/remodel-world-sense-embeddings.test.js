@@ -1,7 +1,7 @@
 import { jest } from '@jest/globals';
 import { benchmarkWorldSense, ensureWorldSenseIndex, queryWorldSense } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-embeddings.js';
 import { invalidateTimelineLoreCache } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-lore.js';
-import { previewWorldSense, resolveWorldSense } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-runtime.js';
+import { getWorldSenseTurnOverrides, previewWorldSense, resolveWorldSense, setWorldSenseTurnOverride } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-runtime.js';
 import {
     DEFAULT_WORLD_SENSE_MODEL,
     getWorldSenseContinuity,
@@ -34,8 +34,8 @@ afterEach(() => {
 
 test('stores a configurable local model and bounded benchmark targets', () => {
     expect(getWorldSenseProfile().modelId).toBe(DEFAULT_WORLD_SENSE_MODEL);
-    const profile = updateWorldSenseProfile({ modelId: 'Org/small-model', warmQueryTargetMs: 1, supportedBookSize: 99999 });
-    expect(profile).toMatchObject({ modelId: 'Org/small-model', warmQueryTargetMs: 50, supportedBookSize: 5000 });
+    const profile = updateWorldSenseProfile({ mode: 'observe', modelId: 'Org/small-model', warmQueryTargetMs: 1, supportedBookSize: 99999 });
+    expect(profile).toMatchObject({ mode: 'observe', modelId: 'Org/small-model', warmQueryTargetMs: 50, supportedBookSize: 5000 });
 });
 
 test('incrementally indexes enabled entries and reuses an unchanged collection', async () => {
@@ -119,6 +119,26 @@ test('Preview ranks the same deterministic lore without saving receipt or contin
     expect(turn.receipt).not.toHaveProperty('loomPacket');
     expect(turn.loomPacket.entries[0].content).toBe('A tidal port.');
     expect(listWorldSenseReceipts({ sceneId: scene.id })).toHaveLength(1);
+});
+
+test('one-turn pins and exclusions affect Preview but are consumed only by Send', async () => {
+    global.fetch = jest.fn(async () => { throw new Error('local model unavailable'); });
+    __setContextOverrides({ loadWorldInfo: async () => ({ entries: {
+        1: { uid: 1, comment: 'Harbor', key: ['harbor'], content: 'A tidal port.' },
+        3: { uid: 3, comment: 'Bell Tower', key: ['bell'], content: 'A silent tower.' },
+    } }) });
+    invalidateTimelineLoreCache();
+    const scene = { id: 'scene-overrides', timelineId: TIMELINE };
+    setWorldSenseTurnOverride(scene.id, { book: 'Living Book', uid: '1' }, 'exclude');
+    setWorldSenseTurnOverride(scene.id, { book: 'Living Book', uid: '3' }, 'pin');
+
+    const preview = await previewWorldSense(scene, { action: 'Approach the harbor.' });
+    expect(preview.selected).toEqual([expect.objectContaining({ uid: '3' })]);
+    expect(getWorldSenseTurnOverrides(scene.id)).toMatchObject({ pins: [{ uid: '3' }], excludes: [{ uid: '1' }] });
+
+    const turn = await resolveWorldSense(scene, { action: 'Approach the harbor.' });
+    expect(turn.selected).toEqual([expect.objectContaining({ uid: '3' })]);
+    expect(getWorldSenseTurnOverrides(scene.id)).toEqual({ pins: [], excludes: [] });
 });
 
 function response(body, status = 200) {

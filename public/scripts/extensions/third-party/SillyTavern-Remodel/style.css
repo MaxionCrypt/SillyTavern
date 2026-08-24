@@ -10311,6 +10311,497 @@ body.st-remodel-active .remodel-lorebooks-dock button[aria-expanded="true"] {
   box-shadow:0 0 12px rgba(215,200,0,.1) !important;
 }
 
+/* World Sense is mounted only while its Lorebooks utility is open. That keeps
+   the native World Info editor authoritative and avoids adding a second hidden
+   tree to an already dense workspace. */
+body.st-remodel-active .remodel-lorebooks-workspace.is-world-sense-open .remodel-lorebooks-outlet {
+  display: none;
+}
+
+body.st-remodel-active .remodel-world-sense-host:not([hidden]) {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  scrollbar-width: none;
+}
+
+body.st-remodel-active .remodel-world-sense-host::-webkit-scrollbar,
+body.st-remodel-active .remodel-world-sense-entry-list::-webkit-scrollbar {
+  display: none;
+}
+
+body.st-remodel-active .remodel-world-sense {
+  --ws-line: color-mix(in srgb, var(--SmartThemeQuoteColor) 32%, transparent);
+  --ws-panel: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, #07080c 10%);
+  width: min(1440px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 34px 0 80px;
+  color: var(--SmartThemeBodyColor);
+}
+
+body.st-remodel-active .remodel-world-sense-loading,
+body.st-remodel-active .remodel-world-sense-empty {
+  min-height: 260px;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  text-align: center;
+  color: color-mix(in srgb, var(--SmartThemeBodyColor) 68%, transparent);
+}
+
+body.st-remodel-active .remodel-world-sense-empty.compact {
+  min-height: 140px;
+}
+
+body.st-remodel-active .remodel-world-sense-head,
+body.st-remodel-active .remodel-world-sense-status,
+body.st-remodel-active .remodel-world-sense-grid,
+body.st-remodel-active .remodel-world-sense-review-grid {
+  display: grid;
+  gap: 18px;
+}
+
+body.st-remodel-active .remodel-world-sense-head {
+  grid-template-columns: minmax(0, 1fr) minmax(250px, 360px);
+  align-items: end;
+  padding: 0 0 24px;
+  border-bottom: 1px solid var(--ws-line);
+}
+
+body.st-remodel-active .remodel-world-sense-kicker,
+body.st-remodel-active .remodel-world-sense-head p,
+body.st-remodel-active .remodel-world-sense-status span,
+body.st-remodel-active .remodel-world-sense-status small,
+body.st-remodel-active .remodel-world-sense-review header span {
+  color: color-mix(in srgb, var(--SmartThemeBodyColor) 58%, transparent);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+body.st-remodel-active .remodel-world-sense-head h2 {
+  margin: 3px 0 2px;
+  font: 500 clamp(2rem, 4vw, 3.5rem)/1 var(--remodel-display-font, Georgia, serif);
+}
+
+body.st-remodel-active .remodel-world-sense-head p,
+body.st-remodel-active .remodel-world-sense-mode-note {
+  margin: 0;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+body.st-remodel-active .remodel-world-sense-mode {
+  display: grid;
+  gap: 7px;
+}
+
+body.st-remodel-active .remodel-world-sense-mode label,
+body.st-remodel-active .remodel-world-sense-settings label,
+body.st-remodel-active .remodel-world-sense-filters label,
+body.st-remodel-active .remodel-world-sense-meta-row label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+body.st-remodel-active .remodel-world-sense select,
+body.st-remodel-active .remodel-world-sense input,
+body.st-remodel-active .remodel-world-sense button {
+  min-height: 40px;
+  border: 1px solid var(--ws-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ws-panel) 86%, transparent);
+  color: inherit;
+}
+
+body.st-remodel-active .remodel-world-sense button {
+  cursor: pointer;
+  padding: 8px 13px;
+}
+
+body.st-remodel-active .remodel-world-sense button:hover,
+body.st-remodel-active .remodel-world-sense button:focus-visible,
+body.st-remodel-active .remodel-world-sense button.primary,
+body.st-remodel-active .remodel-world-sense button.is-active {
+  border-color: var(--SmartThemeQuoteColor);
+  color: var(--SmartThemeQuoteColor);
+  outline: none;
+}
+
+body.st-remodel-active .remodel-world-sense button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+body.st-remodel-active .remodel-world-sense-notice {
+  margin: 14px 0 0;
+  padding: 10px 14px;
+  border-left: 2px solid var(--SmartThemeQuoteColor);
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor) 9%, transparent);
+}
+
+body.st-remodel-active .remodel-world-sense-status {
+  grid-template-columns: 1fr 0.8fr 0.8fr auto;
+  align-items: stretch;
+  margin: 20px 0;
+}
+
+body.st-remodel-active .remodel-world-sense-status > div,
+body.st-remodel-active .remodel-world-sense-status > button,
+body.st-remodel-active .remodel-world-sense-settings,
+body.st-remodel-active .remodel-world-sense-browser,
+body.st-remodel-active .remodel-world-sense-inspector,
+body.st-remodel-active .remodel-world-sense-review,
+body.st-remodel-active .remodel-world-sense-dryrun {
+  border: 1px solid var(--ws-line);
+  border-radius: 12px;
+  background: var(--ws-panel);
+}
+
+body.st-remodel-active .remodel-world-sense-status > div {
+  display: grid;
+  gap: 3px;
+  padding: 13px 15px;
+}
+
+body.st-remodel-active .remodel-world-sense-status strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.st-remodel-active .remodel-world-sense-status .is-ready {
+  color: #a8d88d;
+}
+
+body.st-remodel-active .remodel-world-sense-status .is-unavailable {
+  color: #e89386;
+}
+
+body.st-remodel-active .remodel-world-sense-settings {
+  margin-bottom: 20px;
+  padding: 12px 15px;
+}
+
+body.st-remodel-active .remodel-world-sense-settings > summary,
+body.st-remodel-active .remodel-world-sense-dryrun > summary {
+  cursor: pointer;
+}
+
+body.st-remodel-active .remodel-world-sense-settings > div {
+  display: grid;
+  grid-template-columns: minmax(260px, 2fr) repeat(3, minmax(110px, 0.6fr));
+  gap: 12px;
+  padding-top: 14px;
+}
+
+body.st-remodel-active .remodel-world-sense-grid {
+  grid-template-columns: minmax(320px, 0.9fr) minmax(390px, 1.1fr);
+  min-height: 610px;
+}
+
+body.st-remodel-active .remodel-world-sense-browser,
+body.st-remodel-active .remodel-world-sense-inspector {
+  min-width: 0;
+  padding: 16px;
+}
+
+body.st-remodel-active .remodel-world-sense-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+body.st-remodel-active .remodel-world-sense-search label {
+  position: relative;
+}
+
+body.st-remodel-active .remodel-world-sense-search i {
+  position: absolute;
+  left: 13px;
+  top: 13px;
+  opacity: 0.55;
+}
+
+body.st-remodel-active .remodel-world-sense-search input {
+  width: 100%;
+  padding-left: 36px;
+}
+
+body.st-remodel-active .remodel-world-sense-filters {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 9px;
+  align-items: end;
+  margin: 12px 0;
+}
+
+body.st-remodel-active .remodel-world-sense-filters > span {
+  padding: 0 2px 11px;
+  font-size: 0.76rem;
+  opacity: 0.62;
+}
+
+body.st-remodel-active .remodel-world-sense-entry-list {
+  display: grid;
+  gap: 8px;
+  max-height: 490px;
+  overflow: auto;
+  scrollbar-width: none;
+}
+
+body.st-remodel-active button.remodel-world-sense-entry {
+  display: grid;
+  gap: 5px;
+  min-height: 0;
+  padding: 12px 13px;
+  text-align: left;
+  color: inherit;
+}
+
+body.st-remodel-active button.remodel-world-sense-entry.is-selected {
+  border-color: var(--SmartThemeQuoteColor);
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor) 12%, var(--ws-panel));
+}
+
+body.st-remodel-active .remodel-world-sense-entry-top,
+body.st-remodel-active .remodel-world-sense-entry-flags,
+body.st-remodel-active .remodel-world-sense-inspector header,
+body.st-remodel-active .remodel-world-sense-proposal header,
+body.st-remodel-active .remodel-world-sense-proposal footer,
+body.st-remodel-active .remodel-world-sense-history,
+body.st-remodel-active .remodel-world-sense-dryrun article header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+body.st-remodel-active .remodel-world-sense-entry-top em,
+body.st-remodel-active .remodel-world-sense-entry-flags,
+body.st-remodel-active .remodel-world-sense-entry-keys,
+body.st-remodel-active .remodel-world-sense-entry-reason {
+  font-size: 0.72rem;
+  opacity: 0.66;
+}
+
+body.st-remodel-active .remodel-world-sense-entry-top em {
+  padding: 2px 7px;
+  border: 1px solid var(--ws-line);
+  border-radius: 99px;
+  font-style: normal;
+}
+
+body.st-remodel-active .remodel-world-sense-entry-reason b {
+  color: var(--SmartThemeQuoteColor);
+}
+
+body.st-remodel-active .remodel-world-sense-entry-flags {
+  justify-content: flex-start;
+}
+
+body.st-remodel-active .remodel-world-sense-entry-flags span {
+  margin-left: auto;
+}
+
+body.st-remodel-active .remodel-world-sense-inspector form {
+  display: grid;
+  gap: 15px;
+}
+
+body.st-remodel-active .remodel-world-sense-inspector h3 {
+  margin: 3px 0 0;
+  font: 500 1.55rem/1.15 var(--remodel-display-font, Georgia, serif);
+}
+
+body.st-remodel-active .remodel-world-sense-inspector header span,
+body.st-remodel-active .remodel-world-sense-evidence,
+body.st-remodel-active .remodel-world-sense-links {
+  font-size: 0.78rem;
+  opacity: 0.76;
+}
+
+body.st-remodel-active .remodel-world-sense-revision {
+  padding: 5px 9px;
+  border: 1px solid var(--ws-line);
+  border-radius: 99px;
+}
+
+body.st-remodel-active .remodel-world-sense-meta-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+body.st-remodel-active .remodel-world-sense-inspector fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 15px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--ws-line);
+  border-radius: 9px;
+}
+
+body.st-remodel-active .remodel-world-sense-inspector fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+body.st-remodel-active .remodel-world-sense-inspector input[type="checkbox"] {
+  min-height: 0;
+}
+
+body.st-remodel-active .remodel-world-sense-links {
+  display: grid;
+  gap: 5px;
+}
+
+body.st-remodel-active .remodel-world-sense-review-grid {
+  grid-template-columns: 1.15fr 0.85fr;
+  margin-top: 18px;
+}
+
+body.st-remodel-active .remodel-world-sense-review {
+  padding: 16px;
+}
+
+body.st-remodel-active .remodel-world-sense-review > header {
+  margin-bottom: 12px;
+}
+
+body.st-remodel-active .remodel-world-sense-review > header div {
+  display: flex;
+  justify-content: space-between;
+}
+
+body.st-remodel-active .remodel-world-sense-proposal,
+body.st-remodel-active .remodel-world-sense-history,
+body.st-remodel-active .remodel-world-sense-dryrun article {
+  margin-top: 9px;
+  padding: 12px;
+  border: 1px solid var(--ws-line);
+  border-radius: 9px;
+  background: color-mix(in srgb, #000 12%, transparent);
+}
+
+body.st-remodel-active .remodel-world-sense-proposal header > div,
+body.st-remodel-active .remodel-world-sense-history > div {
+  display: grid;
+  gap: 3px;
+}
+
+body.st-remodel-active .remodel-world-sense-proposal header span,
+body.st-remodel-active .remodel-world-sense-proposal time,
+body.st-remodel-active .remodel-world-sense-proposal small,
+body.st-remodel-active .remodel-world-sense-history span {
+  font-size: 0.7rem;
+  opacity: 0.62;
+}
+
+body.st-remodel-active .remodel-world-sense-diff {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0;
+}
+
+body.st-remodel-active .remodel-world-sense-diff > div {
+  display: grid;
+  grid-template-columns: 90px 1fr 1fr;
+  gap: 7px;
+  align-items: start;
+  font-size: 0.76rem;
+}
+
+body.st-remodel-active .remodel-world-sense-diff del,
+body.st-remodel-active .remodel-world-sense-diff ins {
+  max-height: 100px;
+  overflow: auto;
+  padding: 7px;
+  border-radius: 6px;
+  text-decoration: none;
+  white-space: pre-wrap;
+}
+
+body.st-remodel-active .remodel-world-sense-diff del {
+  background: rgba(185, 67, 67, 0.12);
+}
+
+body.st-remodel-active .remodel-world-sense-diff ins {
+  background: rgba(96, 175, 113, 0.14);
+}
+
+body.st-remodel-active .remodel-world-sense-proposal footer {
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+body.st-remodel-active .remodel-world-sense-dryrun {
+  margin-top: 18px;
+  padding: 14px 16px;
+}
+
+body.st-remodel-active .remodel-world-sense-dryrun > summary {
+  display: flex;
+  justify-content: space-between;
+}
+
+body.st-remodel-active .remodel-world-sense-dryrun pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  font: inherit;
+  font-size: 0.78rem;
+}
+
+body.st-remodel-active .remodel-world-sense-muted {
+  opacity: 0.58;
+}
+
+@media (max-width: 920px) {
+  body.st-remodel-active .remodel-world-sense {
+    width: calc(100% - 24px);
+  }
+
+  body.st-remodel-active .remodel-world-sense-head,
+  body.st-remodel-active .remodel-world-sense-grid,
+  body.st-remodel-active .remodel-world-sense-review-grid {
+    grid-template-columns: 1fr;
+  }
+
+  body.st-remodel-active .remodel-world-sense-status {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  body.st-remodel-active .remodel-world-sense-settings > div {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  body.st-remodel-active .remodel-world-sense-entry-list {
+    max-height: 380px;
+  }
+}
+
+@media (max-width: 560px) {
+  body.st-remodel-active .remodel-world-sense-status,
+  body.st-remodel-active .remodel-world-sense-settings > div,
+  body.st-remodel-active .remodel-world-sense-meta-row,
+  body.st-remodel-active .remodel-world-sense-search {
+    grid-template-columns: 1fr;
+  }
+
+  body.st-remodel-active .remodel-world-sense-diff > div {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Remove the ornamental spine and pin drawing. The native lock remains as a
    compact, legible control at the far right of the title bar. */
 body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px {

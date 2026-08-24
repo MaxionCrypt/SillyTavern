@@ -77,6 +77,7 @@ import {
 } from './story-goals.js';
 import { getSceneGoals, updateSceneGoalState } from './story-goals-store.js';
 import { clearMechanicsReceiptInjection } from './mechanics-runtime.js';
+import { mountWorldSenseWorkspace, renderWorldSenseWorkspaceShell } from './world-sense-workspace.js';
 import { listVariablesForLoreRef, listVariableValues } from './variables-store.js';
 import {
     listEvents as archiveListEvents,
@@ -4489,7 +4490,12 @@ function renderLorebooksWorkspace() {
                     <i class="fa-solid fa-sliders" aria-hidden="true"></i>
                     <span>World settings</span>
                 </button>
+                <button type="button" data-remodel-lorebooks-panel="world-sense" aria-expanded="false" title="World Sense retrieval, metadata and proposals">
+                    <i class="fa-solid fa-compass" aria-hidden="true"></i>
+                    <span>World Sense</span>
+                </button>
             </nav>
+            <div class="remodel-world-sense-host" data-remodel-world-sense-host hidden></div>
             <div id="${LEGACY_OUTLET_ID}" class="remodel-tavern-legacy-outlet remodel-lorebooks-outlet"></div>
         </section>
     `;
@@ -4498,22 +4504,32 @@ function renderLorebooksWorkspace() {
 function toggleLorebooksUtilityPanel(panelName) {
     const workspace = document.querySelector('.remodel-lorebooks-workspace');
 
-    if (!workspace || !['library', 'settings'].includes(panelName)) {
+    if (!workspace || !['library', 'settings', 'world-sense'].includes(panelName)) {
         return;
     }
 
-    const activeClass = panelName === 'library' ? 'is-library-open' : 'is-settings-open';
+    const activeClass = panelName === 'library' ? 'is-library-open' : panelName === 'settings' ? 'is-settings-open' : 'is-world-sense-open';
     const shouldOpen = !workspace.classList.contains(activeClass);
-    workspace.classList.remove('is-library-open', 'is-settings-open');
+    workspace.classList.remove('is-library-open', 'is-settings-open', 'is-world-sense-open');
 
     if (shouldOpen) {
         workspace.classList.add(activeClass);
     }
 
     workspace.querySelectorAll('[data-remodel-lorebooks-panel]').forEach((button) => {
-        const buttonClass = button.dataset.remodelLorebooksPanel === 'library' ? 'is-library-open' : 'is-settings-open';
+        const buttonClass = button.dataset.remodelLorebooksPanel === 'library'
+            ? 'is-library-open'
+            : button.dataset.remodelLorebooksPanel === 'settings' ? 'is-settings-open' : 'is-world-sense-open';
         button.setAttribute('aria-expanded', String(workspace.classList.contains(buttonClass)));
     });
+    const host = workspace.querySelector('[data-remodel-world-sense-host]');
+    if (host instanceof HTMLElement) {
+        host.hidden = !workspace.classList.contains('is-world-sense-open');
+        if (!host.hidden) {
+            if (!host.querySelector('[data-remodel-world-sense]')) host.innerHTML = renderWorldSenseWorkspaceShell();
+            mountWorldSenseWorkspace(host.querySelector('[data-remodel-world-sense]'));
+        }
+    }
 }
 
 function syncLorebooksWorkspaceMeta(panel) {
