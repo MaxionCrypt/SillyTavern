@@ -10,6 +10,8 @@ const connectionManager = fs.readFileSync(
     new URL('../public/scripts/extensions/connection-manager/index.js', import.meta.url), 'utf8');
 const timelineSpine = fs.readFileSync(
     new URL('../public/scripts/extensions/third-party/SillyTavern-Remodel/timeline-spine.js', import.meta.url), 'utf8');
+const liveDirection = fs.readFileSync(
+    new URL('../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js', import.meta.url), 'utf8');
 
 test('native profile activation does not reconnect an already-online selected profile', () => {
     expect(connectionManager).toMatch(/selectedProfile === profile\.id && online_status !== 'no_connection'/);
@@ -17,6 +19,27 @@ test('native profile activation does not reconnect an already-online selected pr
 
 test('native profile activation waits for asynchronous reconnect before returning', () => {
     expect(connectionManager).toMatch(/waitUntilCondition\(\(\) => online_status !== 'no_connection'/);
+    expect(connectionManager).toContain('30000, 100, { rejectOnTimeout: true }');
+    expect(connectionManager).toContain('did not become ready within 30 seconds');
+});
+
+test('concurrent activation of the same profile shares one connection flight', () => {
+    expect(connectionManager).toContain('let profileActivationFlight = null');
+    expect(connectionManager).toContain('if (profileActivationId === profile.id) return profileActivationFlight');
+    expect(connectionManager).toContain('await profileActivationFlight');
+});
+
+test('the roleplay connection picker waits for the Narrator route before closing', () => {
+    expect(timelineSpine).toContain('roleplayConnectionApplication = state.narratorProfileId');
+    expect(timelineSpine).toContain('await roleplayConnectionApplication');
+    expect(timelineSpine).toContain('Connecting Narrator');
+});
+
+test('profile command events are not claimed as the Narrator generation', () => {
+    const start = liveDirection.indexOf('async function generateDirectedPerformer');
+    const body = liveDirection.slice(start, liveDirection.indexOf('async function beginLoomVisibleStream', start));
+    expect(body.indexOf('await hooks.activateConnectionProfile(narratorProfileId)')).toBeLessThan(body.indexOf('ownedGenerationDepth++'));
+    expect(body).toContain('if (generationOwned) ownedGenerationDepth');
 });
 
 
@@ -45,7 +68,7 @@ test('a failed Narrator profile activation does not abandon Scene creation', () 
 // the end of CC_COMMANDS. Those re-enter core's `#main_api` change handler,
 // which calls cancelStatusCheck() — aborting the in-flight status probe AND
 // forcing online_status to 'no_connection', with nothing scheduled to replace
-// it. The wait then burns its full 10s and throws, and the Scene being opened
+// it. The wait then burns its timeout and throws, and the Scene being opened
 // is abandoned.
 //
 // The FIRST fix guarded on online_status at the end of applyConnectionProfile

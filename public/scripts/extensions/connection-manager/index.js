@@ -452,6 +452,13 @@ async function reissueConnection(profile) {
     }
 }
 
+// Profile commands mutate one global native connection. Concurrent callers
+// otherwise duplicate or interleave secret rotation, provider discovery and
+// status probes; the slower probe can then set `online_status` back to
+// `no_connection` after the faster caller already began generation.
+let profileActivationFlight = null;
+let profileActivationId = '';
+
 /**
  * Selects and applies a saved profile from extension code without simulating a
  * click on Connection Manager's settings UI. Native generation reads the
@@ -477,6 +484,28 @@ export async function activateConnectionProfile(profileId) {
         return profile;
     }
 
+    if (profileActivationFlight) {
+        if (profileActivationId === profile.id) return profileActivationFlight;
+        // The native connection is global, so a different profile must wait
+        // too. Retry after the prior flight settles, re-reading the then-live
+        // selected profile and online status through this exported boundary.
+        try { await profileActivationFlight; } catch { /* the next route is independent */ }
+        return activateConnectionProfile(profile.id);
+    }
+
+    const activation = activateConnectionProfileOnce(profile).finally(() => {
+        if (profileActivationFlight === activation) {
+            profileActivationFlight = null;
+            profileActivationId = '';
+        }
+    });
+    profileActivationFlight = activation;
+    profileActivationId = profile.id;
+    return activation;
+}
+
+async function activateConnectionProfileOnce(profile) {
+
     extension_settings.connectionManager.selectedProfile = profile.id;
     saveSettingsDebounced();
     await applyConnectionProfile(profile);
@@ -489,7 +518,7 @@ export async function activateConnectionProfile(profileId) {
     // Commands late in the profile — `secret-id` above all — re-enter core's
     // `#main_api` change handler, which calls cancelStatusCheck(): that aborts the
     // in-flight probe AND forces online_status to 'no_connection', with no
-    // replacement scheduled. Waiting alone therefore burns the full 10s and throws,
+    // replacement scheduled. Waiting alone therefore burns the timeout and throws,
     // and the caller abandons the Scene it was opening.
     //
     // Let change handlers queued by the last profile command finish before
@@ -501,7 +530,20 @@ export async function activateConnectionProfile(profileId) {
     if (!await reissueConnection(profile)) {
         throw new Error(`Could not start the connection check for profile: ${profile.name || profile.id}`);
     }
-    await waitUntilCondition(() => online_status !== 'no_connection', 10000, 100, { rejectOnTimeout: true });
+    try {
+        // Model/provider discovery and local embedding work can queue the
+        // status endpoint for longer than ten seconds even when it succeeds.
+        // Thirty seconds covers that measured slow path without waiting
+        // indefinitely for a genuinely broken profile.
+        await waitUntilCondition(() => online_status !== 'no_connection', 30000, 100, { rejectOnTimeout: true });
+    } catch (error) {
+        // The status response can land on the timeout boundary. Accept the
+        // observed healthy state; otherwise replace the utility's anonymous
+        // condition error with the route the user can actually repair.
+        if (online_status === 'no_connection') {
+            throw new Error(`Connection profile "${profile.name || profile.id}" did not become ready within 30 seconds.`, { cause: error });
+        }
+    }
 
     const select = document.getElementById('connection_profiles');
     if (select instanceof HTMLSelectElement) {

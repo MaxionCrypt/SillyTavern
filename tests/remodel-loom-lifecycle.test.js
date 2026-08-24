@@ -14,6 +14,7 @@ import {
     clearLiveDirectionFailure,
     isLatestUserMessage,
     regenerateLastDirectedResponse,
+    retryLiveDirection,
     rerunDirectedRoleplayFromUserMessage,
     previewLoomPrompt,
     runLoomReconciliation,
@@ -100,6 +101,7 @@ beforeEach(() => {
         onSettled: () => {},
         onFailure: () => {},
         setNativePromptContent: () => {},
+        activateConnectionProfile: async () => null,
     });
     setLiveDirectionTestAdapters({
         generatePerformer: speak,
@@ -112,6 +114,7 @@ afterEach(async () => {
     await stopLiveDirection();
     clearLiveDirectionFailure();
     setLiveDirectionTestAdapters(null);
+    delete scene.generationProfileIds;
 });
 
 test('a Loom turn commits the Narrator draft and waits for the user', async () => {
@@ -176,6 +179,28 @@ test('Retry invalidates the superseded suggestion and queues the retake once', a
     expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })).toEqual([
         expect.objectContaining({ proposal: expect.objectContaining({ id: 'take-2' }) }),
     ]);
+});
+
+test('Retry preserves the completed response until its replacement connection is ready', async () => {
+    scene.generationProfileIds = { narrator: 'slow-route', loom: 'slow-route' };
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    const original = structuredClone(__getChat());
+    let reported = '';
+    initLiveDirection({
+        activateConnectionProfile: async () => { throw new Error('Connection profile "Slow route" did not become ready within 30 seconds.'); },
+        onFailure: (error) => { reported = error.message; },
+    });
+
+    expect(await regenerateLastDirectedResponse(scene)).toBe(false);
+    expect(__getChat()).toEqual(original);
+    expect(reported).toMatch(/Slow route/);
+
+    initLiveDirection({ activateConnectionProfile: async () => ({ id: 'ready' }) });
+    expect(await retryLiveDirection()).toBe(true);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    expect(__getChat()).toHaveLength(1);
+    expect(__getChat()[0].mes).toBe(RESPONSE);
 });
 
 test('editing the latest user message rewinds its response and reruns without duplicating the user', async () => {

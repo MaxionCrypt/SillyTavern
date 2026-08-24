@@ -679,6 +679,7 @@ export async function retryLiveDirection() {
     const retry = pendingFailure;
     pendingFailure = null;
     if (!retry) return false;
+    if (retry.operation === 'regenerate') return regenerateLastDirectedResponse(retry.scene);
     return beginDirection(retry);
 }
 
@@ -756,6 +757,17 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
             sceneId: scene.id,
         }, { severity: 'warn' });
         return requestNextDirection(scene);
+    }
+    // Retry is destructive only after its Narrator route is ready. Previously
+    // the completed response and its mechanics were removed first, then a
+    // slow profile reconnect failed, leaving the user with neither version.
+    const narratorProfileId = scene.generationProfileIds?.narrator;
+    if (narratorProfileId) {
+        try {
+            await hooks.activateConnectionProfile(narratorProfileId);
+        } catch (error) {
+            return directionFailure(error, { operation: 'regenerate', scene });
+        }
     }
     // A background catch-up may still be creating suggestions for this take.
     // Join it before invalidating, otherwise it can land after the invalidation
@@ -1453,8 +1465,8 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         nativeComposer.value = '';
         nativeComposer.dispatchEvent(new Event('input', { bubbles: true }));
     }
-    ownedGenerationDepth++;
-    const generationStartedAt = Date.now();
+    let generationOwned = false;
+    let generationStartedAt = 0;
     try {
         const context = getContext();
         // Releases Remodel-authored prose that older builds accidentally
@@ -1470,7 +1482,13 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         }
         const narratorProfileId = scene.generationProfileIds?.narrator;
         if (narratorProfileId) {
+            const activationStartedAt = Date.now();
             await hooks.activateConnectionProfile(narratorProfileId);
+            journal('connection.ready', {
+                directionId: envelope.directionId,
+                profileId: narratorProfileId,
+                durationMs: Date.now() - activationStartedAt,
+            }, { correlationId: envelope.directionId, summary: 'Narrator connection ready' });
         }
         const loreActivation = await activateWorldSenseSelection(context, envelope.worldSense, { phase: 'generation' });
         journalWorldSenseActivation(loreActivation, envelope.directionId);
@@ -1481,6 +1499,13 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             throw new Error(`${performer.label || 'The selected performer'} is not a loaded character card in this group, so no native index could be resolved for it.`);
         }
         const options = context.groupId ? { force_chid: performer.characterId } : {};
+        // Connection Manager profile commands can emit native generation
+        // lifecycle events of their own. Claim ownership only after profile
+        // activation and lore activation have completed, immediately before
+        // Remodel actually asks core to generate.
+        ownedGenerationDepth++;
+        generationOwned = true;
+        generationStartedAt = Date.now();
         journal('generation.start', {
             directionId: envelope.directionId,
             performerLabel: performer.label,
@@ -1526,19 +1551,21 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             await context.generate('normal', options);
         }
     } finally {
-        ownedGenerationDepth = Math.max(0, ownedGenerationDepth - 1);
+        if (generationOwned) ownedGenerationDepth = Math.max(0, ownedGenerationDepth - 1);
         // Dynamic macro content is request-scoped even though its native prompt
         // object persists with the recipe. Clear the resolved Archive after
         // assembly so a later free-play request cannot inherit it.
         hooks.setNativePromptContent('narratorGrounding', '');
-        journal('generation.end', {
-            directionId: envelope.directionId,
-            durationMs: Date.now() - generationStartedAt,
-            messageId: activeRun?.directionId === envelope.directionId ? activeRun.messageId : null,
-            bufferedLength: activeRun?.directionId === envelope.directionId ? activeRun.rawBufferedText.length : null,
-            stillOwned: activeRun?.directionId === envelope.directionId,
-        }, { correlationId: envelope.directionId });
-        if (activeRun?.directionId === envelope.directionId) {
+        if (generationOwned) {
+            journal('generation.end', {
+                directionId: envelope.directionId,
+                durationMs: Date.now() - generationStartedAt,
+                messageId: activeRun?.directionId === envelope.directionId ? activeRun.messageId : null,
+                bufferedLength: activeRun?.directionId === envelope.directionId ? activeRun.rawBufferedText.length : null,
+                stillOwned: activeRun?.directionId === envelope.directionId,
+            }, { correlationId: envelope.directionId });
+        }
+        if (generationOwned && activeRun?.directionId === envelope.directionId) {
             activeRun.narratorGenerationFinished = true;
         }
     }

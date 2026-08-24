@@ -5316,6 +5316,7 @@ async function reorderRoleplayCast(movedAvatar, targetAvatar) {
 const ROLEPLAY_PICKER_ID = 'remodel-rp-cast-picker';
 const ROLEPLAY_NARRATOR_PICKER_ID = 'remodel-rp-narrator-picker';
 const ROLEPLAY_CONNECTION_PICKER_ID = 'remodel-rp-connection-picker';
+let roleplayConnectionApplication = null;
 
 /**
  * Chooses the sole model-facing role in an editor turn. The Loom is pipeline
@@ -5511,13 +5512,13 @@ function openRoleplayConnectionPicker() {
 
 function closeRoleplayConnectionPicker() {
     const overlay = document.getElementById(ROLEPLAY_CONNECTION_PICKER_ID);
-    if (!overlay) return;
+    if (!overlay || overlay._remodelConnections?.busy) return;
     overlay.classList.remove('remodel-rp-picker-in');
     setTimeout(() => overlay.remove(), 200);
 }
 
 function bindRoleplayConnectionPickerEvents() {
-    document.addEventListener('click', (event) => {
+    document.addEventListener('click', async (event) => {
         const overlay = document.getElementById(ROLEPLAY_CONNECTION_PICKER_ID);
         if (!overlay) return;
         const target = event.target instanceof Element ? event.target : null;
@@ -5528,6 +5529,7 @@ function bindRoleplayConnectionPickerEvents() {
         }
         if (!target.closest('[data-remodel-rp-connection-apply]')) return;
         const state = overlay._remodelConnections;
+        if (state.busy || roleplayConnectionApplication) return;
         const scene = getScene(state.sceneId);
         if (!scene) {
             closeRoleplayConnectionPicker();
@@ -5539,9 +5541,32 @@ function bindRoleplayConnectionPickerEvents() {
                 loom: state.loomProfileId || null,
             },
         });
-        closeRoleplayConnectionPicker();
-        renderRoleplayScene();
-        showRoleplayToast('Narrator and Loom connections updated for this scene.');
+        const applyButton = overlay.querySelector('[data-remodel-rp-connection-apply]');
+        state.busy = true;
+        if (applyButton instanceof HTMLButtonElement) {
+            applyButton.disabled = true;
+            applyButton.innerHTML = 'Connecting Narrator… <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>';
+        }
+        roleplayConnectionApplication = state.narratorProfileId
+            ? activateConnectionProfile(state.narratorProfileId)
+            : Promise.resolve(null);
+        try {
+            await roleplayConnectionApplication;
+            state.busy = false;
+            roleplayConnectionApplication = null;
+            closeRoleplayConnectionPicker();
+            renderRoleplayScene();
+            showRoleplayToast('Narrator and Loom connections updated. The Narrator route is ready.');
+        } catch (error) {
+            console.error('Remodel: Narrator connection profile did not become ready', error);
+            state.busy = false;
+            roleplayConnectionApplication = null;
+            if (applyButton instanceof HTMLButtonElement) {
+                applyButton.disabled = false;
+                applyButton.innerHTML = 'Try connection again <i class="fa-solid fa-plug-circle-xmark" aria-hidden="true"></i>';
+            }
+            showRoleplayToast(String(error?.message || error));
+        }
     });
 
     document.addEventListener('change', (event) => {
