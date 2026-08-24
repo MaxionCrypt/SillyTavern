@@ -108,6 +108,7 @@ import {
     describeNativeGenerationBlock,
     isDirectedLiveScene,
     ownsLiveDirectionGeneration,
+    prefetchLiveDirectionLore,
     regenerateLastDirectedResponse,
     requestNextDirection,
     retryLiveStep,
@@ -9825,6 +9826,7 @@ function bindRoleplayComposerEvents() {
         if (input instanceof HTMLTextAreaElement) {
             autosizeRoleplayInput(input);
             handleLiveDirectionDraft(input.value);
+            prefetchLiveDirectionLore(getActiveScene(), input.value);
             return;
         }
 

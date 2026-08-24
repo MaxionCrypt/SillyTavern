@@ -1,5 +1,6 @@
 import { RATE_CEIL, RATE_FLOOR, clampRate } from './story-goals-math.js';
 import { normalizeOwnerRef } from './variables-store.js';
+import { normalizeGoalLoreLink } from './living-lore-model.js';
 
 // Story Goals — the goal data model.
 //
@@ -96,6 +97,7 @@ export function createStoryGoal({
     token = '',
     status = 'active',
     visibility = 'public',
+    loreLinks = [],
 } = {}) {
     const resolvedTitle = String(title || 'Untitled Goal');
     return {
@@ -120,9 +122,15 @@ export function createStoryGoal({
         token: String(token || '') || defaultTokenFor(resolvedTitle),
         status: STORY_GOAL_STATUSES.includes(status) ? status : 'active',
         visibility: STORY_GOAL_VISIBILITIES.includes(visibility) ? visibility : 'public',
+        loreLinks: normalizeGoalLoreLinks(loreLinks),
         createdAt: now(),
         updatedAt: now(),
     };
+}
+
+export function normalizeGoalLoreLinks(values) {
+    const links = (Array.isArray(values) ? values : []).map(normalizeGoalLoreLink).filter(Boolean);
+    return [...new Map(links.map((link) => [`${link.book}.${link.uid}:${link.type}`, link])).values()];
 }
 
 /**

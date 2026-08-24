@@ -814,6 +814,10 @@ function renderWorldSenseBenchmark() {
                     <input type="number" min="50" max="5000" data-remodel-debug-world-sense="warmQueryTargetMs" value="${profile.warmQueryTargetMs}"></label>
                 <label>Representative book size
                     <input type="number" min="10" max="5000" data-remodel-debug-world-sense="supportedBookSize" value="${profile.supportedBookSize}"></label>
+                <label>Entries per turn
+                    <input type="number" min="1" max="50" data-remodel-debug-world-sense="maxEntries" value="${profile.maxEntries}"></label>
+                <label>Lore token budget
+                    <input type="number" min="100" max="12000" data-remodel-debug-world-sense="maxTokens" value="${profile.maxTokens}"></label>
                 <div class="is-wide remodel-debug-actions">
                     <button type="button" data-remodel-debug-action="world-sense-index" ${!timeline || worldSenseTask ? 'disabled' : ''}>${worldSenseTask === 'index' ? 'Indexing…' : 'Build incremental index'}</button>
                     <button type="button" data-remodel-debug-action="world-sense-benchmark" ${!timeline || worldSenseTask ? 'disabled' : ''}>${worldSenseTask === 'benchmark' ? 'Benchmarking…' : 'Run local benchmark'}</button>

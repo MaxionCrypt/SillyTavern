@@ -1,6 +1,14 @@
 import { benchmarkWorldSense, ensureWorldSenseIndex, queryWorldSense } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-embeddings.js';
 import { invalidateTimelineLoreCache } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-lore.js';
-import { DEFAULT_WORLD_SENSE_MODEL, getWorldSenseIndexState, getWorldSenseProfile, updateWorldSenseProfile } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-store.js';
+import {
+    DEFAULT_WORLD_SENSE_MODEL,
+    getWorldSenseContinuity,
+    getWorldSenseIndexState,
+    getWorldSenseProfile,
+    listWorldSenseReceipts,
+    saveWorldSenseReceipt,
+    updateWorldSenseProfile,
+} from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-store.js';
 import { __setContextOverrides, __setExtensionSettings } from './util/st-context-stub.js';
 
 const TIMELINE = 'timeline-embeddings';
@@ -34,8 +42,9 @@ test('incrementally indexes enabled entries and reuses an unchanged collection',
         if (url === '/api/vector/insert') return response(null, 204);
         throw new Error(`Unexpected URL ${url}`);
     });
-    const first = await ensureWorldSenseIndex(TIMELINE);
+    const [first, concurrent] = await Promise.all([ensureWorldSenseIndex(TIMELINE), ensureWorldSenseIndex(TIMELINE)]);
     expect(first).toMatchObject({ ok: true, inserted: 1, removed: 0 });
+    expect(concurrent).toMatchObject({ ok: true, inserted: 1, removed: 0 });
     const insertBody = JSON.parse(global.fetch.mock.calls.find(([url]) => url === '/api/vector/insert')[1].body);
     expect(insertBody).toMatchObject({ source: 'transformers', model: DEFAULT_WORLD_SENSE_MODEL });
     expect(insertBody.items).toHaveLength(1);
@@ -60,6 +69,16 @@ test('records representative benchmark measurements and acceptance', async () =>
     });
     const result = await benchmarkWorldSense(TIMELINE);
     expect(result).toMatchObject({ ok: true, accepted: true, entryCount: 1, warmQueryP95Ms: 80, targetMs: 500 });
+});
+
+test('stores inspectable receipts and scene retrieval continuity', () => {
+    saveWorldSenseReceipt({
+        id: 'receipt-1', sceneId: 'scene-1', queryHash: 'query-1',
+        selected: [{ book: 'Living Book', uid: '1', reasons: [{ channel: 'goal.link', points: 34 }] }],
+        rejected: [{ book: 'Living Book', uid: '2', decision: 'token-budget' }],
+    });
+    expect(listWorldSenseReceipts({ sceneId: 'scene-1' })).toHaveLength(1);
+    expect(getWorldSenseContinuity('scene-1')).toEqual([{ book: 'Living Book', uid: '1' }]);
 });
 
 function response(body, status = 200) {

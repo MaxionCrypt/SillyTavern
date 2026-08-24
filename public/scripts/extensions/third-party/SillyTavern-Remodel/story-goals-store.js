@@ -8,6 +8,7 @@ import {
     createStoryGoal,
     createStoryGoalRelation,
     normalizeGoalOwnerRefs,
+    normalizeGoalLoreLinks,
     normalizeHolders,
 } from './story-goals-model.js';
 import {
@@ -169,6 +170,7 @@ export function updateStoryGoal(goalId, patch = {}, context = {}) {
     if (patch.holders !== undefined) goal.holders = normalizeHolders(patch.holders);
     if (patch.holderRefs !== undefined) goal.holderRefs = normalizeGoalOwnerRefs(patch.holderRefs, goal.holders);
     if (patch.targetRefs !== undefined) goal.targetRefs = normalizeGoalOwnerRefs(patch.targetRefs);
+    if (patch.loreLinks !== undefined) goal.loreLinks = normalizeGoalLoreLinks(patch.loreLinks);
     if (typeof patch.token === 'string' && patch.token.trim()) goal.token = patch.token.trim();
     if (STORY_GOAL_STATUSES.includes(patch.status)) goal.status = patch.status;
     if (STORY_GOAL_VISIBILITIES.includes(patch.visibility)) goal.visibility = patch.visibility;
@@ -448,6 +450,7 @@ function normalizeGoal(value) {
         successRate: clampRate(value.successRate) ?? 30, constitution: value.constitution ? createConstitutionPool(value.constitution) : null,
         holders: normalizeHolders(value.holders), token: String(value.token || '').trim() || '[goal]',
         holderRefs: normalizeGoalOwnerRefs(value.holderRefs, value.holders), targetRefs: normalizeGoalOwnerRefs(value.targetRefs),
+        loreLinks: normalizeGoalLoreLinks(value.loreLinks),
         status: STORY_GOAL_STATUSES.includes(value.status) ? value.status : 'active',
         visibility: STORY_GOAL_VISIBILITIES.includes(value.visibility) ? value.visibility : 'public',
         createdAt: value.createdAt || now(), updatedAt: value.updatedAt || now(),

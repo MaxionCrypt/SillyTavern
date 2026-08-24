@@ -67,9 +67,15 @@ export function normalizeLivingLoreMetadata(value = {}, identity = {}) {
         origin,
         protectedFields,
         links,
+        worldSense: normalizeWorldSense(value.worldSense),
         createdAt,
         updatedAt: normalizeTimestamp(value.updatedAt, createdAt),
     };
+}
+
+function normalizeWorldSense(value) {
+    const settings = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    return { excluded: Boolean(settings.excluded), pinned: Boolean(settings.pinned) };
 }
 
 function uniqueLinks(values) {

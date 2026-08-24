@@ -2,6 +2,8 @@ import { getRequestHeaders } from '../../../../script.js';
 import { loadTimelineLore } from './world-sense-lore.js';
 import { getWorldSenseIndexState, getWorldSenseProfile, saveWorldSenseBenchmark, updateWorldSenseIndexState } from './world-sense-store.js';
 
+const indexingByCollection = new Map();
+
 export async function ensureWorldSenseIndex(timelineId, { force = false } = {}) {
     const packet = await loadTimelineLore(timelineId);
     const profile = getWorldSenseProfile();
@@ -9,6 +11,17 @@ export async function ensureWorldSenseIndex(timelineId, { force = false } = {}) 
     if (!packet.book) return unavailable(timelineId, 'This Timeline has no Living Lore book assigned.');
     const collectionId = collectionName(timelineId, profile.modelId);
     if (!force && state.status === 'ready' && state.bookHash === packet.hash && state.modelId === profile.modelId) return { ok: true, state };
+    if (!force && indexingByCollection.has(collectionId)) return indexingByCollection.get(collectionId);
+    const indexing = buildWorldSenseIndex(timelineId, packet, profile, collectionId);
+    indexingByCollection.set(collectionId, indexing);
+    try {
+        return await indexing;
+    } finally {
+        if (indexingByCollection.get(collectionId) === indexing) indexingByCollection.delete(collectionId);
+    }
+}
+
+async function buildWorldSenseIndex(timelineId, packet, profile, collectionId) {
     updateWorldSenseIndexState(timelineId, { status: 'indexing', error: '', collectionId, modelId: profile.modelId });
     try {
         const documents = packet.entries.filter((entry) => !entry.native.disable).map(documentFor);

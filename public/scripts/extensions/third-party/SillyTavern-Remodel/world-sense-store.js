@@ -24,6 +24,8 @@ export function updateWorldSenseProfile(patch = {}) {
     if (patch.modelId !== undefined) store.profile.modelId = String(patch.modelId || '').trim().slice(0, 200) || DEFAULT_WORLD_SENSE_MODEL;
     if (patch.warmQueryTargetMs !== undefined) store.profile.warmQueryTargetMs = clamp(patch.warmQueryTargetMs, 50, 5000, 500);
     if (patch.supportedBookSize !== undefined) store.profile.supportedBookSize = clamp(patch.supportedBookSize, 10, 5000, 250);
+    if (patch.maxEntries !== undefined) store.profile.maxEntries = clamp(patch.maxEntries, 1, 50, 12);
+    if (patch.maxTokens !== undefined) store.profile.maxTokens = clamp(patch.maxTokens, 100, 12000, 1800);
     store.profile.updatedAt = now();
     save();
     return store.profile;
@@ -51,12 +53,34 @@ export function saveWorldSenseBenchmark(result) {
     return store.benchmark;
 }
 
+export function saveWorldSenseReceipt(receipt) {
+    const store = getWorldSenseStore();
+    const saved = isObject(receipt) ? structuredClone(receipt) : null;
+    if (!saved) return null;
+    store.receipts.push(saved);
+    if (store.receipts.length > 100) store.receipts.splice(0, store.receipts.length - 100);
+    if (saved.sceneId) store.continuityByScene[String(saved.sceneId)] = (saved.selected || []).map(({ book, uid }) => ({ book, uid })).slice(0, 20);
+    save();
+    return saved;
+}
+
+export function listWorldSenseReceipts({ sceneId = '' } = {}) {
+    const receipts = getWorldSenseStore().receipts;
+    return (sceneId ? receipts.filter((item) => item.sceneId === String(sceneId)) : receipts).map((item) => structuredClone(item));
+}
+
+export function getWorldSenseContinuity(sceneId) {
+    return structuredClone(getWorldSenseStore().continuityByScene[String(sceneId)] || []);
+}
+
 function emptyStore() {
     return {
         version: STORE_VERSION,
-        profile: { modelId: DEFAULT_WORLD_SENSE_MODEL, warmQueryTargetMs: 500, supportedBookSize: 250, updatedAt: now() },
+        profile: { modelId: DEFAULT_WORLD_SENSE_MODEL, warmQueryTargetMs: 500, supportedBookSize: 250, maxEntries: 12, maxTokens: 1800, updatedAt: now() },
         indexes: {},
         benchmark: null,
+        receipts: [],
+        continuityByScene: {},
     };
 }
 
@@ -71,12 +95,16 @@ function normalizeStore(store) {
     store.profile.modelId = String(store.profile.modelId || DEFAULT_WORLD_SENSE_MODEL).trim().slice(0, 200) || DEFAULT_WORLD_SENSE_MODEL;
     store.profile.warmQueryTargetMs = clamp(store.profile.warmQueryTargetMs, 50, 5000, 500);
     store.profile.supportedBookSize = clamp(store.profile.supportedBookSize, 10, 5000, 250);
+    store.profile.maxEntries = clamp(store.profile.maxEntries, 1, 50, 12);
+    store.profile.maxTokens = clamp(store.profile.maxTokens, 100, 12000, 1800);
     store.indexes = isObject(store.indexes) ? store.indexes : {};
     for (const [timelineId, raw] of Object.entries(store.indexes)) {
         store.indexes[timelineId] = { ...indexState(timelineId), ...(isObject(raw) ? raw : {}), timelineId };
         store.indexes[timelineId].hashes = isObject(store.indexes[timelineId].hashes) ? store.indexes[timelineId].hashes : {};
     }
     store.benchmark = isObject(store.benchmark) ? store.benchmark : null;
+    store.receipts = Array.isArray(store.receipts) ? store.receipts.filter(isObject).slice(-100) : [];
+    store.continuityByScene = isObject(store.continuityByScene) ? store.continuityByScene : {};
 }
 
 function save() { getContext().saveSettingsDebounced(); }

@@ -29,6 +29,7 @@ import {
     describeDirectionProgress,
     settleDirectionProgress,
 } from './direction-progress.js';
+import { resolveWorldSense, scheduleWorldSensePrefetch } from './world-sense-runtime.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const PACING = Object.freeze({
@@ -477,6 +478,23 @@ export function handleLiveDirectionDraft(value) {
         notifyState();
         scheduleReveal(0);
     }
+}
+
+/** Warm read-only lore ranking while the user composes. Send reuses the result
+ * only when the complete bounded query hashes identically. */
+export function prefetchLiveDirectionLore(scene, action) {
+    if (!isDirectedLiveScene(scene)) return;
+    const history = (getContext().chat || []).slice(-12).map((message) => ({
+        role: message.is_user ? 'user' : 'assistant',
+        name: message.name || '',
+        content: sanitizeDirectionText(message.extra?.remodelDirection?.acceptedText ?? message.mes ?? ''),
+    })).filter((message) => message.content.trim());
+    scheduleWorldSensePrefetch(scene, {
+        action,
+        history,
+        cast: hooks.getCast() || [],
+        persona: hooks.getPersona() || null,
+    });
 }
 
 export function continueLiveDirection() {
@@ -954,6 +972,18 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     // at a history depth that drops it there is no such response to talk about.
     const cutOff = effectiveChat[effectiveChat.length - 1];
     const cutOffRecord = recentChat[recentChat.length - 1] === cutOff ? readInterruptionRecord(cutOff) : null;
+    const performingCast = cast.filter((member) => !member.disabled);
+    // Commit 5 ranks beside native preparation but cannot activate anything.
+    // Nothing in direction-sources.js reads this receipt into either prompt.
+    const worldSensePromise = preview ? Promise.resolve(null) : resolveWorldSense(scene, {
+        action,
+        history,
+        cast: performingCast,
+        persona,
+    }).catch((error) => {
+        journal('world-sense.failed-open', { error: String(error?.message || error) }, { severity: 'warn' });
+        return null;
+    });
     let lore = {};
     try {
         const scan = [action, ...history.slice(-12).reverse().map((message) => message.content)];
@@ -961,7 +991,6 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     } catch (error) {
         lore = { warning: String(error?.message || error) };
     }
-    const performingCast = cast.filter((member) => !member.disabled);
     const activatedEntries = [...(lore.allActivatedEntries || [])];
     // Preview never rolls or mutates and never carries authorized Goal ids —
     // but retrieval (resolveVariableContext) scores against action/history/
@@ -980,6 +1009,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
             activatedEntries,
             correlationId: directionInFlight?.id || null,
         });
+    const worldSense = await worldSensePromise;
     return {
         scene: { id: scene.id, timelineId: scene.timelineId, title: scene.title },
         currentAction: action,
@@ -988,6 +1018,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         narratorRef: scene.liveDirection?.narratorRef || null,
         persona,
         acceptedHistory: history,
+        worldSense: worldSense?.receipt || null,
         // What the user cut into, in the performer's own words — the half that
         // reached them (already in acceptedHistory, ending exactly where the
         // reveal froze) and the half that did not. Null on an ordinary turn.
