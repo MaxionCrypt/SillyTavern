@@ -14,7 +14,7 @@ import {
     clearLiveDirectionFailure,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { listEvents, recordEvent } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
-import { __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
+import { __setContextOverrides, __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
 import { __setOnlineStatus } from './util/script-stub.js';
 
 globalThis.document ??= { getElementById: () => null };
@@ -110,6 +110,29 @@ test('a completed turn waits for the user and Continue advances the next one', a
     await requestNextDirection(scene);
     expect(await until(() => __getChat().length === 2)).toBe(true);
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+});
+
+test('STOP during a new private Narrator pass keeps the preceding completed output and reports no failure', async () => {
+    const previous = { name: 'Wren', is_user: false, mes: 'The preceding turn must remain.', extra: {} };
+    __getChat().push(previous);
+    let rejectGeneration = null;
+    let failureCount = 0;
+    initLiveDirection({ onFailure: () => { failureCount++; } });
+    setLiveDirectionTestAdapters({
+        generatePerformer: () => new Promise((_resolve, reject) => { rejectGeneration = reject; }),
+    });
+    __setContextOverrides({
+        stopGeneration: () => rejectGeneration?.(new Error('Generation was aborted.')),
+    });
+
+    const pending = requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.phase === 'narrator' && rejectGeneration)).toBe(true);
+    await stopLiveDirection();
+    await pending;
+
+    expect(__getChat()).toEqual([previous]);
+    expect(failureCount).toBe(0);
+    expect(getLiveDirectionRun()).toBeNull();
 });
 
 test('an empty performer response is reported, not silently accepted as a turn', async () => {

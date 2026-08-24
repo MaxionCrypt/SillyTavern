@@ -916,6 +916,18 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         standingPerformer = performer;
         return await generateDirectedPerformer({ scene, envelope: normalized, performer, autonomousSequence, token });
     } catch (error) {
+        // Stop/supersede deliberately aborts whichever provider call owns the
+        // pass. The resulting AbortError (often surfaced only as "Generation
+        // was aborted") confirms cancellation; it is not a second failure.
+        if (token.aborted) {
+            journal('failed.suppressed', {
+                passId: token.id,
+                directionId: standingEnvelope?.directionId || null,
+                message: String(error?.message || error),
+                reason: 'the pass was deliberately stopped or superseded',
+            }, { correlationId: token.id, severity: 'info', summary: 'direction.failed: suppressed after requested cancellation' });
+            return false;
+        }
         // The empty-response retry chain already owns this turn's outcome, and
         // this throw is the same generation reported a second time. Declaring
         // the pass failed here would put "Direction paused" over a scene that
@@ -1234,6 +1246,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         pendingRequestsApplied: false,
         emptyRetries: Number(emptyRetries) || 0,
         previousReasoningLength: Number(previousReasoningLength) || 0,
+        passToken: token,
         progress: token?.progress || createDirectionProgress(envelope.directionId),
     };
     advancePassStage(activeRun, 'narrator');
@@ -2087,6 +2100,10 @@ async function interruptLiveDirection({ preserveForIntervention }) {
     }, { correlationId: run.directionId, severity: 'warn' });
     run.interrupted = true;
     run.holdReason = 'interrupt';
+    // The hidden-phase lock has already been released, but its token still
+    // follows beginDirection to the provider boundary. Mark it cancelled so
+    // the provider's expected abort rejection cannot become a failure notice.
+    abortDirectionPass(run.passToken);
     if (run.phase === 'loom') {
         try { run.loomController?.abort(); } catch { /* already aborted */ }
     } else if (!run.narratorGenerationFinished && ownsLiveDirectionGeneration()) {
@@ -2131,6 +2148,20 @@ async function persistFinalizedRunMessage(run, state) {
     // construction instead of by remembering. See clearPersistTimer.
     clearPersistTimer();
     const context = getContext();
+    const accepted = acceptedProse(run);
+    if (!accepted && !Number.isInteger(run.messageId)) {
+        // A private Narrator can be stopped before core creates its new
+        // assistant row. Never "recover" that missing id by adopting the last
+        // assistant message: it belongs to the preceding completed turn, and
+        // deleting it is catastrophic data loss from a harmless Stop.
+        journal('finalize.empty-unreserved', {
+            directionId: run.directionId,
+            state,
+            chatLength: context.chat?.length ?? null,
+            bufferedLength: run.rawBufferedText.length,
+        }, { correlationId: run.directionId, severity: 'info', summary: 'direction.finalize: stopped before a new message was reserved' });
+        return;
+    }
     if (!Number.isInteger(run.messageId)) {
         const last = context.chat.length - 1;
         if (last >= 0 && !context.chat[last]?.is_user) run.messageId = last;
@@ -2146,7 +2177,6 @@ async function persistFinalizedRunMessage(run, state) {
         }, { correlationId: run.directionId, severity: 'warn' });
         return;
     }
-    const accepted = acceptedProse(run);
     if (!accepted) {
         // Nothing was ever accepted, so there is nothing to keep — whether the
         // user interrupted before the first character or the performer returned
