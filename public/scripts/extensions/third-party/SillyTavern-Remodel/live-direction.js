@@ -31,6 +31,7 @@ import {
 } from './direction-progress.js';
 import { activateWorldSenseSelection } from './world-sense-activation.js';
 import { previewWorldSense, resolveWorldSense, scheduleWorldSensePrefetch } from './world-sense-runtime.js';
+import { applyNarratorRetryPolicy } from './narrator-retry-policy.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const PACING = Object.freeze({
@@ -299,6 +300,27 @@ export function initLiveDirection(options = {}) {
         // Whether the Narrator should see the user at all, and how to stop the
         // echo, are live questions. Neither is answered by silently reshaping
         // every prompt.
+    });
+    // Prompt nudging alone cannot recover a reasoning-only OpenRouter reply:
+    // the next request otherwise carries the identical reasoning mode and can
+    // spend its entire output budget the same way. Alter only Remodel's retry
+    // payload at the final, request-scoped seam. The saved connection profile
+    // and the user's reasoning controls remain untouched.
+    context.eventSource.on(context.eventTypes.CHAT_COMPLETION_SETTINGS_READY, (request) => {
+        if (!ownsLiveDirectionGeneration() || !activeRun) return;
+        const recovered = applyNarratorRetryPolicy(request, activeRun);
+        if (!recovered) return;
+        journal('retry.reasoning-disabled', {
+            directionId: activeRun.directionId,
+            attempt: activeRun.emptyRetries + 1,
+            previousReasoningLength: activeRun.previousReasoningLength,
+            provider: request.chat_completion_source,
+            model: request.model,
+        }, {
+            correlationId: activeRun.directionId,
+            severity: 'warn',
+            summary: 'direction.retry: reasoning disabled after reasoning-only reply',
+        });
     });
     const finish = () => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
@@ -1208,6 +1230,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         addressBook: envelope.addressBook || { entries: [], duplicates: [] },
         pendingRequestsApplied: false,
         emptyRetries: Number(emptyRetries) || 0,
+        previousReasoningLength: Number(previousReasoningLength) || 0,
         progress: token?.progress || createDirectionProgress(envelope.directionId),
     };
     advancePassStage(activeRun, 'narrator');

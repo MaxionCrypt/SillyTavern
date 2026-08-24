@@ -128,6 +128,40 @@ test('an empty performer response is reported, not silently accepted as a turn',
     expect(listEvents(scene.timelineId, scene.id)).toEqual([]);
 });
 
+test('a reasoning-only OpenRouter reply retries once with reasoning disabled and keeps the recovered prose', async () => {
+    const requests = [];
+    let attempt = 0;
+    setLiveDirectionTestAdapters({
+        generatePerformer: async () => {
+            attempt++;
+            const request = {
+                chat_completion_source: 'openrouter',
+                model: 'deepseek/deepseek-v4-pro',
+                reasoning_effort: 'low',
+                include_reasoning: true,
+            };
+            await __emit('CHAT_COMPLETION_SETTINGS_READY', request);
+            requests.push(request);
+
+            const chat = __getChat();
+            if (attempt === 1) {
+                chat.push({ name: 'Wren', is_user: false, mes: '', extra: { reasoning: 'Private reasoning with no prose.' } });
+            } else {
+                chat.push({ name: 'Wren', is_user: false, mes: RESPONSE, extra: {} });
+            }
+            await __emit('MESSAGE_RECEIVED', chat.length - 1);
+        },
+    });
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    expect(attempt).toBe(2);
+    expect(requests[0]).toMatchObject({ reasoning_effort: 'low', include_reasoning: true });
+    expect(requests[1]).toMatchObject({ reasoning_effort: 'none', include_reasoning: false });
+    expect(__getChat()).toHaveLength(1);
+    expect(__getChat()[0].mes).toBe(RESPONSE);
+});
+
 test('an intervention stores only the visible Loom prefix and never the private draft or buffered tail', async () => {
     const visible = 'The guard reaches for the alarm—';
     const full = `${visible}and presses it before Wren can move.`;
