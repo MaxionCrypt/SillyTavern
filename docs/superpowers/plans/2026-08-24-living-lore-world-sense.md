@@ -81,6 +81,20 @@ This division lets a seed grow richly without asking a tiny local model to
 author rich prose. The main creative model makes the world real in narration;
 Living Lore captures and organizes what became real.
 
+### 2.4 Pipeline boundary
+
+Living Lore keeps the current Roleplay pipeline unchanged: the hidden Narrator
+produces the complete private draft through SillyTavern's native generation
+path, then the Loom reconciles it and owns the streamed canonical version. The
+World Sense work may prepare context concurrently or in advance, but it does
+not rename these roles, transfer prose ownership, or change their ordering.
+
+The alternative beats-first design (a compact hidden Scene Planner followed by
+a prose-writing Loom) is deliberately shelved. It belongs on a separate future
+feature branch with its own recipe migration, latency measurements, and
+acceptance tests. No commit in this plan may implement part of that alternate
+pipeline or create compatibility state for it.
+
 ## 3. Entry contract
 
 ### 3.1 Entry types
