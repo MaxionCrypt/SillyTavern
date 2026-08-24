@@ -107,7 +107,7 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         const timeoutMs = phase === 'prefetch' ? 20000 : Math.max(250, profile.warmQueryTargetMs * 2);
         try {
             semantic = await withTimeout(
-                queryWorldSense(scene.timelineId, prepared.packet.text, { topK: Math.min(50, profile.maxEntries * 3), threshold: 0.2 }),
+                queryWorldSense(scene.timelineId, prepared.packet.text, { topK: Math.min(50, profile.maxEntries * 3), threshold: profile.semanticThreshold }),
                 timeoutMs,
                 'Local semantic retrieval exceeded the turn budget.',
             );
@@ -129,6 +129,8 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         pins: prepared.pins,
         continuity: getWorldSenseContinuity(scene.id),
         budget: { maxEntries: profile.maxEntries, maxTokens: profile.maxTokens },
+        semanticThreshold: profile.semanticThreshold,
+        semanticOnlyLimit: profile.semanticOnlyLimit,
     });
     return {
         phase,
@@ -172,6 +174,10 @@ function saveReceipt(scene, result, { reusedPrefetch }) {
         degraded: result.degraded,
         error: result.error,
         budget: result.budget,
+        semanticPolicy: {
+            threshold: getWorldSenseProfile().semanticThreshold,
+            semanticOnlyLimit: getWorldSenseProfile().semanticOnlyLimit,
+        },
         propagation: result.propagation,
         selected: result.selected,
         rejected: result.rejected,

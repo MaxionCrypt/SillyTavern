@@ -381,15 +381,17 @@ async function deleteVectorItems(directories, collectionId, source, sourceSettin
  * @param {string} searchText - The text to search for
  * @param {number} topK - The number of results to return
  * @param {number} threshold - The threshold for the search
+ * @param {boolean} includeScores Include similarity beside each metadata record
  * @returns {Promise<{hashes: number[], metadata: object[]}>} - The metadata of the items that match the search text
  */
-async function queryCollection(directories, collectionId, source, sourceSettings, searchText, topK, threshold) {
+async function queryCollection(directories, collectionId, source, sourceSettings, searchText, topK, threshold, includeScores = false) {
     const store = await getIndex(directories, collectionId, source, sourceSettings);
     const vector = await getVector(source, sourceSettings, searchText, true, directories);
 
     const result = await store.queryItems(vector, topK);
-    const metadata = result.filter(x => x.score >= threshold).map(x => x.item.metadata);
-    const hashes = result.map(x => Number(x.item.metadata.hash));
+    const matches = result.filter(x => x.score >= threshold);
+    const metadata = matches.map(x => includeScores ? { ...x.item.metadata, score: x.score } : x.item.metadata);
+    const hashes = matches.map(x => Number(x.item.metadata.hash));
     return { metadata, hashes };
 }
 
@@ -524,10 +526,11 @@ router.post('/query', async (req, res) => {
         const searchText = String(req.body.searchText);
         const topK = Number(req.body.topK) || 10;
         const threshold = Number(req.body.threshold) || 0.0;
+        const includeScores = req.body.includeScores === true;
         const source = String(req.body.source) || 'transformers';
         const sourceSettings = getSourceSettings(source, req);
 
-        const results = await queryCollection(req.user.directories, collectionId, source, sourceSettings, searchText, topK, threshold);
+        const results = await queryCollection(req.user.directories, collectionId, source, sourceSettings, searchText, topK, threshold, includeScores);
         return res.json(results);
     } catch (error) {
         return regenerateCorruptedIndexErrorHandler(req, res, error);

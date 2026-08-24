@@ -818,6 +818,10 @@ function renderWorldSenseBenchmark() {
                     <input type="number" min="1" max="50" data-remodel-debug-world-sense="maxEntries" value="${profile.maxEntries}"></label>
                 <label>Lore token budget
                     <input type="number" min="100" max="12000" data-remodel-debug-world-sense="maxTokens" value="${profile.maxTokens}"></label>
+                <label>Semantic similarity floor
+                    <input type="number" min="0" max="1" step="0.01" data-remodel-debug-world-sense="semanticThreshold" value="${profile.semanticThreshold}"></label>
+                <label>Semantic-only entry cap
+                    <input type="number" min="1" max="20" data-remodel-debug-world-sense="semanticOnlyLimit" value="${profile.semanticOnlyLimit}"></label>
                 <div class="is-wide remodel-debug-actions">
                     <button type="button" data-remodel-debug-action="world-sense-index" ${!timeline || worldSenseTask ? 'disabled' : ''}>${worldSenseTask === 'index' ? 'Indexing…' : 'Build incremental index'}</button>
                     <button type="button" data-remodel-debug-action="world-sense-benchmark" ${!timeline || worldSenseTask ? 'disabled' : ''}>${worldSenseTask === 'benchmark' ? 'Benchmarking…' : 'Run local benchmark'}</button>

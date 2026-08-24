@@ -50,10 +50,14 @@ export async function queryWorldSense(timelineId, searchText, { topK = 12, thres
     try {
         const result = await vectorRequest('/api/vector/query', {
             collectionId: state.collectionId, searchText: String(searchText || ''),
-            topK: Math.max(1, Math.min(50, Number(topK) || 12)), threshold: Number(threshold) || 0,
+            topK: Math.max(1, Math.min(50, Number(topK) || 12)), threshold: Number(threshold) || 0, includeScores: true,
         }, state.modelId);
         const matches = (Array.isArray(result?.metadata) ? result.metadata : [])
-            .map((item, rank) => ({ ...state.hashes[String(item?.hash)], rank }))
+            .map((item, rank) => ({
+                ...state.hashes[String(item?.hash)],
+                rank,
+                score: Number.isFinite(Number(item?.score)) ? Number(item.score) : null,
+            }))
             .filter((item) => item.book && item.uid);
         return { ok: true, degraded: false, status: 'ready', matches };
     } catch (error) {

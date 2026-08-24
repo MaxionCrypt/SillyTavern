@@ -41,6 +41,7 @@ export function canReuseWorldSensePrefetch(cached, queryHash, now = Date.now(), 
 /** Pure hybrid ranker. It never activates or writes a native lore entry. */
 export function rankLivingLore({
     packet, entries = [], semanticMatches = [], metadata = [], goals = [], variables = [], pins = [], continuity = [], budget = {},
+    semanticThreshold = 0.30, semanticOnlyLimit = 3,
 } = {}) {
     const limits = { ...DEFAULT_BUDGET, ...budget };
     const candidates = new Map();
@@ -62,11 +63,25 @@ export function rankLivingLore({
         candidate.forced = candidate.reasons.some((reason) => reason.channel === 'native.constant' || reason.channel === 'pin');
 
         const semantic = semanticByKey.get(key);
-        if (semantic) add(candidate, Math.max(12, 52 - semantic.rank * 3), 'semantic', { rank: semantic.rank });
-        if (continuityKeys.has(key)) add(candidate, 14, 'continuity');
+        if (semantic) {
+            const similarity = Number(semantic.score);
+            if (!Number.isFinite(similarity) || similarity >= Number(semanticThreshold)) {
+                const points = Number.isFinite(similarity)
+                    ? Math.max(12, Math.round(20 + similarity * 60))
+                    : Math.max(12, 52 - semantic.rank * 3);
+                add(candidate, points, 'semantic', {
+                    rank: semantic.rank,
+                    ...(Number.isFinite(similarity) ? { similarity } : {}),
+                });
+            }
+        }
         for (const evidence of goalLinks.get(key) || []) add(candidate, 34, 'goal.link', evidence);
         for (const evidence of variableLinks.get(key) || []) add(candidate, 26, 'variable.link', evidence);
         scoreKeywords(candidate, packet?.sources || []);
+        // Continuity stabilizes an entry that is relevant again; it is not
+        // independent evidence. Otherwise one noisy semantic selection would
+        // perpetuate itself forever after its similarity fell below the floor.
+        if (continuityKeys.has(key) && candidate.score > 0) add(candidate, 14, 'continuity');
         candidates.set(key, candidate);
     }
 
@@ -85,9 +100,15 @@ export function rankLivingLore({
     const selected = [];
     const rejected = [];
     let tokens = 0;
+    let semanticOnlyUsed = 0;
     for (const candidate of ranked) {
         if (!candidate.forced && candidate.score <= 0) {
             rejected.push(receiptCandidate(candidate, 'no-evidence'));
+            continue;
+        }
+        const semanticOnly = candidate.reasons.length > 0 && candidate.reasons.every((reason) => reason.channel === 'semantic');
+        if (!candidate.forced && semanticOnly && semanticOnlyUsed >= positive(semanticOnlyLimit, 3)) {
+            rejected.push(receiptCandidate(candidate, 'semantic-only-limit'));
             continue;
         }
         const entryLimit = selected.length >= positive(limits.maxEntries, DEFAULT_BUDGET.maxEntries);
@@ -97,6 +118,7 @@ export function rankLivingLore({
             continue;
         }
         selected.push(receiptCandidate(candidate, candidate.forced && (entryLimit || tokenLimit) ? 'forced-over-budget' : 'selected'));
+        if (semanticOnly) semanticOnlyUsed += 1;
         tokens += candidate.tokenCost;
     }
     const selectedKeys = new Set(selected.map(entryKey));

@@ -62,6 +62,23 @@ test('fails open with an explicit unavailable state', async () => {
     expect(result.error).toContain('model offline');
 });
 
+test('requests and preserves real vector similarity scores', async () => {
+    let insertedHash = null;
+    global.fetch = jest.fn(async (url, options) => {
+        if (url === '/api/vector/list') return response([]);
+        if (url === '/api/vector/insert') {
+            insertedHash = JSON.parse(options.body).items[0].hash;
+            return response(null, 204);
+        }
+        if (url === '/api/vector/query') return response({ metadata: [{ hash: insertedHash, score: 0.72 }] });
+        throw new Error(`Unexpected URL ${url}`);
+    });
+    const result = await queryWorldSense(TIMELINE, 'tidal harbor', { threshold: 0.35 });
+    expect(result.matches[0]).toMatchObject({ book: 'Living Book', uid: '1', score: 0.72, rank: 0 });
+    const queryBody = JSON.parse(global.fetch.mock.calls.find(([url]) => url === '/api/vector/query')[1].body);
+    expect(queryBody).toMatchObject({ includeScores: true, threshold: 0.35 });
+});
+
 test('records representative benchmark measurements and acceptance', async () => {
     global.fetch = jest.fn(async (url) => {
         expect(url).toBe('/api/vector/benchmark');

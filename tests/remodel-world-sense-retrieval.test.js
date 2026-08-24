@@ -56,3 +56,54 @@ test('falls back deterministically when semantic candidates are absent', () => {
     expect(result.selected.map((item) => item.uid)).toEqual(['1']);
     expect(result.rejected[0]).toMatchObject({ uid: '2', decision: 'no-evidence' });
 });
+
+test('uses real similarity and caps entries supported by semantic evidence alone', () => {
+    const packet = buildWorldSenseQueryPacket({ action: 'touch the amulet' });
+    const entries = [
+        entry(1, 'Relevant amulet', []),
+        entry(2, 'Weakly related object', []),
+        entry(3, 'First semantic extra', []),
+        entry(4, 'Second semantic extra', []),
+    ];
+    const result = rankLivingLore({
+        packet,
+        entries,
+        semanticMatches: [
+            { book: 'Book', uid: '1', rank: 0, score: 0.72 },
+            { book: 'Book', uid: '2', rank: 1, score: 0.21 },
+            { book: 'Book', uid: '3', rank: 2, score: 0.61 },
+            { book: 'Book', uid: '4', rank: 3, score: 0.56 },
+        ],
+        semanticThreshold: 0.35,
+        semanticOnlyLimit: 2,
+    });
+    expect(result.selected.map((item) => item.uid)).toEqual(['1', '3']);
+    expect(result.selected[0].reasons[0]).toMatchObject({ channel: 'semantic', similarity: 0.72 });
+    expect(result.rejected).toEqual(expect.arrayContaining([
+        expect.objectContaining({ uid: '2', decision: 'no-evidence' }),
+        expect.objectContaining({ uid: '4', decision: 'semantic-only-limit' }),
+    ]));
+});
+
+test('default similarity floor follows the measured lorebook boundary', () => {
+    const result = rankLivingLore({
+        packet: buildWorldSenseQueryPacket({ action: 'continue' }),
+        entries: [entry(1, 'Vox-level match', []), entry(2, 'Noise-level match', [])],
+        semanticMatches: [
+            { book: 'Book', uid: '1', rank: 0, score: 0.338 },
+            { book: 'Book', uid: '2', rank: 1, score: 0.288 },
+        ],
+    });
+    expect(result.selected.map((item) => item.uid)).toEqual(['1']);
+    expect(result.rejected).toEqual(expect.arrayContaining([expect.objectContaining({ uid: '2', decision: 'no-evidence' })]));
+});
+
+test('continuity boosts renewed evidence but cannot preserve stale noise alone', () => {
+    const result = rankLivingLore({
+        packet: buildWorldSenseQueryPacket({ action: 'Marissa returns' }),
+        entries: [entry(1, 'Marissa', ['Marissa']), entry(2, 'Stale artifact', [])],
+        continuity: [{ book: 'Book', uid: '1' }, { book: 'Book', uid: '2' }],
+    });
+    expect(result.selected[0].reasons.map((reason) => reason.channel)).toEqual(expect.arrayContaining(['action.primary', 'continuity']));
+    expect(result.rejected).toEqual(expect.arrayContaining([expect.objectContaining({ uid: '2', decision: 'no-evidence' })]));
+});
