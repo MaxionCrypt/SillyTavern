@@ -1,6 +1,7 @@
 import { jest } from '@jest/globals';
 import { benchmarkWorldSense, ensureWorldSenseIndex, queryWorldSense } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-embeddings.js';
 import { invalidateTimelineLoreCache } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-lore.js';
+import { recordEvent } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { getWorldSenseTurnOverrides, previewWorldSense, resolveWorldSense, setWorldSenseTurnOverride } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-runtime.js';
 import {
     DEFAULT_WORLD_SENSE_MODEL,
@@ -79,6 +80,34 @@ test('requests and preserves real vector similarity scores', async () => {
     expect(result.matches[0]).toMatchObject({ book: 'Living Book', uid: '1', score: 0.72, rank: 0 });
     const queryBody = JSON.parse(global.fetch.mock.calls.find(([url]) => url === '/api/vector/query')[1].body);
     expect(queryBody).toMatchObject({ includeScores: true, threshold: 0.35 });
+});
+
+test('indexes Archive records in the same collection and returns them as continuity matches', async () => {
+    __setExtensionSettings({ remodel: { timelineV1: {
+        version: 1, timelineIds: [TIMELINE], activeTimelineId: TIMELINE,
+        timelines: { [TIMELINE]: { id: TIMELINE, lorebookName: 'Living Book', arcIds: ['arc-1'] } },
+        arcs: { 'arc-1': { id: 'arc-1', timelineId: TIMELINE, title: 'Arrival', sceneIds: ['scene-1'] } },
+        scenes: { 'scene-1': { id: 'scene-1', timelineId: TIMELINE, arcId: 'arc-1', title: 'The Cellar', mode: 'roleplay' } },
+    } } });
+    const event = recordEvent(TIMELINE, 'scene-1', 'Mara hid the obsidian key beneath the cellar floor.');
+    let archiveHash = null;
+    global.fetch = jest.fn(async (url, options) => {
+        if (url === '/api/vector/list') return response([]);
+        if (url === '/api/vector/insert') {
+            const items = JSON.parse(options.body).items;
+            archiveHash = items.find((item) => item.text.includes('obsidian key')).hash;
+            return response(null, 204);
+        }
+        if (url === '/api/vector/query') return response({ metadata: [{ hash: archiveHash, score: 0.79 }] });
+        throw new Error(`Unexpected URL ${url}`);
+    });
+
+    const result = await queryWorldSense(TIMELINE, 'the key hidden in the cellar');
+
+    expect(result.matches).toEqual([]);
+    expect(result.continuityMatches).toEqual([expect.objectContaining({
+        kind: 'archive', sceneId: 'scene-1', recordType: 'event', recordId: event.id, score: 0.79,
+    })]);
 });
 
 test('records representative benchmark measurements and acceptance', async () => {

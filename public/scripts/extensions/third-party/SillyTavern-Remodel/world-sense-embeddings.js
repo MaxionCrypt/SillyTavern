@@ -1,18 +1,20 @@
 import { getRequestHeaders } from '../../../../script.js';
 import { loadTimelineLore } from './world-sense-lore.js';
 import { getWorldSenseIndexState, getWorldSenseProfile, saveWorldSenseBenchmark, updateWorldSenseIndexState } from './world-sense-store.js';
+import { buildTimelineContinuityDocuments } from './world-sense-continuity.js';
 
 const indexingByCollection = new Map();
 
 export async function ensureWorldSenseIndex(timelineId, { force = false } = {}) {
     const packet = await loadTimelineLore(timelineId);
+    const continuity = buildTimelineContinuityDocuments(timelineId);
     const profile = getWorldSenseProfile();
     const state = getWorldSenseIndexState(timelineId);
-    if (!packet.book) return unavailable(timelineId, 'This Timeline has no Living Lore book assigned.');
+    if (!packet.book && !continuity.documents.length) return unavailable(timelineId, 'This Timeline has neither a Living Lore book nor earlier Archive material to index.');
     const collectionId = collectionName(timelineId, profile.modelId);
-    if (!force && state.status === 'ready' && state.bookHash === packet.hash && state.modelId === profile.modelId) return { ok: true, state };
+    if (!force && state.status === 'ready' && state.bookHash === packet.hash && state.archiveHash === continuity.hash && state.modelId === profile.modelId) return { ok: true, state };
     if (!force && indexingByCollection.has(collectionId)) return indexingByCollection.get(collectionId);
-    const indexing = buildWorldSenseIndex(timelineId, packet, profile, collectionId);
+    const indexing = buildWorldSenseIndex(timelineId, packet, continuity, profile, collectionId);
     indexingByCollection.set(collectionId, indexing);
     try {
         return await indexing;
@@ -21,10 +23,13 @@ export async function ensureWorldSenseIndex(timelineId, { force = false } = {}) 
     }
 }
 
-async function buildWorldSenseIndex(timelineId, packet, profile, collectionId) {
+async function buildWorldSenseIndex(timelineId, packet, continuity, profile, collectionId) {
     updateWorldSenseIndexState(timelineId, { status: 'indexing', error: '', collectionId, modelId: profile.modelId });
     try {
-        const documents = packet.entries.filter((entry) => !entry.native.disable).map(documentFor);
+        const documents = [
+            ...packet.entries.filter((entry) => !entry.native.disable).map(documentFor),
+            ...continuity.documents,
+        ];
         const desired = Object.fromEntries(documents.map((document) => [String(document.hash), document.metadata]));
         const saved = await vectorRequest('/api/vector/list', { collectionId }, profile.modelId);
         const savedHashes = new Set((Array.isArray(saved) ? saved : []).map(String));
@@ -34,7 +39,7 @@ async function buildWorldSenseIndex(timelineId, packet, profile, collectionId) {
         if (remove.length) await vectorRequest('/api/vector/delete', { collectionId, hashes: remove }, profile.modelId);
         if (insert.length) await vectorRequest('/api/vector/insert', { collectionId, items: insert }, profile.modelId);
         const ready = updateWorldSenseIndexState(timelineId, {
-            status: 'ready', error: '', book: packet.book, bookHash: packet.hash, hashes: desired,
+            status: 'ready', error: '', book: packet.book, bookHash: packet.hash, archiveHash: continuity.hash, hashes: desired,
             inserted: insert.length, removed: remove.length, indexedAt: new Date().toISOString(),
         });
         return { ok: true, state: ready, inserted: insert.length, removed: remove.length };
@@ -45,24 +50,25 @@ async function buildWorldSenseIndex(timelineId, packet, profile, collectionId) {
 
 export async function queryWorldSense(timelineId, searchText, { topK = 12, threshold = 0.25 } = {}) {
     const indexed = await ensureWorldSenseIndex(timelineId);
-    if (!indexed.ok) return { ok: false, degraded: true, status: 'unavailable', error: indexed.state.error, matches: [] };
+    if (!indexed.ok) return { ok: false, degraded: true, status: 'unavailable', error: indexed.state.error, matches: [], continuityMatches: [] };
     const state = getWorldSenseIndexState(timelineId);
     try {
         const result = await vectorRequest('/api/vector/query', {
             collectionId: state.collectionId, searchText: String(searchText || ''),
             topK: Math.max(1, Math.min(50, Number(topK) || 12)), threshold: Number(threshold) || 0, includeScores: true,
         }, state.modelId);
-        const matches = (Array.isArray(result?.metadata) ? result.metadata : [])
+        const ranked = (Array.isArray(result?.metadata) ? result.metadata : [])
             .map((item, rank) => ({
                 ...state.hashes[String(item?.hash)],
                 rank,
                 score: Number.isFinite(Number(item?.score)) ? Number(item.score) : null,
-            }))
-            .filter((item) => item.book && item.uid);
-        return { ok: true, degraded: false, status: 'ready', matches };
+            }));
+        const matches = ranked.filter((item) => item.kind !== 'archive' && item.book && item.uid);
+        const continuityMatches = ranked.filter((item) => item.kind === 'archive' && item.sceneId && item.recordId);
+        return { ok: true, degraded: false, status: 'ready', matches, continuityMatches };
     } catch (error) {
         const degraded = unavailable(timelineId, String(error?.message || error));
-        return { ok: false, degraded: true, status: 'unavailable', error: degraded.state.error, matches: [] };
+        return { ok: false, degraded: true, status: 'unavailable', error: degraded.state.error, matches: [], continuityMatches: [] };
     }
 }
 
@@ -85,7 +91,7 @@ export async function benchmarkWorldSense(timelineId) {
 function documentFor(entry) {
     const text = `ENTRY: ${entry.name}\nKEYS: ${[...entry.keys, ...entry.secondaryKeys].join(', ')}\nLORE: ${entry.content}`;
     const hash = Number.parseInt(entry.hash.slice(-8), 16) >>> 0;
-    return { hash, text, metadata: { hash, book: entry.book, uid: entry.uid, entryHash: entry.hash } };
+    return { hash, text, metadata: { hash, kind: 'lore', book: entry.book, uid: entry.uid, entryHash: entry.hash } };
 }
 
 function representativeQueries(entries) {

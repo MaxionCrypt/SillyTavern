@@ -89,6 +89,10 @@ import {
     setSecret as archiveSetSecret,
     clearSecret as archiveClearSecret,
     clearCharStateFacet as archiveClearCharStateFacet,
+    getSceneContinuitySettings as archiveGetContinuitySettings,
+    setSceneContinuitySettings as archiveSetContinuitySettings,
+    pinContinuityRecord as archivePinContinuityRecord,
+    unpinContinuityRecord as archiveUnpinContinuityRecord,
 } from './archivist-store.js';
 import {
     buildVariableStateBodyMarkup,
@@ -3212,6 +3216,37 @@ async function handleAction(element) {
             }
             break;
         }
+        case 'archive-continuity-read': {
+            const { timelineId, sceneId } = element.dataset;
+            const settings = archiveGetContinuitySettings(timelineId, sceneId);
+            archiveSetContinuitySettings(timelineId, sceneId, { readPrevious: !settings.readPrevious });
+            break;
+        }
+        case 'archive-continuity-share': {
+            const { timelineId, sceneId } = element.dataset;
+            const settings = archiveGetContinuitySettings(timelineId, sceneId);
+            archiveSetContinuitySettings(timelineId, sceneId, { shareForward: !settings.shareForward });
+            break;
+        }
+        case 'archive-continuity-exclude': {
+            const { timelineId, sceneId, sourceSceneId } = element.dataset;
+            const settings = archiveGetContinuitySettings(timelineId, sceneId);
+            const excluded = new Set(settings.excludedSceneIds || []);
+            if (excluded.has(sourceSceneId)) excluded.delete(sourceSceneId);
+            else excluded.add(sourceSceneId);
+            archiveSetContinuitySettings(timelineId, sceneId, { excludedSceneIds: [...excluded] });
+            break;
+        }
+        case 'archive-continuity-pin': {
+            const { timelineId, sceneId, sourceSceneId, recordType, recordId } = element.dataset;
+            const pin = { sourceSceneId, recordType, recordId };
+            const settings = archiveGetContinuitySettings(timelineId, sceneId);
+            const key = `${sourceSceneId}:${recordType}:${recordId}`;
+            const pinned = (settings.pins || []).some((item) => `${item.sourceSceneId}:${item.recordType}:${item.recordId}` === key);
+            if (pinned) archiveUnpinContinuityRecord(timelineId, sceneId, pin);
+            else archivePinContinuityRecord(timelineId, sceneId, pin);
+            break;
+        }
         case 'create-arc': {
             const title = askForTitle('Arc title?', 'New Arc');
             if (title) {
@@ -4090,11 +4125,16 @@ function renderTimelineFocus(timeline, store) {
 /** Roleplay Scenes in this Timeline, in Arc/Scene order — the ones the Loom
  * keeps an Archive for. */
 function listArchiveScenes(timeline, store) {
-    return timeline.arcIds
-        .flatMap((arcId) => store.arcs[arcId]?.sceneIds || [])
-        .map((sceneId) => store.scenes[sceneId])
-        .filter((scene) => scene?.mode === 'roleplay')
-        .map((scene) => ({ id: scene.id, title: scene.title || 'Untitled Scene' }));
+    const scenes = [];
+    for (let arcIndex = 0; arcIndex < timeline.arcIds.length; arcIndex += 1) {
+        const arc = store.arcs[timeline.arcIds[arcIndex]];
+        for (const sceneId of arc?.sceneIds || []) {
+            const scene = store.scenes[sceneId];
+            if (scene?.mode !== 'roleplay') continue;
+            scenes.push({ id: scene.id, title: scene.title || 'Untitled Scene', arcId: arc.id, arcTitle: arc.title || 'Untitled Arc', arcIndex, orderIndex: scenes.length });
+        }
+    }
+    return scenes;
 }
 
 /** One Archive section: a titled, counted list of items (each already HTML),
@@ -4121,7 +4161,7 @@ function renderArchiveSection(title, icon, items, emptyText, { tone = '' } = {})
  * matches its `recordId`.
  */
 function renderArchiveItem(key, text, {
-    badge = '', recordId = '', editable = false, deletable = false, editValue = '', timelineId = '', sceneId = '',
+    badge = '', recordId = '', editable = false, deletable = false, editValue = '', timelineId = '', sceneId = '', extraAction = '',
 } = {}) {
     const editing = recordId && loomArchive.editingId === recordId;
     const attrs = `data-record-id="${escapeAttribute(recordId)}" data-timeline-id="${escapeAttribute(timelineId)}" data-scene-id="${escapeAttribute(sceneId)}"`;
@@ -4137,10 +4177,11 @@ function renderArchiveItem(key, text, {
         </li>`;
     }
 
-    const actions = recordId && (editable || deletable)
+    const actions = (recordId && (editable || deletable)) || extraAction
         ? `<span class="remodel-archive-item-actions">
             ${editable ? `<button type="button" title="Edit" aria-label="Edit" data-remodel-timeline-action="archive-edit-start" ${attrs}><i class="fa-solid fa-pen" aria-hidden="true"></i></button>` : ''}
             ${deletable ? `<button type="button" class="danger" title="Remove from the Loom's memory" aria-label="Remove" data-remodel-timeline-action="archive-delete" ${attrs}><i class="fa-solid fa-trash-can" aria-hidden="true"></i></button>` : ''}
+            ${extraAction}
         </span>`
         : '';
 
@@ -4184,6 +4225,23 @@ function renderArchiveViewToggle() {
     </div>`;
 }
 
+function renderArchiveContinuityButton(label, icon, active, action, data = {}) {
+    const attrs = Object.entries(data).map(([key, value]) => `data-${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}="${escapeAttribute(String(value ?? ''))}"`).join(' ');
+    return `<button type="button" class="remodel-archive-continuity-button ${active ? 'is-active' : ''}" aria-pressed="${active ? 'true' : 'false'}" data-remodel-timeline-action="${action}" ${attrs}>
+        <i class="fa-solid ${icon}" aria-hidden="true"></i><span>${escapeHtml(label)}</span>
+    </button>`;
+}
+
+function renderArchiveRecallAction({ timelineId, targetSceneId, sourceSceneId, recordType, recordId, pinned, targetTitle }) {
+    if (!targetSceneId || !sourceSceneId || targetSceneId === sourceSceneId) return '';
+    const title = pinned ? `Stop explicitly recalling this in ${targetTitle}` : `Explicitly recall this in ${targetTitle}`;
+    return `<button type="button" class="${pinned ? 'is-active' : ''}" title="${escapeAttribute(title)}" aria-label="${escapeAttribute(title)}" aria-pressed="${pinned ? 'true' : 'false'}"
+        data-remodel-timeline-action="archive-continuity-pin" data-timeline-id="${escapeAttribute(timelineId)}" data-scene-id="${escapeAttribute(targetSceneId)}"
+        data-source-scene-id="${escapeAttribute(sourceSceneId)}" data-record-type="${escapeAttribute(recordType)}" data-record-id="${escapeAttribute(recordId)}">
+        <i class="fa-solid fa-thumbtack" aria-hidden="true"></i>
+    </button>`;
+}
+
 function renderLoomArchive(timeline, store) {
     const isNarrator = loomArchive.view === 'narrator';
     const closeButton = `<button type="button" class="remodel-notebook-close" data-remodel-timeline-action="toggle-archive">
@@ -4214,6 +4272,19 @@ function renderLoomArchive(timeline, store) {
     const activeSceneId = scenes.some((scene) => scene.id === loomArchive.sceneId)
         ? loomArchive.sceneId
         : (scenes.find((scene) => scene.id === timeline.activeSceneId)?.id || scenes[0].id);
+    const viewedScene = scenes.find((scene) => scene.id === activeSceneId);
+    const targetScene = scenes.find((scene) => scene.id === timeline.activeSceneId) || viewedScene;
+    const viewedContinuity = archiveGetContinuitySettings(timeline.id, activeSceneId);
+    const targetContinuity = archiveGetContinuitySettings(timeline.id, targetScene.id);
+    const viewedIsEarlier = viewedScene.orderIndex < targetScene.orderIndex;
+    const sourceExcluded = targetContinuity.excludedSceneIds.includes(activeSceneId);
+    const pinnedKeys = new Set(targetContinuity.pins.map((pin) => `${pin.sourceSceneId}:${pin.recordType}:${pin.recordId}`));
+    const recallAction = (recordType, recordId) => !isNarrator && viewedIsEarlier && viewedContinuity.shareForward && !sourceExcluded
+        ? renderArchiveRecallAction({
+            timelineId: timeline.id, targetSceneId: targetScene.id, sourceSceneId: activeSceneId, recordType, recordId,
+            pinned: pinnedKeys.has(`${activeSceneId}:${recordType}:${recordId}`), targetTitle: targetScene.title,
+        })
+        : '';
 
     const events = archiveListEvents(timeline.id, activeSceneId);
     const facts = archiveListSceneFacts(timeline.id, activeSceneId);
@@ -4230,14 +4301,14 @@ function renderLoomArchive(timeline, store) {
     // What happened — newest first, so the latest beat is at the top. Events
     // are an append-only record, so they are never edited or deleted here.
     const eventItems = events.slice().reverse()
-        .map((event) => renderArchiveItem('', escapeHtml(event.summary || '')));
+        .map((event) => renderArchiveItem('', escapeHtml(event.summary || ''), { extraAction: recallAction('event', event.id) }));
     const factItems = facts.map((fact) => renderArchiveItem(fact.key, escapeHtml(String(fact.value)), {
-        recordId: `fact:${fact.key}`, editable, deletable: editable, editValue: String(fact.value), ...scope,
+        recordId: `fact:${fact.key}`, editable, deletable: editable, editValue: String(fact.value), extraAction: recallAction('fact', fact.key), ...scope,
     }));
     const charItems = chars.map((char) => renderArchiveItem(
         char.charId,
         escapeHtml(Object.entries(char.facets || {}).map(([facet, value]) => `${facet}: ${value}`).join(' · ')),
-        { recordId: `char:${char.charId}`, deletable: editable, ...scope },
+        { recordId: `char:${char.charId}`, deletable: editable, extraAction: recallAction('character', char.charId), ...scope },
     ));
     const goalItems = goals.map((goal) => renderArchiveItem(
         '',
@@ -4263,6 +4334,22 @@ function renderLoomArchive(timeline, store) {
         ...(isNarrator ? [] : [renderArchiveSection('Secrets', 'fa-lock', secretItems, 'No secrets kept.', { tone: 'is-secret' })]),
     ].join('');
 
+    const continuityControls = isNarrator ? '' : `<section class="remodel-archive-continuity" aria-label="Timeline continuity controls">
+        <div class="remodel-archive-continuity-copy">
+            <strong>Timeline continuity</strong>
+            <span>${viewedScene.id === targetScene.id
+                ? 'Control whether this Scene looks backward and whether later Scenes may recall it.'
+                : `Control whether ${targetScene.title} may automatically or explicitly recall this earlier Scene.`}</span>
+        </div>
+        <div class="remodel-archive-continuity-actions">
+            ${viewedScene.id === targetScene.id ? renderArchiveContinuityButton('Look into earlier scenes', 'fa-clock-rotate-left', viewedContinuity.readPrevious, 'archive-continuity-read', { timelineId: timeline.id, sceneId: activeSceneId }) : ''}
+            ${renderArchiveContinuityButton('Allow later recall', 'fa-share-nodes', viewedContinuity.shareForward, 'archive-continuity-share', { timelineId: timeline.id, sceneId: activeSceneId })}
+            ${viewedIsEarlier ? renderArchiveContinuityButton(`Use in ${targetScene.title}`, 'fa-link', !sourceExcluded, 'archive-continuity-exclude', { timelineId: timeline.id, sceneId: targetScene.id, sourceSceneId: activeSceneId }) : ''}
+        </div>
+        ${viewedIsEarlier && targetContinuity.pins.some((pin) => pin.sourceSceneId === activeSceneId)
+        ? `<p>${targetContinuity.pins.filter((pin) => pin.sourceSceneId === activeSceneId).length} item(s) explicitly recalled in ${escapeHtml(targetScene.title)}. Use the thumbtacks below to remove them.</p>` : ''}
+    </section>`;
+
     return `<section class="remodel-notebook remodel-archive" aria-label="Loom's Archive">
         ${closeButton}
         ${head}
@@ -4275,6 +4362,7 @@ function renderLoomArchive(timeline, store) {
             </label>
             ${renderArchiveViewToggle()}
         </div>
+        ${continuityControls}
         <div class="remodel-archive-sections">
             ${sections}
         </div>

@@ -43,7 +43,23 @@ export function rankLivingLore({
     packet, entries = [], semanticMatches = [], metadata = [], goals = [], variables = [], pins = [], continuity = [], budget = {},
     semanticThreshold = 0.30, semanticOnlyLimit = 3,
 } = {}) {
-    const limits = { ...DEFAULT_BUDGET, ...budget };
+    const candidates = scoreLivingLoreCandidates({ packet, entries, semanticMatches, metadata, goals, variables, pins, continuity, semanticThreshold });
+    const ranking = selectWorldSenseCandidates(candidates, { budget, semanticOnlyLimit });
+    const selectedKeys = new Set(ranking.selected.filter((item) => item.kind !== 'continuity').map(entryKey));
+    return {
+        ...ranking,
+        propagation: {
+            goalIds: linkedRecordIds(goals, selectedKeys),
+            variableIds: linkedRecordIds(variables, selectedKeys),
+        },
+    };
+}
+
+/** Score lore without spending the shared World Sense prompt budget yet. */
+export function scoreLivingLoreCandidates({
+    packet, entries = [], semanticMatches = [], metadata = [], goals = [], variables = [], pins = [], continuity = [],
+    semanticThreshold = 0.30,
+} = {}) {
     const candidates = new Map();
     const metadataByKey = new Map(metadata.map((item) => [entryKey(item), item]));
     const semanticByKey = new Map(semanticMatches.map((item, index) => [entryKey(item), { ...item, rank: Number.isFinite(Number(item.rank)) ? Number(item.rank) : index }]));
@@ -57,7 +73,7 @@ export function rankLivingLore({
         if (!key) continue;
         const sidecar = metadataByKey.get(key);
         if (entry.native?.disable || sidecar?.worldSense?.excluded) continue;
-        const candidate = { key, entry, score: 0, reasons: [], forced: false, tokenCost: estimateEntryTokens(entry) };
+        const candidate = { kind: 'lore', key, entry, score: 0, reasons: [], forced: false, tokenCost: estimateEntryTokens(entry) };
         if (entry.native?.constant) add(candidate, 120, 'native.constant');
         if (pinKeys.has(key) || sidecar?.worldSense?.pinned) add(candidate, 140, 'pin');
         candidate.forced = candidate.reasons.some((reason) => reason.channel === 'native.constant' || reason.channel === 'pin');
@@ -96,19 +112,34 @@ export function rankLivingLore({
         }
     }
 
-    const ranked = [...candidates.values()].sort(compareCandidates);
+    return [...candidates.values()];
+}
+
+/** Apply one entry/token budget across lore and recalled continuity. */
+export function selectWorldSenseCandidates(candidates = [], { budget = {}, semanticOnlyLimit = 3, continuityLimit = 4, continuityHardLimit = 8 } = {}) {
+    const limits = { ...DEFAULT_BUDGET, ...budget };
+    const ranked = [...candidates].sort(compareCandidates);
     const selected = [];
     const rejected = [];
     let tokens = 0;
     let semanticOnlyUsed = 0;
+    let continuityUsed = 0;
     for (const candidate of ranked) {
         if (!candidate.forced && candidate.score <= 0) {
             rejected.push(receiptCandidate(candidate, 'no-evidence'));
             continue;
         }
-        const semanticOnly = candidate.reasons.length > 0 && candidate.reasons.every((reason) => reason.channel === 'semantic');
+        if (candidate.kind === 'continuity' && continuityUsed >= positive(continuityHardLimit, 8)) {
+            rejected.push(receiptCandidate(candidate, 'continuity-hard-limit'));
+            continue;
+        }
+        const semanticOnly = candidate.kind === 'lore' && candidate.reasons.length > 0 && candidate.reasons.every((reason) => reason.channel === 'semantic');
         if (!candidate.forced && semanticOnly && semanticOnlyUsed >= positive(semanticOnlyLimit, 3)) {
             rejected.push(receiptCandidate(candidate, 'semantic-only-limit'));
+            continue;
+        }
+        if (!candidate.forced && candidate.kind === 'continuity' && continuityUsed >= positive(continuityLimit, 4)) {
+            rejected.push(receiptCandidate(candidate, 'continuity-limit'));
             continue;
         }
         const entryLimit = selected.length >= positive(limits.maxEntries, DEFAULT_BUDGET.maxEntries);
@@ -119,16 +150,12 @@ export function rankLivingLore({
         }
         selected.push(receiptCandidate(candidate, candidate.forced && (entryLimit || tokenLimit) ? 'forced-over-budget' : 'selected'));
         if (semanticOnly) semanticOnlyUsed += 1;
+        if (candidate.kind === 'continuity') continuityUsed += 1;
         tokens += candidate.tokenCost;
     }
-    const selectedKeys = new Set(selected.map(entryKey));
     return {
         selected,
         rejected,
-        propagation: {
-            goalIds: linkedRecordIds(goals, selectedKeys),
-            variableIds: linkedRecordIds(variables, selectedKeys),
-        },
         budget: {
             maxEntries: positive(limits.maxEntries, DEFAULT_BUDGET.maxEntries),
             maxTokens: positive(limits.maxTokens, DEFAULT_BUDGET.maxTokens),
@@ -178,6 +205,15 @@ function add(candidate, points, channel, detail = {}) {
 }
 
 function receiptCandidate(candidate, decision) {
+    if (candidate.kind === 'continuity') {
+        return {
+            kind: 'continuity', key: candidate.key,
+            sceneId: candidate.record.sceneId, sceneTitle: candidate.record.sceneTitle,
+            arcId: candidate.record.arcId, arcTitle: candidate.record.arcTitle,
+            recordType: candidate.record.recordType, recordId: candidate.record.recordId, text: candidate.record.text,
+            score: candidate.score, tokenCost: candidate.tokenCost, forced: candidate.forced, decision, reasons: candidate.reasons,
+        };
+    }
     return {
         book: candidate.entry.book,
         uid: candidate.entry.uid,

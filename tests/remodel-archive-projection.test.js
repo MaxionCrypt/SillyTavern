@@ -50,3 +50,18 @@ test('zero budget omits Archive event material without touching raw events', () 
     expect(projection.entries).toEqual([]);
     expect(ledger).toHaveLength(3);
 });
+
+test('recalled continuity shares the Archive budget and renders its provenance', () => {
+    const projection = projectArchiveEvents(events(8), {
+        maxEntries: 4,
+        continuity: [{
+            kind: 'continuity', recordId: 'evt-old', recordType: 'event', text: 'Mara hid the obsidian key.',
+            sceneId: 'scene-old', sceneTitle: 'The Cellar', arcId: 'arc-old', arcTitle: 'Arrival', score: 70,
+        }],
+    });
+
+    expect(projection.entries).toHaveLength(4);
+    expect(projection.entries[0]).toMatchObject({ kind: 'recall', sourceLabel: 'Arrival · The Cellar' });
+    expect(projection.receipt.recalledCount).toBe(1);
+    expect(renderArchiveProjection(projection)).toContain('Recalled from Arrival · The Cellar');
+});

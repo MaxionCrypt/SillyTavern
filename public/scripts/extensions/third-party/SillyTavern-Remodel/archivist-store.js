@@ -35,9 +35,35 @@ function sceneBucket(store, timelineId, sceneId) {
     scene.events ??= [];
     scene.charStates ??= {};
     scene.secrets ??= {};
+    scene.continuity = normalizeContinuitySettings(scene.continuity);
     if (typeof scene.eventSeq !== 'number') scene.eventSeq = scene.events.length;
     return scene;
 }
+
+const DEFAULT_CONTINUITY = Object.freeze({ readPrevious: true, shareForward: true, excludedSceneIds: [], pins: [] });
+
+function normalizeContinuitySettings(value) {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const excludedSceneIds = uniqueStrings(source.excludedSceneIds);
+    const pins = (Array.isArray(source.pins) ? source.pins : []).map(normalizeContinuityPin).filter(Boolean);
+    return {
+        readPrevious: source.readPrevious !== false,
+        shareForward: source.shareForward !== false,
+        excludedSceneIds,
+        pins: [...new Map(pins.map((pin) => [continuityPinKey(pin), pin])).values()],
+    };
+}
+
+function normalizeContinuityPin(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const sourceSceneId = String(value.sourceSceneId || '').trim();
+    const recordType = ['event', 'fact', 'character'].includes(value.recordType) ? value.recordType : '';
+    const recordId = String(value.recordId || '').trim();
+    return sourceSceneId && recordType && recordId ? { sourceSceneId, recordType, recordId } : null;
+}
+
+function continuityPinKey(value) { return `${value.sourceSceneId}:${value.recordType}:${value.recordId}`; }
+function uniqueStrings(value) { return [...new Set((Array.isArray(value) ? value : []).map((item) => String(item || '').trim()).filter(Boolean))]; }
 
 export function getSceneFact(timelineId, sceneId, key) {
     const scene = sceneBucket(getArchivistStore(), timelineId, sceneId);
@@ -84,6 +110,47 @@ export function recordEvent(timelineId, sceneId, summary, { msgId = null, turnIn
 export function listEvents(timelineId, sceneId) {
     const scene = sceneBucket(getArchivistStore(), timelineId, sceneId);
     return scene.events.slice().sort((a, b) => a.seq - b.seq).map(clone);
+}
+
+/** Per-Scene controls for timeline-isolated World Sense continuity recall. */
+export function getSceneContinuitySettings(timelineId, sceneId) {
+    return clone(sceneBucket(getArchivistStore(), timelineId, sceneId).continuity);
+}
+
+export function setSceneContinuitySettings(timelineId, sceneId, patch = {}) {
+    const scene = sceneBucket(getArchivistStore(), timelineId, sceneId);
+    scene.continuity = normalizeContinuitySettings({ ...scene.continuity, ...clone(patch) });
+    saveArchivistStore();
+    return clone(scene.continuity);
+}
+
+export function pinContinuityRecord(timelineId, sceneId, value) {
+    const pin = normalizeContinuityPin(value);
+    if (!pin) return null;
+    const scene = sceneBucket(getArchivistStore(), timelineId, sceneId);
+    scene.continuity = normalizeContinuitySettings({ ...scene.continuity, pins: [...scene.continuity.pins, pin] });
+    saveArchivistStore();
+    return clone(pin);
+}
+
+export function unpinContinuityRecord(timelineId, sceneId, value) {
+    const pin = normalizeContinuityPin(value);
+    if (!pin) return false;
+    const scene = sceneBucket(getArchivistStore(), timelineId, sceneId);
+    const key = continuityPinKey(pin);
+    const before = scene.continuity.pins.length;
+    scene.continuity.pins = scene.continuity.pins.filter((item) => continuityPinKey(item) !== key);
+    if (scene.continuity.pins.length !== before) saveArchivistStore();
+    return scene.continuity.pins.length !== before;
+}
+
+/** Detached Timeline Archive snapshot used by World Sense indexing. */
+export function listTimelineArchiveScenes(timelineId) {
+    const timeline = getArchivistStore().timelines[String(timelineId || '')];
+    return Object.values(timeline?.scenes || {}).map((scene) => ({
+        ...clone(scene),
+        continuity: normalizeContinuitySettings(scene.continuity),
+    }));
 }
 
 export function setCharStateFacet(timelineId, sceneId, charId, facet, value) {

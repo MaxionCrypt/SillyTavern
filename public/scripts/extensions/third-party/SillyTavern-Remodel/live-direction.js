@@ -1240,10 +1240,13 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         ...performingCast.flatMap((member) => [member.label || member.name || '', member.description || '', member.scenario || '']),
         ...(mechanics?.goals || []).flatMap((goal) => [goal.title || goal.name || '', goal.description || '']),
     ];
-    const archiveProjection = buildSceneArchiveProjection(scene.timelineId, scene.id, { query: archiveQuery });
+    const archiveProjection = buildSceneArchiveProjection(scene.timelineId, scene.id, {
+        query: archiveQuery,
+        continuity: worldSense?.continuity || [],
+    });
     journal('archive.projection', archiveProjection.receipt, {
         correlationId: directionInFlight?.id || null,
-        summary: `Archive projected ${archiveProjection.receipt.projectedCount}/${archiveProjection.receipt.storedCount} entries`,
+        summary: `Archive projected ${archiveProjection.receipt.projectedCount}/${archiveProjection.receipt.storedCount} local entries with ${archiveProjection.receipt.recalledCount || 0} recalled`,
     });
     return {
         scene: { id: scene.id, timelineId: scene.timelineId, title: scene.title },

@@ -63,7 +63,9 @@ export function saveWorldSenseReceipt(receipt) {
     if (!saved) return null;
     store.receipts.push(saved);
     if (store.receipts.length > 100) store.receipts.splice(0, store.receipts.length - 100);
-    if (saved.sceneId) store.continuityByScene[String(saved.sceneId)] = (saved.selected || []).map(({ book, uid }) => ({ book, uid })).slice(0, 20);
+    if (saved.sceneId) store.continuityByScene[String(saved.sceneId)] = (saved.selected || [])
+        .filter(({ book, uid }) => book && uid != null)
+        .map(({ book, uid }) => ({ book, uid })).slice(0, 20);
     save();
     return saved;
 }
@@ -89,7 +91,7 @@ function emptyStore() {
 }
 
 function indexState(timelineId) {
-    return { timelineId, collectionId: '', modelId: '', bookHash: '', hashes: {}, status: 'idle', error: '', updatedAt: now() };
+    return { timelineId, collectionId: '', modelId: '', bookHash: '', archiveHash: '', hashes: {}, status: 'idle', error: '', updatedAt: now() };
 }
 
 function normalizeStore(store) {

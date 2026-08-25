@@ -12,26 +12,30 @@ const STOP_WORDS = new Set([
 ]);
 
 /** Deterministic prompt projection over accepted raw Archive events. */
-export function projectArchiveEvents(events = [], { query = [], maxEntries = DEFAULT_BUDGET } = {}) {
+export function projectArchiveEvents(events = [], { query = [], maxEntries = DEFAULT_BUDGET, continuity = [] } = {}) {
     const budget = clampBudget(maxEntries);
+    const recalls = (Array.isArray(continuity) ? continuity : []).slice(0, budget).map(recallEntry);
+    const localBudget = Math.max(0, budget - recalls.length);
     const ordered = (Array.isArray(events) ? events : []).filter((event) => event && String(event.summary || '').trim())
         .slice().sort((left, right) => Number(left.seq || 0) - Number(right.seq || 0));
     const { unique, duplicateIds } = dedupeEvents(ordered);
     const queryTokens = tokenize(Array.isArray(query) ? query.join('\n') : query);
-    if (!budget || !unique.length) return emptyProjection(ordered.length, duplicateIds, budget, [...queryTokens]);
+    if (!budget) return emptyProjection(ordered.length, duplicateIds, budget, [...queryTokens]);
+    if (!unique.length || !localBudget) return projectionWithRecalls(emptyProjection(ordered.length, duplicateIds, budget, [...queryTokens]), recalls);
 
-    const recent = unique.slice(-Math.min(DEFAULT_RECENT, budget, unique.length));
+    const recent = unique.slice(-Math.min(DEFAULT_RECENT, localBudget, unique.length));
     const recentIds = new Set(recent.map((event) => event.id));
     const older = unique.filter((event) => !recentIds.has(event.id));
-    const relevantCapacity = Math.min(DEFAULT_RELEVANT, Math.max(0, budget - recent.length));
+    const relevantCapacity = Math.min(DEFAULT_RELEVANT, Math.max(0, localBudget - recent.length));
     const relevant = older.map((event) => ({ event, score: relevanceScore(event, queryTokens) }))
         .filter((item) => item.score > 0)
         .sort((left, right) => right.score - left.score || Number(right.event.seq || 0) - Number(left.event.seq || 0))
         .slice(0, relevantCapacity).map((item) => ({ ...item.event, relevanceScore: item.score }));
     const selectedIds = new Set([...recent, ...relevant].map((event) => event.id));
     const compactable = older.filter((event) => !selectedIds.has(event.id));
-    const summaries = compactEvents(compactable, Math.max(0, budget - recent.length - relevant.length));
+    const summaries = compactEvents(compactable, Math.max(0, localBudget - recent.length - relevant.length));
     const entries = [
+        ...recalls,
         ...relevant.map((event) => eventEntry(event, 'relevant')),
         ...recent.map((event) => eventEntry(event, 'recent')),
         ...summaries,
@@ -50,17 +54,20 @@ export function projectArchiveEvents(events = [], { query = [], maxEntries = DEF
             duplicateIds,
             omittedIds: unique.filter((event) => !representedIds.has(event.id)).map((event) => event.id),
             projectedCount: entries.length,
+            recalledCount: recalls.length,
+            recalledIds: recalls.map((entry) => entry.id),
         },
     };
 }
 
 /** Add stable scene state to the turn query without exposing Archive secrets. */
-export function buildSceneArchiveProjection(timelineId, sceneId, { query = [], maxEntries = DEFAULT_BUDGET } = {}) {
+export function buildSceneArchiveProjection(timelineId, sceneId, { query = [], maxEntries = DEFAULT_BUDGET, continuity = [] } = {}) {
     const facts = listSceneFacts(timelineId, sceneId);
     const characters = listCharStates(timelineId, sceneId);
     const beat = getBeat(timelineId, sceneId);
     return projectArchiveEvents(listEvents(timelineId, sceneId), {
         maxEntries,
+        continuity,
         query: [
             ...(Array.isArray(query) ? query : [query]),
             ...facts.map((fact) => `${fact.key}: ${fact.value}`),
@@ -73,7 +80,26 @@ export function buildSceneArchiveProjection(timelineId, sceneId, { query = [], m
 export function renderArchiveProjection(projection) {
     return (projection?.entries || []).map((entry) => entry.kind === 'summary'
         ? `- Earlier (${entry.sourceLabel}): ${entry.summary}`
-        : `- ${entry.summary}`).join('\n');
+        : entry.kind === 'recall'
+            ? `- Recalled from ${entry.sourceLabel}: ${entry.summary}`
+            : `- ${entry.summary}`).join('\n');
+}
+
+function recallEntry(value, index) {
+    return {
+        kind: 'recall', id: `recall:${value.sceneId}:${value.recordType}:${value.recordId}`,
+        summary: String(value.text || '').trim(), sourceLabel: [value.arcTitle, value.sceneTitle].filter(Boolean).join(' · '),
+        sourceEventIds: [], firstSeq: Number.MIN_SAFE_INTEGER + index, lastSeq: Number.MIN_SAFE_INTEGER + index,
+        provenance: { arcId: value.arcId, arcTitle: value.arcTitle, sceneId: value.sceneId, sceneTitle: value.sceneTitle, recordType: value.recordType, recordId: value.recordId },
+    };
+}
+
+function projectionWithRecalls(projection, recalls) {
+    projection.entries = recalls;
+    projection.receipt.recalledCount = recalls.length;
+    projection.receipt.recalledIds = recalls.map((entry) => entry.id);
+    projection.receipt.projectedCount = recalls.length;
+    return projection;
 }
 
 function compactEvents(events, capacity) {
@@ -137,5 +163,5 @@ function clampBudget(value) {
     return Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : DEFAULT_BUDGET;
 }
 function emptyProjection(storedCount, duplicateIds, budget, queryTerms = []) {
-    return { version: 1, queryTerms: queryTerms.slice(0, 96), entries: [], receipt: { storedCount, uniqueCount: Math.max(0, storedCount - duplicateIds.length), budget, recentIds: [], retrievedIds: [], summaryIds: [], summarizedEventIds: [], duplicateIds, omittedIds: [], projectedCount: 0 } };
+    return { version: 1, queryTerms: queryTerms.slice(0, 96), entries: [], receipt: { storedCount, uniqueCount: Math.max(0, storedCount - duplicateIds.length), budget, recentIds: [], retrievedIds: [], summaryIds: [], summarizedEventIds: [], duplicateIds, omittedIds: [], recalledCount: 0, recalledIds: [], projectedCount: 0 } };
 }

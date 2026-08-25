@@ -7,7 +7,13 @@ import { recordDebugEvent } from './debug-console.js';
 import { buildLivingLorePacket } from './living-lore-proposals.js';
 import { queryWorldSense } from './world-sense-embeddings.js';
 import { loadTimelineLore } from './world-sense-lore.js';
-import { buildWorldSenseQueryPacket, canReuseWorldSensePrefetch, rankLivingLore } from './world-sense-retrieval.js';
+import {
+    buildWorldSenseQueryPacket,
+    canReuseWorldSensePrefetch,
+    scoreLivingLoreCandidates,
+    selectWorldSenseCandidates,
+} from './world-sense-retrieval.js';
+import { buildTimelineContinuityDocuments, scoreTimelineContinuityCandidates } from './world-sense-continuity.js';
 import {
     getWorldSenseContinuity,
     getWorldSenseIndexState,
@@ -91,7 +97,8 @@ async function resolveWorldSenseForPhase(scene, options, { persist, consumePrefe
             const waitMs = Math.max(250, getWorldSenseProfile().warmQueryTargetMs * 2);
             result = cached.result || await withTimeout(cached.promise, waitMs, 'Composer prefetch was still warming the local model.');
             const currentLore = await loadTimelineLore(scene.timelineId);
-            reusedPrefetch = Boolean(result && result.bookHash === currentLore.hash);
+            const currentContinuity = buildTimelineContinuityDocuments(scene.timelineId);
+            reusedPrefetch = Boolean(result && result.bookHash === currentLore.hash && result.archiveHash === currentContinuity.hash);
             if (!reusedPrefetch) result = null;
         } catch {
             prefetchTimedOut = true;
@@ -149,10 +156,11 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
             timelineId: String(scene.timelineId),
             book: lore.book,
             bookHash: lore.hash,
+            archiveHash: buildTimelineContinuityDocuments(scene.timelineId).hash,
             queryHash: prepared.packet.hash,
             queryLength: prepared.packet.length,
             modelId: profile.modelId,
-            indexRevision: getWorldSenseIndexState(scene.timelineId)?.bookHash || '',
+            indexRevision: [getWorldSenseIndexState(scene.timelineId)?.bookHash, getWorldSenseIndexState(scene.timelineId)?.archiveHash].filter(Boolean).join(':'),
             degraded: false,
             error: '',
             elapsedMs: Math.round(performance.now() - startedAt),
@@ -163,7 +171,7 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
             budget: { maxEntries: 0, maxTokens: 0, usedEntries: 0, usedTokens: 0, overflow: false },
         };
     }
-    let semantic = { ok: true, degraded: false, matches: [] };
+    let semantic = { ok: true, degraded: false, matches: [], continuityMatches: [] };
     if (prepared.packet.text && !skipSemantic) {
         const timeoutMs = phase === 'prefetch' ? 20000 : Math.max(250, profile.warmQueryTargetMs * 2);
         try {
@@ -173,14 +181,14 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
                 'Local semantic retrieval exceeded the turn budget.',
             );
         } catch (error) {
-            semantic = { ok: false, degraded: true, matches: [], error: String(error?.message || error) };
+            semantic = { ok: false, degraded: true, matches: [], continuityMatches: [], error: String(error?.message || error) };
         }
     } else if (skipSemantic) {
-        semantic = { ok: false, degraded: true, matches: [], error: 'Composer prefetch exceeded the turn budget; deterministic ranking continued immediately.' };
+        semantic = { ok: false, degraded: true, matches: [], continuityMatches: [], error: 'Composer prefetch exceeded the turn budget; deterministic ranking continued immediately.' };
     }
     const metadata = listLivingLoreMetadata({ timelineId: scene.timelineId, book: lore.book || '' });
     const variables = listVariableValues({ timelineId: scene.timelineId });
-    const ranking = rankLivingLore({
+    const loreCandidates = scoreLivingLoreCandidates({
         packet: prepared.packet,
         entries: lore.entries.filter((entry) => !prepared.excludes.some((excluded) => loreKey(excluded) === loreKey(entry))),
         semanticMatches: semantic.matches || [],
@@ -189,16 +197,35 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         variables,
         pins: prepared.pins,
         continuity: getWorldSenseContinuity(scene.id),
-        budget: { maxEntries: profile.maxEntries, maxTokens: profile.maxTokens },
         semanticThreshold: profile.semanticThreshold,
-        semanticOnlyLimit: profile.semanticOnlyLimit,
     });
+    const continuitySource = buildTimelineContinuityDocuments(scene.timelineId);
+    const continuityCandidates = scoreTimelineContinuityCandidates({
+        timelineId: scene.timelineId,
+        sceneId: scene.id,
+        packet: prepared.packet,
+        records: continuitySource.records,
+        semanticMatches: semantic.continuityMatches || [],
+        semanticThreshold: profile.semanticThreshold,
+    });
+    const ranking = selectWorldSenseCandidates([...loreCandidates, ...continuityCandidates], {
+        budget: { maxEntries: profile.maxEntries, maxTokens: profile.maxTokens },
+        semanticOnlyLimit: profile.semanticOnlyLimit,
+        continuityLimit: 4,
+    });
+    const selectedLore = ranking.selected.filter((item) => item.kind !== 'continuity');
+    const selectedContinuity = ranking.selected.filter((item) => item.kind === 'continuity');
+    const selectedLoreKeys = new Set(selectedLore.map(loreKey));
+    const propagation = {
+        goalIds: linkedIds(prepared.goals, selectedLoreKeys),
+        variableIds: linkedIds(variables, selectedLoreKeys),
+    };
     const loomPacket = buildLivingLorePacket({
         timelineId: scene.timelineId,
         book: lore.book,
         bookHash: lore.hash,
         entries: lore.entries,
-        selected: ranking.selected,
+        selected: selectedLore,
         metadata,
         limits: { maxEntries: profile.maxEntries },
     });
@@ -208,16 +235,24 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         timelineId: String(scene.timelineId),
         book: lore.book,
         bookHash: lore.hash,
+        archiveHash: continuitySource.hash,
         queryHash: prepared.packet.hash,
         queryLength: prepared.packet.length,
         modelId: profile.modelId,
-        indexRevision: getWorldSenseIndexState(scene.timelineId)?.bookHash || '',
+        indexRevision: [getWorldSenseIndexState(scene.timelineId)?.bookHash, getWorldSenseIndexState(scene.timelineId)?.archiveHash].filter(Boolean).join(':'),
         degraded: Boolean(semantic.degraded),
         error: semantic.error || '',
         elapsedMs: Math.round(performance.now() - startedAt),
         loomPacket,
+        continuity: selectedContinuity,
+        propagation,
         ...ranking,
     };
+}
+
+function linkedIds(records, selectedKeys) {
+    return (records || []).filter((record) => (record.loreLinks || []).some((link) => selectedKeys.has(loreKey(link))))
+        .map((record) => String(record.id || '')).filter(Boolean);
 }
 
 function loreKey(value) {
@@ -242,6 +277,7 @@ function saveReceipt(scene, result, { reusedPrefetch }) {
         timelineId: String(scene.timelineId),
         book: result.book,
         bookHash: result.bookHash,
+        archiveHash: result.archiveHash,
         queryHash: result.queryHash,
         queryLength: result.queryLength,
         modelId: result.modelId,
@@ -256,6 +292,7 @@ function saveReceipt(scene, result, { reusedPrefetch }) {
             semanticOnlyLimit: getWorldSenseProfile().semanticOnlyLimit,
         },
         propagation: result.propagation,
+        continuity: result.continuity || [],
         selected: result.selected,
         rejected: result.rejected,
     });
@@ -263,7 +300,7 @@ function saveReceipt(scene, result, { reusedPrefetch }) {
         recordDebugEvent('world-sense', 'retrieval.receipt', receipt, {
             severity: receipt.degraded ? 'warn' : 'info',
             correlationId: receipt.id,
-            summary: `World Sense selected ${receipt.selected.length} of ${receipt.selected.length + receipt.rejected.length} lore entries${reusedPrefetch ? ' from composer prefetch' : ''}`,
+            summary: `World Sense selected ${receipt.selected.length} of ${receipt.selected.length + receipt.rejected.length} lore and continuity candidates${reusedPrefetch ? ' from composer prefetch' : ''}`,
         });
     } catch {
         // Retrieval is useful without Debug; diagnostics cannot break a turn.
