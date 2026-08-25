@@ -10765,6 +10765,104 @@ body.st-remodel-active .remodel-world-sense-muted {
   opacity: 0.58;
 }
 
+body.st-remodel-active .remodel-world-sense-seed-locks,
+body.st-remodel-active .remodel-world-sense-cultivation,
+body.st-remodel-active .remodel-world-sense-cultivation-preview,
+body.st-remodel-active .remodel-world-sense-conflicts {
+  border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+  background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 82%, transparent);
+  border-radius: 0.55rem;
+}
+
+body.st-remodel-active .remodel-world-sense-seed-locks {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.7rem;
+}
+
+body.st-remodel-active .remodel-world-sense-seed-locks > span,
+body.st-remodel-active .remodel-world-sense-cultivation header span {
+  color: var(--remodel-accent, #d5df36);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+body.st-remodel-active .remodel-world-sense-seed-locks small,
+body.st-remodel-active .remodel-world-sense-cultivation header small,
+body.st-remodel-active .remodel-world-sense-cultivation-preview small {
+  opacity: 0.68;
+}
+
+body.st-remodel-active .remodel-world-sense-cultivation {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 0.85rem;
+  padding: 0.85rem;
+}
+
+body.st-remodel-active .remodel-world-sense-cultivation > header,
+body.st-remodel-active .remodel-world-sense-cultivation-preview > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+body.st-remodel-active .remodel-world-sense-cultivation h3 { margin: 0.15rem 0 0; }
+
+body.st-remodel-active .remodel-world-sense-cultivation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+body.st-remodel-active .remodel-world-sense-cultivation form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+body.st-remodel-active .remodel-world-sense-cultivation form label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+}
+
+body.st-remodel-active .remodel-world-sense-cultivation form .wide,
+body.st-remodel-active .remodel-world-sense-cultivation form > button { grid-column: 1 / -1; }
+
+body.st-remodel-active .remodel-world-sense-cultivation textarea {
+  min-height: 5rem;
+  resize: vertical;
+}
+
+body.st-remodel-active .remodel-world-sense-cultivation-preview,
+body.st-remodel-active .remodel-world-sense-conflicts {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.7rem;
+}
+
+body.st-remodel-active .remodel-world-sense-cultivation-preview.is-error,
+body.st-remodel-active .remodel-world-sense-conflicts .is-possible-contradiction {
+  border-color: color-mix(in srgb, #e68b70 70%, transparent);
+}
+
+body.st-remodel-active .remodel-world-sense-conflicts article {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.65rem;
+  padding: 0.55rem;
+  border-left: 2px solid var(--remodel-accent, #d5df36);
+}
+
+body.st-remodel-active .remodel-world-sense-conflicts article p {
+  grid-column: 1 / -1;
+  margin: 0;
+  opacity: 0.78;
+}
+
 @media (max-width: 920px) {
   body.st-remodel-active .remodel-world-sense {
     width: calc(100% - 24px);
@@ -10798,6 +10896,10 @@ body.st-remodel-active .remodel-world-sense-muted {
   }
 
   body.st-remodel-active .remodel-world-sense-diff > div {
+    grid-template-columns: 1fr;
+  }
+
+  body.st-remodel-active .remodel-world-sense-cultivation form {
     grid-template-columns: 1fr;
   }
 }

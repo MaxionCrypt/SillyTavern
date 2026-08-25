@@ -36,7 +36,7 @@ const PROTECTED_BY_OPERATION = Object.freeze({
  * deliberately left to the caller (Commit 9).
  */
 export async function queueLivingLoreProposals({
-    timelineId = '', packet = null, proposals = [], acceptedProse = '', archiveFacts = [], source = {},
+    timelineId = '', packet = null, proposals = [], acceptedProse = '', archiveFacts = [], explicitInstructions = [], source = {},
 } = {}) {
     const automationMode = getWorldSenseProfile().mode || 'suggest';
     if (automationMode === 'off' || automationMode === 'observe') {
@@ -72,7 +72,7 @@ export async function queueLivingLoreProposals({
             queued.push(clone(existing));
             continue;
         }
-        const code = validateSuggestion(proposal, { timelineId, bucket, data, acceptedProse, archiveFacts });
+        const code = validateSuggestion(proposal, { timelineId, bucket, data, acceptedProse, archiveFacts, explicitInstructions, source });
         if (code) {
             rejected.push({ index, code, proposal: clone(proposal) });
             continue;
@@ -105,7 +105,7 @@ export async function queueLivingLoreProposals({
             idempotencyKey,
             proposal: clone(proposal),
             diff: preview.diff,
-            evidence: { matched: true, source: evidenceSource(proposal.evidence, acceptedProse, archiveFacts) },
+            evidence: { matched: true, source: evidenceSource(proposal.evidence, acceptedProse, archiveFacts, explicitInstructions, source) },
             source: { ...clone(source), proposalId: proposalIdentity },
             createdAt: timestamp,
             updatedAt: timestamp,
@@ -322,9 +322,9 @@ export async function rollbackLivingLoreTransaction({ timelineId = '', transacti
     return { ok: true, transactionId: transaction.id };
 }
 
-function validateSuggestion(proposal, { timelineId, bucket, data, acceptedProse, archiveFacts }) {
+function validateSuggestion(proposal, { timelineId, bucket, data, acceptedProse, archiveFacts, explicitInstructions, source }) {
     if (String(proposal.value ?? '').length > MAX_VALUE_CHARS) return 'value-too-large';
-    if (!evidenceSource(proposal.evidence, acceptedProse, archiveFacts)) return 'unsupported-evidence';
+    if (!evidenceSource(proposal.evidence, acceptedProse, archiveFacts, explicitInstructions, source)) return 'unsupported-evidence';
     if (proposal.operation === 'entry.create') return '';
     const key = loreEntryKey(proposal.target);
     const metadata = bucket.entries[key] || normalizeLivingLoreMetadata({}, proposal.target);
@@ -447,7 +447,7 @@ function isProtected(metadata, operation) {
     return (PROTECTED_BY_OPERATION[operation] || []).some((field) => protectedFields.has(field));
 }
 
-function evidenceSource(evidence, acceptedProse, archiveFacts) {
+function evidenceSource(evidence, acceptedProse, archiveFacts, explicitInstructions = [], source = {}) {
     const needle = normalized(evidence);
     if (!needle) return '';
     if (normalized(acceptedProse).includes(needle)) return 'accepted-prose';
@@ -456,6 +456,7 @@ function evidenceSource(evidence, acceptedProse, archiveFacts) {
         const summary = typeof fact === 'string' ? fact : String(fact?.summary ?? '');
         if ((id && needle === normalized(`archive:${id}`)) || normalized(summary).includes(needle)) return 'archive';
     }
+    if (source?.authority === 'owner' && (Array.isArray(explicitInstructions) ? explicitInstructions : []).some((instruction) => normalized(instruction).includes(needle) || needle.includes(normalized(instruction)))) return 'owner-instruction';
     return '';
 }
 

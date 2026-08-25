@@ -94,6 +94,18 @@ test('Suggest mode queues a field-level diff without writing native lore', async
     expect(saves).toHaveLength(0);
 });
 
+test('explicit owner cultivation queues a reviewable proposal without pretending it is accepted fiction', async () => {
+    const instruction = 'Let the buried bell attract an order of listeners.';
+    const result = await queueLivingLoreProposals({
+        timelineId: TIMELINE, packet: packet(),
+        proposals: [proposal('thread.add', instruction, { id: 'owner-cultivation', evidence: instruction })],
+        explicitInstructions: [instruction], source: { authority: 'owner', stage: 'cultivation' },
+    });
+
+    expect(result).toMatchObject({ ok: true, queued: [{ evidence: { matched: true, source: 'owner-instruction' }, status: 'suggested' }] });
+    expect(saves).toHaveLength(0);
+});
+
 test('owner can edit and reject queued suggestions without mutating native lore', async () => {
     const queued = await queueLivingLoreProposals({
         timelineId: TIMELINE, packet: packet(),

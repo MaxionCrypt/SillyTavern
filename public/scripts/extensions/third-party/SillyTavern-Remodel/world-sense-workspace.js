@@ -5,9 +5,17 @@ import {
     editLivingLoreProposalValue,
     listLivingLoreHistory,
     listLivingLoreProposals,
+    queueLivingLoreProposals,
     rejectLivingLoreProposal,
     rollbackLivingLoreTransaction,
 } from './living-lore-mutations.js';
+import {
+    buildCultivationPacket,
+    cultivationSearchText,
+    draftCultivationProposal,
+    inspectCultivationConflicts,
+    seedProtectionSummary,
+} from './living-lore-cultivation.js';
 import { listLivingLoreMetadata, upsertLivingLoreMetadata } from './living-lore-store.js';
 import { getTimelineStore } from './timeline-state.js';
 import { getWorldSenseTurnOverrides, setWorldSenseTurnOverride } from './world-sense-runtime.js';
@@ -37,7 +45,7 @@ export async function mountWorldSenseWorkspace(root) {
     if (!(root instanceof HTMLElement)) return;
     let state = states.get(root);
     if (!state) {
-        state = { query: '', type: 'all', status: 'all', selectedKey: '', semanticMatches: [], busy: '', message: '', bound: false };
+        state = { query: '', type: 'all', status: 'all', selectedKey: '', semanticMatches: [], busy: '', message: '', cultivationDraft: null, conflictKey: '', bound: false };
         states.set(root, state);
     }
     if (!state.bound) bind(root, state);
@@ -65,17 +73,18 @@ async function refresh(root, state) {
     });
     if (!entries.some((entry) => entry.key === state.selectedKey)) state.selectedKey = entries[0]?.key || '';
     const selected = entries.find((entry) => entry.key === state.selectedKey) || null;
+    const conflicts = selected && state.conflictKey === selected.key ? inspectCultivationConflicts(lore.entries, selected) : [];
     const sceneId = String(timeline?.activeSceneId || '');
     const turnOverrides = getWorldSenseTurnOverrides(sceneId);
     const profile = getWorldSenseProfile();
     const index = getWorldSenseIndexState(timelineId);
     const dryRun = buildWorldSenseDryRun({ entries: lore.entries, metadata, receipt });
-    root.innerHTML = render({ timelineId, timeline, lore, entries, selected, profile, index, proposals, history, receipt, dryRun, turnOverrides, sceneId, state });
+    root.innerHTML = render({ timelineId, timeline, lore, metadata, entries, selected, conflicts, profile, index, proposals, history, receipt, dryRun, turnOverrides, sceneId, state });
     root.setAttribute('aria-busy', String(Boolean(state.busy)));
 }
 
 function render(view) {
-    const { timeline, lore, entries, selected, profile, index, proposals, history, receipt, dryRun, turnOverrides, sceneId, state } = view;
+    const { timeline, lore, metadata, entries, selected, conflicts, profile, index, proposals, history, receipt, dryRun, turnOverrides, sceneId, state } = view;
     if (!timeline) return '<div class="remodel-world-sense-empty"><h3>No active Timeline</h3><p>Select a Timeline before configuring World Sense.</p></div>';
     const indexed = Object.keys(index?.hashes || {}).length;
     return `
@@ -118,7 +127,7 @@ function render(view) {
                 </div>
             </section>
             <section class="remodel-world-sense-inspector" aria-label="Living Lore inspector">
-                ${selected ? renderInspector(selected, { turnOverrides, sceneId }) : '<div class="remodel-world-sense-empty"><h3>Select an entry</h3><p>Inspect retrieval evidence, protection and links here.</p></div>'}
+                ${selected ? renderInspector(selected, { turnOverrides, sceneId, allEntries: lore.entries, conflicts, draft: state.cultivationDraft }) : '<div class="remodel-world-sense-empty"><h3>Select an entry</h3><p>Inspect retrieval evidence, protection and links here.</p></div>'}
             </section>
         </div>
         <section class="remodel-world-sense-review-grid">
@@ -143,10 +152,11 @@ function renderEntry(entry, selectedKey) {
     </button>`;
 }
 
-function renderInspector(entry, { turnOverrides, sceneId }) {
+function renderInspector(entry, { turnOverrides, sceneId, allEntries, conflicts, draft }) {
     const reasons = describeWorldSenseReasons(entry.reasons);
     const nextPinned = turnOverrides.pins.some((item) => `${item.book}.${item.uid}` === entry.key);
     const nextExcluded = turnOverrides.excludes.some((item) => `${item.book}.${item.uid}` === entry.key);
+    const protection = seedProtectionSummary(entry.metadata);
     return `<form data-ws-metadata-form data-book="${escapeAttribute(entry.book)}" data-uid="${escapeAttribute(entry.uid)}">
         <header><div><span>${escapeHtml(entry.book)} · ${escapeHtml(entry.uid)}</span><h3>${escapeHtml(entry.name)}</h3></div><span class="remodel-world-sense-revision">rev ${entry.revision}</span></header>
         <p class="remodel-world-sense-evidence">${reasons.length ? `<b>Why it matched:</b> ${escapeHtml(reasons.join(' · '))}` : 'This entry was not part of the latest retrieval.'}</p>
@@ -154,9 +164,35 @@ function renderInspector(entry, { turnOverrides, sceneId }) {
         <fieldset><legend>Next turn</legend><button type="button" data-ws-turn="${nextPinned ? 'clear' : 'pin'}" data-scene="${escapeAttribute(sceneId)}" data-book="${escapeAttribute(entry.book)}" data-uid="${escapeAttribute(entry.uid)}" class="${nextPinned ? 'is-active' : ''}" ${sceneId ? '' : 'disabled'}><i class="fa-solid fa-thumbtack"></i> ${nextPinned ? 'Pinned for next turn' : 'Pin for next turn'}</button><button type="button" data-ws-turn="${nextExcluded ? 'clear' : 'exclude'}" data-scene="${escapeAttribute(sceneId)}" data-book="${escapeAttribute(entry.book)}" data-uid="${escapeAttribute(entry.uid)}" class="${nextExcluded ? 'is-active' : ''}" ${sceneId ? '' : 'disabled'}><i class="fa-solid fa-eye-slash"></i> ${nextExcluded ? 'Excluded next turn' : 'Exclude next turn'}</button></fieldset>
         <fieldset><legend>Persistent handling</legend><label><input type="checkbox" name="pinned" ${entry.pinned ? 'checked' : ''}> Always pin</label><label><input type="checkbox" name="excluded" ${entry.excluded ? 'checked' : ''}> Always exclude</label></fieldset>
         <fieldset class="remodel-world-sense-protection"><legend>Protected fields</legend>${LIVING_LORE_PROTECTED_FIELDS.map((field) => `<label><input type="checkbox" name="protectedFields" value="${field}" ${entry.protectedFields.includes(field) ? 'checked' : ''}> ${humanField(field)}</label>`).join('')}</fieldset>
+        ${entry.entryType === 'seed' ? `<div class="remodel-world-sense-seed-locks"><span>Seed contract</span><b>${protection.premiseProtected ? 'Premise locked' : 'Premise editable with review'}</b><b>${protection.hooksProtected ? 'Open hooks locked' : 'Open hooks may grow'}</b><small>Identity + Established protect the premise. Open threads control expandable hooks.</small></div>` : ''}
         <div class="remodel-world-sense-links"><span>Related entries</span>${entry.links.length ? entry.links.map((link) => `<span>${escapeHtml(link.relation)} → ${escapeHtml(link.target.book)} · ${escapeHtml(link.target.uid)}</span>`).join('') : '<em>No typed links yet</em>'}</div>
         <button type="submit">Save metadata and protection</button>
-    </form>`;
+    </form>${renderCultivation(entry, { allEntries, conflicts, draft })}`;
+}
+
+function renderCultivation(entry, { allEntries, conflicts, draft }) {
+    const linkOptions = (allEntries || []).filter((item) => `${item.book}.${item.uid}` !== entry.key).map((item) => `<option value="${escapeAttribute(item.uid)}">${escapeHtml(item.name || `Entry ${item.uid}`)}</option>`).join('');
+    const belongsToEntry = draft?.entryKey === entry.key;
+    return `<section class="remodel-world-sense-cultivation" aria-label="Cultivate Living Lore">
+        <header><div><span>Directed cultivation</span><h3>Grow with intent</h3></div><small>Drafts only. Review is required.</small></header>
+        <div class="remodel-world-sense-cultivation-actions"><button type="button" data-ws-cultivate="grow">Grow this seed</button><button type="button" data-ws-cultivate="related">Find related lore</button><button type="button" data-ws-cultivate="contradictions">Check contradictions</button><button type="button" data-ws-cultivate="update">Update from scene</button></div>
+        <form data-ws-cultivation-form data-book="${escapeAttribute(entry.book)}" data-uid="${escapeAttribute(entry.uid)}">
+            <label>Pointed action<select name="action"><option value="grow">Add open hook</option><option value="establish">Add established fact</option><option value="update">Set current state</option><option value="create">Create related entry</option><option value="link">Link another entry</option></select></label>
+            <label>Entry type<select name="entryType">${LIVING_LORE_ENTRY_TYPES.map((type) => `<option value="${type}" ${type === entry.entryType ? 'selected' : ''}>${title(type)}</option>`).join('')}</select></label>
+            <label class="wide">Instruction or exact proposed text<textarea name="value" rows="3" placeholder="State exactly what should be proposed. This is treated as owner instruction, not accepted fiction."></textarea></label>
+            <label>Link target<select name="linkUid"><option value="">Choose an entry</option>${linkOptions}</select></label>
+            <label>Relationship<input name="relation" value="related"></label>
+            <button type="submit">Preview proposal</button>
+        </form>
+        ${belongsToEntry ? renderCultivationDraft(draft) : ''}
+        ${conflicts.length ? `<div class="remodel-world-sense-conflicts"><strong>${conflicts.length} warning${conflicts.length === 1 ? '' : 's'}</strong>${conflicts.map((item) => `<article class="is-${escapeAttribute(item.kind)}"><b>${escapeHtml(item.kind.replaceAll('-', ' '))}</b><span>${escapeHtml(item.name || item.target.uid)}</span><p>${escapeHtml(item.detail)}</p></article>`).join('')}</div>` : ''}
+    </section>`;
+}
+
+function renderCultivationDraft(draft) {
+    if (!draft?.result?.ok) return `<div class="remodel-world-sense-cultivation-preview is-error">Draft refused: ${escapeHtml(draft?.result?.code || 'invalid proposal')}</div>`;
+    const proposal = draft.result.proposal;
+    return `<div class="remodel-world-sense-cultivation-preview"><header><strong>Proposal preview</strong><span>${escapeHtml(proposal.operation)}</span></header><p>${escapeHtml(typeof proposal.value === 'string' ? proposal.value : JSON.stringify(proposal.value))}</p><small>No lore has been changed.</small><button type="button" class="primary" data-ws-cultivation-queue>Send to review queue</button></div>`;
 }
 
 function renderProposal(record) {
@@ -177,7 +213,10 @@ function bind(root, state) {
     state.bound = true;
     root.addEventListener('click', async (event) => {
         const entry = event.target.closest?.('[data-ws-entry]');
-        if (entry) { state.selectedKey = entry.dataset.wsEntry; await refresh(root, state); return; }
+        if (entry) { state.selectedKey = entry.dataset.wsEntry; state.cultivationDraft = null; state.conflictKey = ''; await refresh(root, state); return; }
+        const cultivate = event.target.closest?.('[data-ws-cultivate]')?.dataset.wsCultivate;
+        if (cultivate) { await handleCultivationShortcut(root, state, cultivate); return; }
+        if (event.target.closest?.('[data-ws-cultivation-queue]')) { await queueCultivationDraft(root, state); return; }
         const action = event.target.closest?.('[data-ws-action]')?.dataset.wsAction;
         if (action === 'reindex') await act(root, state, 'index', async () => ensureWorldSenseIndex(getTimelineStore().activeTimelineId, { force: true }), 'Index rebuilt.');
         const proposal = event.target.closest?.('[data-ws-proposal]');
@@ -226,8 +265,70 @@ function bind(root, state) {
             });
             state.message = 'Entry metadata and protection saved.';
             await refresh(root, state);
+            return;
+        }
+        if (event.target.matches('[data-ws-cultivation-form]')) {
+            event.preventDefault();
+            const form = event.target;
+            const view = await cultivationContext(form.dataset.uid);
+            const linkTarget = view.lore.entries.find((item) => String(item.uid) === String(form.elements.linkUid.value)) || null;
+            if (linkTarget) linkTarget.metadata = view.metadata.find((item) => `${item.book}.${item.uid}` === `${linkTarget.book}.${linkTarget.uid}`);
+            const result = draftCultivationProposal({
+                action: form.elements.action.value, book: view.lore.book, entry: view.entry, metadata: view.entryMetadata,
+                value: form.elements.value.value, entryType: form.elements.entryType.value, linkTarget, relation: form.elements.relation.value,
+            });
+            state.cultivationDraft = { entryKey: `${view.entry.book}.${view.entry.uid}`, result, instruction: form.elements.value.value.trim(), lore: view.lore, metadata: view.metadata };
+            state.message = result.ok ? 'Proposal drafted. Review the exact operation before queueing it.' : `Cultivation draft refused: ${result.code}.`;
+            await refresh(root, state);
         }
     });
+}
+
+async function handleCultivationShortcut(root, state, action) {
+    const timelineId = getTimelineStore().activeTimelineId;
+    const lore = await loadTimelineLore(timelineId);
+    const selected = lore.entries.find((entry) => `${entry.book}.${entry.uid}` === state.selectedKey);
+    if (!selected) return;
+    if (action === 'related') {
+        state.query = cultivationSearchText(selected);
+        return act(root, state, 'search', async () => {
+            const result = await queryWorldSense(timelineId, state.query, { topK: 30, threshold: 0 });
+            state.semanticMatches = (result.matches || []).filter((item) => `${item.book}.${item.uid}` !== state.selectedKey);
+            if (!result.ok) throw new Error(result.error || 'Semantic search unavailable.');
+            return result;
+        }, 'Related lore ranked. Results include semantic evidence, not automatic links.');
+    }
+    if (action === 'contradictions') {
+        state.conflictKey = state.selectedKey;
+        state.message = 'Deterministic duplicate and contradiction checks completed.';
+        await refresh(root, state);
+        return;
+    }
+    const form = root.querySelector('[data-ws-cultivation-form]');
+    if (form) { form.elements.action.value = action; form.elements.value.focus(); }
+}
+
+async function cultivationContext(uid) {
+    const timelineId = getTimelineStore().activeTimelineId;
+    const lore = await loadTimelineLore(timelineId);
+    const metadata = listLivingLoreMetadata({ timelineId, book: lore.book || '' });
+    const entry = lore.entries.find((item) => String(item.uid) === String(uid));
+    const entryMetadata = metadata.find((item) => `${item.book}.${item.uid}` === `${entry?.book}.${entry?.uid}`);
+    return { timelineId, lore, metadata, entry, entryMetadata };
+}
+
+async function queueCultivationDraft(root, state) {
+    const draft = state.cultivationDraft;
+    if (!draft?.result?.ok) return;
+    const timelineId = getTimelineStore().activeTimelineId;
+    const proposal = draft.result.proposal;
+    const packet = buildCultivationPacket({ timelineId, book: draft.lore.book, bookHash: draft.lore.hash, entries: draft.lore.entries, metadata: draft.metadata, proposal });
+    await act(root, state, 'proposal', () => queueLivingLoreProposals({
+        timelineId, packet, proposals: [proposal], explicitInstructions: [proposal.evidence, draft.instruction].filter(Boolean),
+        source: { authority: 'owner', stage: 'cultivation' },
+    }), 'Cultivation proposal added to the review queue.');
+    state.cultivationDraft = null;
+    await refresh(root, state);
 }
 
 async function handleProposal(root, state, action, id) {
