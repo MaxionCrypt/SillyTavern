@@ -65,6 +65,42 @@ test('fails open with an explicit unavailable state', async () => {
     expect(result.error).toContain('model offline');
 });
 
+test('retries cleanly after a model download or temporary offline failure', async () => {
+    let offline = true;
+    global.fetch = jest.fn(async (url) => {
+        if (offline) throw new Error('model download in progress');
+        if (url === '/api/vector/list') return response([]);
+        if (url === '/api/vector/insert') return response(null, 204);
+        throw new Error(`Unexpected URL ${url}`);
+    });
+    expect(await ensureWorldSenseIndex(TIMELINE)).toMatchObject({ ok: false, state: { status: 'unavailable' } });
+    offline = false;
+    expect(await ensureWorldSenseIndex(TIMELINE)).toMatchObject({ ok: true, state: { status: 'ready' } });
+});
+
+test('rebuilds a corrupt collection once when query hashes have no local identity', async () => {
+    let knownHash = null;
+    let queries = 0;
+    global.fetch = jest.fn(async (url, options) => {
+        if (url === '/api/vector/list') return response(knownHash == null ? [] : [knownHash]);
+        if (url === '/api/vector/insert') { knownHash = JSON.parse(options.body).items[0].hash; return response(null, 204); }
+        if (url === '/api/vector/delete') return response(null, 204);
+        if (url === '/api/vector/query') { queries += 1; return response({ metadata: [{ hash: queries === 1 ? 4294967295 : knownHash, score: 0.8 }] }); }
+        throw new Error(`Unexpected URL ${url}`);
+    });
+
+    const result = await queryWorldSense(TIMELINE, 'harbor');
+
+    expect(result).toMatchObject({ ok: true, matches: [expect.objectContaining({ uid: '1', score: 0.8 })] });
+    expect(queries).toBe(2);
+    expect(global.fetch.mock.calls.some(([url]) => url === '/api/vector/delete')).toBe(true);
+});
+
+test('migrates Auto-safe settings to the guarded allowlist and threshold', () => {
+    __setExtensionSettings({ remodel: { worldSenseV1: { version: 1, profile: { mode: 'auto-safe', autoSafeConfidence: 0.1, autoSafeOperations: ['entry.retire', 'fact.append'] } } } });
+    expect(getWorldSenseProfile()).toMatchObject({ mode: 'auto-safe', autoSafeConfidence: 0.5, autoSafeOperations: ['fact.append'] });
+});
+
 test('requests and preserves real vector similarity scores', async () => {
     let insertedHash = null;
     global.fetch = jest.fn(async (url, options) => {

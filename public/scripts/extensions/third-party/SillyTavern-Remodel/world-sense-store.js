@@ -2,7 +2,7 @@ import { getContext } from '../../../st-context.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'worldSenseV1';
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 export const DEFAULT_WORLD_SENSE_MODEL = 'Xenova/all-MiniLM-L6-v2';
 export const WORLD_SENSE_MODES = Object.freeze(['off', 'observe', 'suggest', 'auto-safe']);
 
@@ -30,6 +30,8 @@ export function updateWorldSenseProfile(patch = {}) {
     if (patch.maxTokens !== undefined) store.profile.maxTokens = clamp(patch.maxTokens, 100, 12000, 1800);
     if (patch.semanticThreshold !== undefined) store.profile.semanticThreshold = clampDecimal(patch.semanticThreshold, 0, 1, 0.30);
     if (patch.semanticOnlyLimit !== undefined) store.profile.semanticOnlyLimit = clamp(patch.semanticOnlyLimit, 1, 20, 3);
+    if (patch.autoSafeConfidence !== undefined) store.profile.autoSafeConfidence = clampDecimal(patch.autoSafeConfidence, 0.5, 1, 0.92);
+    if (patch.autoSafeOperations !== undefined) store.profile.autoSafeOperations = normalizeAutoSafeOperations(patch.autoSafeOperations);
     store.profile.updatedAt = now();
     save();
     return store.profile;
@@ -82,7 +84,7 @@ export function getWorldSenseContinuity(sceneId) {
 function emptyStore() {
     return {
         version: STORE_VERSION,
-        profile: { mode: 'suggest', modelId: DEFAULT_WORLD_SENSE_MODEL, warmQueryTargetMs: 500, supportedBookSize: 250, maxEntries: 12, maxTokens: 1800, semanticThreshold: 0.30, semanticOnlyLimit: 3, updatedAt: now() },
+        profile: { mode: 'suggest', modelId: DEFAULT_WORLD_SENSE_MODEL, warmQueryTargetMs: 500, supportedBookSize: 250, maxEntries: 12, maxTokens: 1800, semanticThreshold: 0.30, semanticOnlyLimit: 3, autoSafeConfidence: 0.92, autoSafeOperations: ['fact.append', 'alias.add', 'entry.link', 'current.set'], updatedAt: now() },
         indexes: {},
         benchmark: null,
         receipts: [],
@@ -106,6 +108,8 @@ function normalizeStore(store) {
     store.profile.maxTokens = clamp(store.profile.maxTokens, 100, 12000, 1800);
     store.profile.semanticThreshold = clampDecimal(store.profile.semanticThreshold, 0, 1, 0.30);
     store.profile.semanticOnlyLimit = clamp(store.profile.semanticOnlyLimit, 1, 20, 3);
+    store.profile.autoSafeConfidence = clampDecimal(store.profile.autoSafeConfidence, 0.5, 1, 0.92);
+    store.profile.autoSafeOperations = normalizeAutoSafeOperations(store.profile.autoSafeOperations);
     store.indexes = isObject(store.indexes) ? store.indexes : {};
     for (const [timelineId, raw] of Object.entries(store.indexes)) {
         store.indexes[timelineId] = { ...indexState(timelineId), ...(isObject(raw) ? raw : {}), timelineId };
@@ -126,4 +130,9 @@ function clamp(value, minimum, maximum, fallback) {
 function clampDecimal(value, minimum, maximum, fallback) {
     const number = Number(value);
     return Number.isFinite(number) ? Math.max(minimum, Math.min(maximum, number)) : fallback;
+}
+function normalizeAutoSafeOperations(values) {
+    const allowed = ['fact.append', 'alias.add', 'entry.link', 'current.set'];
+    const source = Array.isArray(values) ? values : allowed;
+    return [...new Set(source.map((value) => String(value || '').trim()).filter((value) => allowed.includes(value)))];
 }

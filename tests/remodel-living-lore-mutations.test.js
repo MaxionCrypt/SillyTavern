@@ -14,7 +14,9 @@ import {
     upsertLivingLoreMetadata,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
 import { buildLivingLorePacket } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-proposals.js';
+import { updateWorldSenseProfile } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-store.js';
 import { __setContextOverrides, __setExtensionSettings } from './util/st-context-stub.js';
+import { __clearDebugEvents, __getDebugEvents } from './util/debug-console-stub.js';
 
 const TIMELINE = 'timeline-marches';
 const BOOK = 'The Marches';
@@ -59,6 +61,7 @@ function proposal(operation, value, overrides = {}) {
 }
 
 beforeEach(() => {
+    __clearDebugEvents();
     __setExtensionSettings({ remodel: {} });
     nativeBook = { entries: { 42: entry(42), 77: entry(77, { comment: 'Second entry' }) } };
     saves = [];
@@ -104,6 +107,29 @@ test('explicit owner cultivation queues a reviewable proposal without pretending
 
     expect(result).toMatchObject({ ok: true, queued: [{ evidence: { matched: true, source: 'owner-instruction' }, status: 'suggested' }] });
     expect(saves).toHaveLength(0);
+});
+
+test('Auto-safe atomically applies only admitted Loom proposals and leaves the rest reviewable', async () => {
+    updateWorldSenseProfile({ mode: 'auto-safe', autoSafeConfidence: 0.9, autoSafeOperations: ['fact.append', 'alias.add'] });
+    const result = await queueLivingLoreProposals({
+        timelineId: TIMELINE, packet: packet(), acceptedProse: 'The bell rang twice.',
+        proposals: [
+            proposal('fact.append', 'The bell now answers footsteps.', { id: 'automatic-fact', confidence: 0.97 }),
+            proposal('alias.add', 'Quiet Bell', { id: 'weak-alias', confidence: 0.6 }),
+        ],
+        source: { directionId: 'direction-auto', stage: 'accepted-fiction' },
+    });
+
+    expect(result.autoSafe).toMatchObject({ ok: true, applied: ['automatic-fact'], review: [{ id: 'weak-alias', reason: 'below-confidence' }] });
+    expect(result.queued).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'automatic-fact', status: 'applied' }),
+        expect.objectContaining({ id: 'weak-alias', status: 'suggested' }),
+    ]));
+    expect(nativeBook.entries[42].content).toContain('The bell now answers footsteps.');
+    expect(listLivingLoreHistory({ timelineId: TIMELINE })[0].application).toMatchObject({ authority: 'auto-safe', confidenceThreshold: 0.9 });
+    expect(__getDebugEvents()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ category: 'world-sense', type: 'auto-safe.applied', detail: expect.objectContaining({ proposalIds: ['automatic-fact'] }) }),
+    ]));
 });
 
 test('owner can edit and reject queued suggestions without mutating native lore', async () => {

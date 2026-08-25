@@ -107,3 +107,18 @@ test('continuity boosts renewed evidence but cannot preserve stale noise alone',
     expect(result.selected[0].reasons.map((reason) => reason.channel)).toEqual(expect.arrayContaining(['action.primary', 'continuity']));
     expect(result.rejected).toEqual(expect.arrayContaining([expect.objectContaining({ uid: '2', decision: 'no-evidence' })]));
 });
+
+test('a thousand-entry candidate set stays inside prompt and latency budgets', () => {
+    const entries = Array.from({ length: 1000 }, (_, index) => entry(index, `Entry ${index}`, [], 'x'.repeat(120)));
+    const semanticMatches = entries.map((item, rank) => ({ book: item.book, uid: item.uid, rank, score: 0.9 - (rank / 10000) }));
+    const startedAt = performance.now();
+    const result = rankLivingLore({
+        packet: buildWorldSenseQueryPacket({ action: 'continue the world' }), entries, semanticMatches,
+        semanticThreshold: 0.3, semanticOnlyLimit: 1000, budget: { maxEntries: 12, maxTokens: 1800 },
+    });
+    const elapsedMs = performance.now() - startedAt;
+    expect(result.selected.length).toBeLessThanOrEqual(12);
+    expect(result.budget.usedTokens).toBeLessThanOrEqual(1800);
+    expect(result.rejected.length).toBeGreaterThan(900);
+    expect(elapsedMs).toBeLessThan(1000);
+});

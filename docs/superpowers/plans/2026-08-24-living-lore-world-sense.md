@@ -1,6 +1,6 @@
 # Living Lore and World Sense
 
-**Status:** Proposed implementation plan for `feature/loom`.
+**Status:** Implemented through Commit 12 on `feature/living-lore-world-sense`.
 
 ## 1. Product promise
 

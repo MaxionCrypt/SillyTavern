@@ -10,6 +10,7 @@ import {
     saveLivingLoreStore,
 } from './living-lore-store.js';
 import { parseLivingLoreProposals } from './living-lore-proposals.js';
+import { classifyAutoSafeProposals } from './living-lore-auto-safe.js';
 import { invalidateTimelineLoreCache } from './world-sense-lore.js';
 import { getWorldSenseProfile } from './world-sense-store.js';
 
@@ -117,7 +118,12 @@ export async function queueLivingLoreProposals({
     bucket.updatedAt = now();
     saveLivingLoreStore();
     debug('proposal.queued', { timelineId, book: packet.book, queued: queued.length, rejected }, rejected.length ? 'warn' : 'info');
-    return { ok: rejected.length === 0, queued, rejected };
+    const autoSafe = automationMode === 'auto-safe'
+        ? await applyAutoSafeLivingLoreProposals({ timelineId, proposalIds: queued.map((record) => record.id) })
+        : { ok: true, applied: [], review: [] };
+    const canonicalBucket = getTimelineLivingLoreState(timelineId, { create: false });
+    const refreshed = queued.map((record) => clone(canonicalBucket?.proposals?.[record.id] || record));
+    return { ok: rejected.length === 0, queued: refreshed, rejected, autoSafe };
 }
 
 /** Invalidate only unapplied suggestions belonging to superseded fiction. */
@@ -155,6 +161,31 @@ export function listLivingLoreProposals({ timelineId = '', status = '' } = {}) {
 
 export function listLivingLoreHistory({ timelineId = '' } = {}) {
     return (getTimelineLivingLoreState(timelineId, { create: false })?.history || []).map(clone);
+}
+
+/** Apply only proposals admitted by the pure Auto-safe policy. A failed batch
+ * remains reviewable and never turns an otherwise successful roleplay save
+ * into a generation failure. */
+export async function applyAutoSafeLivingLoreProposals({ timelineId = '', proposalIds = [] } = {}) {
+    const bucket = getTimelineLivingLoreState(timelineId, { create: false });
+    const ids = uniqueStrings(proposalIds);
+    const records = ids.map((id) => bucket?.proposals?.[id]).filter(Boolean);
+    const decision = classifyAutoSafeProposals(records, getWorldSenseProfile());
+    if (!decision.eligible.length) {
+        debug('auto-safe.review', { timelineId, review: decision.review, threshold: decision.threshold });
+        return { ok: true, applied: [], review: decision.review, policy: decision };
+    }
+    const eligibleIds = decision.eligible.map((item) => item.id);
+    const applied = await applyLivingLoreProposals({
+        timelineId, proposalIds: eligibleIds,
+        application: { authority: 'auto-safe', confidenceThreshold: decision.threshold, allowlist: decision.allowlist },
+    });
+    if (!applied.ok) {
+        debug('auto-safe.failed', { timelineId, proposalIds: eligibleIds, code: applied.code, review: decision.review }, 'warn');
+        return { ok: false, applied: [], review: [...decision.review, ...eligibleIds.map((id) => ({ id, reason: applied.code || 'apply-failed' }))], policy: decision, code: applied.code };
+    }
+    debug('auto-safe.applied', { timelineId, proposalIds: eligibleIds, transactionId: applied.transactionId, review: decision.review });
+    return { ok: true, applied: eligibleIds, transactionId: applied.transactionId, review: decision.review, policy: decision };
 }
 
 export function rejectLivingLoreProposal({ timelineId = '', proposalId = '', reason = 'owner-rejected' } = {}) {
@@ -196,7 +227,7 @@ export async function editLivingLoreProposalValue({ timelineId = '', proposalId 
 }
 
 /** Apply an owner-selected suggestion set as one native World Info save. */
-export async function applyLivingLoreProposals({ timelineId = '', proposalIds = [] } = {}) {
+export async function applyLivingLoreProposals({ timelineId = '', proposalIds = [], application = {} } = {}) {
     const bucket = getTimelineLivingLoreState(timelineId, { create: false });
     const ids = uniqueStrings(proposalIds);
     if (!bucket || !ids.length) return failure('missing-proposals');
@@ -270,6 +301,7 @@ export async function applyLivingLoreProposals({ timelineId = '', proposalIds = 
         proposalIds: ids,
         diffs,
         affected,
+        application: clone(application),
         appliedAt: timestamp,
         updatedAt: timestamp,
     });

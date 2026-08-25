@@ -16,6 +16,7 @@ import {
     inspectCultivationConflicts,
     seedProtectionSummary,
 } from './living-lore-cultivation.js';
+import { AUTO_SAFE_OPERATIONS } from './living-lore-auto-safe.js';
 import { listLivingLoreMetadata, upsertLivingLoreMetadata } from './living-lore-store.js';
 import { getTimelineStore } from './timeline-state.js';
 import { getWorldSenseTurnOverrides, setWorldSenseTurnOverride } from './world-sense-runtime.js';
@@ -35,7 +36,7 @@ import {
 } from './world-sense-workspace-model.js';
 
 const states = new WeakMap();
-const SAFE_OPERATIONS = new Set(['fact.append', 'alias.add', 'entry.link', 'current.set']);
+const SAFE_OPERATIONS = new Set(AUTO_SAFE_OPERATIONS);
 
 export function renderWorldSenseWorkspaceShell() {
     return '<section class="remodel-world-sense" data-remodel-world-sense aria-label="World Sense" aria-busy="true"><div class="remodel-world-sense-loading"><i class="fa-solid fa-circle-notch fa-spin"></i> Loading Timeline lore…</div></section>';
@@ -109,7 +110,9 @@ function render(view) {
                 <label>Entry budget<input type="number" min="1" max="50" value="${profile.maxEntries}" data-ws-profile="maxEntries"></label>
                 <label>Token budget<input type="number" min="100" max="12000" value="${profile.maxTokens}" data-ws-profile="maxTokens"></label>
                 <label>Semantic floor<input type="number" min="0" max="1" step="0.05" value="${profile.semanticThreshold}" data-ws-profile="semanticThreshold"></label>
+                <label>Auto-safe confidence<input type="number" min="0.5" max="1" step="0.01" value="${profile.autoSafeConfidence}" data-ws-profile="autoSafeConfidence"></label>
             </div>
+            <fieldset class="remodel-world-sense-auto-safe"><legend>Auto-safe allowlist</legend>${AUTO_SAFE_OPERATIONS.map((operation) => `<label><input type="checkbox" value="${operation}" data-ws-auto-safe-op ${profile.autoSafeOperations.includes(operation) ? 'checked' : ''}> ${operation}</label>`).join('')}<small>Identity, premise, creation, retirement, deletion, low-confidence, conflicting, and sensitive changes always remain in review.</small></fieldset>
         </details>
         <div class="remodel-world-sense-grid">
             <section class="remodel-world-sense-browser" aria-label="Living Lore browser">
@@ -235,6 +238,13 @@ function bind(root, state) {
         if (profileField) {
             updateWorldSenseProfile({ [profileField]: event.target.type === 'number' ? Number(event.target.value) : event.target.value });
             state.message = profileField === 'modelId' ? 'Model changed. Reindex before semantic search.' : 'World Sense settings saved.';
+            await refresh(root, state);
+            return;
+        }
+        if (event.target.matches('[data-ws-auto-safe-op]')) {
+            const operations = [...root.querySelectorAll('[data-ws-auto-safe-op]:checked')].map((input) => input.value);
+            updateWorldSenseProfile({ autoSafeOperations: operations });
+            state.message = 'Auto-safe allowlist saved. Empty means every proposal stays in review.';
             await refresh(root, state);
             return;
         }
@@ -365,11 +375,11 @@ async function act(root, state, busy, task, success) {
     }
 }
 
-function modeLabel(mode) { return mode === 'auto-safe' ? 'Auto-safe (preview)' : title(mode); }
+function modeLabel(mode) { return title(mode); }
 function modeNote(mode) {
     if (mode === 'off') return 'Native World Info continues without semantic retrieval.';
     if (mode === 'observe') return 'Retrieves relevant lore but creates no proposals.';
-    if (mode === 'auto-safe') return 'Commit 12 will add automatic application; suggestions still require review.';
+    if (mode === 'auto-safe') return 'Applies only allowlisted, high-confidence changes backed by accepted fiction; every other change stays in review.';
     return 'Retrieves lore and queues changes for your review.';
 }
 function relativeTime(value) {

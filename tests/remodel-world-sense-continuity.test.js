@@ -8,6 +8,7 @@ import {
     recordEvent,
     setSceneContinuitySettings,
     setSceneFact,
+    setSecret,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { buildWorldSenseQueryPacket, selectWorldSenseCandidates } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-retrieval.js';
 import { __setExtensionSettings } from './util/st-context-stub.js';
@@ -45,6 +46,16 @@ test('indexes accepted facts and events with arc and scene provenance', () => {
         expect.objectContaining({ metadata: expect.objectContaining({ sceneTitle: 'The Cellar', arcTitle: 'Arrival', recordType: 'fact' }) }),
     ]));
     expect(result.hash).toMatch(/^[0-9a-f]{16}$/);
+});
+
+test('never places Archive secrets in continuity records or embedding documents', () => {
+    recordEvent(TIMELINE, 'scene-1', 'Mara locked the cellar door.');
+    setSecret(TIMELINE, 'scene-1', 'parasite-origin', 'The dean planted the alien egg.');
+
+    const result = buildTimelineContinuityDocuments(TIMELINE);
+
+    expect(JSON.stringify(result)).not.toContain('alien egg');
+    expect(result.records.map((item) => item.recordType)).not.toContain('secret');
 });
 
 test('only earlier eligible scenes are automatic sources and settings remain timeline-isolated', () => {

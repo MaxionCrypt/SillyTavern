@@ -14,7 +14,7 @@ export async function ensureWorldSenseIndex(timelineId, { force = false } = {}) 
     const collectionId = collectionName(timelineId, profile.modelId);
     if (!force && state.status === 'ready' && state.bookHash === packet.hash && state.archiveHash === continuity.hash && state.modelId === profile.modelId) return { ok: true, state };
     if (!force && indexingByCollection.has(collectionId)) return indexingByCollection.get(collectionId);
-    const indexing = buildWorldSenseIndex(timelineId, packet, continuity, profile, collectionId);
+    const indexing = buildWorldSenseIndex(timelineId, packet, continuity, profile, collectionId, { force });
     indexingByCollection.set(collectionId, indexing);
     try {
         return await indexing;
@@ -23,7 +23,7 @@ export async function ensureWorldSenseIndex(timelineId, { force = false } = {}) 
     }
 }
 
-async function buildWorldSenseIndex(timelineId, packet, continuity, profile, collectionId) {
+async function buildWorldSenseIndex(timelineId, packet, continuity, profile, collectionId, { force = false } = {}) {
     updateWorldSenseIndexState(timelineId, { status: 'indexing', error: '', collectionId, modelId: profile.modelId });
     try {
         const documents = [
@@ -34,8 +34,8 @@ async function buildWorldSenseIndex(timelineId, packet, continuity, profile, col
         const saved = await vectorRequest('/api/vector/list', { collectionId }, profile.modelId);
         const savedHashes = new Set((Array.isArray(saved) ? saved : []).map(String));
         const desiredHashes = new Set(Object.keys(desired));
-        const remove = [...savedHashes].filter((hash) => !desiredHashes.has(hash)).map(Number);
-        const insert = documents.filter((document) => !savedHashes.has(String(document.hash))).map(({ hash, text }) => ({ hash, text }));
+        const remove = [...savedHashes].filter((hash) => force || !desiredHashes.has(hash)).map(Number);
+        const insert = documents.filter((document) => force || !savedHashes.has(String(document.hash))).map(({ hash, text }) => ({ hash, text }));
         if (remove.length) await vectorRequest('/api/vector/delete', { collectionId, hashes: remove }, profile.modelId);
         if (insert.length) await vectorRequest('/api/vector/insert', { collectionId, items: insert }, profile.modelId);
         const ready = updateWorldSenseIndexState(timelineId, {
@@ -48,7 +48,7 @@ async function buildWorldSenseIndex(timelineId, packet, continuity, profile, col
     }
 }
 
-export async function queryWorldSense(timelineId, searchText, { topK = 12, threshold = 0.25 } = {}) {
+export async function queryWorldSense(timelineId, searchText, { topK = 12, threshold = 0.25, recoveryAttempt = false } = {}) {
     const indexed = await ensureWorldSenseIndex(timelineId);
     if (!indexed.ok) return { ok: false, degraded: true, status: 'unavailable', error: indexed.state.error, matches: [], continuityMatches: [] };
     const state = getWorldSenseIndexState(timelineId);
@@ -57,7 +57,13 @@ export async function queryWorldSense(timelineId, searchText, { topK = 12, thres
             collectionId: state.collectionId, searchText: String(searchText || ''),
             topK: Math.max(1, Math.min(50, Number(topK) || 12)), threshold: Number(threshold) || 0, includeScores: true,
         }, state.modelId);
-        const ranked = (Array.isArray(result?.metadata) ? result.metadata : [])
+        const returned = Array.isArray(result?.metadata) ? result.metadata : [];
+        const unknownHashes = returned.filter((item) => !state.hashes[String(item?.hash)]);
+        if (unknownHashes.length && !recoveryAttempt) {
+            const rebuilt = await ensureWorldSenseIndex(timelineId, { force: true });
+            if (rebuilt.ok) return queryWorldSense(timelineId, searchText, { topK, threshold, recoveryAttempt: true });
+        }
+        const ranked = returned
             .map((item, rank) => ({
                 ...state.hashes[String(item?.hash)],
                 rank,
@@ -67,6 +73,10 @@ export async function queryWorldSense(timelineId, searchText, { topK = 12, thres
         const continuityMatches = ranked.filter((item) => item.kind === 'archive' && item.sceneId && item.recordId);
         return { ok: true, degraded: false, status: 'ready', matches, continuityMatches };
     } catch (error) {
+        if (!recoveryAttempt && isRecoverableIndexError(error)) {
+            const rebuilt = await ensureWorldSenseIndex(timelineId, { force: true });
+            if (rebuilt.ok) return queryWorldSense(timelineId, searchText, { topK, threshold, recoveryAttempt: true });
+        }
         const degraded = unavailable(timelineId, String(error?.message || error));
         return { ok: false, degraded: true, status: 'unavailable', error: degraded.state.error, matches: [], continuityMatches: [] };
     }
@@ -113,4 +123,8 @@ function collectionName(timelineId, model) {
 
 function unavailable(timelineId, error) {
     return { ok: false, state: updateWorldSenseIndexState(timelineId, { status: 'unavailable', error }) };
+}
+
+function isRecoverableIndexError(error) {
+    return /\b(?:corrupt|invalid index|index.*not found|collection.*not found|unknown collection)\b/i.test(String(error?.message || error));
 }

@@ -2584,8 +2584,9 @@ function applyPendingRequests(run) {
 
 /**
  * Turn detached Loom proposals into persistent suggestions only after their
- * evidence has become visible fiction (or a committed Archive delta). Native
- * lore is never written here; Commit 8's queue remains Suggest-only.
+ * evidence has become visible fiction (or a committed Archive delta). The
+ * queue owns validation; in opt-in Auto-safe mode it may ask the same atomic
+ * mutation engine to apply the narrow admitted subset.
  */
 async function queueAcceptedLoreProposals(run, { proposals = null, phase = 'complete', reactivate = false } = {}) {
     const packet = run?.envelope?.livingLore;
@@ -2619,12 +2620,14 @@ async function queueAcceptedLoreProposals(run, { proposals = null, phase = 'comp
             phase,
             proposed: candidates.length,
             queued: result.queued.length,
+            autoApplied: result.autoSafe?.applied || [],
+            autoReview: result.autoSafe?.review || [],
             rejected: result.rejected.map((item) => ({ index: item.index, code: item.code })),
             proposalIds: run.loreProposalIds,
         }, {
             correlationId: run.directionId,
             severity: result.rejected.length ? 'warn' : 'info',
-            summary: `Living Lore bound ${result.queued.length}/${candidates.length} proposal(s) to accepted fiction`,
+            summary: `Living Lore bound ${result.queued.length}/${candidates.length} proposal(s) to accepted fiction${result.autoSafe?.applied?.length ? ` and auto-applied ${result.autoSafe.applied.length}` : ''}`,
         });
         return result;
     } catch (error) {
