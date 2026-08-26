@@ -1,5 +1,6 @@
 import {
     initializePromptStudioStore,
+    getStoryArchiveLoomRecipe,
     NARRATOR_POLICY_DEFAULT,
     normalizeRecipe,
     PROMPT_MODES,
@@ -68,7 +69,7 @@ test('v13 stores migrate old hidden grounding into an editable recipe policy and
 
     const store = initializePromptStudioStore();
     const recipe = store.recipes.rp;
-    expect(store.version).toBe(19);
+    expect(store.version).toBe(20);
     expect(recipe.blocks.some((block) => block.content === '{{loom.context}}')).toBe(false);
     expect(recipe.blocks).toEqual(expect.arrayContaining([
         expect.objectContaining({ content: NARRATOR_POLICY_DEFAULT, locked: false }),
@@ -102,7 +103,7 @@ test('v15 seeds the patch Loom recipe, activates it, and leaves the existing one
     });
     const store = initializePromptStudioStore();
 
-    expect(store.version).toBe(19);
+    expect(store.version).toBe(20);
     // The user's recipe is untouched and still selectable.
     expect(store.recipes.mine).toBeTruthy();
     expect(store.recipes.mine.blocks[0].content).toBe('my own carefully edited policy');
@@ -152,9 +153,18 @@ test('v18 migrates the untouched full policy and never an edited one', async () 
     __setExtensionSettings({ remodel: { promptStudioV1: { version: 17, recipeIds: ids, recipes, active: { loom: { chat: 'full' } } } } });
 
     const store = initializePromptStudioStore();
-    expect(store.version).toBe(19);
+    expect(store.version).toBe(20);
     expect(store.recipes.full.blocks[0].content).toBe(LOOM_POLICY_DEFAULT);
     expect(store.recipes.edited.blocks[0].content).toBe('my own policy');
+});
+
+test('Prompt Studio seeds one editable Story Archive Loom recipe without replacing the Roleplay default', () => {
+    __setExtensionSettings({ remodel: {} });
+    const store = initializePromptStudioStore();
+    const recipe = getStoryArchiveLoomRecipe();
+    expect(recipe?.name).toBe('Loom · Story Archive');
+    expect(recipe?.blocks.map((block) => block.content).join('\n')).toContain('manuscript is immutable');
+    expect(store.active.loom.chat).not.toBe(recipe.id);
 });
 
 test('v19 adds the editable selected-lore macro without changing authored Loom text', () => {
@@ -170,7 +180,7 @@ test('v19 adds the editable selected-lore macro without changing authored Loom t
 
     const store = initializePromptStudioStore();
     const contents = store.recipes.mine.blocks.map((block) => block.content);
-    expect(store.version).toBe(19);
+    expect(store.version).toBe(20);
     expect(contents).toContain('my authored policy');
     expect(contents).toContain('{{loom.lore}}');
     expect(contents.indexOf('{{loom.lore}}')).toBeLessThan(contents.indexOf('{{narrator.draft}}'));

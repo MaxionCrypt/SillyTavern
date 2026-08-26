@@ -38,11 +38,19 @@ import {
     updateTimeline,
 } from './timeline-state.js';
 import {
+    createStoryArchiveCapture,
     createStoryDoc,
     getStoryDoc,
     updateStoryDoc,
 } from './story-doc.js';
+import {
+    describeStoryArchiveCaptureState,
+    queueStoryArchiveCapture,
+    resumeStoryArchiveCaptures,
+    supersedeStoryBeatArchive,
+} from './story-loom-archive.js';
 import { generateProse } from './story-generate.js';
+import { listArchiveSceneDescriptors } from './archive-scene-list.js';
 import {
     advanceStoryWorldInfoState,
     getStoryLorebookNames,
@@ -60,6 +68,7 @@ import {
     getPromptApiType,
     getPromptStudioRecipe,
     getPromptStudioRecipes,
+    getStoryArchivePromptStudioRecipe,
     initPromptStudio,
     renderPromptStudioWorkspace,
     syncPromptStudioForCurrentMode,
@@ -319,7 +328,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
         getRuntimeMode: () => isRealStoryDocSceneActive() ? 'story' : 'roleplay',
         getRuntimeRecipeId: (mode, apiType) => {
             const scene = getActiveScene();
-            if (mode === 'loom' && scene?.mode === 'roleplay') return scene.promptRecipeIds?.loom || null;
+            if (mode === 'loom' && scene) return scene.promptRecipeIds?.loom || null;
             return scene?.mode === mode ? scene.promptRecipeIds?.[apiType] || null : null;
         },
         isRecipeInUse: (recipeId) => Object.values(getTimelineStore().scenes)
@@ -4122,21 +4131,6 @@ function renderTimelineFocus(timeline, store) {
 // view (no secrets, goals as objectives without odds, no variables) — so the
 // owner can see exactly what each side of the turn is allowed to know.
 
-/** Roleplay Scenes in this Timeline, in Arc/Scene order — the ones the Loom
- * keeps an Archive for. */
-function listArchiveScenes(timeline, store) {
-    const scenes = [];
-    for (let arcIndex = 0; arcIndex < timeline.arcIds.length; arcIndex += 1) {
-        const arc = store.arcs[timeline.arcIds[arcIndex]];
-        for (const sceneId of arc?.sceneIds || []) {
-            const scene = store.scenes[sceneId];
-            if (scene?.mode !== 'roleplay') continue;
-            scenes.push({ id: scene.id, title: scene.title || 'Untitled Scene', arcId: arc.id, arcTitle: arc.title || 'Untitled Arc', arcIndex, orderIndex: scenes.length });
-        }
-    }
-    return scenes;
-}
-
 /** One Archive section: a titled, counted list of items (each already HTML),
  * or an empty line when there is nothing to show. */
 function renderArchiveSection(title, icon, items, emptyText, { tone = '' } = {}) {
@@ -4257,14 +4251,14 @@ function renderLoomArchive(timeline, store) {
         : 'The Loom\'s full memory of this Scene — what happened, the facts and characters it tracks, its secrets, and the numbers behind Goals and Variables.'}</p>
     </header>`;
 
-    const scenes = listArchiveScenes(timeline, store);
+    const scenes = listArchiveSceneDescriptors(timeline, store);
     if (!scenes.length) {
         return `<section class="remodel-notebook remodel-archive" aria-label="Loom's Archive">
             ${closeButton}
             ${head}
             <div class="remodel-notebook-empty">
                 <i class="fa-solid fa-box-archive" aria-hidden="true"></i>
-                <p>This Timeline has no Roleplay Scenes yet, so the Loom has no Archive.</p>
+                <p>This Timeline has no Scenes yet, so the Loom has no Archive.</p>
             </div>
         </section>`;
     }
@@ -4357,7 +4351,7 @@ function renderLoomArchive(timeline, store) {
             <label class="remodel-notebook-scene-picker">
                 <span>Scene</span>
                 <select data-remodel-timeline-field="archive-scene" data-timeline-id="${escapeAttribute(timeline.id)}">
-                    ${scenes.map((scene) => `<option value="${escapeAttribute(scene.id)}" ${scene.id === activeSceneId ? 'selected' : ''}>${escapeHtml(scene.title)}</option>`).join('')}
+                    ${scenes.map((scene) => `<option value="${escapeAttribute(scene.id)}" ${scene.id === activeSceneId ? 'selected' : ''}>${escapeHtml(scene.title)} · ${scene.mode === 'story' ? 'Story' : 'Roleplay'}</option>`).join('')}
                 </select>
             </label>
             ${renderArchiveViewToggle()}
@@ -6271,6 +6265,7 @@ async function openStoryDocScene(sceneId) {
     activeStoryDocId = scene.storyDocId;
     writeSceneMetadata(scene);
     enterStoryDocWorkspace();
+    resumeActiveStoryArchive(scene);
     await enterSceneViewport(scene);
 }
 
@@ -6294,7 +6289,20 @@ async function beginStoryDocScene(sceneId, avatars) {
     activeStoryDocId = doc.id;
     writeSceneMetadata(getScene(sceneId));
     enterStoryDocWorkspace();
+    resumeActiveStoryArchive(getScene(sceneId));
     await enterSceneViewport(getScene(sceneId));
+}
+
+function resumeActiveStoryArchive(scene = getActiveScene()) {
+    if (!scene || scene.mode !== 'story' || !scene.storyDocId) return;
+    void resumeStoryArchiveCaptures({
+        scene,
+        docId: scene.storyDocId,
+        onStateChange: (state) => {
+            if (getActiveScene()?.id === scene.id) setStorySaveState(state.label);
+            renderTimelinePanel();
+        },
+    });
 }
 
 // One-time, idempotent migration for Story scenes created before StoryDocs.
@@ -6386,7 +6394,9 @@ function getScenePromptChoice(scene = getActiveScene(), requestedMode = null) {
     const validSelection = selected?.mode === mode && selected?.apiType === apiType;
     const recipe = validSelection
         ? selected
-        : getDefaultPromptStudioRecipe(mode, apiType);
+        : (mode === 'loom' && scene?.mode === 'story'
+            ? getStoryArchivePromptStudioRecipe()
+            : getDefaultPromptStudioRecipe(mode, apiType));
     return {
         mode,
         apiType,
@@ -6427,6 +6437,22 @@ function renderRoleplayPromptChoice(scene = getActiveScene()) {
     `;
 }
 
+function renderStoryPromptChoice(scene = getActiveScene()) {
+    const story = getScenePromptChoice(scene, 'story');
+    const loom = getScenePromptChoice(scene, 'loom');
+    const inherited = story.inherited && loom.inherited;
+    return `
+        <button type="button" class="remodel-scene-prompt-choice is-compact" data-remodel-scene-prompt-choice data-prompt-mode="story-pipeline" title="Choose the Story Narrator or Loom Archive recipe for this Scene">
+            <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+            <span class="remodel-scene-prompt-choice-copy">
+                <small>Story &amp; Loom · ${inherited ? 'defaults' : 'scene recipes'}</small>
+                <strong>${escapeHtml(story.recipe?.name || 'No Story recipe')} · ${escapeHtml(loom.recipe?.name || 'No Loom recipe')}</strong>
+            </span>
+            <i class="fa-solid fa-chevron-down remodel-scene-prompt-choice-caret" aria-hidden="true"></i>
+        </button>
+    `;
+}
+
 function openRoleplayPromptJobMenu(anchor) {
     const scene = getActiveScene();
     if (!scene) return;
@@ -6446,12 +6472,27 @@ function openRoleplayPromptJobMenu(anchor) {
     ], (mode) => openScenePromptRecipeMenu(anchor, mode));
 }
 
+function openStoryPromptJobMenu(anchor) {
+    const scene = getActiveScene();
+    if (!scene) return;
+    const story = getScenePromptChoice(scene, 'story');
+    const loom = getScenePromptChoice(scene, 'loom');
+    openRoleplayMenu(anchor, [
+        { id: 'story', label: 'Story Narrator recipe', sublabel: story.recipe?.name || 'No recipe selected' },
+        { id: 'loom', label: 'Loom Archive recipe', sublabel: loom.recipe?.name || 'No recipe selected' },
+    ], (mode) => openScenePromptRecipeMenu(anchor, mode));
+}
+
 function openScenePromptRecipeMenu(anchor, requestedModeOverride = null) {
     const scene = getActiveScene();
     if (!scene) return;
     const requestedMode = requestedModeOverride || anchor?.dataset?.promptMode || scene.mode;
     if (requestedMode === 'pipeline') {
         openRoleplayPromptJobMenu(anchor);
+        return;
+    }
+    if (requestedMode === 'story-pipeline') {
+        openStoryPromptJobMenu(anchor);
         return;
     }
     const { mode, apiType, recipe: current, inherited } = getScenePromptChoice(scene, requestedMode);
@@ -6626,7 +6667,7 @@ function renderStoryEditor(force = false) {
     const title = editor.querySelector('[data-remodel-storydoc-title]');
     if (title && document.activeElement !== title) title.value = doc.title || 'Untitled Story';
     const promptChoice = editor.querySelector('[data-remodel-storydoc-prompt-choice]');
-    if (promptChoice) promptChoice.innerHTML = renderScenePromptChoice(getActiveScene(), true);
+    if (promptChoice) promptChoice.innerHTML = renderStoryPromptChoice(getActiveScene());
     const character = (getContext().characters || [])[Number(doc.boundCharacterId)];
     const characterName = editor.querySelector('[data-remodel-storydoc-character]');
     if (characterName) characterName.textContent = character?.name || 'Unbound character';
@@ -6638,6 +6679,7 @@ function renderStoryEditor(force = false) {
         avatar.style.backgroundImage = url ? `url('${url.replace(/'/g, "\\'")}')` : '';
         avatar.textContent = url ? '' : roleplayInitials(character?.name || 'Story');
     }
+    setStorySaveState(describeStoryArchiveCaptureState(doc.id).label);
 }
 
 // Renders plain text (paragraphs separated by blank lines) as <p> elements,
@@ -7594,6 +7636,7 @@ async function generateStoryDocBeat(beatId) {
     if (!doc || !beat || !beat.instruction.trim()) return;
     const isRegeneration = Boolean(beat.generatedText);
     if (isRegeneration) {
+        await supersedeStoryBeatArchive({ scene: getActiveScene(), docId: activeStoryDocId, beatId });
         const removed = removeGeneratedBeatText(doc, beat);
         updateStoryDoc(activeStoryDocId, {
             body: removed.body,
@@ -7652,7 +7695,11 @@ function autosizeStoryBeatInput(input) {
 
 function setStorySaveState(label) {
     const el = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-save-state]');
-    if (el) el.textContent = label;
+    if (el) {
+        el.textContent = label === 'Saved' && activeStoryDocId
+            ? describeStoryArchiveCaptureState(activeStoryDocId).label
+            : label;
+    }
 }
 
 const STORY_PREVIEW_ID = 'remodel-story-preview-modal';
@@ -8381,6 +8428,7 @@ async function generateStory({ mode = 'continue', beat = '', beatId = null } = {
 
     storyGenerating = true;
     setStoryGeneratingUI(true);
+    const storyGenerationId = `story-generation-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 
     try {
         const currentDoc = getStoryDoc(activeStoryDocId);
@@ -8413,9 +8461,31 @@ async function generateStory({ mode = 'continue', beat = '', beatId = null } = {
             storyStreamAbort = null;
         }
 
-        if (beatId) insertStoryBeatProse(beatId, prose);
-        else appendStoryProse(prose);
+        const inserted = beatId ? insertStoryBeatProse(beatId, prose) : appendStoryProse(prose);
         updateStoryDoc(activeStoryDocId, { worldInfoState: advanceStoryWorldInfoState(assembled.pendingState) });
+        const scene = getActiveScene();
+        const capture = inserted && scene?.mode === 'story'
+            ? createStoryArchiveCapture(activeStoryDocId, {
+                origin: 'story-narrator',
+                text: inserted.text,
+                start: inserted.start,
+                end: inserted.end,
+                generationId: storyGenerationId,
+                beatId,
+            })
+            : null;
+        if (capture && scene) {
+            setStorySaveState(describeStoryArchiveCaptureState(activeStoryDocId).label);
+            void queueStoryArchiveCapture({
+                scene,
+                docId: activeStoryDocId,
+                captureId: capture.id,
+                onStateChange: (state) => {
+                    if (getActiveScene()?.id === scene.id) setStorySaveState(state.label);
+                    renderTimelinePanel();
+                },
+            });
+        }
         renderStoryEditor(true);
         return true;
     } catch (err) {
@@ -8448,24 +8518,26 @@ async function generateStory({ mode = 'continue', beat = '', beatId = null } = {
 function appendStoryProse(text) {
     const prose = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-prose]');
     if (!prose) {
-        return;
+        return null;
     }
     // If the editor is just an empty placeholder paragraph, clear it first.
     if (prose.textContent.trim() === '') {
         prose.textContent = '';
     }
-    for (const para of String(text).split(/\n{2,}/)) {
-        if (!para.trim()) {
-            continue;
-        }
+    const paragraphs = String(text).split(/\n{2,}/).map((para) => para.trim()).filter(Boolean);
+    for (const para of paragraphs) {
         const p = document.createElement('p');
-        p.textContent = para.trim();
+        p.textContent = para;
         prose.appendChild(p);
     }
     updateStoryDoc(activeStoryDocId, readStoryEditorState(prose));
+    const insertedText = paragraphs.join('\n\n');
+    const body = getStoryDoc(activeStoryDocId)?.body || '';
+    const start = insertedText ? body.lastIndexOf(insertedText) : -1;
     // Land the view on the freshly written prose.
     const editor = getRealStoryEditor();
     requestAnimationFrame(() => { if (editor) editor.scrollTop = editor.scrollHeight; });
+    return insertedText && start >= 0 ? { text: insertedText, start, end: start + insertedText.length } : null;
 }
 
 // Toggles the generating state class + the writing indicator. The controls
@@ -8491,7 +8563,7 @@ function setStoryGeneratingUI(on) {
 function insertStoryBeatProse(beatId, text) {
     const doc = getStoryDoc(activeStoryDocId);
     const beat = doc?.beats?.find((item) => item.id === beatId);
-    if (!doc || !beat) return;
+    if (!doc || !beat) return null;
     const position = Math.max(0, Math.min(doc.body.length, Number(beat.position) || 0));
     const prefix = doc.body.slice(0, position);
     const suffix = doc.body.slice(position);
@@ -8508,6 +8580,9 @@ function insertStoryBeatProse(beatId, text) {
         // to move with it (beat positions above do the same thing).
         styleRuns: shiftStyleRuns(doc.styleRuns, position, inserted.length),
     });
+    const acceptedText = String(text || '').trim();
+    const start = position + before.length;
+    return acceptedText ? { text: acceptedText, start, end: start + acceptedText.length } : null;
 }
 
 function buildStoryGenerationPrompt({ docText = '', contextBlock = '', mode = 'continue', beat = '' } = {}) {

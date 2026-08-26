@@ -1,9 +1,10 @@
 import { getContext } from '../../../st-context.js';
 import { isSupersededLoomPatchPolicy, LOOM_POLICY_DEFAULT_PRIOR, LOOM_OUTPUT_CONTRACT_PATCH, LOOM_POLICY_PATCH, LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT, LOOM_POLICY_V12 } from './loom-reconciliation.js';
+import { STORY_ARCHIVE_CONTRACT, STORY_ARCHIVE_LOOM_RECIPE_NAME, STORY_ARCHIVE_POLICY } from './story-loom-contract.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 19;
+const STORE_VERSION = 20;
 
 export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
@@ -127,6 +128,12 @@ export function getActivePromptRecipe(mode, apiType) {
     const store = getPromptStudioStore();
     const recipeId = store.active?.[mode]?.[apiType];
     return recipeId ? store.recipes[recipeId] || null : null;
+}
+
+export function getStoryArchiveLoomRecipe() {
+    const store = getPromptStudioStore();
+    return store.recipeIds.map((id) => store.recipes[id])
+        .find((recipe) => recipe?.mode === 'loom' && recipe.name === STORY_ARCHIVE_LOOM_RECIPE_NAME) || null;
 }
 
 export function setActivePromptRecipe(mode, apiType, recipeId) {
@@ -340,12 +347,21 @@ function createSeededStore(seed) {
             blocks: defaultLoomBlocks(),
             transport: null,
         },
+        {
+            id: createId('prompt'),
+            name: STORY_ARCHIVE_LOOM_RECIPE_NAME,
+            description: 'Reads accepted Story manuscript passages and updates the shared Timeline Loom Archive without rewriting prose.',
+            mode: 'loom',
+            apiType: 'chat',
+            blocks: storyArchiveLoomBlocks(),
+            transport: null,
+        },
     ];
     for (const seedRecipe of seeds) {
         const recipe = normalizeRecipe({ ...seedRecipe, createdAt: timestamp, updatedAt: timestamp });
         store.recipes[recipe.id] = recipe;
         store.recipeIds.push(recipe.id);
-        store.active[recipe.mode][recipe.apiType] = recipe.id;
+        if (recipe.name !== STORY_ARCHIVE_LOOM_RECIPE_NAME) store.active[recipe.mode][recipe.apiType] = recipe.id;
     }
     return store;
 }
@@ -418,6 +434,21 @@ function defaultLoomBlocks() {
             role: 'system',
             content: LOOM_OUTPUT_CONTRACT_DEFAULT,
             advancedWarning: 'Changing the state fence or request schema can prevent the Loom reply from being parsed or applied.',
+        }),
+    ];
+}
+
+function storyArchiveLoomBlocks() {
+    return [
+        createPromptBlock({ kind: 'message', role: 'system', content: STORY_ARCHIVE_POLICY }),
+        createPromptBlockFromTemplate('loom', 'archiveState'),
+        createPromptBlockFromTemplate('loom', 'mechanicsBoard'),
+        createPromptBlockFromTemplate('loom', 'narratorDraft'),
+        createPromptBlock({
+            kind: 'message',
+            role: 'system',
+            content: STORY_ARCHIVE_CONTRACT,
+            advancedWarning: 'Changing the archive-only state fence can prevent Story passages from reaching the shared Loom Archive.',
         }),
     ];
 }
@@ -642,6 +673,18 @@ function normalizeStore(store, seed) {
             mode: 'roleplay',
             apiType: 'chat',
             blocks: defaultBlocksFor('roleplay', 'chat'),
+            transport: null,
+        });
+        changed = true;
+    }
+
+    if (previousVersion < 20 && !store.recipeIds.some((id) => store.recipes[id]?.name === STORY_ARCHIVE_LOOM_RECIPE_NAME)) {
+        createPromptRecipeWithoutSave(store, {
+            name: STORY_ARCHIVE_LOOM_RECIPE_NAME,
+            description: 'Reads accepted Story manuscript passages and updates the shared Timeline Loom Archive without rewriting prose.',
+            mode: 'loom',
+            apiType: 'chat',
+            blocks: storyArchiveLoomBlocks(),
             transport: null,
         });
         changed = true;

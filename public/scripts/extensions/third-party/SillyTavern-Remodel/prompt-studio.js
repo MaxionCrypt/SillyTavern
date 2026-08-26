@@ -26,6 +26,7 @@ import {
     getActivePromptRecipe,
     getPromptRecipe,
     getPromptRecipes,
+    getStoryArchiveLoomRecipe as getStoredStoryArchiveLoomRecipe,
     initializePromptStudioStore,
     isPromptRecipeActive,
     setActivePromptRecipe,
@@ -178,6 +179,10 @@ export function getPromptStudioRecipe(recipeId) {
 
 export function getDefaultPromptStudioRecipe(mode, apiType) {
     return getActivePromptRecipe(mode, apiType);
+}
+
+export function getStoryArchivePromptStudioRecipe() {
+    return getStoredStoryArchiveLoomRecipe();
 }
 
 export function capturePromptStudioRuntimeSettings() {
