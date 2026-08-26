@@ -1,9 +1,12 @@
 import {
     VARIABLE_KINDS,
+    LORE_LINK_HINTS,
+    attachEntry,
     addVariableModifier,
     adjustVariableValue,
     computeVariable,
     createVariableValue,
+    detachEntry,
     getVariableValue,
     listVariableValues,
     normalizeOwnerRef,
@@ -20,6 +23,7 @@ import {
     createTimelineGoalRelation,
     getPendingOps,
     getStoryGoal,
+    getTimelineGoals,
     queuePendingOps,
     restoreStoryGoalsStore,
     snapshotStoryGoalsStore,
@@ -29,6 +33,7 @@ import {
 } from './story-goals-store.js';
 import { clampRate, resolveReach } from './story-goals-math.js';
 import { STORY_GOAL_STATUSES, STORY_GOAL_VISIBILITIES } from './story-goals-model.js';
+import { GOAL_LORE_LINK_TYPES } from './living-lore-model.js';
 import {
     setSceneFact,
     clearSceneFact,
@@ -45,23 +50,27 @@ import {
 export const MECHANICS_PROTOCOL = 'remodel-mechanics/1';
 
 const CAPABILITY_NAMES = Object.freeze([
-    'goal.create', 'goal.edit', 'goal.delete', 'goal.reach', 'goal.relate',
-    'variable.create', 'variable.set', 'variable.adjust', 'variable.transition', 'variable.subvalue.set',
+    'goal.create', 'goal.edit', 'goal.delete', 'goal.reach', 'goal.relate', 'goal.lore.attach', 'goal.lore.detach',
+    'variable.create', 'variable.set', 'variable.adjust', 'variable.transition', 'variable.subvalue.set', 'variable.lore.attach', 'variable.lore.detach',
     'modifier.add', 'modifier.remove',
     'scene.set', 'scene.clear', 'event.record', 'char_state.set', 'char_state.clear', 'beat.set', 'secret.set', 'secret.clear',
 ]);
 
 const CAPABILITIES = Object.freeze({
-    'goal.create': capability('Create a meaningful unresolved Story Goal using typed holders and targets.', ['timeline'], 'hybrid'),
+    'goal.create': capability('Create a meaningful unresolved Story Goal using typed holders and targets. If another request in this batch will relate or attach it, set "alias":"short-name" here and address it there as "$short-name".', ['timeline'], 'hybrid'),
     'goal.edit': capability('Change anything about an existing Goal: its Success Rate, status, title, description, or visibility. Supply only the fields you are changing. A separate fictional reason is always required.', ['goal'], 'hybrid'),
     'goal.delete': capability('Remove a Goal that should no longer exist at all. Prefer goal.edit with a terminal status when the Goal simply ended — a Goal that was achieved or abandoned is part of the record.', ['goal'], 'hybrid'),
     'goal.reach': capability('Declare one decisive attempt against a Goal. Code freezes inputs and rolls d100.', ['goal'], 'hybrid'),
     'goal.relate': capability('Create or update a directional sympathetic or antagonistic Goal relationship.', ['goal'], 'hybrid'),
-    'variable.create': capability('Bring into being a Variable this Timeline does not have yet, when a mechanical fact matters and none of the Variables above covers it. Give it a name no existing Variable already uses; you may address it from the NEXT turn onward, never the turn you create it. Changes you later request to it are held for the user to review.', ['number', 'enum', 'text', 'boolean'], 'review'),
+    'goal.lore.attach': capability('Attach an advertised Goal to one selected lore entry using a typed relation.', ['goal', 'lore'], 'hybrid'),
+    'goal.lore.detach': capability('Detach an advertised Goal from one selected lore entry.', ['goal', 'lore'], 'hybrid'),
+    'variable.create': capability('Bring into being a Variable this Timeline does not have yet, when a mechanical fact matters and none of the Variables above covers it. Give it a unique name. If a later request in this batch will attach it to lore, set "alias":"short-name" here and use "$short-name" there; ordinary name addressing begins next turn. Changes after creation are held for user review.', ['number', 'enum', 'text', 'boolean'], 'review'),
     'variable.set': capability('Set the primary scalar value of an advertised Variable.', ['number', 'enum', 'text', 'boolean'], 'hybrid'),
     'variable.adjust': capability('Adjust an advertised numeric Variable or numeric subvalue.', ['number'], 'hybrid'),
     'variable.transition': capability('Move an advertised enum Variable or enum subvalue to an allowed state.', ['enum'], 'hybrid'),
     'variable.subvalue.set': capability('Set one advertised scalar subvalue.', ['number', 'enum', 'text', 'boolean'], 'hybrid'),
+    'variable.lore.attach': capability('Attach an advertised Variable to one selected lore entry using a typed hint.', ['variable', 'lore'], 'hybrid'),
+    'variable.lore.detach': capability('Detach an advertised Variable from one selected lore entry.', ['variable', 'lore'], 'hybrid'),
     'modifier.add': capability('Attach a bounded value or maximum modifier to an advertised Variable.', ['variable'], 'hybrid'),
     'modifier.remove': capability('Remove one existing Variable modifier by ID.', ['variable'], 'hybrid'),
     'scene.set': capability('Record or update a scene fact the Narrator treats as given — location, time of day, weather, atmosphere. Overwriting the same key replaces it.', ['narrative'], 'hybrid'),
@@ -135,7 +144,7 @@ export function getMechanicsRequestSchema() {
                                 type: 'object', additionalProperties: false,
                                 description: 'Only the fields the chosen capability needs are read; the rest are ignored. Every *Ref field below is the exact Variable or Goal name advertised this turn — never an id, and never a name that was not advertised.',
                                 properties: {
-                                    alias: { type: 'string', description: 'A local name ($alias) for a Goal this request creates, so a later request in the same batch can address it before it has a real name — see goalRef.' },
+                                    alias: { type: 'string', description: 'A local name ($alias) for a Goal or Variable this request creates, so a later request in the same batch can address it.' },
                                     goalRef: { type: 'string', description: 'The Goal this request addresses: its exact advertised name, or an earlier request\'s $alias.' },
                                     fromGoalRef: { type: 'string', description: 'goal.relate only: the Goal the relationship starts from, addressed the same way as goalRef.' },
                                     toGoalRef: { type: 'string', description: 'goal.relate only: the Goal the relationship points to, addressed the same way as goalRef.' },
@@ -160,6 +169,11 @@ export function getMechanicsRequestSchema() {
                                     value: { type: ['number', 'string', 'boolean'], description: 'variable.set / variable.subvalue.set: the exact value to write, matching the field\'s type. variable.create: the value the new Variable starts at, matching its valueType — one of the enumValues for an enum, and within minimum/maximum for a number.' },
                                     delta: { type: 'number', description: 'variable.adjust only: the numeric amount to add (negative to subtract). modifier.add only: the modifier\'s amount.' },
                                     nextState: { type: ['string', 'boolean'], description: 'variable.transition only: the state to move the enum (or boolean) Variable to. Must be a state the Variable\'s definition allows.' },
+                                    loreBook: { type: 'string', description: 'A *.lore.attach/detach capability: copy the selected lore target book exactly.' },
+                                    loreUid: { type: 'string', description: 'A *.lore.attach/detach capability: copy the selected lore target uid exactly.' },
+                                    loreRevision: { type: 'number', description: 'A *.lore.attach/detach capability: copy the selected lore target revision exactly.' },
+                                    loreType: { type: 'string', enum: GOAL_LORE_LINK_TYPES, description: 'goal.lore.attach only: the typed role this lore has for the Goal.' },
+                                    loreHint: { type: 'string', enum: LORE_LINK_HINTS, description: 'variable.lore.attach only: the typed role this lore has for the Variable.' },
                                     label: { type: 'string', description: 'modifier.add only: a short label identifying this modifier, e.g. "Wounded" or "Blessed".' },
                                     target: { type: 'string', enum: ['value', 'maximum'], description: 'modifier.add only: whether the modifier bounds the Variable\'s value or its maximum.' },
                                     endingCondition: { type: 'string', description: 'modifier.add only: in prose, when this modifier should end. Code does not expire it automatically — this is a note for whoever reviews it later.' },
@@ -221,6 +235,7 @@ export function executeMechanicsRequest(envelope, context = {}) {
         // request could not legitimately have named.
         variableRefs: context.variableRefs instanceof Map ? context.variableRefs : new Map(Object.entries(context.variableRefs || {})),
         goalRefs: context.goalRefs instanceof Map ? context.goalRefs : new Map(Object.entries(context.goalRefs || {})),
+        loreRefs: context.loreRefs instanceof Map ? context.loreRefs : new Map(Object.entries(context.loreRefs || {})),
         // What retrieval put in front of the model this pass, which is a
         // different question from what a request may address — goal.reach asks
         // the first, everything else asks the second. Defaults to the address
@@ -234,6 +249,7 @@ export function executeMechanicsRequest(envelope, context = {}) {
         receipts: [],
         pending: [],
         reached: new Set(),
+        createdVariableIds: new Set(),
         authorizedGoalIds: new Set((context.authorizedGoalIds || []).map(String)),
         authorizedVariableRefs: new Set((context.authorizedVariableRefs || []).map(String)),
         allowUserGoalCreate: Boolean(context.allowUserGoalCreate),
@@ -260,6 +276,7 @@ export function executeMechanicsRequest(envelope, context = {}) {
         const transaction = recordMechanicsTransaction({
             id: transactionId, protocol: MECHANICS_PROTOCOL, timelineId: runtime.timelineId, sceneId: runtime.sceneId,
             turnId: runtime.turnId, directionId: runtime.directionId, messageId: runtime.messageId, checkpointId: runtime.checkpointId,
+            source: copy(context.source || null),
             status, requests: envelope.requests, receipts: [...runtime.receipts, ...runtime.pending.map((item) => item.receipt)],
             undo: { variables: variableSnapshot, goals: goalSnapshot, archivist: archivistSnapshot },
         });
@@ -269,7 +286,7 @@ export function executeMechanicsRequest(envelope, context = {}) {
         restoreStoryGoalsStore(goalSnapshot, { save: false });
         restoreArchivistStore(archivistSnapshot, { save: false });
         const message = error instanceof MechanicsError ? error.message : `Mechanical transaction failed: ${error.message}`;
-        const transaction = recordMechanicsTransaction({ id: transactionId, protocol: MECHANICS_PROTOCOL, timelineId: runtime.timelineId, sceneId: runtime.sceneId, turnId: runtime.turnId, directionId: runtime.directionId, messageId: runtime.messageId, checkpointId: runtime.checkpointId, status: 'rolled-back', requests: envelope.requests, receipts: [{ status: 'rejected', rejectionReason: message }] });
+        const transaction = recordMechanicsTransaction({ id: transactionId, protocol: MECHANICS_PROTOCOL, timelineId: runtime.timelineId, sceneId: runtime.sceneId, turnId: runtime.turnId, directionId: runtime.directionId, messageId: runtime.messageId, checkpointId: runtime.checkpointId, source: copy(context.source || null), status: 'rolled-back', requests: envelope.requests, receipts: [{ status: 'rejected', rejectionReason: message }] });
         return { ok: false, transaction, receipts: transaction.receipts, errors: [message] };
     }
 }
@@ -321,12 +338,16 @@ function applyRequest(request, runtime) {
         case 'variable.subvalue.set': return setVariable(request, args, runtime, true);
         case 'variable.adjust': return adjustVariable(request, args, runtime);
         case 'variable.transition': return transitionVariable(request, args, runtime);
+        case 'variable.lore.attach': return attachVariableLore(request, args, runtime);
+        case 'variable.lore.detach': return detachVariableLore(request, args, runtime);
         case 'modifier.add': return addModifier(request, args, runtime);
         case 'modifier.remove': return removeModifier(request, args, runtime);
         case 'goal.create': return createGoal(request, args, runtime);
         case 'goal.edit': return editGoal(request, args, runtime);
         case 'goal.delete': return deleteGoal(request, args, runtime);
         case 'goal.relate': return relateGoals(request, args, runtime);
+        case 'goal.lore.attach': return attachGoalLore(request, args, runtime);
+        case 'goal.lore.detach': return detachGoalLore(request, args, runtime);
         case 'goal.reach': return reachGoal(request, args, runtime);
         case 'scene.set': return applySceneSet(request, args, runtime);
         case 'scene.clear': return applySceneClear(request, args, runtime);
@@ -422,6 +443,8 @@ function createVariable(request, args, runtime) {
         authority: 'review',
     }, txContext(runtime, request));
     if (!created) throw new MechanicsError(`${request.id}: Variable could not be created.`);
+    runtime.createdVariableIds.add(created.id);
+    setAlias(runtime, args.alias, created.id, 'variable');
     receipt(runtime, request, null, created);
 }
 
@@ -559,6 +582,8 @@ function createGoal(request, args, runtime) {
     // stated rate — clampRate returns null rather than reading an absent value
     // as zero, which would have made such a Goal nearly impossible.
     const rate = clampRate(args.successRate) ?? 30;
+    const clash = getTimelineGoals(runtime.timelineId).find((goal) => sameVariableName(goal.title, args.title));
+    if (clash) throw new MechanicsError(`${request.id}: this Timeline already has a Goal named “${clash.title}”. Address that Goal instead of creating a duplicate.`);
     const goal = createTimelineGoal(runtime.timelineId, { title: args.title, description: args.description, holderRefs, targetRefs, successRate: rate, visibility: args.visibility }, { sceneId: runtime.sceneId, actor: 'mechanics', reason: request.reason });
     if (!goal) throw new MechanicsError(`${request.id}: Goal could not be created.`);
     setAlias(runtime, args.alias, goal.id, 'goal');
@@ -611,6 +636,51 @@ function relateGoals(request, args, runtime) {
     const relation = createTimelineGoalRelation(runtime.timelineId, from.id, to.id, args.type, request.reason, txContext(runtime, request));
     if (!relation) throw new MechanicsError(`${request.id}: invalid Goal relationship.`);
     receipt(runtime, request, null, relation);
+}
+
+function attachGoalLore(request, args, runtime) {
+    const goal = requireGoal(resolveReference(args.goalRef ?? args.goalId, runtime, 'goal'), runtime, { mustBeActive: false });
+    if (!isAuthorizedGoal(goal, runtime)) return deferGoal(request, runtime, { [String(args.goalRef ?? args.goalId)]: goal.id }, `Changing lore links for the user-owned Goal “${goal.title}” requires review.`);
+    const type = String(args.loreType || '').trim();
+    if (!GOAL_LORE_LINK_TYPES.includes(type)) throw new MechanicsError(`${request.id}: loreType must be one of ${GOAL_LORE_LINK_TYPES.join(', ')}.`);
+    const link = requireLoreTarget(args, runtime, { type });
+    const before = copy(goal);
+    const existing = (goal.loreLinks || []).filter((item) => loreTargetKey(item) !== loreTargetKey(link));
+    const after = updateStoryGoal(goal.id, { loreLinks: [...existing, link] }, { ...txContext(runtime, request), type: 'goal.lore-attached' });
+    receipt(runtime, request, before, after);
+}
+
+function detachGoalLore(request, args, runtime) {
+    const goal = requireGoal(resolveReference(args.goalRef ?? args.goalId, runtime, 'goal'), runtime, { mustBeActive: false });
+    if (!isAuthorizedGoal(goal, runtime)) return deferGoal(request, runtime, { [String(args.goalRef ?? args.goalId)]: goal.id }, `Changing lore links for the user-owned Goal “${goal.title}” requires review.`);
+    const target = requireLoreTarget(args, runtime);
+    const before = copy(goal);
+    const loreLinks = (goal.loreLinks || []).filter((item) => loreTargetKey(item) !== loreTargetKey(target));
+    if (loreLinks.length === (goal.loreLinks || []).length) throw new MechanicsError(`${request.id}: the Goal is not attached to that lore entry.`);
+    const after = updateStoryGoal(goal.id, { loreLinks }, { ...txContext(runtime, request), type: 'goal.lore-detached' });
+    receipt(runtime, request, before, after);
+}
+
+function attachVariableLore(request, args, runtime) {
+    const variable = requireVariable(resolveVariableReference(args.variableRef, runtime), runtime);
+    if (!isAuthorizedVariable(variable, args.variableRef, runtime)) return deferVariable(request, runtime, variable, `Changing lore links for ${variable.name} requires review.`);
+    const hint = String(args.loreHint || '').trim();
+    if (!LORE_LINK_HINTS.includes(hint)) throw new MechanicsError(`${request.id}: loreHint must be one of ${LORE_LINK_HINTS.join(', ')}.`);
+    const link = requireLoreTarget(args, runtime, { hint });
+    const before = copy(variable);
+    const after = attachEntry(variable.id, link, txContext(runtime, request));
+    if (!after) throw new MechanicsError(`${request.id}: Variable lore link could not be attached.`);
+    receipt(runtime, request, before, after);
+}
+
+function detachVariableLore(request, args, runtime) {
+    const variable = requireVariable(resolveVariableReference(args.variableRef, runtime), runtime);
+    if (!isAuthorizedVariable(variable, args.variableRef, runtime)) return deferVariable(request, runtime, variable, `Changing lore links for ${variable.name} requires review.`);
+    const target = requireLoreTarget(args, runtime);
+    const before = copy(variable);
+    const after = detachEntry(variable.id, target, txContext(runtime, request));
+    if (!after) throw new MechanicsError(`${request.id}: Variable lore link could not be detached.`);
+    receipt(runtime, request, before, after);
 }
 
 function reachGoal(request, args, runtime) {
@@ -683,8 +753,10 @@ export const REQUIRED_ARGUMENTS = Object.freeze({
         ['toGoalRef', 'the Goal it points at'],
         ['type', '"antagonistic" or "sympathetic"'],
     ]),
+    'goal.lore.attach': Object.freeze([['goalRef', "the Goal's exact advertised name or $alias"], ['loreBook', 'the selected lore book'], ['loreUid', 'the selected lore uid'], ['loreRevision', 'the selected lore revision'], ['loreType', 'the typed relation']]),
+    'goal.lore.detach': Object.freeze([['goalRef', "the Goal's exact advertised name or $alias"], ['loreBook', 'the selected lore book'], ['loreUid', 'the selected lore uid'], ['loreRevision', 'the selected lore revision']]),
     'variable.create': Object.freeze([
-        ['name', 'the name you will address it by from next turn on'],
+        ['name', 'the unique name you will address it by from next turn on'],
         ['valueType', 'one of "number", "enum", "text", "boolean"'],
         ['value', 'its starting value'],
         ['description', 'what it means in the fiction, one line, written for your future self'],
@@ -693,6 +765,8 @@ export const REQUIRED_ARGUMENTS = Object.freeze({
     'variable.subvalue.set': Object.freeze([['variableRef', 'its exact advertised name'], ['field', 'which subvalue'], ['value', 'the new value']]),
     'variable.adjust': Object.freeze([['variableRef', 'its exact advertised name'], ['delta', 'how much it moves, positive or negative']]),
     'variable.transition': Object.freeze([['variableRef', 'its exact advertised name'], ['nextState', 'one of its declared states']]),
+    'variable.lore.attach': Object.freeze([['variableRef', 'its exact advertised name or $alias'], ['loreBook', 'the selected lore book'], ['loreUid', 'the selected lore uid'], ['loreRevision', 'the selected lore revision'], ['loreHint', 'the typed relation']]),
+    'variable.lore.detach': Object.freeze([['variableRef', 'its exact advertised name or $alias'], ['loreBook', 'the selected lore book'], ['loreUid', 'the selected lore uid'], ['loreRevision', 'the selected lore revision']]),
     'modifier.add': Object.freeze([
         ['variableRef', 'its exact advertised name'], ['label', 'what the modifier is'],
         ['delta', 'how much it shifts'], ['target', 'which field it applies to'],
@@ -732,6 +806,7 @@ function validateArguments(request) {
 }
 
 function isAuthorizedVariable(variable, ref, runtime) {
+    if (runtime.createdVariableIds.has(variable.id)) return true;
     if (variable.authority === 'world') return true;
     return runtime.authorizedVariableRefs.has(String(ref || ''));
 }
@@ -826,11 +901,31 @@ function resolveReference(value, runtime, type) {
 
 function resolveVariableReference(value, runtime) {
     const ref = String(value || '');
+    const alias = ref.startsWith('$') ? runtime.aliases.get(ref.slice(1)) : runtime.aliases.get(ref);
+    if (alias) {
+        if (alias.type !== 'variable') throw new MechanicsError(`${ref} does not refer to a variable.`);
+        return alias.id;
+    }
     const id = runtime.variableRefs.get(ref);
     if (!id) throw new MechanicsError(`Variable reference ${ref || '(missing)'} was not advertised for this request.`);
     const variable = getVariableValue(id, runtime.timelineId);
     if (!variable) throw new MechanicsError(`Variable reference ${ref} is no longer available.`);
     return variable.id;
+}
+
+function requireLoreTarget(args, runtime, extra = {}) {
+    const target = { book: String(args.loreBook || '').trim(), uid: String(args.loreUid ?? '').trim(), ...extra };
+    const key = loreTargetKey(target);
+    const revision = Number(args.loreRevision);
+    if (!key || !runtime.loreRefs.has(key)) throw new MechanicsError(`Lore target ${key || '(missing)'} was not selected for this request.`);
+    if (!Number.isInteger(revision) || runtime.loreRefs.get(key) !== revision) throw new MechanicsError(`Lore target ${key} has a stale revision.`);
+    return target;
+}
+
+function loreTargetKey(value) {
+    const book = String(value?.book || '').trim();
+    const uid = String(value?.uid ?? '').trim();
+    return book && uid ? `${book}.${uid}` : '';
 }
 
 function requireVariable(id, runtime = null) {

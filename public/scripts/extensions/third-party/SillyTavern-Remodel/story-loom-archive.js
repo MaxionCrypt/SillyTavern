@@ -26,11 +26,22 @@ import { STORY_ARCHIVE_CONTRACT, STORY_ARCHIVE_POLICY } from './story-loom-contr
 import { splitStoryArchiveAddition, STORY_ARCHIVE_PASSAGE_MAX_CHARS } from './story-archive-provenance.js';
 import { buildStoryWorldSenseOptions, formatStoryWorldSenseContinuity } from './story-world-sense.js';
 import { resolveWorldSense } from './world-sense-runtime.js';
+import {
+    buildStoryTimelineWebPacket,
+    createStoryWebReceipt,
+    formatStoryTimelineWebPacket,
+    storyTimelineWebAddressing,
+} from './story-timeline-web.js';
 
 export const STORY_ARCHIVE_CAPABILITIES = Object.freeze([
     'scene.set', 'scene.clear', 'event.record',
     'char_state.set', 'char_state.clear', 'beat.set',
     'secret.set', 'secret.clear',
+    'goal.create', 'goal.edit', 'goal.delete', 'goal.relate',
+    'goal.lore.attach', 'goal.lore.detach',
+    'variable.create', 'variable.set', 'variable.adjust', 'variable.transition', 'variable.subvalue.set',
+    'variable.lore.attach', 'variable.lore.detach',
+    'modifier.add', 'modifier.remove',
 ]);
 
 const STORY_ARCHIVE_CAPABILITY_SET = new Set(STORY_ARCHIVE_CAPABILITIES);
@@ -51,13 +62,13 @@ export function describeStoryArchiveCaptureState(docId) {
     return { status: 'idle', label: 'Saved' };
 }
 
-export function buildStoryArchivePrompt({ passage, archiveState, worldSense = null, recipe = getStoryArchivePromptStudioRecipe() } = {}) {
+export function buildStoryArchivePrompt({ passage, archiveState, worldSense = null, webPacket = null, recipe = getStoryArchivePromptStudioRecipe() } = {}) {
     const continuity = formatStoryWorldSenseContinuity(worldSense);
     const currentArchive = String(archiveState || '').trim()
         ? `Current Timeline Loom Archive for this Scene:\n${String(archiveState).trim()}`
         : 'Current Timeline Loom Archive for this Scene: empty.';
     const sources = {
-        archiveState: [currentArchive, continuity].filter(Boolean).join('\n\n'),
+        archiveState: [currentArchive, continuity, formatStoryTimelineWebPacket(webPacket)].filter(Boolean).join('\n\n'),
         mechanicsBoard: buildArchiveCapabilityGuide(),
         livingLore: formatLivingLorePacket(worldSense?.loomPacket),
         narratorDraft: `Accepted Story manuscript passage (evidence only; never reproduce it):\n${String(passage || '').trim()}`,
@@ -167,9 +178,11 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
         .find((transaction) => transaction.checkpointId === capture.id && transaction.status === 'applied');
     if (recovered) {
         const lore = await queueStoryCaptureLore({ scene, docId, capture, packet: capture.livingLorePacket });
+        const webReceipt = capture.webReceipt || createStoryWebReceipt({ scene, docId, capture, transaction: recovered, lore });
         return updateCapture(docId, capture.id, {
             status: 'applied',
             transactionId: recovered.id,
+            webReceipt,
             loreProposalIds: lore.queued.map((item) => item.id),
             loreProposalRejections: [...(capture.loreProposalRejections || []), ...(lore.rejected || [])],
             error: '',
@@ -198,11 +211,12 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
         }, { correlationId: `story-archive:${capture.id}`, severity: 'warn', summary: 'Story World Sense failed open; Archive capture continued' });
     }
     const archiveState = buildNarratorArchivistSections(scene.timelineId, scene.id);
+    const webPacket = buildStoryTimelineWebPacket({ scene, worldSense });
     const selectedRecipe = getPromptStudioRecipe(scene.promptRecipeIds?.loom);
     const recipe = selectedRecipe?.mode === 'loom' && selectedRecipe?.apiType === 'chat'
         ? selectedRecipe
         : getStoryArchivePromptStudioRecipe();
-    const prompt = buildStoryArchivePrompt({ passage, archiveState, worldSense, recipe });
+    const prompt = buildStoryArchivePrompt({ passage, archiveState, worldSense, webPacket, recipe });
     const correlationId = `story-archive:${capture.id}`;
     recordSentPromptTranscript('loom', {
         recipeName: `${recipe?.name || 'Loom'} Â· Story Archive`,
@@ -229,6 +243,7 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
         const replyShape = describeLoomReply(raw);
         const parsed = parseLoomReply(raw, { livingLorePacket: worldSense?.loomPacket || null });
         const requests = parsed.requests.filter((request) => STORY_ARCHIVE_CAPABILITY_SET.has(request?.capability));
+        const disabledRequests = parsed.requests.filter((request) => !STORY_ARCHIVE_CAPABILITY_SET.has(request?.capability));
         const archiveFacts = storyArchiveEvidence(requests);
         if (!replyShape.fenceParsed) {
             throw new Error('The Story Loom returned no readable state fence for this accepted passage.');
@@ -239,14 +254,17 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
         capture = updateCapture(docId, capture.id, {
             worldSenseReceiptId: worldSense?.receipt?.id || null,
             livingLorePacket: worldSense?.loomPacket || null,
+            timelineWebPacket: webPacket,
             loreProposals: parsed.loreProposals,
             loreProposalRejections: parsed.loreProposalRejections,
             archiveFacts,
         }, onStateChange);
         if (!requests.length && !parsed.loreProposals.length) {
+            const webReceipt = createStoryWebReceipt({ scene, docId, capture, worldSense, webPacket, lore: { queued: [], rejected: disabledRequests.map((request) => ({ code: 'story-capability-disabled', capability: request.capability })) } });
             const applied = updateCapture(docId, capture.id, {
                 status: 'applied',
                 transactionId: null,
+                webReceipt,
                 error: '',
                 appliedAt: new Date().toISOString(),
             }, onStateChange);
@@ -257,25 +275,37 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
             return applied;
         }
         let transactionId = null;
+        let transaction = null;
         if (requests.length) {
+            const addressing = storyTimelineWebAddressing(webPacket);
             const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests }, {
                 timelineId: scene.timelineId,
                 sceneId: scene.id,
                 turnId: capture.generationId || capture.id,
                 directionId: correlationId,
                 checkpointId: capture.id,
-                variableRefs: new Map(),
-                goalRefs: new Map(),
+                variableRefs: addressing.variableRefs,
+                goalRefs: addressing.goalRefs,
+                loreRefs: addressing.loreRefs,
+                source: captureReceipt(scene, docId, capture),
             });
             if (!result.ok) throw new Error((result.errors || []).join(' ') || 'The Archive transaction was rejected.');
+            transaction = result.transaction || null;
             transactionId = result.transaction?.id || null;
         }
         const lore = await queueStoryCaptureLore({ scene, docId, capture, packet: worldSense?.loomPacket || null });
+        const loreRejections = [
+            ...(parsed.loreProposalRejections || []),
+            ...(lore.rejected || []),
+            ...disabledRequests.map((request) => ({ code: 'story-capability-disabled', capability: request.capability, requestId: request.id })),
+        ];
+        const webReceipt = createStoryWebReceipt({ scene, docId, capture, worldSense, webPacket, transaction, lore: { ...lore, rejected: loreRejections } });
         const applied = updateCapture(docId, capture.id, {
             status: 'applied',
             transactionId,
+            webReceipt,
             loreProposalIds: lore.queued.map((item) => item.id),
-            loreProposalRejections: [...(parsed.loreProposalRejections || []), ...(lore.rejected || [])],
+            loreProposalRejections: loreRejections,
             error: '',
             appliedAt: new Date().toISOString(),
         }, onStateChange);
@@ -431,7 +461,7 @@ function buildArchiveCapabilityGuide() {
             const required = (capability.requiredArguments || []).map((argument) => `${argument.key} â€” ${argument.hint}`).join('; ');
             return `- ${capability.name}: ${capability.description}${required ? `\n    arguments: ${required}` : ''}`;
         }).join('\n');
-    return `[ARCHIVE OPERATIONS â€” the only capabilities enabled in this pass]\n${guide}`;
+    return `[TIMELINE WEB OPERATIONS — the only capabilities enabled in this pass]\n${guide}`;
 }
 
 function ensurePromptContent(messages, content, role, { prepend = false } = {}) {

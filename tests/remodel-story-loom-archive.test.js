@@ -2,6 +2,8 @@ import { afterEach, beforeEach, expect, test } from '@jest/globals';
 import { listEvents, listSceneFacts } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { listArchiveSceneDescriptors } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archive-scene-list.js';
 import { listLivingLoreProposals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-mutations.js';
+import { getTimelineGoals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js';
+import { listVariableValues } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
 import {
     buildStoryArchivePrompt,
     captureStoryArchiveCatchUp,
@@ -53,7 +55,7 @@ test('Story and Roleplay Scenes appear in the same Timeline Archive list', () =>
         .toEqual([['rp', 'roleplay'], ['story', 'story']]);
 });
 
-test('the Story Loom prompt makes accepted prose immutable and advertises only Archive operations', () => {
+test('the Story Loom prompt makes accepted prose immutable and advertises the safe Timeline Web operations', () => {
     const prompt = buildStoryArchivePrompt({
         passage: 'Mara locked the door.',
         archiveState: 'location: observatory',
@@ -66,14 +68,14 @@ test('the Story Loom prompt makes accepted prose immutable and advertises only A
     expect(text).toContain('Mara locked the door.');
 });
 
-test('accepted Story prose applies only Archive requests once', async () => {
+test('accepted Story prose applies enabled retrospective requests once', async () => {
     const { doc, capture } = makeCapture();
     setStoryLoomArchiveTestAdapter(async ({ prompt }) => {
         expect(prompt.map((message) => message.content).join('\n')).toContain('Mara locked the observatory door.');
         return fence([
             { id: 'event', capability: 'event.record', arguments: { summary: 'Mara locked the observatory door' }, reason: 'accepted Story prose' },
             { id: 'scene', capability: 'scene.set', arguments: { key: 'observatory door', value: 'locked' }, reason: 'accepted Story prose' },
-            { id: 'ignored', capability: 'goal.create', arguments: { title: 'Break in', description: 'Enter the observatory', holderRefs: [] }, reason: 'not enabled in Commit 13' },
+            { id: 'ignored', capability: 'goal.reach', arguments: { goalRef: 'Break in' }, reason: 'retrospective rolls are disabled' },
         ]);
     });
 
@@ -87,7 +89,7 @@ test('accepted Story prose applies only Archive requests once', async () => {
     expect(listEvents(scene.timelineId, scene.id)).toHaveLength(1);
 });
 
-test('accepted Story evidence can queue a typed Living Lore proposal without enabling Goal or Variable writes', async () => {
+test('accepted Story evidence can queue a typed Living Lore proposal alongside the Timeline Web', async () => {
     __setExtensionSettings({ remodel: {
         timelineV1: {
             version: 1,
@@ -172,6 +174,48 @@ test('regenerating Story evidence invalidates its unapplied Living Lore suggesti
     expect(listLivingLoreProposals({ timelineId: scene.timelineId })[0]).toMatchObject({
         status: 'invalidated', invalidationReason: 'story-generation-superseded',
     });
+});
+
+test('accepted Story consequences create linked Timeline Web records without a retrospective roll', async () => {
+    __setExtensionSettings({ remodel: {
+        timelineV1: {
+            version: 1, timelineIds: [scene.timelineId], activeTimelineId: scene.timelineId,
+            timelines: { [scene.timelineId]: { id: scene.timelineId, lorebookName: 'Living Story', arcIds: ['arc'] } },
+            arcs: { arc: { id: 'arc', timelineId: scene.timelineId, sceneIds: [scene.id] } },
+            scenes: { [scene.id]: { ...scene, arcId: 'arc' } },
+        },
+        worldSenseV1: { version: 2, profile: { mode: 'suggest', maxEntries: 12, maxTokens: 1800 }, indexes: {}, receipts: [], continuityByScene: {} },
+    } });
+    __setContextOverrides({ loadWorldInfo: async () => ({ entries: {
+        7: { uid: 7, comment: 'Mara', key: ['Mara', 'hunt'], keysecondary: [], content: 'Identity\nMara leads the observatory watch.', disable: false },
+    } }) });
+    const doc = createStoryDoc({ title: 'Consequences' });
+    const prose = 'Mara swore to catch the intruder, while the watch lost confidence.';
+    updateStoryDoc(doc.id, { body: prose });
+    const capture = createStoryArchiveCapture(doc.id, { text: prose, start: 0, end: prose.length, generationId: 'web-1', beatId: 'web-beat' });
+    setStoryLoomArchiveTestAdapter(async () => fence([
+        { id: 'g', capability: 'goal.create', arguments: { alias: 'hunt', title: 'Mara catches the intruder', description: 'Mara must identify and corner the intruder before they escape.', holderRefs: [{ kind: 'character', id: 'Mara', label: 'Mara' }], successRate: 45 }, reason: 'Mara explicitly commits to the hunt.' },
+        { id: 'gl', capability: 'goal.lore.attach', arguments: { goalRef: '$hunt', loreBook: 'Living Story', loreUid: '7', loreRevision: 1, loreType: 'stake' }, reason: 'The hunt belongs to Mara.' },
+        { id: 'v', capability: 'variable.create', arguments: { alias: 'confidence', name: 'Watch Confidence', valueType: 'number', value: 35, minimum: 0, maximum: 100, description: 'How strongly the observatory watch trusts its ability to protect the site.' }, reason: 'The accepted passage establishes a loss of confidence.' },
+        { id: 'vl', capability: 'variable.lore.attach', arguments: { variableRef: '$confidence', loreBook: 'Living Story', loreUid: '7', loreRevision: 1, loreHint: 'subject' }, reason: 'The confidence belongs to Mara and her watch.' },
+        { id: 'roll', capability: 'goal.reach', arguments: { goalRef: '$hunt' }, reason: 'must never execute retrospectively' },
+    ]));
+
+    const applied = await processStoryArchiveCapture({ scene, docId: doc.id, captureId: capture.id });
+    expect(applied.status).toBe('applied');
+    expect(applied.webReceipt).toMatchObject({ captureId: capture.id, transactionId: applied.transactionId });
+    expect(applied.webReceipt.mechanics.map((item) => item.capability)).not.toContain('goal.reach');
+    expect(applied.loreProposalRejections).toContainEqual(expect.objectContaining({ code: 'story-capability-disabled', capability: 'goal.reach' }));
+    expect(getTimelineGoals(scene.timelineId)).toEqual([
+        expect.objectContaining({ title: 'Mara catches the intruder', status: 'active', loreLinks: [expect.objectContaining({ book: 'Living Story', uid: '7', type: 'stake' })] }),
+    ]);
+    expect(listVariableValues({ timelineId: scene.timelineId })).toEqual([
+        expect.objectContaining({ name: 'Watch Confidence', value: 35, loreLinks: [expect.objectContaining({ book: 'Living Story', uid: '7', hint: 'subject' })] }),
+    ]);
+
+    await supersedeStoryBeatArchive({ scene, docId: doc.id, beatId: 'web-beat' });
+    expect(getTimelineGoals(scene.timelineId)).toEqual([]);
+    expect(listVariableValues({ timelineId: scene.timelineId })).toEqual([]);
 });
 
 test('a valid empty Story Loom fence completes as an idempotent no-op', async () => {

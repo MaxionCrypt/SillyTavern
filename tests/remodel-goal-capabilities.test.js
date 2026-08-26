@@ -43,9 +43,9 @@ function editRequest(args, id = 'r1') {
     return { id, capability: 'goal.edit', arguments: args, reason: 'The column is a day out.' };
 }
 
-test('the dictionary names exactly the five Goal verbs', () => {
+test('the dictionary names the Goal verbs including typed lore links', () => {
     const verbs = getCapabilityDictionary().map((entry) => entry.name).filter((name) => name.startsWith('goal.')).sort();
-    expect(verbs).toEqual(['goal.create', 'goal.delete', 'goal.edit', 'goal.reach', 'goal.relate']);
+    expect(verbs).toEqual(['goal.create', 'goal.delete', 'goal.edit', 'goal.lore.attach', 'goal.lore.detach', 'goal.reach', 'goal.relate']);
 });
 
 test('goal.edit sets a rate the Loom chose', () => {

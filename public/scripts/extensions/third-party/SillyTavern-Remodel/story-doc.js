@@ -10,7 +10,7 @@ import { buildStoryArchiveCatchUpPreview, hashStoryArchiveText, rebaseStoryArchi
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'storyDocsV1';
-const STORE_VERSION = 5;
+const STORE_VERSION = 6;
 const STORY_ARCHIVE_CAPTURE_STATUSES = Object.freeze(['pending', 'processing', 'applied', 'failed', 'superseded']);
 
 function getStore() {
@@ -212,6 +212,8 @@ export function createStoryArchiveCapture(docId, input = {}) {
         transactionId: null,
         worldSenseReceiptId: null,
         livingLorePacket: null,
+        timelineWebPacket: null,
+        webReceipt: null,
         loreProposals: [],
         loreProposalRejections: [],
         loreProposalIds: [],
@@ -275,6 +277,8 @@ export function updateStoryArchiveCapture(docId, captureId, patch = {}) {
     if ('transactionId' in patch) capture.transactionId = patch.transactionId == null ? null : String(patch.transactionId);
     if ('worldSenseReceiptId' in patch) capture.worldSenseReceiptId = patch.worldSenseReceiptId == null ? null : String(patch.worldSenseReceiptId);
     if ('livingLorePacket' in patch) capture.livingLorePacket = patch.livingLorePacket && typeof patch.livingLorePacket === 'object' ? structuredClone(patch.livingLorePacket) : null;
+    if ('timelineWebPacket' in patch) capture.timelineWebPacket = patch.timelineWebPacket && typeof patch.timelineWebPacket === 'object' ? structuredClone(patch.timelineWebPacket) : null;
+    if ('webReceipt' in patch) capture.webReceipt = patch.webReceipt && typeof patch.webReceipt === 'object' ? structuredClone(patch.webReceipt) : null;
     if (Array.isArray(patch.loreProposals)) capture.loreProposals = structuredClone(patch.loreProposals);
     if (Array.isArray(patch.loreProposalRejections)) capture.loreProposalRejections = structuredClone(patch.loreProposalRejections);
     if (Array.isArray(patch.loreProposalIds)) capture.loreProposalIds = patch.loreProposalIds.map(String);
@@ -463,6 +467,8 @@ function normalizeArchiveCapture(value) {
         transactionId: value.transactionId == null ? null : String(value.transactionId),
         worldSenseReceiptId: value.worldSenseReceiptId == null ? null : String(value.worldSenseReceiptId),
         livingLorePacket: value.livingLorePacket && typeof value.livingLorePacket === 'object' ? structuredClone(value.livingLorePacket) : null,
+        timelineWebPacket: value.timelineWebPacket && typeof value.timelineWebPacket === 'object' ? structuredClone(value.timelineWebPacket) : null,
+        webReceipt: value.webReceipt && typeof value.webReceipt === 'object' ? structuredClone(value.webReceipt) : null,
         loreProposals: Array.isArray(value.loreProposals) ? structuredClone(value.loreProposals) : [],
         loreProposalRejections: Array.isArray(value.loreProposalRejections) ? structuredClone(value.loreProposalRejections) : [],
         loreProposalIds: Array.isArray(value.loreProposalIds) ? value.loreProposalIds.map(String) : [],

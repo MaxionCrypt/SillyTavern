@@ -1,7 +1,7 @@
 # Living Lore and World Sense
 
-**Status:** Implemented through Commit 15 on `feature/living-lore-world-sense`;
-Commits 15.5-16 below define the remaining Story Timeline Web consequences and mixed-mode hardening.
+**Status:** Implemented through Commit 15.5 on `feature/living-lore-world-sense`;
+Commit 16 below defines the remaining mixed-mode lifecycle hardening.
 
 ## 1. Product promise
 
@@ -746,6 +746,14 @@ This is the first commit that changes what the Narrator can see.
 ### Commit 15.5 - Story Timeline Web consequences
 
 `feat(remodel): project Story consequences into the Timeline Web`
+
+**Implemented:** Story ingestion now receives a bounded canonical Web address
+packet, may apply validated retrospective Goal and Variable consequences plus
+typed lore links in the same mechanics transaction, records a capture-level Web
+receipt, and filters reach requests before execution. Selected lore revisions,
+duplicate Goal names, existing authority rules, and transaction rollback form
+the deterministic write fences; deferred lore proposals remain within the
+existing review boundary.
 
 - assemble a bounded pre-ingestion Web packet from relevant Archive records,
   lore, Goals, Variables, relations, and links;
