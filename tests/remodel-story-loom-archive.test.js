@@ -4,6 +4,7 @@ import { listArchiveSceneDescriptors } from '../public/scripts/extensions/third-
 import {
     buildStoryArchivePrompt,
     processStoryArchiveCapture,
+    resumeStoryArchiveCaptures,
     setStoryLoomArchiveTestAdapter,
     supersedeStoryBeatArchive,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-loom-archive.js';
@@ -99,6 +100,19 @@ test('an unusable Story Loom response remains visibly retryable', async () => {
     expect(failed.status).toBe('failed');
     expect(failed.error).toContain('no readable state fence');
     expect(getStoryArchiveCapture(doc.id, capture.id)?.attempts).toBe(1);
+});
+
+test('a failed capture retries on reopen and accepts the bounded quoted-object repair', async () => {
+    const { doc, capture } = makeCapture();
+    setStoryLoomArchiveTestAdapter(async () => 'not a state fence');
+    await processStoryArchiveCapture({ scene, docId: doc.id, captureId: capture.id });
+    expect(getStoryArchiveCapture(doc.id, capture.id)?.status).toBe('failed');
+
+    setStoryLoomArchiveTestAdapter(async () => '```state\n{"requests":[{"id":"event","capability":"event.record","arguments":{"summary":"Mara locked the door"},"reason":"accepted passage"},"{"id":"beat","capability":"beat.set","arguments":{"directive":"Someone tests the lock"},"reason":"unresolved beat"}],"flow":{"continue":false}}\n```');
+    await resumeStoryArchiveCaptures({ scene, docId: doc.id });
+
+    expect(getStoryArchiveCapture(doc.id, capture.id)).toMatchObject({ status: 'applied', attempts: 2 });
+    expect(listEvents(scene.timelineId, scene.id).map((item) => item.summary)).toEqual(['Mara locked the door']);
 });
 
 test('regenerating a beat rolls its prior accepted Archive transaction back', async () => {

@@ -75,7 +75,11 @@ export function queueStoryArchiveCapture({ scene, docId, captureId, onStateChang
 }
 
 export function resumeStoryArchiveCaptures({ scene, docId, onStateChange = null } = {}) {
-    const pending = listStoryArchiveCaptures(docId, { statuses: ['pending', 'processing'] });
+    // A failed background pass must not strand accepted prose forever. Retry
+    // it when the Scene is reopened, but cap automatic attempts so a broken
+    // provider/recipe cannot silently spend requests on every visit.
+    const pending = listStoryArchiveCaptures(docId, { statuses: ['pending', 'processing', 'failed'] })
+        .filter((capture) => capture.status !== 'failed' || capture.attempts < 3);
     return pending.reduce(
         (chain, capture) => chain.then(() => queueStoryArchiveCapture({ scene, docId, captureId: capture.id, onStateChange })),
         Promise.resolve(),

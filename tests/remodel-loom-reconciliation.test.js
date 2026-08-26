@@ -139,6 +139,16 @@ test('a malformed fence is distinguished from a missing one', () => {
     expect(reply.capabilities).toEqual([]);
 });
 
+test('repairs quoted request objects at array boundaries without general JSON guessing', () => {
+    const malformed = '```state\n{"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"one"}},"{"id":"r2","capability":"beat.set","arguments":{"directive":"next"}}],"flow":{"continue":false}}\n```';
+    const described = describeLoomReply(malformed);
+    expect(described).toMatchObject({ hasFence: true, fenceParsed: true, fenceFormat: 'state-quoted-object-repaired', requestCount: 2 });
+    expect(parseLoomReply(malformed).requests.map((request) => request.id)).toEqual(['r1', 'r2']);
+
+    const unrelatedDamage = '```state\n{"requests":[{"id":"r1"} BROKEN]}\n```';
+    expect(describeLoomReply(unrelatedDamage)).toMatchObject({ hasFence: true, fenceParsed: false });
+});
+
 test('a valid fence reports the capabilities it named', () => {
     const fence = JSON.stringify({ requests: [
         { id: 'r1', capability: 'event.record', arguments: { summary: 'x' } },

@@ -127,6 +127,15 @@ function readLoomEnvelope(text) {
         try {
             return { present: true, parsed: true, format: 'state', json: stateMatch[1], value: JSON.parse(stateMatch[1]) };
         } catch {
+            const repaired = repairQuotedRequestObjects(stateMatch[1]);
+            if (repaired !== stateMatch[1]) {
+                try {
+                    const value = JSON.parse(repaired);
+                    if (isLoomEnvelope(value)) {
+                        return { present: true, parsed: true, format: 'state-quoted-object-repaired', json: repaired, value };
+                    }
+                } catch { /* a bounded repair did not make the whole envelope valid */ }
+            }
             return { present: true, parsed: false, format: 'state', json: stateMatch[1], value: null };
         }
     }
@@ -139,10 +148,7 @@ function readLoomEnvelope(text) {
     }
     try {
         const value = JSON.parse(candidate);
-        const loomShaped = value && typeof value === 'object' && !Array.isArray(value)
-            && (Array.isArray(value.requests) || Array.isArray(value.swaps) || Array.isArray(value.loreProposals)
-                || (value.flow && typeof value.flow === 'object' && !Array.isArray(value.flow)));
-        if (!loomShaped) return { present: false, parsed: false, format: '', json: '', value: null };
+        if (!isLoomEnvelope(value)) return { present: false, parsed: false, format: '', json: '', value: null };
         return {
             present: true,
             parsed: true,
@@ -153,6 +159,22 @@ function readLoomEnvelope(text) {
     } catch {
         return { present: false, parsed: false, format: '', json: '', value: null };
     }
+}
+
+function isLoomEnvelope(value) {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        && (Array.isArray(value.requests) || Array.isArray(value.swaps) || Array.isArray(value.loreProposals)
+            || (value.flow && typeof value.flow === 'object' && !Array.isArray(value.flow)));
+}
+
+/**
+ * Some models emit the next request object as `,"{"id":...` instead of
+ * `,{"id":...`. Repair only that exact array-boundary defect. This is not a
+ * general JSON fixer: it cannot invent braces, commas, fields, or values, and
+ * the repaired result still has to parse as a complete Loom envelope.
+ */
+function repairQuotedRequestObjects(json) {
+    return String(json || '').replace(/([,\[]\s*)"\s*(\{\s*"id"\s*:)/g, '$1$2');
 }
 
 /** Return only the prose portion of a cumulative Loom response. While the
