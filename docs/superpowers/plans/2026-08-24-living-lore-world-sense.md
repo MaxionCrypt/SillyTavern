@@ -1,6 +1,7 @@
 # Living Lore and World Sense
 
-**Status:** Implemented through Commit 12 on `feature/living-lore-world-sense`.
+**Status:** Implemented through Commit 12 on `feature/living-lore-world-sense`;
+Commits 13-16 below define the approved Story Scene bridge.
 
 ## 1. Product promise
 
@@ -40,6 +41,21 @@ ordinary turn.
   state into lore content. Variables keep their existing linked-but-separate
   relationship to lore entries.
 
+The **Timeline Web** is the product name for the connected view of this state:
+
+- Timeline, Arc, and Scene chronology;
+- Loom Archive events, facts, character states, beats, and secrets;
+- Living Lore entries and their typed links;
+- Goals, Goal relationships, and Goal-to-lore links;
+- Variables, modifiers, and Variable-to-lore links;
+- provenance edges showing which accepted passage established or changed each
+  node.
+
+The Web is not another database. Each node remains owned by its existing store;
+the Web is a typed projection used for retrieval, consequence planning,
+receipts, and navigation. This prevents a second copy of Goal odds, Variable
+values, lore content, or Archive state from drifting out of sync.
+
 ### 2.2 What local AI does
 
 The local model performs semantic attention:
@@ -75,12 +91,19 @@ The local model does **not** freely overwrite entries, invent canon in the
 background, resolve mechanics, or decide that speculative model reasoning is
 true.
 
+World Sense therefore chooses what part of the Timeline Web is relevant. It
+does not decide what the story changed. Consequence reasoning belongs to the
+Loom, and deterministic capability code remains the only writer.
+
 ### 2.3 What the Narrator and Loom do
 
 - The Narrator creates the lived fiction as it does today.
 - The Loom receives only a bounded packet of relevant writable lore entries.
 - Alongside Archive/Goal operations, the Loom may emit typed **lore proposals**
   describing what accepted fiction warrants.
+- In Story mode, the Loom may also propose new or changed Goals, Variables,
+  relationships, and cross-store links when the accepted manuscript makes
+  those consequences useful to later Scenes.
 - Proposals are validated and committed only at the same accepted-fiction
   boundary used by the roleplay pipeline.
 - A later optional powerful mode may use a selected remote model for deliberate
@@ -103,6 +126,68 @@ a prose-writing Loom) is deliberately shelved. It belongs on a separate future
 feature branch with its own recipe migration, latency measurements, and
 acceptance tests. No commit in this plan may implement part of that alternate
 pipeline or create compatibility state for it.
+
+### 2.5 Scene-mode boundary
+
+Living Lore is Timeline canon shared by Roleplay and Story Scenes, but the two
+modes produce evidence differently:
+
+- Roleplay keeps its existing Narrator -> Loom -> accepted reveal and Archive
+  lifecycle;
+- Story remains a co-authoring manuscript and does not acquire the Roleplay
+  hidden-turn pipeline;
+- after accepted Story Narrator prose is committed, a Story-specific Loom
+  reader receives that exact passage and posts the normal structured output to
+  the same Timeline Loom Archive used by Roleplay Scenes;
+- user-written manuscript prose is sent through that same reader only when the
+  user invokes **Catch up Archive**;
+- the Story Loom may extract Archive, Goal, Variable, and lore-proposal
+  operations, but it never rewrites, continues, or corrects manuscript prose;
+- Archive evidence may later support World Sense retrieval and reviewable
+  Living Lore proposals, but it does not become canon merely by being recorded.
+
+There is one Loom Archive store, renderer, output contract, and continuity
+system. Only the input adapter and allowed Loom behavior differ by Scene mode;
+a manuscript is never converted into or treated as a chat transcript.
+
+### 2.6 Story consequences and the Timeline Web
+
+An accepted Story passage is both prose and a possible state transition. After
+the passage enters the StoryDoc, the Story Loom receives:
+
+- only the newly accepted passage and its provenance;
+- a bounded World Sense selection of relevant Archive records, lore entries,
+  Goals, Variables, relationships, and links;
+- the same typed capability dictionary and revision/address fences used by
+  Roleplay, narrowed to actions valid after fiction is already decided.
+
+The Loom may then request:
+
+- Archive event, scene, character-state, beat, and secret changes;
+- creation or editing of meaningful Goals, including status, odds, and
+  Goal-to-Goal relationships;
+- creation or editing of Variables and modifiers;
+- typed Goal-to-lore, Variable-to-lore, and lore-to-lore links;
+- Living Lore entry creation and field-level proposals.
+
+Because the manuscript has already established the outcome, Story ingestion
+must never call `goal.reach` or roll retroactively. It records consequences with
+`goal.edit`, closes resolved Goals, or creates a new unresolved Goal. Likewise,
+it cannot invent a Variable change unsupported by the accepted passage merely
+to make the Web look busy.
+
+All writes carry Timeline, source Scene, StoryDoc revision, capture id, exact
+evidence span, and transaction id. Existing authority rules still apply:
+user-owned Goal changes defer for review, Loom-created unlinked Variables begin
+with review authority, protected lore remains protected, and destructive or
+ambiguous link changes require confirmation. Retry, regeneration, superseding
+edits, and reload cannot apply the same consequence twice.
+
+Before a later Story or Roleplay Scene generates, World Sense traverses this
+updated Web and retrieves only relevant nodes under separate lore and mechanics
+budgets. This is how a decision authored in Story mode can become a Goal,
+Variable pressure, relationship, secret, or canon fact that matters naturally
+in the next Roleplay Scene.
 
 ## 3. Entry contract
 
@@ -195,6 +280,18 @@ Mutation proposals may rely on:
 - the entry revisions that were supplied to the Loom;
 - explicit user instructions to grow or revise lore.
 
+For Story Scenes, accepted evidence additionally includes:
+
+- the exact completed Story Narrator passage committed to the StoryDoc and sent
+  through the Story Loom reader;
+- an exact user-written manuscript delta explicitly submitted through **Catch
+  up Archive** and accepted by that reader;
+- the stable StoryDoc revision, source span, content hash, and author origin
+  attached to that capture.
+
+Streaming previews, failed generations, discarded regenerations, current
+selection text, author guidance, and uncommitted editor state are not evidence.
+
 ### 4.3 What is deliberately not scanned as truth
 
 - private chain-of-thought or provider reasoning;
@@ -222,6 +319,8 @@ Retrieval is hybrid and inspectable:
    retrieval continuity.
    A relevant lore entry boosts its linked Goals and Variables; an active Goal
    or retrieved Variable contributes its linked entries back to lore ranking.
+   Timeline Web traversal may cross only explicit typed links and provenance
+   edges; each hop decays relevance and Debug records the path.
 5. **Deduplicate:** identity is always `book + uid`; native and semantic matches
    merge into one candidate with multiple reasons.
 6. **Budget:** rank into a configurable entry and token budget. Constant and
@@ -236,6 +335,11 @@ Lore entries use the native World Info token budget. Goals and Variables retain
 their shared mechanics retrieval budget. The evidence graph is shared, but the
 delivery budgets are separate so a long lore entry cannot evict a mechanically
 essential Goal or Variable.
+
+The same ranking result is mode-neutral evidence with mode-specific delivery:
+Roleplay feeds the Narrator and reconciling Loom; Story feeds the co-authoring
+Narrator and later its archive/consequence Loom pass. A node created in one
+Scene mode therefore needs no migration before another mode can retrieve it.
 
 The existing native Vectors extension already demonstrates the correct
 `WORLDINFO_FORCE_ACTIVATE` seam. Remodel will own a Timeline-scoped index and
@@ -369,6 +473,31 @@ reasoning.
 
 The ordinary native entry editor remains the source editor. World Sense augments
 it with metadata and proposals rather than replacing it.
+
+### Story manuscripts in the Loom Archive
+
+There is no separate Story Archive. Story Scenes populate the existing Loom
+Archive with mode-appropriate reading behavior:
+
+- **Loom Archive** opens the same Timeline workspace and Scene selector used by
+  Roleplay; Story Scenes appear beside Roleplay Scenes;
+- each record shows author origin, captured revision, source location, time,
+  hash, and whether it has contributed to a lore proposal;
+- **Catch up Archive** previews and submits accepted manuscript prose since the
+  last captured boundary to the Story Loom reader;
+- the preview distinguishes Story Narrator prose from user prose and never
+  includes guidance, prompts, reasoning, or discarded draft text;
+- ingestion is idempotent and reports `Already caught up` rather than
+  duplicating records;
+- Story output lands in the same What Happened, scene state, characters, Goals,
+  Variables, and Secrets sections supported by the shared Archive contract;
+- a **Timeline Web changes** receipt groups the Goals, Variables, lore entries,
+  and links created, changed, deferred, or rejected from each captured passage;
+- continuity controls remain available per Scene: look into earlier Scenes,
+  allow later recall, exclude a Scene, and pin an exact record;
+- cultivation actions may turn selected Loom Archive evidence into typed lore
+  proposals, using the same review, protection, and Auto-safe policy as
+  Roleplay evidence.
 
 ## 10. Diagnostics and performance budgets
 
@@ -527,6 +656,17 @@ This is the first commit that changes what the Narrator can see.
 - proposal review, field diff, history, and rollback;
 - responsive and keyboard-accessible browser validation.
 
+### Commit 10.5 - Timeline continuity recall
+
+`feat(remodel): recall continuity across timeline scenes`
+
+- Timeline-order traversal across Scenes and Arcs;
+- per-Scene read/share/exclusion controls and exact-record pins;
+- semantic and deterministic ranking of prior Archive evidence;
+- bounded continuity packet shared by Preview, Narrator, and Loom;
+- strict Timeline isolation and no secret indexing;
+- provenance-rich receipts in Loom Archive and Debug.
+
 ### Commit 11 - Seed cultivation tools
 
 `feat(remodel): grow Living Lore from authored seeds`
@@ -546,6 +686,96 @@ This is the first commit that changes what the Narrator can see.
 - model download/offline/corrupt-index recovery;
 - secret-leak, prompt-budget, concurrent-edit, and migration tests;
 - end-to-end Debug recordings and user documentation.
+
+### Commit 13 - Story-to-Loom Archive adapter
+
+`feat(remodel): archive accepted Story manuscript prose`
+
+- add a versioned StoryDoc provenance/capture ledger without changing the
+  manuscript's plain-text body contract;
+- after each completed Story Narrator passage is accepted into the StoryDoc,
+  enqueue its exact span for the Story Loom reader;
+- store exact text, author origin, StoryDoc revision, source span, generation or
+  beat id, and content hash;
+- give the Loom a Story-specific archive-only input recipe while retaining the
+  selected Loom connection and shared structured output contract;
+- advertise and apply only the existing narrative Archive capabilities in this
+  commit; Goal, Variable, link, and lore-proposal writes remain disabled until
+  Commits 15 and 15.5 add their retrieval and mutation boundaries;
+- run archival work after prose is visible, expose pending/saved/failed state,
+  and resume safely after reload without delaying Story's first character;
+- make Continue, beat generation, regeneration, Stop, failure, reload, and
+  migration idempotent;
+- expose Story Scene records in the existing Timeline Loom Archive rather than
+  adding a new store, route, or renderer;
+- forbid Story-mode Loom output from altering manuscript prose.
+
+### Commit 14 - Manual Loom Archive catch-up
+
+`feat(remodel): capture user-written manuscript continuations`
+
+- add **Catch up Archive** to Story tools and the shared Loom Archive;
+- derive uncaptured accepted manuscript spans from provenance boundaries rather
+  than assuming the whole suffix has one author;
+- preview exact additions, edits, and deletions before capture;
+- submit the accepted delta to the same Story Loom reader and shared Archive
+  capability contract without rewriting the manuscript;
+- handle edits across an old boundary, repeated clicks, reloads, and concurrent
+  autosave safely;
+- preserve prior records as audit evidence and supersede them explicitly when a
+  later edit changes their source text.
+
+### Commit 15 - Story World Sense and Living Lore bridge
+
+`feat(remodel): connect Story Scenes to Living Lore`
+
+- add a Story-specific query packet using accepted manuscript tail, active beat,
+  bound cast/location, Loom Archive evidence, and Timeline canon;
+- index eligible Story Scene records from the shared Loom Archive in the
+  Timeline World Sense collection;
+- allow Story Scenes to recall earlier Roleplay or Story evidence and later
+  Scenes to recall Story evidence, subject to existing continuity controls;
+- keep author guidance, prompt text, reasoning, discarded generations, and
+  secrets outside the index;
+- allow selected Story evidence to produce typed create/link/update lore
+  proposals through the existing Loom proposal boundary;
+- preserve Preview parity, native World Info activation, revision checks,
+  protection, Suggest mode, and guarded Auto-safe behavior;
+- keep separate Timelines fully isolated.
+
+### Commit 15.5 - Story Timeline Web consequences
+
+`feat(remodel): project Story consequences into the Timeline Web`
+
+- assemble a bounded pre-ingestion Web packet from relevant Archive records,
+  lore, Goals, Variables, relations, and links;
+- expand the Story Loom reader from Archive-only operations to the existing
+  validated Goal and Variable capability paths plus lore proposals;
+- add typed `goal.lore.attach`, `goal.lore.detach`, `variable.lore.attach`, and
+  `variable.lore.detach` capabilities rather than a generic graph-write escape
+  hatch; retain `goal.relate` for Goal-to-Goal and `entry.link` for lore-to-lore;
+- forbid `goal.reach` during retrospective Story ingestion because accepted
+  prose has already determined the outcome;
+- apply accepted Story consequences as one provenance-rich transaction, with
+  user-owned/review authority, revision, protection, and duplicate fences;
+- create Web receipts linking every applied or deferred change to the exact
+  manuscript capture and source Scene;
+- make the resulting Goals, Variables, lore, and links immediately eligible for
+  later Story or Roleplay retrieval without copying them into Scene storage.
+
+### Commit 16 - Mixed-mode lifecycle hardening
+
+`test(remodel): harden Story and Roleplay continuity`
+
+- acceptance coverage for Story -> Story, Story -> Roleplay, Roleplay -> Story,
+  cross-Arc, Timeline Web propagation, exclusion, pinning, and Timeline
+  isolation;
+- recorder journeys for Continue, beat generation, manual prose, catch-up,
+  regeneration, Stop, reload, and conflict recovery;
+- large-manuscript retrieval and capture performance budgets;
+- migration and rollback tests for StoryDocs created before provenance capture;
+- Debug receipts that identify mode, source Scene, document revision, record,
+  ranking reason, prompt inclusion, and lore outcome.
 
 ## 12. Acceptance scenarios
 
@@ -572,6 +802,35 @@ This is the first commit that changes what the Narrator can see.
    revision is rejected and shown as a merge conflict, never silently saved.
 10. **Large book:** unchanged entries are not re-embedded, the prompt respects
     the lore budget, and warm retrieval stays within the measured target.
+11. **Automatic Story ingestion:** generate two Story passages and one beat.
+    Each accepted passage is read once by the Story Loom and its structured
+    records appear under that Story Scene in the same Timeline Loom Archive.
+12. **Manual Story catch-up:** write manuscript prose after the last Narrator
+    passage, preview Catch up Archive, accept it, reload, and repeat. The exact
+    user span is processed once, shared Archive sections update, and the
+    manuscript is unchanged.
+13. **Story regeneration:** regenerate an earlier beat. The old evidence remains
+    auditable but is superseded; only the accepted replacement is retrievable.
+14. **Mixed-mode continuity:** establish a fact in a Story Scene, continue into
+    a later Roleplay Scene, and retrieve it with provenance. Disable sharing on
+    the Story Scene and prove it is no longer eligible.
+15. **Reverse mixed-mode continuity:** establish a Roleplay Archive fact, open a
+    later Story Scene, and retrieve it into Story World Sense without exposing
+    secrets, reasoning, or author guidance.
+16. **Story cultivation:** select captured manuscript evidence and propose a
+    new seed/link/update. The diff remains reviewable and the protected premise
+    cannot be silently changed.
+17. **Story-to-Roleplay mechanics:** establish in Story prose that a faction has
+    begun a hunt and an ally has lost confidence. Story ingestion creates or
+    updates the warranted Goal and Variable; the next Roleplay Scene retrieves
+    both with provenance and without copying them into its Scene record.
+18. **No retrospective roll:** write the result of a decisive contest directly
+    in Story mode. The Loom records the result and updates Goal status/odds but
+    never calls `goal.reach` or rolls against already accepted fiction.
+19. **Cross-store links:** introduce a new character pressure in Story mode. A
+    Goal, Variable, and lore entry may be proposed and linked through typed
+    capabilities; deleting or superseding the passage cannot leave duplicate or
+    dangling links.
 
 ## 13. Questions answered and deferred
 
@@ -596,6 +855,28 @@ Answered now:
   duplicated into lorebook prose.
 - **Does local retrieval wait for Send?** No. Background composer prefetch is
   the default, with query-hash validation preventing stale reuse.
+- **Do Story Scenes use the Roleplay Loom pipeline?** No. Story Narrator prose is
+  read after acceptance by an archive-only Loom mode; it is never reconciled or
+  narrated a second time.
+- **Is there a separate Story Archive?** No. Both Scene modes write through the
+  same capability contract into the same Timeline Loom Archive. Records retain
+  their source Scene and author provenance.
+- **Can Story and Roleplay Scenes carry continuity between them?** Yes, within
+  one Timeline. Their evidence adapters differ, but World Sense ranks both and
+  Living Lore remains their shared durable canon.
+- **Does recording Story prose immediately write lore?** No. Recording creates
+  evidence. Cultivation creates a proposal, and the existing validation and
+  review/Auto-safe policy decides whether it reaches canon.
+- **What is the Timeline Web?** A typed projection across existing Timeline,
+  Archive, Living Lore, Goal, and Variable stores. It adds traversal and
+  provenance, not another copy of their state.
+- **Does World Sense decide Story consequences?** No. World Sense retrieves the
+  relevant Web neighborhood. The Story Loom proposes consequences, and the
+  deterministic capability and lore validators decide what applies or defers.
+- **Can Story create mechanics for a later Roleplay Scene?** Yes. Goals and
+  Variables are Timeline-owned, so a warranted Story change becomes eligible
+  for the next Scene immediately; typed links help World Sense summon it only
+  when relevant.
 
 Deferred until the first UI review:
 
