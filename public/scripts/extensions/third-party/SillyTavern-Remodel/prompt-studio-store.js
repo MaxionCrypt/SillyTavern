@@ -4,7 +4,7 @@ import { STORY_ARCHIVE_CONTRACT, STORY_ARCHIVE_LOOM_RECIPE_NAME, STORY_ARCHIVE_P
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 20;
+const STORE_VERSION = 21;
 
 export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
@@ -443,6 +443,7 @@ function storyArchiveLoomBlocks() {
         createPromptBlock({ kind: 'message', role: 'system', content: STORY_ARCHIVE_POLICY }),
         createPromptBlockFromTemplate('loom', 'archiveState'),
         createPromptBlockFromTemplate('loom', 'mechanicsBoard'),
+        createPromptBlockFromTemplate('loom', 'livingLore'),
         createPromptBlockFromTemplate('loom', 'narratorDraft'),
         createPromptBlock({
             kind: 'message',
@@ -688,6 +689,32 @@ function normalizeStore(store, seed) {
             transport: null,
         });
         changed = true;
+    }
+
+    // v21 repairs only the untouched Story Archive recipe seeded before Story
+    // Timeline Web and Living Lore output were enabled. That recipe told the
+    // model both that lore proposals were disabled and, via the engine-owned
+    // final contract, that they were allowed. Some models respond to the
+    // contradiction by omitting the state fence altogether. Owner-created and
+    // renamed recipes remain exactly as authored.
+    if (previousVersion < 21) {
+        const recipe = store.recipeIds
+            .map((id) => store.recipes[id])
+            .find((item) => item?.name === STORY_ARCHIVE_LOOM_RECIPE_NAME);
+        if (recipe) {
+            for (const block of recipe.blocks || []) {
+                const content = String(block.content || '');
+                if (content.includes('Goals, Variables, rolls, lore proposals, flow control, and swaps are disabled for this stage.')) {
+                    block.content = STORY_ARCHIVE_POLICY;
+                    changed = true;
+                }
+                if (content.startsWith('Output NOTHING except one state fence:') && content.includes('"loreProposals":[]')) {
+                    block.content = STORY_ARCHIVE_CONTRACT;
+                    changed = true;
+                }
+            }
+            if (ensureLivingLoreSource(recipe.blocks)) changed = true;
+        }
     }
 
     store.active = store.active && typeof store.active === 'object' ? store.active : {};

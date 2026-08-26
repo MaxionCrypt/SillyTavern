@@ -6,6 +6,7 @@ import {
     PROMPT_MODES,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/prompt-studio-store.js';
 import { __setExtensionSettings } from './util/st-context-stub.js';
+import { STORY_ARCHIVE_CONTRACT, STORY_ARCHIVE_POLICY } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-loom-contract.js';
 
 test('Prompt Studio exposes Loom as its hidden-pass mode', () => {
     expect(PROMPT_MODES).toEqual(['story', 'roleplay', 'loom']);
@@ -69,7 +70,7 @@ test('v13 stores migrate old hidden grounding into an editable recipe policy and
 
     const store = initializePromptStudioStore();
     const recipe = store.recipes.rp;
-    expect(store.version).toBe(20);
+    expect(store.version).toBe(21);
     expect(recipe.blocks.some((block) => block.content === '{{loom.context}}')).toBe(false);
     expect(recipe.blocks).toEqual(expect.arrayContaining([
         expect.objectContaining({ content: NARRATOR_POLICY_DEFAULT, locked: false }),
@@ -103,7 +104,7 @@ test('v15 seeds the patch Loom recipe, activates it, and leaves the existing one
     });
     const store = initializePromptStudioStore();
 
-    expect(store.version).toBe(20);
+    expect(store.version).toBe(21);
     // The user's recipe is untouched and still selectable.
     expect(store.recipes.mine).toBeTruthy();
     expect(store.recipes.mine.blocks[0].content).toBe('my own carefully edited policy');
@@ -153,7 +154,7 @@ test('v18 migrates the untouched full policy and never an edited one', async () 
     __setExtensionSettings({ remodel: { promptStudioV1: { version: 17, recipeIds: ids, recipes, active: { loom: { chat: 'full' } } } } });
 
     const store = initializePromptStudioStore();
-    expect(store.version).toBe(20);
+    expect(store.version).toBe(21);
     expect(store.recipes.full.blocks[0].content).toBe(LOOM_POLICY_DEFAULT);
     expect(store.recipes.edited.blocks[0].content).toBe('my own policy');
 });
@@ -165,6 +166,34 @@ test('Prompt Studio seeds one editable Story Archive Loom recipe without replaci
     expect(recipe?.name).toBe('Loom · Story Archive');
     expect(recipe?.blocks.map((block) => block.content).join('\n')).toContain('manuscript is immutable');
     expect(store.active.loom.chat).not.toBe(recipe.id);
+});
+
+test('v21 repairs the contradictory untouched Story Archive recipe and exposes Living Lore', () => {
+    const legacyPolicy = 'You are the Loom reading an accepted Story manuscript passage after it has already been written. Goals, Variables, rolls, lore proposals, flow control, and swaps are disabled for this stage.';
+    const legacyContract = 'Output NOTHING except one state fence:\n```state\n{"requests":[],"loreProposals":[],"flow":{"continue":false}}\n```';
+    __setExtensionSettings({ remodel: { promptStudioV1: {
+        version: 20,
+        recipeIds: ['story-archive'],
+        recipes: {
+            'story-archive': {
+                id: 'story-archive', name: 'Loom · Story Archive', mode: 'loom', apiType: 'chat',
+                blocks: [
+                    { id: 'policy', kind: 'message', role: 'system', content: legacyPolicy, enabled: true },
+                    { id: 'draft', kind: 'message', role: 'user', content: '{{narrator.draft}}', enabled: true },
+                    { id: 'contract', kind: 'message', role: 'system', content: legacyContract, enabled: true },
+                ],
+            },
+        },
+        active: { loom: { chat: 'story-archive' } },
+    } } });
+
+    const store = initializePromptStudioStore();
+    const contents = store.recipes['story-archive'].blocks.map((block) => block.content);
+    expect(store.version).toBe(21);
+    expect(contents).toContain(STORY_ARCHIVE_POLICY);
+    expect(contents).toContain(STORY_ARCHIVE_CONTRACT);
+    expect(contents).toContain('{{loom.lore}}');
+    expect(contents).not.toContain(legacyPolicy);
 });
 
 test('v19 adds the editable selected-lore macro without changing authored Loom text', () => {
@@ -180,7 +209,7 @@ test('v19 adds the editable selected-lore macro without changing authored Loom t
 
     const store = initializePromptStudioStore();
     const contents = store.recipes.mine.blocks.map((block) => block.content);
-    expect(store.version).toBe(20);
+    expect(store.version).toBe(21);
     expect(contents).toContain('my authored policy');
     expect(contents).toContain('{{loom.lore}}');
     expect(contents.indexOf('{{loom.lore}}')).toBeLessThan(contents.indexOf('{{narrator.draft}}'));
