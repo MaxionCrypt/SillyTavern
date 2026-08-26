@@ -60,6 +60,17 @@ test('incrementally indexes enabled entries and reuses an unchanged collection',
     expect(getWorldSenseIndexState(TIMELINE).status).toBe('ready');
 });
 
+test('accepts SillyTavern plain-text vector mutation acknowledgements', async () => {
+    global.fetch = jest.fn(async (url) => {
+        if (url === '/api/vector/list') return response([]);
+        if (url === '/api/vector/insert') return response('OK');
+        throw new Error(`Unexpected URL ${url}`);
+    });
+
+    await expect(ensureWorldSenseIndex(TIMELINE)).resolves.toMatchObject({ ok: true, inserted: 1 });
+    expect(getWorldSenseIndexState(TIMELINE).status).toBe('ready');
+});
+
 test('fails open with an explicit unavailable state', async () => {
     global.fetch = jest.fn(async () => { throw new Error('model offline'); });
     const result = await queryWorldSense(TIMELINE, 'ships near the harbor');
@@ -217,5 +228,10 @@ test('one-turn pins and exclusions affect Preview but are consumed only by Send'
 });
 
 function response(body, status = 200) {
-    return { ok: status >= 200 && status < 300, status, async json() { return body; } };
+    return {
+        ok: status >= 200 && status < 300,
+        status,
+        async json() { return body; },
+        async text() { return typeof body === 'string' ? body : JSON.stringify(body); },
+    };
 }

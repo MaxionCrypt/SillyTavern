@@ -113,7 +113,17 @@ async function vectorRequest(path, input, model) {
     const response = await fetch(path, { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ ...input, source: 'transformers', model }) });
     if (!response.ok) throw new Error(`Local embedding request failed (${response.status}) at ${path}.`);
     if (response.status === 204) return null;
-    return response.json();
+    // SillyTavern's vector mutation endpoints intentionally acknowledge a
+    // successful insert/delete with plain `OK`, while list/query return JSON.
+    // Treating every successful response as JSON made a completed reindex look
+    // like an unavailable embedding model (Unexpected token 'O').
+    const body = await response.text();
+    if (!body.trim()) return null;
+    try {
+        return JSON.parse(body);
+    } catch {
+        return body;
+    }
 }
 
 function collectionName(timelineId, model) {

@@ -6450,12 +6450,15 @@ function renderRoleplayPromptChoice(scene = getActiveScene()) {
 }
 
 function renderStoryPromptChoice(scene = getActiveScene()) {
-    const story = getScenePromptChoice(scene, 'story');
-    const loom = getScenePromptChoice(scene, 'loom');
-    const inherited = story.inherited && loom.inherited;
+    const profiles = getStoryConnectionProfiles();
+    const coauthor = profiles.find((profile) => profile.id === scene?.generationProfileIds?.story);
+    const loomConnection = profiles.find((profile) => profile.id === scene?.generationProfileIds?.loom);
+    const story = { recipe: { name: coauthor?.name || 'Current connection' } };
+    const loom = { recipe: { name: loomConnection?.name || 'Current connection' } };
+    const inherited = !(coauthor || loomConnection);
     return `
-        <button type="button" class="remodel-scene-prompt-choice is-compact" data-remodel-scene-prompt-choice data-prompt-mode="story-pipeline" title="Choose the Story Narrator or Loom Archive recipe for this Scene">
-            <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+        <button type="button" class="remodel-scene-prompt-choice is-compact" data-remodel-scene-prompt-choice data-prompt-mode="story-connections" title="Choose the co-author and Loom connections for this Scene">
+            <i class="fa-solid fa-plug" aria-hidden="true"></i>
             <span class="remodel-scene-prompt-choice-copy">
                 <small>Story &amp; Loom · ${inherited ? 'defaults' : 'scene recipes'}</small>
                 <strong>${escapeHtml(story.recipe?.name || 'No Story recipe')} · ${escapeHtml(loom.recipe?.name || 'No Loom recipe')}</strong>
@@ -6484,15 +6487,48 @@ function openRoleplayPromptJobMenu(anchor) {
     ], (mode) => openScenePromptRecipeMenu(anchor, mode));
 }
 
-function openStoryPromptJobMenu(anchor) {
+function getStoryConnectionProfiles() {
+    const context = getContext();
+    return (context.extensionSettings?.connectionManager?.profiles || [])
+        .filter((profile) => {
+            const boundary = context.CONNECT_API_MAP?.[profile?.api]?.selected;
+            return profile?.id && profile?.name && boundary === 'openai';
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function openStoryConnectionMenu(anchor, role = null) {
     const scene = getActiveScene();
     if (!scene) return;
-    const story = getScenePromptChoice(scene, 'story');
-    const loom = getScenePromptChoice(scene, 'loom');
+    const profiles = getStoryConnectionProfiles();
+    if (!role) {
+        const coauthor = profiles.find((profile) => profile.id === scene.generationProfileIds?.story);
+        const loom = profiles.find((profile) => profile.id === scene.generationProfileIds?.loom);
+        openRoleplayMenu(anchor, [
+            { id: 'story', label: 'Co-author connection', sublabel: coauthor?.name || 'Current SillyTavern connection' },
+            { id: 'loom', label: 'Loom connection', sublabel: loom?.name || 'Current SillyTavern connection' },
+        ], (selectedRole) => openStoryConnectionMenu(anchor, selectedRole));
+        return;
+    }
     openRoleplayMenu(anchor, [
-        { id: 'story', label: 'Story Narrator recipe', sublabel: story.recipe?.name || 'No recipe selected' },
-        { id: 'loom', label: 'Loom Archive recipe', sublabel: loom.recipe?.name || 'No recipe selected' },
-    ], (mode) => openScenePromptRecipeMenu(anchor, mode));
+        { id: '', label: 'Use current SillyTavern connection', sublabel: 'No Scene-specific connection' },
+        ...profiles.map((profile) => ({
+            id: profile.id,
+            label: profile.name,
+            sublabel: [profile.api, profile.model].filter(Boolean).join(' / ') || 'Chat Completion',
+            active: scene.generationProfileIds?.[role] === profile.id,
+        })),
+    ], (profileId) => {
+        const activeScene = getActiveScene();
+        if (!activeScene) return;
+        updateScene(activeScene.id, {
+            generationProfileIds: {
+                ...(activeScene.generationProfileIds || {}),
+                [role]: profileId || null,
+            },
+        });
+        renderStoryEditor();
+    });
 }
 
 function openScenePromptRecipeMenu(anchor, requestedModeOverride = null) {
@@ -6504,7 +6540,11 @@ function openScenePromptRecipeMenu(anchor, requestedModeOverride = null) {
         return;
     }
     if (requestedMode === 'story-pipeline') {
-        openStoryPromptJobMenu(anchor);
+        openStoryConnectionMenu(anchor);
+        return;
+    }
+    if (requestedMode === 'story-connections') {
+        openStoryConnectionMenu(anchor);
         return;
     }
     const { mode, apiType, recipe: current, inherited } = getScenePromptChoice(scene, requestedMode);
@@ -6676,7 +6716,11 @@ function renderStoryEditor(force = false) {
     const title = editor.querySelector('[data-remodel-storydoc-title]');
     if (title && document.activeElement !== title) title.value = doc.title || 'Untitled Story';
     const promptChoice = editor.querySelector('[data-remodel-storydoc-prompt-choice]');
-    if (promptChoice) promptChoice.innerHTML = renderStoryPromptChoice(getActiveScene());
+    if (promptChoice) {
+        promptChoice.innerHTML = renderStoryPromptChoice(getActiveScene());
+        const label = promptChoice.querySelector('.remodel-scene-prompt-choice-copy small');
+        if (label) label.textContent = 'Co-author & Loom · connections';
+    }
     const character = (getContext().characters || [])[Number(doc.boundCharacterId)];
     const characterName = editor.querySelector('[data-remodel-storydoc-character]');
     if (characterName) characterName.textContent = character?.name || 'Unbound character';
@@ -8653,12 +8697,14 @@ async function generateStory({ mode = 'continue', beat = '', beatId = null } = {
         storyStreamAbort = new AbortController();
         const live = openStoryStreamPreview(beatId);
         let prose = '';
+        const coauthorProfileId = getActiveScene()?.generationProfileIds?.story || null;
         try {
             ({ text: prose } = await generateProse({
                 prompt,
                 responseLength: storyResponseLength(),
                 instructOverride: false,
                 signal: storyStreamAbort.signal,
+                profileId: coauthorProfileId,
                 onStream: ({ text, reasoning }) => updateStoryStreamPreview(live, text, reasoning),
             }));
         } finally {

@@ -365,7 +365,7 @@ async function act(root, state, busy, task, success) {
     await refresh(root, state);
     try {
         const result = await task();
-        if (result?.ok === false) throw new Error(result.code || result.error || 'The operation could not be completed.');
+        if (result?.ok === false) throw new Error(result.code || result.error || result.state?.error || 'The operation could not be completed.');
         state.message = success;
     } catch (error) {
         state.message = String(error?.message || error);

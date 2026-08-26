@@ -33,7 +33,7 @@ export class StoryGenerationError extends Error {
  * @param {object[]|string} prompt compiled messages, or a plain string
  * @returns {Promise<{ text: string, raw: any, source: string }>}
  */
-export async function generateProse({ prompt, responseLength = null, instructOverride = false, systemPrompt = '', onStream = null, signal = null } = {}) {
+export async function generateProse({ prompt, responseLength = null, instructOverride = false, systemPrompt = '', onStream = null, signal = null, profileId = null } = {}) {
     // Stage 1 — never let an empty prompt reach the API layer, where it
     // surfaces as a connection error and sends you hunting the wrong bug.
     // A system prompt alone is enough to have something to send.
@@ -47,9 +47,12 @@ export async function generateProse({ prompt, responseLength = null, instructOve
     // Stage 2 — stream when the caller wants live text and the connection can
     // actually do it. Everything else falls through to the one-shot path below,
     // unchanged, so Text Completion and non-streaming providers are untouched.
-    if (typeof onStream === 'function' && canStreamStory() && !systemPrompt) {
+    // A Scene-owned co-author profile is an explicit request to use its Chat
+    // Completion route, rather than silently falling back to Tavern's active
+    // connection.
+    if (typeof onStream === 'function' && (profileId || canStreamStory()) && !systemPrompt) {
         try {
-            const streamed = await streamChatPrompt({ prompt, onChunk: onStream, signal });
+            const streamed = await streamChatPrompt({ prompt, onChunk: onStream, signal, profileId });
             if (streamed.text) {
                 return { text: streamed.text, raw: null, source: streamed.streamed ? 'stream' : 'stream-fallback', reasoning: streamed.reasoning };
             }
