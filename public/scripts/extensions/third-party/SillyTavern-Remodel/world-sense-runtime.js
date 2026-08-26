@@ -232,6 +232,7 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
     return {
         phase,
         sceneId: String(scene.id),
+        sceneMode: String(scene.mode || 'roleplay'),
         timelineId: String(scene.timelineId),
         book: lore.book,
         bookHash: lore.hash,
@@ -274,6 +275,7 @@ function saveReceipt(scene, result, { reusedPrefetch }) {
         id: `world-sense-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         at: new Date().toISOString(),
         sceneId: String(scene.id),
+        sceneMode: String(scene.mode || 'roleplay'),
         timelineId: String(scene.timelineId),
         book: result.book,
         bookHash: result.bookHash,

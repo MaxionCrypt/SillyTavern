@@ -31,7 +31,7 @@ export function buildTimelineContinuityDocuments(timelineId) {
         if (!arc) continue;
         for (const sceneId of arc.sceneIds || []) {
             const scene = store.scenes[sceneId];
-            if (!scene || scene.mode !== 'roleplay') continue;
+            if (!isContinuityScene(scene)) continue;
             const archive = archiveByScene.get(String(scene.id));
             if (archive) records.push(...recordsForScene(archive, scene, arc, { arcIndex, orderIndex }));
             orderIndex += 1;
@@ -96,7 +96,7 @@ export function scoreTimelineContinuityCandidates({
 
 function recordsForScene(archive, scene, arc, position) {
     const common = {
-        sceneId: String(scene.id), sceneTitle: String(scene.title || 'Untitled Scene'), arcId: String(arc.id),
+        sceneId: String(scene.id), sceneTitle: String(scene.title || 'Untitled Scene'), sceneMode: String(scene.mode || 'roleplay'), arcId: String(arc.id),
         arcTitle: String(arc.title || 'Untitled Arc'), ...position,
     };
     const events = (archive.events || []).filter((item) => String(item.summary || '').trim()).map((item) => record(common, 'event', item.id, item.summary));
@@ -126,7 +126,7 @@ function sceneOrder(timelineId, sceneId) {
     for (const arcId of timeline?.arcIds || []) {
         for (const id of store.arcs[arcId]?.sceneIds || []) {
             const scene = store.scenes[id];
-            if (!scene || scene.mode !== 'roleplay') continue;
+            if (!isContinuityScene(scene)) continue;
             if (String(id) === String(sceneId)) return order;
             order += 1;
         }
@@ -136,6 +136,7 @@ function sceneOrder(timelineId, sceneId) {
 
 function archiveKey(value) { return `archive:${value.sceneId}:${value.recordType}:${value.recordId}`; }
 function pinKey(value) { return `${value.sourceSceneId}:${value.recordType}:${value.recordId}`; }
+function isContinuityScene(scene) { return scene?.mode === 'roleplay' || scene?.mode === 'story'; }
 function add(candidate, points, channel, detail = {}) { candidate.score += points; candidate.reasons.push({ channel, points, ...detail }); }
 function tokenize(value) { return new Set(String(value || '').toLocaleLowerCase().replace(/[^\p{L}\p{N}'-]+/gu, ' ').split(/\s+/).filter((word) => word.length >= 3 && !STOP_WORDS.has(word))); }
 function hash32(value) {

@@ -60,6 +60,12 @@ import {
     resolveStoryWorldInfo,
 } from './story-world-info.js';
 import {
+    buildStoryWorldSenseOptions,
+    formatStoryWorldSenseContinuity,
+    storyWorldSenseLoreSelection,
+} from './story-world-sense.js';
+import { previewWorldSense, resolveWorldSense } from './world-sense-runtime.js';
+import {
     applyPromptStudioRuntimeRecipe,
     capturePromptStudioRuntimeSettings,
     compilePromptRecipe,
@@ -8319,6 +8325,26 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
     try {
         const chid = doc?.boundCharacterId == null ? null : Number(doc.boundCharacterId);
         const character = Number.isInteger(chid) ? ctx.characters?.[chid] : null;
+        const scene = getActiveScene();
+        let worldSense = null;
+        let worldSenseError = '';
+        if (scene?.mode === 'story') {
+            try {
+                worldSense = await (dryRun ? previewWorldSense : resolveWorldSense)(scene, buildStoryWorldSenseOptions({
+                    doc,
+                    mode,
+                    beat,
+                    cast: character ? [{
+                        label: character.name || '',
+                        description: character.description || '',
+                        personality: character.personality || '',
+                        scenario: character.scenario || '',
+                    }] : [],
+                }));
+            } catch (error) {
+                worldSenseError = `Story World Sense failed open: ${String(error?.message || error)}`;
+            }
+        }
         const wi = await resolveStoryWorldInfo({
             doc,
             mode,
@@ -8328,6 +8354,7 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
             // The Timeline this Scene belongs to may bind a lorebook of its own,
             // shared by every Scene under it.
             timelineLorebook: getActiveTimelineLorebook(),
+            forcedEntries: storyWorldSenseLoreSelection(worldSense).selected,
         });
         const macroOptions = wi.macroOptions;
         const resolve = (value) => ctx.substituteParams?.(String(value || ''), macroOptions) || String(value || '');
@@ -8350,7 +8377,8 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
             guidance,
         ].filter(Boolean).join('\n\n');
         const depthText = (wi.worldInfoDepth?.messages || []).map((message) => `[${message.role} · depth ${message.depth}]\n${message.content}`).join('\n');
-        const contextBlock = [wi.worldInfoBefore, wi.worldInfoAfter, wi.worldInfoExamples, depthText].filter(Boolean).join('\n\n');
+        const continuityRecall = formatStoryWorldSenseContinuity(worldSense);
+        const contextBlock = [continuityRecall, wi.worldInfoBefore, wi.worldInfoAfter, wi.worldInfoExamples, depthText].filter(Boolean).join('\n\n');
         return {
             systemPrompt,
             contextBlock,
@@ -8363,7 +8391,7 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
             authorGuidance: guidance,
             outlets: wi.outlets || {},
             activatedEntries: wi.activatedEntries || [],
-            diagnostics: wi.diagnostics || [],
+            diagnostics: [...(wi.diagnostics || []), ...(worldSenseError ? [worldSenseError] : [])],
             // False here: everything below is the resolver's own accounting of
             // what it did (an unbound character, a budget cut, a missing
             // lorebook) — information about how resolution went, not a sign the
@@ -8376,6 +8404,8 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
             budget: wi.budget || null,
             pendingState: wi.pendingState,
             macroOptions: wi.macroOptions || macroOptions,
+            worldSense,
+            continuityRecall,
         };
     } catch (err) {
         console.warn('Remodel Story: isolated context seam failed — generating without WI/card context.', err);
@@ -8405,6 +8435,8 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
             budget: null,
             pendingState: doc?.worldInfoState,
             macroOptions,
+            worldSense: null,
+            continuityRecall: '',
         };
     }
 }
@@ -8423,7 +8455,10 @@ function buildStoryPromptSources(doc, assembled, { mode = 'continue', beat = '' 
         worldInfoExamples: assembled?.worldInfoExamples || '',
         worldInfoDepth: assembled?.worldInfoDepth || { messages: [] },
         authorGuidance: assembled?.authorGuidance || '',
-        priorText: doc?.priorText ? `=== PRIOR SCENE TEXT ===\n${doc.priorText}` : '',
+        priorText: [
+            assembled?.continuityRecall || '',
+            doc?.priorText ? `=== PRIOR SCENE TEXT ===\n${doc.priorText}` : '',
+        ].filter(Boolean).join('\n\n'),
         manuscript,
         sceneBeat: direction,
     };

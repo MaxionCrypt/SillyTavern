@@ -75,6 +75,7 @@ export async function resolveStoryWorldInfo({
     maxContext = getStoryWorldInfoMaxContext(),
     dryRun = true,
     timelineLorebook = null,
+    forcedEntries = [],
 } = {}) {
     const context = getContext();
     const diagnostics = [];
@@ -104,6 +105,9 @@ export async function resolveStoryWorldInfo({
     if (!character) diagnostics.push('The Story document has no valid bound character; character-linked lorebooks and filters were skipped.');
 
     const { entries, books } = await loadStoryEntries({ doc, character, characterId, diagnostics, timelineLorebook });
+    const forcedKeys = new Set((Array.isArray(forcedEntries) ? forcedEntries : [])
+        .map((entry) => `${String(entry?.book ?? entry?.world ?? '').trim()}.${String(entry?.uid ?? '').trim()}`)
+        .filter((key) => key !== '.'));
     const corpus = buildScanCorpus(doc, beat);
     const globalScanData = buildGlobalScanData({ doc, character, macroOptions });
     const trigger = mode === 'regenerate' ? 'regenerate' : mode === 'continue' ? 'continue' : 'normal';
@@ -132,6 +136,14 @@ export async function resolveStoryWorldInfo({
             if (recursion && entry.excludeRecursion) continue;
             if (!recursion && entry.delayUntilRecursion) continue;
             if (recursion && Number(entry.delayUntilRecursion) > pass - 1) continue;
+
+            // Mirrors native WORLDINFO_FORCE_ACTIVATE: World Sense bypasses
+            // keyword matching, but ordinary enabled/trigger/character/timed
+            // policy and the native inclusion-group pass still apply.
+            if (forcedKeys.has(key) && !entry.decorators?.includes('@@dont_activate')) {
+                candidates.push({ entry, score: Number.MAX_SAFE_INTEGER });
+                continue;
+            }
 
             const sticky = isEffectActive(state.sticky, entry, state.generationIndex);
             const match = matchEntry(entry, {
@@ -196,6 +208,8 @@ export async function resolveStoryWorldInfo({
 
     const result = placeEntries(budgeted);
     const pendingState = applyTimedEffects(state, budgeted);
+    const forcedActivated = budgeted.filter((entry) => forcedKeys.has(entryKey(entry))).length;
+    if (forcedActivated) notes.push(`World Sense force-activated ${forcedActivated} Timeline lore entr${forcedActivated === 1 ? 'y' : 'ies'} for this Story request.`);
     if (entries.some((entry) => Number(entry.delay) > 0 || Number(entry.sticky) > 0 || Number(entry.cooldown) > 0)) {
         notes.push(`Timed lore rules are evaluated against Story generation ${state.generationIndex + 1}; ${dryRun ? 'preview did not advance the counter' : 'state will advance only after prose is inserted'}.`);
     }

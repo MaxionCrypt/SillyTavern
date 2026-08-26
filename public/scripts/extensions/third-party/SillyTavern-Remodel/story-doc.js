@@ -10,7 +10,7 @@ import { buildStoryArchiveCatchUpPreview, hashStoryArchiveText, rebaseStoryArchi
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'storyDocsV1';
-const STORE_VERSION = 4;
+const STORE_VERSION = 5;
 const STORY_ARCHIVE_CAPTURE_STATUSES = Object.freeze(['pending', 'processing', 'applied', 'failed', 'superseded']);
 
 function getStore() {
@@ -210,6 +210,12 @@ export function createStoryArchiveCapture(docId, input = {}) {
         status: 'pending',
         attempts: 0,
         transactionId: null,
+        worldSenseReceiptId: null,
+        livingLorePacket: null,
+        loreProposals: [],
+        loreProposalRejections: [],
+        loreProposalIds: [],
+        archiveFacts: [],
         error: '',
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -267,6 +273,12 @@ export function updateStoryArchiveCapture(docId, captureId, patch = {}) {
     if (STORY_ARCHIVE_CAPTURE_STATUSES.includes(patch.status)) capture.status = patch.status;
     if (Number.isFinite(Number(patch.attempts))) capture.attempts = Math.max(0, Math.floor(Number(patch.attempts)));
     if ('transactionId' in patch) capture.transactionId = patch.transactionId == null ? null : String(patch.transactionId);
+    if ('worldSenseReceiptId' in patch) capture.worldSenseReceiptId = patch.worldSenseReceiptId == null ? null : String(patch.worldSenseReceiptId);
+    if ('livingLorePacket' in patch) capture.livingLorePacket = patch.livingLorePacket && typeof patch.livingLorePacket === 'object' ? structuredClone(patch.livingLorePacket) : null;
+    if (Array.isArray(patch.loreProposals)) capture.loreProposals = structuredClone(patch.loreProposals);
+    if (Array.isArray(patch.loreProposalRejections)) capture.loreProposalRejections = structuredClone(patch.loreProposalRejections);
+    if (Array.isArray(patch.loreProposalIds)) capture.loreProposalIds = patch.loreProposalIds.map(String);
+    if (Array.isArray(patch.archiveFacts)) capture.archiveFacts = patch.archiveFacts.map(String).filter(Boolean);
     if (typeof patch.error === 'string') capture.error = patch.error;
     if ('appliedAt' in patch) capture.appliedAt = patch.appliedAt || null;
     if ('supersededAt' in patch) capture.supersededAt = patch.supersededAt || null;
@@ -449,6 +461,12 @@ function normalizeArchiveCapture(value) {
         status,
         attempts: Math.max(0, Math.floor(Number(value.attempts) || 0)),
         transactionId: value.transactionId == null ? null : String(value.transactionId),
+        worldSenseReceiptId: value.worldSenseReceiptId == null ? null : String(value.worldSenseReceiptId),
+        livingLorePacket: value.livingLorePacket && typeof value.livingLorePacket === 'object' ? structuredClone(value.livingLorePacket) : null,
+        loreProposals: Array.isArray(value.loreProposals) ? structuredClone(value.loreProposals) : [],
+        loreProposalRejections: Array.isArray(value.loreProposalRejections) ? structuredClone(value.loreProposalRejections) : [],
+        loreProposalIds: Array.isArray(value.loreProposalIds) ? value.loreProposalIds.map(String) : [],
+        archiveFacts: Array.isArray(value.archiveFacts) ? value.archiveFacts.map(String).filter(Boolean) : [],
         error: String(value.error || ''),
         createdAt: value.createdAt || now(),
         updatedAt: value.updatedAt || value.createdAt || now(),

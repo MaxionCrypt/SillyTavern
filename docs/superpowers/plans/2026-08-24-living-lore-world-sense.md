@@ -1,7 +1,7 @@
 # Living Lore and World Sense
 
-**Status:** Implemented through Commit 12 on `feature/living-lore-world-sense`;
-Commits 13-16 below define the approved Story Scene bridge.
+**Status:** Implemented through Commit 15 on `feature/living-lore-world-sense`;
+Commits 15.5-16 below define the remaining Story Timeline Web consequences and mixed-mode hardening.
 
 ## 1. Product promise
 

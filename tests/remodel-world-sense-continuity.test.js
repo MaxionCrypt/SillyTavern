@@ -111,3 +111,36 @@ test('a consumer may exclude one prior scene without disabling timeline recall',
 
     expect(candidates.map((candidate) => candidate.record.sceneId)).toEqual(['scene-2']);
 });
+
+test('Story and Roleplay Archive evidence share one ordered Timeline index', () => {
+    const settings = __setExtensionSettings({ remodel: {
+        timelineV1: {
+            version: 1,
+            timelineIds: [TIMELINE],
+            activeTimelineId: TIMELINE,
+            timelines: { [TIMELINE]: { id: TIMELINE, title: 'Route', arcIds: ['arc-1'], activeSceneId: 'scene-rp-2' } },
+            arcs: { 'arc-1': { id: 'arc-1', timelineId: TIMELINE, title: 'Mixed', sceneIds: ['scene-rp-1', 'scene-story', 'scene-rp-2'] } },
+            scenes: {
+                'scene-rp-1': { id: 'scene-rp-1', timelineId: TIMELINE, arcId: 'arc-1', title: 'Roleplay Discovery', mode: 'roleplay' },
+                'scene-story': { id: 'scene-story', timelineId: TIMELINE, arcId: 'arc-1', title: 'Story Decision', mode: 'story' },
+                'scene-rp-2': { id: 'scene-rp-2', timelineId: TIMELINE, arcId: 'arc-1', title: 'Roleplay Consequence', mode: 'roleplay' },
+            },
+        },
+    } });
+    expect(settings).toBeTruthy();
+    recordEvent(TIMELINE, 'scene-rp-1', 'Mara found the western gate mechanism.');
+    recordEvent(TIMELINE, 'scene-story', 'Mara sealed the western gate in the manuscript.');
+
+    const source = buildTimelineContinuityDocuments(TIMELINE);
+    expect(source.records.map((record) => [record.sceneId, record.sceneMode])).toEqual([
+        ['scene-rp-1', 'roleplay'],
+        ['scene-story', 'story'],
+    ]);
+    const candidates = scoreTimelineContinuityCandidates({
+        timelineId: TIMELINE,
+        sceneId: 'scene-rp-2',
+        packet: buildWorldSenseQueryPacket({ action: 'What happened at the western gate?' }),
+        records: source.records,
+    });
+    expect(candidates.map((candidate) => candidate.record.sceneId)).toEqual(['scene-rp-1', 'scene-story']);
+});

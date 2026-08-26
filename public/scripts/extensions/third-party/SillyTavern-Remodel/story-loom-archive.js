@@ -7,6 +7,8 @@ import {
     recordSentPromptTranscript,
 } from './prompt-studio.js';
 import { describeLoomReply, parseLoomReply } from './loom-reconciliation.js';
+import { formatLivingLorePacket } from './living-lore-proposals.js';
+import { invalidateLivingLoreProposals, queueLivingLoreProposals } from './living-lore-mutations.js';
 import { streamChatPrompt } from './story-stream.js';
 import {
     createStoryArchiveCapture,
@@ -22,6 +24,8 @@ import { listMechanicsTransactions } from './variables-store.js';
 import { recordApiTranscript, recordDebugEvent } from './debug-console.js';
 import { STORY_ARCHIVE_CONTRACT, STORY_ARCHIVE_POLICY } from './story-loom-contract.js';
 import { splitStoryArchiveAddition, STORY_ARCHIVE_PASSAGE_MAX_CHARS } from './story-archive-provenance.js';
+import { buildStoryWorldSenseOptions, formatStoryWorldSenseContinuity } from './story-world-sense.js';
+import { resolveWorldSense } from './world-sense-runtime.js';
 
 export const STORY_ARCHIVE_CAPABILITIES = Object.freeze([
     'scene.set', 'scene.clear', 'event.record',
@@ -47,13 +51,15 @@ export function describeStoryArchiveCaptureState(docId) {
     return { status: 'idle', label: 'Saved' };
 }
 
-export function buildStoryArchivePrompt({ passage, archiveState, recipe = getStoryArchivePromptStudioRecipe() } = {}) {
+export function buildStoryArchivePrompt({ passage, archiveState, worldSense = null, recipe = getStoryArchivePromptStudioRecipe() } = {}) {
+    const continuity = formatStoryWorldSenseContinuity(worldSense);
+    const currentArchive = String(archiveState || '').trim()
+        ? `Current Timeline Loom Archive for this Scene:\n${String(archiveState).trim()}`
+        : 'Current Timeline Loom Archive for this Scene: empty.';
     const sources = {
-        archiveState: String(archiveState || '').trim()
-            ? `Current Timeline Loom Archive for this Scene:\n${String(archiveState).trim()}`
-            : 'Current Timeline Loom Archive for this Scene: empty.',
+        archiveState: [currentArchive, continuity].filter(Boolean).join('\n\n'),
         mechanicsBoard: buildArchiveCapabilityGuide(),
-        livingLore: '',
+        livingLore: formatLivingLorePacket(worldSense?.loomPacket),
         narratorDraft: `Accepted Story manuscript passage (evidence only; never reproduce it):\n${String(passage || '').trim()}`,
         narratorReasoning: '',
     };
@@ -61,6 +67,7 @@ export function buildStoryArchivePrompt({ passage, archiveState, recipe = getSto
     ensurePromptContent(messages, STORY_ARCHIVE_POLICY, 'system', { prepend: true });
     ensurePromptContent(messages, sources.archiveState, 'system');
     ensurePromptContent(messages, sources.mechanicsBoard, 'system');
+    ensurePromptContent(messages, sources.livingLore, 'system');
     ensurePromptContent(messages, sources.narratorDraft, 'user');
     ensurePromptContent(messages, STORY_ARCHIVE_CONTRACT, 'system');
     return messages;
@@ -109,6 +116,7 @@ export function captureStoryArchiveCatchUp({ scene, docId, previewToken, onState
         }
         if (change.supersedesCaptureIds.length && partCaptures.length) {
             supersedeStoryArchiveCaptures(docId, change.supersedesCaptureIds, partCaptures[0].id);
+            invalidateStoryCaptureLore(scene.timelineId, change.supersedesCaptureIds, 'story-source-edited');
         }
     }
     const queuedIds = new Set(captures.map((capture) => capture.id));
@@ -139,6 +147,7 @@ export async function waitForStoryArchive(sceneId) {
 export async function supersedeStoryBeatArchive({ scene, docId, beatId, onStateChange = null } = {}) {
     if (!scene?.id || !docId || !beatId) return [];
     const captures = supersedeStoryArchiveCapturesForBeat(docId, beatId);
+    invalidateStoryCaptureLore(scene.timelineId, captures.map((capture) => capture.id), 'story-generation-superseded');
     for (const capture of captures) {
         if (!capture.transactionId) continue;
         const transaction = listMechanicsTransactions({ timelineId: scene.timelineId, sceneId: scene.id })
@@ -157,7 +166,15 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
     const recovered = listMechanicsTransactions({ timelineId: scene.timelineId, sceneId: scene.id })
         .find((transaction) => transaction.checkpointId === capture.id && transaction.status === 'applied');
     if (recovered) {
-        return updateCapture(docId, capture.id, { status: 'applied', transactionId: recovered.id, error: '', appliedAt: new Date().toISOString() }, onStateChange);
+        const lore = await queueStoryCaptureLore({ scene, docId, capture, packet: capture.livingLorePacket });
+        return updateCapture(docId, capture.id, {
+            status: 'applied',
+            transactionId: recovered.id,
+            loreProposalIds: lore.queued.map((item) => item.id),
+            loreProposalRejections: [...(capture.loreProposalRejections || []), ...(lore.rejected || [])],
+            error: '',
+            appliedAt: new Date().toISOString(),
+        }, onStateChange);
     }
 
     await undoSupersededBeatCaptures(docId, capture);
@@ -167,12 +184,25 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
         error: '',
     }, onStateChange);
 
+    const doc = getStoryDoc(docId);
+    const passage = formatStoryCaptureEvidence(capture);
+    let worldSense = null;
+    try {
+        worldSense = await resolveWorldSense(scene, buildStoryWorldSenseOptions({ doc, passage }));
+    } catch (error) {
+        recordDebugEvent('world-sense', 'story.retrieval.failed-open', {
+            timelineId: scene.timelineId,
+            sceneId: scene.id,
+            captureId: capture.id,
+            error: String(error?.message || error),
+        }, { correlationId: `story-archive:${capture.id}`, severity: 'warn', summary: 'Story World Sense failed open; Archive capture continued' });
+    }
     const archiveState = buildNarratorArchivistSections(scene.timelineId, scene.id);
     const selectedRecipe = getPromptStudioRecipe(scene.promptRecipeIds?.loom);
     const recipe = selectedRecipe?.mode === 'loom' && selectedRecipe?.apiType === 'chat'
         ? selectedRecipe
         : getStoryArchivePromptStudioRecipe();
-    const prompt = buildStoryArchivePrompt({ passage: formatStoryCaptureEvidence(capture), archiveState, recipe });
+    const prompt = buildStoryArchivePrompt({ passage, archiveState, worldSense, recipe });
     const correlationId = `story-archive:${capture.id}`;
     recordSentPromptTranscript('loom', {
         recipeName: `${recipe?.name || 'Loom'} Â· Story Archive`,
@@ -197,15 +227,23 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
         }, { type: 'api.response.loom', correlationId, summary: 'Story Archive Loom response received' });
 
         const replyShape = describeLoomReply(raw);
-        const parsed = parseLoomReply(raw);
+        const parsed = parseLoomReply(raw, { livingLorePacket: worldSense?.loomPacket || null });
         const requests = parsed.requests.filter((request) => STORY_ARCHIVE_CAPABILITY_SET.has(request?.capability));
+        const archiveFacts = storyArchiveEvidence(requests);
         if (!replyShape.fenceParsed) {
             throw new Error('The Story Loom returned no readable state fence for this accepted passage.');
         }
         if (parsed.requests.length && !requests.length) {
             throw new Error('The Story Loom returned only operations disabled for Story Archive capture.');
         }
-        if (!requests.length) {
+        capture = updateCapture(docId, capture.id, {
+            worldSenseReceiptId: worldSense?.receipt?.id || null,
+            livingLorePacket: worldSense?.loomPacket || null,
+            loreProposals: parsed.loreProposals,
+            loreProposalRejections: parsed.loreProposalRejections,
+            archiveFacts,
+        }, onStateChange);
+        if (!requests.length && !parsed.loreProposals.length) {
             const applied = updateCapture(docId, capture.id, {
                 status: 'applied',
                 transactionId: null,
@@ -218,27 +256,36 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
             });
             return applied;
         }
-        const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests }, {
-            timelineId: scene.timelineId,
-            sceneId: scene.id,
-            turnId: capture.generationId || capture.id,
-            directionId: correlationId,
-            checkpointId: capture.id,
-            variableRefs: new Map(),
-            goalRefs: new Map(),
-        });
-        if (!result.ok) throw new Error((result.errors || []).join(' ') || 'The Archive transaction was rejected.');
+        let transactionId = null;
+        if (requests.length) {
+            const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests }, {
+                timelineId: scene.timelineId,
+                sceneId: scene.id,
+                turnId: capture.generationId || capture.id,
+                directionId: correlationId,
+                checkpointId: capture.id,
+                variableRefs: new Map(),
+                goalRefs: new Map(),
+            });
+            if (!result.ok) throw new Error((result.errors || []).join(' ') || 'The Archive transaction was rejected.');
+            transactionId = result.transaction?.id || null;
+        }
+        const lore = await queueStoryCaptureLore({ scene, docId, capture, packet: worldSense?.loomPacket || null });
         const applied = updateCapture(docId, capture.id, {
             status: 'applied',
-            transactionId: result.transaction?.id || null,
+            transactionId,
+            loreProposalIds: lore.queued.map((item) => item.id),
+            loreProposalRejections: [...(parsed.loreProposalRejections || []), ...(lore.rejected || [])],
             error: '',
             appliedAt: new Date().toISOString(),
         }, onStateChange);
         recordDebugEvent('story-archive', 'capture.applied', {
             ...captureReceipt(scene, docId, applied),
             requestCount: requests.length,
-            transactionId: result.transaction?.id || null,
-        }, { correlationId, summary: `Story passage added ${requests.length} operation(s) to the shared Loom Archive` });
+            transactionId,
+            loreProposalCount: lore.queued.length,
+            loreProposalRejectedCount: applied.loreProposalRejections.length,
+        }, { correlationId, summary: `Story passage added ${requests.length} Archive operation(s) and ${lore.queued.length} Living Lore proposal(s)` });
         return applied;
     } catch (error) {
         const failed = updateCapture(docId, capture.id, {
@@ -251,6 +298,62 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
         }, { correlationId, severity: 'warn', summary: 'Story passage could not update the Loom Archive' });
         return failed;
     }
+}
+
+async function queueStoryCaptureLore({ scene, docId, capture, packet }) {
+    const proposals = Array.isArray(capture?.loreProposals) ? capture.loreProposals : [];
+    if (!packet?.book || !proposals.length) return { ok: true, queued: [], rejected: [] };
+    const result = await queueLivingLoreProposals({
+        timelineId: scene.timelineId,
+        packet,
+        proposals,
+        acceptedProse: formatStoryCaptureEvidence(capture),
+        archiveFacts: capture.archiveFacts || [],
+        source: {
+            mode: 'story',
+            directionId: `story-archive:${capture.id}`,
+            sceneId: String(scene.id),
+            docId: String(docId),
+            captureId: capture.id,
+            bodyRevision: capture.bodyRevision,
+            sourceSpan: { start: capture.start, end: capture.end },
+            contentHash: capture.contentHash,
+            origin: capture.origin,
+        },
+    });
+    recordDebugEvent('story-archive', 'capture.lore-proposals', {
+        ...captureReceipt(scene, docId, capture),
+        proposed: proposals.length,
+        queued: result.queued?.length || 0,
+        rejected: result.rejected?.length || 0,
+    }, {
+        correlationId: `story-archive:${capture.id}`,
+        severity: result.rejected?.length ? 'warn' : 'info',
+        summary: `Story evidence queued ${result.queued?.length || 0}/${proposals.length} Living Lore proposal(s)`,
+    });
+    return { ok: result.ok, queued: result.queued || [], rejected: result.rejected || [] };
+}
+
+function invalidateStoryCaptureLore(timelineId, captureIds, reason) {
+    const ids = (captureIds || []).map((id) => `story-archive:${String(id || '')}`).filter((id) => !id.endsWith(':'));
+    if (ids.length) invalidateLivingLoreProposals({ timelineId, directionIds: ids, reason });
+}
+
+function storyArchiveEvidence(requests) {
+    const values = [];
+    for (const request of requests || []) {
+        const args = request?.arguments || {};
+        switch (request?.capability) {
+            case 'event.record': values.push(args.summary); break;
+            case 'scene.set': values.push(`${args.key}: ${args.value}`); break;
+            case 'scene.clear': values.push(`${args.key}: cleared`); break;
+            case 'char_state.set': values.push(`${args.charId} ${args.facet}: ${args.value}`); break;
+            case 'char_state.clear': values.push(`${args.charId} ${args.facet}: cleared`); break;
+            case 'beat.set': values.push(args.directive); break;
+            default: break;
+        }
+    }
+    return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
 }
 
 function createManualCatchUpCapture(docId, preview, change) {

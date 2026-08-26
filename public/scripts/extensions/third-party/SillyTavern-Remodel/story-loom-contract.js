@@ -6,11 +6,13 @@ Read the accepted passage as canonical evidence. Record distinct new events, cha
 
 When the evidence is an author-approved edit or deletion, BEFORE is the superseded wording and AFTER is canonical now. Correct or clear mutable Archive state that the change invalidates. Keep past event records as audit history; do not pretend an earlier accepted event never occurred.
 
-The manuscript is immutable during this pass. Do not rewrite it, continue it, critique it, or return prose. Use only the advertised Archive operations. Goals, Variables, rolls, lore proposals, flow control, and swaps are disabled for this stage.`;
+The manuscript is immutable during this pass. Do not rewrite it, continue it, critique it, or return prose. Use only the advertised Archive operations. Goals, Variables, rolls, flow control, and swaps are disabled for this stage.
+
+When a Selected Living Lore packet is present, you may also return precise typed loreProposals supported by the accepted passage. Propose only durable canon or a useful open thread; never copy the passage wholesale, mutate protected premise, or target lore outside the advertised packet.`;
 
 export const STORY_ARCHIVE_CONTRACT = `Output NOTHING except one state fence:
 \`\`\`state
-{"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"the exact accepted passage establishes it"}],"loreProposals":[],"flow":{"continue":false}}
+{"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"the exact accepted passage establishes it"}],"loreProposals":[{"id":"l1","operation":"fact.append","target":{"book":"the advertised book","uid":"the advertised uid","revision":1},"entryType":"entity","section":"Established","value":"one durable fact","evidence":"exact text from the accepted passage","confidence":0.95,"reason":"why this belongs in durable lore"}],"flow":{"continue":false}}
 \`\`\`
 
-Every request must use one advertised Archive capability. Return an empty requests array only when the passage truly adds nothing not already present in the Current Archive.`;
+Every request must use one advertised Archive capability. Return an empty requests array only when the passage truly adds nothing not already present in the Current Archive. Return an empty loreProposals array when no selected lore warrants a precise evidence-backed change.`;
