@@ -218,7 +218,11 @@ export function createScene(arcId, mode = 'roleplay', title = 'New Scene') {
         // roleplay turn. The Narrator still runs through native generation;
         // the Loom is a separate, profile-scoped hidden request. Null means
         // inherit the currently selected SillyTavern connection.
-        generationProfileIds: { narrator: null, loom: null },
+        generationProfileIds: { narrator: null, story: null, loom: null },
+        // Story prose may be captured after each generated passage, or held
+        // until the author explicitly reviews it through Archive Catch Up.
+        // Automatic remains the migration-safe default for existing Scenes.
+        storyArchiveMode: 'auto',
         // How the Scene is staged — who speaks, and in what order.
         //   'free'     : today's behaviour. The group's own activation strategy
         //                decides; no pipeline, no injections.
@@ -391,6 +395,7 @@ function normalizeStore(store) {
         scene.storyDocId ??= null;
         scene.promptRecipeIds = normalizePromptRecipeIds(scene.promptRecipeIds);
         scene.generationProfileIds = normalizeGenerationProfileIds(scene.generationProfileIds);
+        scene.storyArchiveMode = normalizeStoryArchiveMode(scene.storyArchiveMode);
         scene.staging = normalizeStaging(scene.staging);
         scene.liveDirection = normalizeLiveDirection(scene.liveDirection);
         delete scene.ensemble;
@@ -427,6 +432,7 @@ function sanitizeScenePatch(patch) {
         ...(patch.storyDocId !== undefined ? { storyDocId: patch.storyDocId || null } : {}),
         ...(patch.promptRecipeIds !== undefined ? { promptRecipeIds: normalizePromptRecipeIds(patch.promptRecipeIds) } : {}),
         ...(patch.generationProfileIds !== undefined ? { generationProfileIds: normalizeGenerationProfileIds(patch.generationProfileIds) } : {}),
+        ...(patch.storyArchiveMode !== undefined ? { storyArchiveMode: normalizeStoryArchiveMode(patch.storyArchiveMode) } : {}),
         ...(patch.staging !== undefined ? { staging: normalizeStaging(patch.staging) } : {}),
         ...(patch.liveDirection !== undefined ? { liveDirection: normalizeLiveDirection(patch.liveDirection) } : {}),
     };
@@ -443,8 +449,13 @@ function normalizePromptRecipeIds(value) {
 function normalizeGenerationProfileIds(value) {
     return {
         narrator: value?.narrator ? String(value.narrator) : null,
+        story: value?.story ? String(value.story) : null,
         loom: value?.loom ? String(value.loom) : null,
     };
+}
+
+function normalizeStoryArchiveMode(value) {
+    return value === 'manual' ? 'manual' : 'auto';
 }
 
 export const SCENE_STAGINGS = Object.freeze(['free', 'directed']);

@@ -6307,6 +6307,7 @@ async function beginStoryDocScene(sceneId, avatars) {
 
 function resumeActiveStoryArchive(scene = getActiveScene()) {
     if (!scene || scene.mode !== 'story' || !scene.storyDocId) return;
+    if (scene.storyArchiveMode === 'manual') return;
     void resumeStoryArchiveCaptures({
         scene,
         docId: scene.storyDocId,
@@ -8264,6 +8265,21 @@ async function openStoryToolPanel(tool, trigger = null) {
         ].join('');
         title.textContent = 'Loom Archive';
         body.innerHTML = `<p class="remodel-storydoc-panel-copy">The Loom reads accepted manuscript passages after they are written. It records durable continuity, Timeline Web changes, and Living Lore proposals; it does not rewrite your prose.</p><label class="remodel-storydoc-field-label">Loom prompt recipe${renderScenePromptChoice(scene, false, 'loom')}</label><label class="remodel-storydoc-field-label">Loom connection<select data-remodel-storydoc-loom-profile aria-label="Loom connection profile">${connectionOptions}</select></label><p class="remodel-storydoc-panel-foot">Both choices belong to this Scene only. The Loom uses the selected connection only for Archive and Timeline Web work.</p>`;
+        const archiveMode = document.createElement('label');
+        archiveMode.className = 'remodel-storydoc-field-label';
+        archiveMode.innerHTML = 'Story Archive timing<select data-remodel-storydoc-archive-mode aria-label="Story Archive timing"><option value="auto">Automatic — capture generated prose</option><option value="manual">Manual — use Archive Catch Up</option></select><small>Manual mode keeps all manuscript changes pending until you choose Catch Up from the Archive tool or Timeline Archive.</small>';
+        body.append(archiveMode);
+        const archiveModeSelect = archiveMode.querySelector('[data-remodel-storydoc-archive-mode]');
+        if (archiveModeSelect instanceof HTMLSelectElement) {
+            archiveModeSelect.value = scene?.storyArchiveMode === 'manual' ? 'manual' : 'auto';
+            archiveModeSelect.addEventListener('change', () => {
+                const activeScene = getActiveScene();
+                if (!activeScene) return;
+                const manual = archiveModeSelect.value === 'manual';
+                updateScene(activeScene.id, { storyArchiveMode: manual ? 'manual' : 'auto' });
+                setStorySaveState(manual ? 'Manual Archive — use Catch Up' : 'Automatic Archive enabled');
+            });
+        }
         const connection = body.querySelector('[data-remodel-storydoc-loom-profile]');
         if (connection instanceof HTMLSelectElement) {
             connection.value = profiles.some((profile) => profile.id === currentProfileId) ? currentProfileId : '';
@@ -8715,7 +8731,7 @@ async function generateStory({ mode = 'continue', beat = '', beatId = null } = {
         const inserted = beatId ? insertStoryBeatProse(beatId, prose) : appendStoryProse(prose);
         updateStoryDoc(activeStoryDocId, { worldInfoState: advanceStoryWorldInfoState(assembled.pendingState) });
         const scene = getActiveScene();
-        const capture = inserted && scene?.mode === 'story'
+        const capture = inserted && scene?.mode === 'story' && scene.storyArchiveMode !== 'manual'
             ? createStoryArchiveCapture(activeStoryDocId, {
                 origin: 'story-narrator',
                 text: inserted.text,
