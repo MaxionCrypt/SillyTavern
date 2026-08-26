@@ -483,6 +483,11 @@ function evidenceSource(evidence, acceptedProse, archiveFacts, explicitInstructi
     const needle = normalized(evidence);
     if (!needle) return '';
     if (normalized(acceptedProse).includes(needle)) return 'accepted-prose';
+    // Models naturally shorten a supporting quotation with an ellipsis. It is
+    // still grounded when every substantial quoted span occurs, in order, in
+    // this exact accepted passage. Do not admit paraphrases: without an
+    // explicit ellipsis this remains the strict contiguous-substring check.
+    if (matchesElidedEvidence(acceptedProse, evidence)) return 'accepted-prose-elided';
     for (const fact of Array.isArray(archiveFacts) ? archiveFacts : []) {
         const id = String(fact?.id ?? '').trim();
         const summary = typeof fact === 'string' ? fact : String(fact?.summary ?? '');
@@ -490,6 +495,26 @@ function evidenceSource(evidence, acceptedProse, archiveFacts, explicitInstructi
     }
     if (source?.authority === 'owner' && (Array.isArray(explicitInstructions) ? explicitInstructions : []).some((instruction) => normalized(instruction).includes(needle) || needle.includes(normalized(instruction)))) return 'owner-instruction';
     return '';
+}
+
+function matchesElidedEvidence(haystack, evidence) {
+    const raw = String(evidence ?? '');
+    if (!/[\u2026]|\.{3,}/.test(raw)) return false;
+    const spans = raw
+        .split(/(?:\u2026|\.{3,})/)
+        .map(normalized)
+        .filter(Boolean);
+    // One tiny fragment on each side would be indistinguishable from a loose
+    // keyword match. Require two useful spans and preserve their order.
+    if (spans.length < 2 || spans.some((span) => span.length < 12)) return false;
+    const text = normalized(haystack);
+    let cursor = 0;
+    for (const span of spans) {
+        const index = text.indexOf(span, cursor);
+        if (index < 0) return false;
+        cursor = index + span.length;
+    }
+    return true;
 }
 
 function readSection(content, name) {

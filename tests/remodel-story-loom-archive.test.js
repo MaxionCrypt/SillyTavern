@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, test } from '@jest/globals';
 import { listEvents, listSceneFacts } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { listArchiveSceneDescriptors } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archive-scene-list.js';
-import { listLivingLoreProposals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-mutations.js';
+import { listLivingLoreProposals, queueLivingLoreProposals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-mutations.js';
+import { upsertLivingLoreMetadata } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
 import { getTimelineGoals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js';
 import { listVariableValues } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
 import {
@@ -136,6 +137,31 @@ test('accepted Story evidence can queue a typed Living Lore proposal alongside t
     expect(listLivingLoreProposals({ timelineId: scene.timelineId })).toEqual([
         expect.objectContaining({ id: 'story-lore-1', status: 'suggested', source: expect.objectContaining({ mode: 'story', captureId: capture.id }) }),
     ]);
+});
+
+test('an ordered elided Story quotation remains valid proposal evidence', async () => {
+    const timelineId = 'timeline-elided-evidence';
+    __setExtensionSettings({ remodel: { worldSenseV1: { version: 2, profile: { mode: 'suggest' }, indexes: {}, receipts: [], continuityByScene: {} } } });
+    __setContextOverrides({
+        loadWorldInfo: async () => ({ entries: {
+            2: { uid: 2, comment: 'Vesper House', key: ['Vesper House'], content: 'Identity\nA residence hall.', disable: false },
+        } }),
+    });
+    const target = { book: 'Vox Test', uid: '2', revision: 1 };
+    upsertLivingLoreMetadata(timelineId, target, { entryType: 'situation', revision: 1 });
+    const result = await queueLivingLoreProposals({
+        timelineId,
+        packet: { book: 'Vox Test', entries: [{ target, entryType: 'situation' }] },
+        acceptedProse: "They got the partnership. The alumni deal. They're doing the halftime show at the Founder's game and then the Alumni Gala thing, because some alum who owns a chain of gyms is sponsoring them.",
+        proposals: [{
+            id: 'elided-story-evidence', operation: 'fact.append', target, entryType: 'situation', section: 'Established',
+            value: 'The Gold Squad has an alumni gym-chain sponsorship.',
+            evidence: "They got the partnership. The alumni deal. They're doing the halftime show at the Founder's game and then the Alumni Gala thing... because some alum who owns a chain of gyms is sponsoring them.",
+            confidence: 0.93, reason: 'The passage establishes a durable campus fact.',
+        }],
+    });
+
+    expect(result).toMatchObject({ ok: true, queued: [expect.objectContaining({ id: 'elided-story-evidence', evidence: expect.objectContaining({ source: 'accepted-prose-elided' }) })], rejected: [] });
 });
 
 test('regenerating Story evidence invalidates its unapplied Living Lore suggestions', async () => {
