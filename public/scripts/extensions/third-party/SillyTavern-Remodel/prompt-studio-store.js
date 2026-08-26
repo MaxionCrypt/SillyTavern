@@ -1,10 +1,10 @@
 import { getContext } from '../../../st-context.js';
-import { isSupersededLoomPatchPolicy, LOOM_POLICY_DEFAULT_PRIOR, LOOM_OUTPUT_CONTRACT_PATCH, LOOM_POLICY_PATCH, LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT, LOOM_POLICY_V12 } from './loom-reconciliation.js';
+import { isSupersededLoomPatchContract, isSupersededLoomPatchPolicy, LOOM_POLICY_DEFAULT_PRIOR, LOOM_OUTPUT_CONTRACT_PATCH, LOOM_POLICY_PATCH, LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT, LOOM_POLICY_V12 } from './loom-reconciliation.js';
 import { STORY_ARCHIVE_CONTRACT, STORY_ARCHIVE_LOOM_RECIPE_NAME, STORY_ARCHIVE_POLICY } from './story-loom-contract.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 21;
+const STORE_VERSION = 22;
 
 export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
@@ -714,6 +714,29 @@ function normalizeStore(store, seed) {
                 }
             }
             if (ensureLivingLoreSource(recipe.blocks)) changed = true;
+        }
+    }
+
+    // v22 makes Living Lore cultivation an explicit Patch Loom responsibility.
+    // Earlier stores exposed {{loom.lore}}, but the policy never asked the
+    // model to inspect durable canon and the oldest seeded output contract did
+    // not advertise loreProposals at all. Replace only exact, recognized seeded
+    // texts; owner-authored policy and contracts remain untouched.
+    if (previousVersion < 22) {
+        for (const id of store.recipeIds) {
+            const recipe = store.recipes[id];
+            if (!recipe || recipe.mode !== 'loom') continue;
+            for (const block of recipe.blocks || []) {
+                if (isSupersededLoomPatchPolicy(block.content)) {
+                    block.content = LOOM_POLICY_PATCH;
+                    changed = true;
+                    continue;
+                }
+                if (isSupersededLoomPatchContract(block.content)) {
+                    block.content = LOOM_OUTPUT_CONTRACT_PATCH;
+                    changed = true;
+                }
+            }
         }
     }
 
