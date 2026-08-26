@@ -1,4 +1,5 @@
 import { getContext } from '../../../st-context.js';
+import { buildStoryArchiveCatchUpPreview, hashStoryArchiveText, rebaseStoryArchiveProvenance } from './story-archive-provenance.js';
 
 // StoryDoc: the data model for the redesigned Story mode — a real, standalone
 // document, NOT a hidden chat. A story Scene in the timeline binds to a
@@ -9,7 +10,7 @@ import { getContext } from '../../../st-context.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'storyDocsV1';
-const STORE_VERSION = 3;
+const STORE_VERSION = 4;
 const STORY_ARCHIVE_CAPTURE_STATUSES = Object.freeze(['pending', 'processing', 'applied', 'failed', 'superseded']);
 
 function getStore() {
@@ -119,6 +120,7 @@ export function updateStoryDoc(docId, patch) {
     }
     if (typeof patch.body === 'string') {
         if (doc.body !== patch.body) {
+            rebaseStoryArchiveProvenance(doc.archiveCaptures, doc.body, patch.body);
             doc.body = patch.body;
             doc.bodyRevision += 1;
         }
@@ -162,12 +164,14 @@ export function updateStoryDoc(docId, patch) {
 export function createStoryArchiveCapture(docId, input = {}) {
     const store = getStore();
     const doc = store.docs[docId];
-    const text = String(input.text || '').trim();
-    if (!doc || !text) return null;
+    const changeType = ['addition', 'edit', 'deletion'].includes(input.changeType) ? input.changeType : 'addition';
+    const beforeText = String(input.beforeText || '');
+    const text = String(input.text ?? input.afterText ?? '').trim();
+    if (!doc || (!text && !beforeText)) return null;
     const origin = input.origin === 'user' ? 'user' : 'story-narrator';
     const generationId = String(input.generationId || '');
     const beatId = input.beatId == null ? null : String(input.beatId);
-    const contentHash = hashText(text);
+    const contentHash = hashText(`${changeType}\n${beforeText}\n${text}`);
     const stableKey = String(input.stableKey || (generationId
         ? `${origin}:${generationId}:${beatId || ''}`
         : `${origin}:${doc.bodyRevision}:${contentHash}`));
@@ -198,6 +202,11 @@ export function createStoryArchiveCapture(docId, input = {}) {
         bodyRevision: doc.bodyRevision,
         generationId,
         beatId,
+        changeType,
+        beforeText,
+        supersedesCaptureIds: Array.isArray(input.supersedesCaptureIds) ? input.supersedesCaptureIds.map(String) : [],
+        sourceStatus: 'current',
+        currentText: '',
         status: 'pending',
         attempts: 0,
         transactionId: null,
@@ -211,6 +220,33 @@ export function createStoryArchiveCapture(docId, input = {}) {
     doc.updatedAt = timestamp;
     saveStoryDocStore();
     return capture;
+}
+
+export function previewStoryArchiveCatchUp(docId) {
+    const doc = getStoryDoc(docId);
+    return doc ? buildStoryArchiveCatchUpPreview(doc) : null;
+}
+
+export function supersedeStoryArchiveCaptures(docId, captureIds, supersededBy = null) {
+    const store = getStore();
+    const doc = store.docs[docId];
+    const ids = new Set((captureIds || []).map(String));
+    if (!doc || !ids.size) return [];
+    const timestamp = now();
+    const changed = [];
+    for (const capture of doc.archiveCaptures || []) {
+        if (!ids.has(capture.id) || capture.status === 'superseded') continue;
+        capture.status = 'superseded';
+        capture.supersededAt = timestamp;
+        capture.supersededBy = supersededBy == null ? null : String(supersededBy);
+        capture.updatedAt = timestamp;
+        changed.push(capture);
+    }
+    if (changed.length) {
+        doc.updatedAt = timestamp;
+        saveStoryDocStore();
+    }
+    return changed;
 }
 
 export function getStoryArchiveCapture(docId, captureId) {
@@ -297,6 +333,25 @@ function normalizeStore(store) {
         doc.archiveCaptures = Array.isArray(doc.archiveCaptures)
             ? doc.archiveCaptures.map(normalizeArchiveCapture).filter(Boolean)
             : [];
+        for (const capture of doc.archiveCaptures) {
+            if (capture.status === 'superseded' || capture.changeType === 'deletion') continue;
+            if (doc.body.slice(capture.start, capture.end) === capture.text) continue;
+            // V3 did not rebase capture offsets while the author edited. A
+            // unique surviving source span is safe to relocate during the V4
+            // migration; ambiguous or genuinely changed text stays dirty for
+            // the owner's catch-up preview instead of being guessed.
+            const first = capture.text ? doc.body.indexOf(capture.text) : -1;
+            const unique = first >= 0 && doc.body.indexOf(capture.text, first + 1) < 0;
+            if (unique) {
+                capture.start = first;
+                capture.end = first + capture.text.length;
+                capture.sourceStatus = 'current';
+                capture.currentText = '';
+            } else {
+                capture.sourceStatus = 'changed';
+                capture.currentText = doc.body.slice(capture.start, capture.end);
+            }
+        }
         doc.priorText ??= '';
         doc.priorSceneId = doc.priorSceneId == null ? null : String(doc.priorSceneId);
         doc.beats = Array.isArray(doc.beats) ? doc.beats.map(normalizeBeat).filter(Boolean) : [];
@@ -369,7 +424,8 @@ function normalizeBeat(value) {
 }
 
 function normalizeArchiveCapture(value) {
-    if (!value || typeof value !== 'object' || !value.id || !String(value.text || '').trim()) return null;
+    if (!value || typeof value !== 'object' || !value.id
+        || (!String(value.text || '').trim() && !String(value.beforeText || '').trim())) return null;
     const text = String(value.text).trim();
     const start = Math.max(0, Math.floor(Number(value.start) || 0));
     const end = Math.max(start, Math.floor(Number(value.end) || start + text.length));
@@ -385,6 +441,11 @@ function normalizeArchiveCapture(value) {
         bodyRevision: Math.max(0, Math.floor(Number(value.bodyRevision) || 0)),
         generationId: String(value.generationId || ''),
         beatId: value.beatId == null ? null : String(value.beatId),
+        changeType: ['addition', 'edit', 'deletion'].includes(value.changeType) ? value.changeType : 'addition',
+        beforeText: String(value.beforeText || ''),
+        supersedesCaptureIds: Array.isArray(value.supersedesCaptureIds) ? value.supersedesCaptureIds.map(String) : [],
+        sourceStatus: value.sourceStatus === 'changed' ? 'changed' : 'current',
+        currentText: String(value.currentText || ''),
         status,
         attempts: Math.max(0, Math.floor(Number(value.attempts) || 0)),
         transactionId: value.transactionId == null ? null : String(value.transactionId),
@@ -393,16 +454,12 @@ function normalizeArchiveCapture(value) {
         updatedAt: value.updatedAt || value.createdAt || now(),
         appliedAt: value.appliedAt || null,
         supersededAt: value.supersededAt || null,
+        supersededBy: value.supersededBy == null ? null : String(value.supersededBy),
     };
 }
 
 function hashText(value) {
-    let hash = 0x811c9dc5;
-    for (const character of String(value || '')) {
-        hash ^= character.codePointAt(0);
-        hash = Math.imul(hash, 0x01000193);
-    }
-    return (hash >>> 0).toString(16).padStart(8, '0');
+    return hashStoryArchiveText(value);
 }
 
 function normalizeText(value, fallback) {

@@ -4,6 +4,8 @@ export const STORY_ARCHIVE_POLICY = `You are the Loom reading an accepted Story 
 
 Read the accepted passage as canonical evidence. Record distinct new events, changed scene facts, changed character state, hidden truths, and the unresolved forward beat. Compare against the Current Archive and do not duplicate or merely rephrase what is already recorded. Do not invent facts the passage does not establish.
 
+When the evidence is an author-approved edit or deletion, BEFORE is the superseded wording and AFTER is canonical now. Correct or clear mutable Archive state that the change invalidates. Keep past event records as audit history; do not pretend an earlier accepted event never occurred.
+
 The manuscript is immutable during this pass. Do not rewrite it, continue it, critique it, or return prose. Use only the advertised Archive operations. Goals, Variables, rolls, lore proposals, flow control, and swaps are disabled for this stage.`;
 
 export const STORY_ARCHIVE_CONTRACT = `Output NOTHING except one state fence:

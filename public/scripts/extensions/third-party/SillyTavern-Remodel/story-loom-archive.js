@@ -9,15 +9,19 @@ import {
 import { describeLoomReply, parseLoomReply } from './loom-reconciliation.js';
 import { streamChatPrompt } from './story-stream.js';
 import {
+    createStoryArchiveCapture,
     getStoryArchiveCapture,
     getStoryDoc,
     listStoryArchiveCaptures,
+    previewStoryArchiveCatchUp,
+    supersedeStoryArchiveCaptures,
     supersedeStoryArchiveCapturesForBeat,
     updateStoryArchiveCapture,
 } from './story-doc.js';
 import { listMechanicsTransactions } from './variables-store.js';
 import { recordApiTranscript, recordDebugEvent } from './debug-console.js';
 import { STORY_ARCHIVE_CONTRACT, STORY_ARCHIVE_POLICY } from './story-loom-contract.js';
+import { splitStoryArchiveAddition, STORY_ARCHIVE_PASSAGE_MAX_CHARS } from './story-archive-provenance.js';
 
 export const STORY_ARCHIVE_CAPABILITIES = Object.freeze([
     'scene.set', 'scene.clear', 'event.record',
@@ -80,10 +84,51 @@ export function resumeStoryArchiveCaptures({ scene, docId, onStateChange = null 
     // provider/recipe cannot silently spend requests on every visit.
     const pending = listStoryArchiveCaptures(docId, { statuses: ['pending', 'processing', 'failed'] })
         .filter((capture) => capture.status !== 'failed' || capture.attempts < 3);
-    return pending.reduce(
+    const bounded = pending.flatMap((capture) => boundOversizedManualCapture(docId, capture));
+    return bounded.reduce(
         (chain, capture) => chain.then(() => queueStoryArchiveCapture({ scene, docId, captureId: capture.id, onStateChange })),
         Promise.resolve(),
     );
+}
+
+/** Turn one owner-approved, revision-fenced preview into queued captures. */
+export function captureStoryArchiveCatchUp({ scene, docId, previewToken, onStateChange = null } = {}) {
+    const preview = previewStoryArchiveCatchUp(docId);
+    if (!scene?.id || !docId || !preview || preview.token !== String(previewToken || '')) {
+        return { ok: false, stale: true, preview, captures: [], completion: Promise.resolve([]) };
+    }
+    const captures = [];
+    for (const change of preview.changes) {
+        const parts = splitStoryArchiveAddition(change);
+        const partCaptures = [];
+        for (const part of parts) {
+            const capture = createManualCatchUpCapture(docId, preview, part);
+            if (!capture) continue;
+            captures.push(capture);
+            partCaptures.push(capture);
+        }
+        if (change.supersedesCaptureIds.length && partCaptures.length) {
+            supersedeStoryArchiveCaptures(docId, change.supersedesCaptureIds, partCaptures[0].id);
+        }
+    }
+    const queuedIds = new Set(captures.map((capture) => capture.id));
+    const failed = listStoryArchiveCaptures(docId, { statuses: ['failed'] })
+        .filter((capture) => preview.retryCaptureIds.includes(capture.id) && capture.attempts < 3);
+    for (const prior of failed) {
+        for (const capture of boundOversizedManualCapture(docId, prior)) {
+            if (queuedIds.has(capture.id)) continue;
+            captures.push(capture);
+            queuedIds.add(capture.id);
+        }
+    }
+    const completion = captures.reduce(
+        (chain, capture) => chain.then(async (results) => {
+            results.push(await queueStoryArchiveCapture({ scene, docId, captureId: capture.id, onStateChange }));
+            return results;
+        }),
+        Promise.resolve([]),
+    );
+    return { ok: true, stale: false, preview, captures, completion };
 }
 
 export async function waitForStoryArchive(sceneId) {
@@ -127,7 +172,7 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
     const recipe = selectedRecipe?.mode === 'loom' && selectedRecipe?.apiType === 'chat'
         ? selectedRecipe
         : getStoryArchivePromptStudioRecipe();
-    const prompt = buildStoryArchivePrompt({ passage: capture.text, archiveState, recipe });
+    const prompt = buildStoryArchivePrompt({ passage: formatStoryCaptureEvidence(capture), archiveState, recipe });
     const correlationId = `story-archive:${capture.id}`;
     recordSentPromptTranscript('loom', {
         recipeName: `${recipe?.name || 'Loom'} Â· Story Archive`,
@@ -206,6 +251,58 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
         }, { correlationId, severity: 'warn', summary: 'Story passage could not update the Loom Archive' });
         return failed;
     }
+}
+
+function createManualCatchUpCapture(docId, preview, change) {
+    return createStoryArchiveCapture(docId, {
+        origin: 'user',
+        text: change.afterText,
+        beforeText: change.beforeText,
+        changeType: change.type,
+        start: change.start,
+        end: change.end,
+        supersedesCaptureIds: change.supersedesCaptureIds,
+        stableKey: `manual:${preview.token}:${change.id}`,
+    });
+}
+
+function boundOversizedManualCapture(docId, capture) {
+    if (capture.origin !== 'user' || capture.changeType !== 'addition'
+        || capture.text.length <= STORY_ARCHIVE_PASSAGE_MAX_CHARS
+        || !['pending', 'failed'].includes(capture.status)) return [capture];
+    const change = {
+        id: `oversized:${capture.id}`,
+        type: 'addition',
+        start: capture.start,
+        end: capture.end,
+        beforeText: '',
+        afterText: capture.text,
+        supersedesCaptureIds: [capture.id],
+        origin: 'user',
+    };
+    const parts = splitStoryArchiveAddition(change)
+        .map((part) => createStoryArchiveCapture(docId, {
+            origin: 'user',
+            text: part.afterText,
+            changeType: 'addition',
+            start: part.start,
+            end: part.end,
+            supersedesCaptureIds: [capture.id],
+            stableKey: `${capture.stableKey}:part:${part.part}-of-${part.totalParts}`,
+        })).filter(Boolean);
+    if (parts.length) supersedeStoryArchiveCaptures(docId, [capture.id], parts[0].id);
+    return parts.length ? parts : [capture];
+}
+
+function formatStoryCaptureEvidence(capture) {
+    if (capture.changeType === 'edit') {
+        return `Author-approved manuscript edit.\nBEFORE:\n${capture.beforeText}\n\nAFTER:\n${capture.text}`;
+    }
+    if (capture.changeType === 'deletion') {
+        return `Author-approved manuscript deletion.\nBEFORE:\n${capture.beforeText}\n\nAFTER:\n[deleted]`;
+    }
+    const label = capture.origin === 'user' ? 'Author-approved manuscript addition' : 'Accepted Story Narrator passage';
+    return `${label}:\n${capture.text}`;
 }
 
 async function undoSupersededBeatCaptures(docId, current) {

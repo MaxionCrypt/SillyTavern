@@ -41,9 +41,11 @@ import {
     createStoryArchiveCapture,
     createStoryDoc,
     getStoryDoc,
+    previewStoryArchiveCatchUp,
     updateStoryDoc,
 } from './story-doc.js';
 import {
+    captureStoryArchiveCatchUp,
     describeStoryArchiveCaptureState,
     queueStoryArchiveCapture,
     resumeStoryArchiveCaptures,
@@ -3225,6 +3227,9 @@ async function handleAction(element) {
             }
             break;
         }
+        case 'archive-catch-up':
+            openStoryArchiveCatchUp(element.dataset.sceneId);
+            return;
         case 'archive-continuity-read': {
             const { timelineId, sceneId } = element.dataset;
             const settings = archiveGetContinuitySettings(timelineId, sceneId);
@@ -4355,6 +4360,7 @@ function renderLoomArchive(timeline, store) {
                 </select>
             </label>
             ${renderArchiveViewToggle()}
+            ${!isNarrator && viewedScene.mode === 'story' ? `<button type="button" class="remodel-archive-catchup-button" data-remodel-timeline-action="archive-catch-up" data-scene-id="${escapeAttribute(viewedScene.id)}"><i class="fa-solid fa-box-archive" aria-hidden="true"></i> Catch up Archive</button>` : ''}
         </div>
         ${continuityControls}
         <div class="remodel-archive-sections">
@@ -6577,6 +6583,7 @@ function ensureStoryEditor() {
                 <button type="button" data-remodel-storydoc-tool="prompt" title="Final Prompt Preview"><i class="fa-solid fa-eye" aria-hidden="true"></i><span>Prompt</span></button>
                 <button type="button" data-remodel-storydoc-tool="guidance" title="Author guidance"><i class="fa-solid fa-compass" aria-hidden="true"></i><span>Guide</span></button>
                 <button type="button" data-remodel-storydoc-tool="state" title="Timeline State"><i class="fa-solid fa-chart-simple" aria-hidden="true"></i><span>State</span></button>
+                <button type="button" data-remodel-storydoc-tool="archive" title="Review manuscript changes for the Loom Archive"><i class="fa-solid fa-box-archive" aria-hidden="true"></i><span>Archive</span></button>
                 <span class="remodel-storydoc-tool-control remodel-storydoc-native-slot" data-remodel-storydoc-native-slot="options_button" title="Story options">
                     <span class="remodel-storydoc-tool-label">Menu</span>
                 </span>
@@ -7964,8 +7971,133 @@ function closeStoryToolPanel() {
     editor?.querySelectorAll('[data-remodel-storydoc-tool].is-active').forEach((button) => button.classList.remove('is-active'));
 }
 
+const STORY_ARCHIVE_CATCHUP_ID = 'remodel-story-archive-catchup';
+
+function flushStoryDocForArchive(docId) {
+    if (!docId || docId !== activeStoryDocId) return getStoryDoc(docId);
+    clearTimeout(storyEditorSaveTimer);
+    const prose = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-prose]');
+    if (prose) updateStoryDoc(docId, readStoryEditorState(prose));
+    return getStoryDoc(docId);
+}
+
+function openStoryArchiveCatchUp(sceneId) {
+    document.getElementById(STORY_ARCHIVE_CATCHUP_ID)?.remove();
+    const scene = getScene(sceneId);
+    if (!scene || scene.mode !== 'story' || !scene.storyDocId) return;
+    const doc = flushStoryDocForArchive(scene.storyDocId);
+    const preview = previewStoryArchiveCatchUp(scene.storyDocId);
+    if (!doc || !preview) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = STORY_ARCHIVE_CATCHUP_ID;
+    overlay.className = 'remodel-rp-picker-scrim';
+    overlay._remodelStoryArchiveCatchUp = { sceneId: scene.id, docId: doc.id, previewToken: preview.token, busy: false };
+    const count = preview.changes.length;
+    const workCount = count + preview.counts.retries;
+    overlay.innerHTML = `
+        <section class="remodel-story-archive-catchup" role="dialog" aria-modal="true" aria-labelledby="remodel-story-archive-catchup-title">
+            <header class="remodel-rp-picker-head">
+                <div>
+                    <div class="remodel-rp-picker-kicker">Shared Timeline Archive</div>
+                    <div class="remodel-rp-picker-title" id="remodel-story-archive-catchup-title">Catch up ${escapeHtml(scene.title || doc.title)}</div>
+                    <div class="remodel-rp-picker-hint">Review the exact manuscript changes before the Loom records them. This never rewrites the manuscript.</div>
+                </div>
+                <button type="button" class="remodel-rp-picker-x" data-remodel-story-archive-catchup-close aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+            </header>
+            <div class="remodel-story-archive-catchup-summary">
+                <span><b>${preview.counts.additions}</b> addition${preview.counts.additions === 1 ? '' : 's'}</span>
+                <span><b>${preview.counts.edits}</b> edit${preview.counts.edits === 1 ? '' : 's'}</span>
+                <span><b>${preview.counts.deletions}</b> deletion${preview.counts.deletions === 1 ? '' : 's'}</span>
+                ${preview.counts.retries ? `<span><b>${preview.counts.retries}</b> retry</span>` : ''}
+                <small>Manuscript revision ${preview.bodyRevision}</small>
+            </div>
+            <div class="remodel-story-archive-catchup-list">
+                ${count ? preview.changes.map(renderStoryArchiveCatchUpChange).join('') : preview.counts.retries ? '<div class="remodel-story-archive-catchup-empty"><i class="fa-solid fa-rotate"></i><strong>A previous Archive pass needs another attempt.</strong><span>Large passages are divided into bounded sections before retrying.</span></div>' : '<div class="remodel-story-archive-catchup-empty"><i class="fa-solid fa-circle-check"></i><strong>The Archive is caught up.</strong><span>No uncaptured additions, edits, or deletions were found.</span></div>'}
+            </div>
+            <footer class="remodel-story-archive-catchup-foot">
+                <p data-remodel-story-archive-catchup-status>${count ? `${count} change${count === 1 ? '' : 's'} ready for the Story Loom.` : preview.counts.retries ? `${preview.counts.retries} failed capture ready to retry.` : 'Nothing will be sent.'}</p>
+                <div>
+                    <button type="button" data-remodel-story-archive-catchup-close>Cancel</button>
+                    <button type="button" class="is-primary" data-remodel-story-archive-catchup-apply ${workCount ? '' : 'disabled'}><i class="fa-solid fa-box-archive"></i> ${count ? 'Capture changes' : 'Retry catch-up'}</button>
+                </div>
+            </footer>
+        </section>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
+
+    overlay.addEventListener('click', (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target) return;
+        if (target === overlay || target.closest('[data-remodel-story-archive-catchup-close]')) {
+            closeStoryArchiveCatchUp();
+            return;
+        }
+        if (target.closest('[data-remodel-story-archive-catchup-apply]')) submitStoryArchiveCatchUp(overlay);
+    });
+}
+
+function renderStoryArchiveCatchUpChange(change, index) {
+    const label = change.type === 'addition' ? 'Addition' : change.type === 'edit' ? 'Edit' : 'Deletion';
+    const before = change.beforeText
+        ? `<div><span>Before</span><pre>${escapeHtml(change.beforeText)}</pre></div>` : '';
+    const after = change.afterText
+        ? `<div><span>After</span><pre>${escapeHtml(change.afterText)}</pre></div>` : '<div><span>After</span><pre class="is-empty">Deleted</pre></div>';
+    return `<article class="remodel-story-archive-catchup-change is-${change.type}">
+        <header><span>${index + 1}</span><strong>${label}</strong><small>Characters ${change.start}-${change.end}</small></header>
+        <div class="remodel-story-archive-catchup-diff">${before}${after}</div>
+    </article>`;
+}
+
+function closeStoryArchiveCatchUp() {
+    const overlay = document.getElementById(STORY_ARCHIVE_CATCHUP_ID);
+    if (!overlay || overlay._remodelStoryArchiveCatchUp?.busy) return;
+    overlay.classList.remove('remodel-rp-picker-in');
+    setTimeout(() => overlay.remove(), 200);
+}
+
+async function submitStoryArchiveCatchUp(overlay) {
+    const state = overlay?._remodelStoryArchiveCatchUp;
+    if (!state || state.busy) return;
+    const scene = getScene(state.sceneId);
+    if (!scene) return;
+    flushStoryDocForArchive(state.docId);
+    const result = captureStoryArchiveCatchUp({
+        scene,
+        docId: state.docId,
+        previewToken: state.previewToken,
+        onStateChange: (archiveState) => {
+            if (activeStoryDocId === state.docId) setStorySaveState(archiveState.label);
+            renderTimelinePanel();
+        },
+    });
+    if (result.stale) {
+        const status = overlay.querySelector('[data-remodel-story-archive-catchup-status]');
+        if (status) status.textContent = 'The manuscript changed while this preview was open. Refreshing the exact delta...';
+        setTimeout(() => openStoryArchiveCatchUp(state.sceneId), 350);
+        return;
+    }
+    state.busy = true;
+    const button = overlay.querySelector('[data-remodel-story-archive-catchup-apply]');
+    if (button instanceof HTMLButtonElement) {
+        button.disabled = true;
+        button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Archive syncing...';
+    }
+    if (activeStoryDocId === state.docId) setStorySaveState('Archive queued');
+    overlay._remodelStoryArchiveCatchUp.busy = false;
+    closeStoryArchiveCatchUp();
+    await result.completion;
+    renderTimelinePanel();
+    if (activeStoryDocId === state.docId) renderStoryEditor();
+}
+
 async function openStoryToolPanel(tool, trigger = null) {
     const editor = getRealStoryEditor();
+    if (tool === 'archive') {
+        closeStoryToolPanel();
+        openStoryArchiveCatchUp(getActiveScene()?.id);
+        return;
+    }
     if (tool === 'prompt') {
         const existing = document.getElementById(STORY_PREVIEW_ID);
         if (existing) {

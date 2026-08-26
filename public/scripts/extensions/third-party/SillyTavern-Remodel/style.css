@@ -6725,6 +6725,77 @@ body.remodel-storydoc-active .remodel-storydoc-check input {
   flex:0 0 auto !important; margin:0 !important;
 }
 
+/* Story manuscript -> shared Loom Archive review. */
+#remodel-story-archive-catchup .remodel-story-archive-catchup {
+  width:min(920px,94vw) !important; max-height:88vh !important; display:flex !important; flex-direction:column !important;
+  overflow:hidden !important; color:#eee9dc !important; background:rgba(10,10,15,.985) !important;
+  border:1px solid rgba(212,190,33,.46) !important; box-shadow:0 28px 90px rgba(0,0,0,.68) !important;
+  transform:translateY(10px) !important; transition:transform .2s ease !important;
+}
+#remodel-story-archive-catchup.remodel-rp-picker-in .remodel-story-archive-catchup { transform:translateY(0) !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-summary {
+  display:flex !important; align-items:center !important; gap:9px !important; padding:13px 22px !important;
+  border-bottom:1px solid rgba(212,190,33,.14) !important; background:rgba(212,190,33,.035) !important;
+}
+#remodel-story-archive-catchup .remodel-story-archive-catchup-summary > span {
+  padding:6px 9px !important; border:1px solid rgba(212,190,33,.2) !important; color:rgba(238,233,220,.7) !important;
+  font:10px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.08em !important;
+}
+#remodel-story-archive-catchup .remodel-story-archive-catchup-summary b { color:#d7c800 !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-summary small { margin-left:auto !important; color:rgba(238,233,220,.42) !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-list {
+  display:grid !important; gap:12px !important; min-height:180px !important; padding:18px 22px !important; overflow:auto !important;
+}
+#remodel-story-archive-catchup .remodel-story-archive-catchup-change {
+  border:1px solid rgba(212,190,33,.18) !important; background:rgba(255,255,255,.018) !important;
+}
+#remodel-story-archive-catchup .remodel-story-archive-catchup-change > header {
+  display:flex !important; align-items:center !important; gap:9px !important; padding:9px 12px !important; border-bottom:1px solid rgba(212,190,33,.12) !important;
+  font:10px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.08em !important;
+}
+#remodel-story-archive-catchup .remodel-story-archive-catchup-change > header > span {
+  display:grid !important; place-items:center !important; width:20px !important; height:20px !important; border:1px solid rgba(212,190,33,.35) !important; color:#d7c800 !important;
+}
+#remodel-story-archive-catchup .remodel-story-archive-catchup-change > header small { margin-left:auto !important; color:rgba(238,233,220,.38) !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-diff { display:grid !important; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)) !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-diff > div { min-width:0 !important; padding:12px !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-diff > div + div { border-left:1px solid rgba(212,190,33,.12) !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-diff span { color:rgba(238,233,220,.45) !important; font:9px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.12em !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-diff pre {
+  max-height:220px !important; margin:7px 0 0 !important; overflow:auto !important; white-space:pre-wrap !important; overflow-wrap:anywhere !important;
+  color:#eee9dc !important; font:13px/1.55 var(--remodel-manuscript-font,Georgia) !important;
+}
+#remodel-story-archive-catchup .remodel-story-archive-catchup-diff pre.is-empty { color:rgba(232,126,126,.7) !important; font-style:italic !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-change.is-addition { border-left:3px solid rgba(126,196,132,.7) !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-change.is-edit { border-left:3px solid rgba(212,190,33,.7) !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-change.is-deletion { border-left:3px solid rgba(205,94,94,.72) !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-empty {
+  display:grid !important; place-items:center !important; align-content:center !important; gap:8px !important; min-height:180px !important; color:rgba(238,233,220,.55) !important;
+}
+#remodel-story-archive-catchup .remodel-story-archive-catchup-empty i { color:#d7c800 !important; font-size:22px !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-empty strong { color:#eee9dc !important; font-family:var(--remodel-serif,Georgia) !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-foot {
+  display:flex !important; align-items:center !important; justify-content:space-between !important; gap:16px !important; padding:14px 22px !important;
+  border-top:1px solid rgba(212,190,33,.17) !important; background:rgba(0,0,0,.2) !important;
+}
+#remodel-story-archive-catchup .remodel-story-archive-catchup-foot p { margin:0 !important; color:rgba(238,233,220,.52) !important; font:11px/1.35 system-ui,sans-serif !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-foot > div { display:flex !important; gap:9px !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-foot button,
+body.st-remodel-active .remodel-archive-catchup-button {
+  padding:9px 13px !important; border:1px solid rgba(212,190,33,.3) !important; background:rgba(212,190,33,.045) !important;
+  color:#eee9dc !important; cursor:pointer !important; font:10px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.07em !important;
+}
+#remodel-story-archive-catchup .remodel-story-archive-catchup-foot button.is-primary { background:#d7c800 !important; color:#0b0b0d !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-foot button[disabled] { opacity:.35 !important; cursor:not-allowed !important; }
+body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !important; align-items:center !important; gap:7px !important; margin-left:auto !important; }
+
+@media (max-width:700px) {
+  #remodel-story-archive-catchup .remodel-story-archive-catchup-summary { flex-wrap:wrap !important; }
+  #remodel-story-archive-catchup .remodel-story-archive-catchup-summary small { width:100% !important; margin-left:0 !important; }
+  #remodel-story-archive-catchup .remodel-story-archive-catchup-foot { align-items:stretch !important; flex-direction:column !important; }
+  #remodel-story-archive-catchup .remodel-story-archive-catchup-foot > div { justify-content:flex-end !important; }
+}
+
 /* =====================================================================
    PROMPT STUDIO
    A native Tavern workspace: fixed library/editor split, no legacy drawer.
