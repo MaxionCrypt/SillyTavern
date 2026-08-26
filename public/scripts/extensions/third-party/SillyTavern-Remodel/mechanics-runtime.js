@@ -1,6 +1,6 @@
 import { extension_prompt_roles, extension_prompt_types, main_api, setExtensionPrompt } from '../../../../script.js';
 import { getCapabilityDictionary } from './mechanics-capabilities.js';
-import { getSceneGoals, getSceneGoalRelations } from './story-goals-store.js';
+import { getTimelineGoals, getTimelineGoalRelations } from './story-goals-store.js';
 import { getMechanicsProfile } from './variables-store.js';
 import { resolveVariableContext } from './variables-context.js';
 import { buildAddressBook } from './direction-address.js';
@@ -56,7 +56,10 @@ export async function previewMechanicalContext(scene, { cast = [], persona = nul
 }
 
 export async function buildMechanicalSnapshot(scene, action, cast = [], persona = null, authorizedGoalIds = [], evidence = {}, { recordRecall = true } = {}) {
-    const candidateGoals = getSceneGoals(scene.id, { includeResolved: false, states: ['active', 'background'] });
+    // Goals belong to the Timeline Web. Retrieval, not a copied Scene link,
+    // decides which ones travel into this pass; linked Story consequences can
+    // therefore become actionable in a later Roleplay Scene.
+    const candidateGoals = getTimelineGoals(scene.timelineId, { includeResolved: false });
     const subjects = [persona, ...cast].filter(Boolean);
     const resolved = await resolveVariableContext({
         timelineId: scene.timelineId, action,
@@ -105,7 +108,7 @@ export async function buildMechanicalSnapshot(scene, action, cast = [], persona 
         authorizedGoalRefs: authorizedGoalIds.map((id) => refByGoalId.get(String(id))).filter(Boolean),
         entities: subjects,
         goals: listedGoals,
-        relationships: describeRelations(getSceneGoalRelations(scene.id), refByGoalId),
+        relationships: describeRelations(getTimelineGoalRelations(scene.timelineId), refByGoalId),
         // Variables travel as the compact lines serializeRetrievedVariables
         // produces — the format design section 3 specifies, and far cheaper
         // than a nested object each. Held here so callers need one object;

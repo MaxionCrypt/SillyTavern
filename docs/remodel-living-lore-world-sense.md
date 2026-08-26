@@ -56,15 +56,55 @@ remains reviewable and cannot fail the roleplay turn.
 
 The Debug workspace records World Sense retrieval receipts, degradation,
 proposal decisions, automatic applications, transaction failures, and index
-recovery. Prompt bodies remain subject to the existing sensitive-transcript
-setting.
+recovery. A retrieval receipt identifies the target Scene mode, query-source
+labels and character counts, every lore or continuity record included in the
+prompt, its ranking reasons, and the source Scene mode. Story Archive receipts
+also identify the document revision, exact source span and hash, mechanics
+transaction outcome, and queued or rejected lore proposals. Prompt bodies
+remain subject to the existing sensitive-transcript setting.
 
 If search looks stale, use **Reindex**. A query that receives unknown vector
 identities or a corrupt/missing collection rebuilds the Timeline collection
 once and retries. Repeated failure returns to native keyword retrieval rather
 than blocking narration.
 
-For a manual acceptance run, keep the session recorder attached, exercise one
-Suggest proposal and one Auto-safe proposal, then verify `proposal.queued`,
-`auto-safe.applied`, `transaction.applied`, and the corresponding retrieval
-receipt share the expected Timeline and direction context.
+## Mixed-mode recorder journeys
+
+Start the Debug recorder before opening the first Scene. Keep the Story status,
+Roleplay stage feedback, and Debug receipt visible where possible. Run one
+journey per recording so a failure has one causal path.
+
+1. **Roleplay Continue into Story:** establish a named fact with Continue in a
+   Roleplay Scene, open a later Story Scene in another Arc, and generate one
+   beat. The Story retrieval receipt must include the Roleplay source Scene and
+   exact Archive record; the manuscript must not contain Debug or prompt text.
+2. **Story beat into Roleplay:** generate and accept a Story beat that changes a
+   character pressure, wait for **Saved · Archived**, then Continue in a later
+   Roleplay Scene. Its receipt must include the Story source record and any
+   linked Goal or Variable created by Story ingestion.
+3. **Manual prose and Catch up:** type after the last Story Narrator passage,
+   preview **Catch up Archive**, accept it, wait for Archive completion, reload,
+   and preview again. Only the exact manual span is ingested and the second
+   preview has no duplicate change.
+4. **Regeneration:** regenerate an accepted Story beat. The prior capture and
+   its unapplied lore suggestions become superseded, its mechanics transaction
+   is rolled back, and only the replacement remains eligible for recall.
+5. **Stop:** stop Story generation while prose is streaming. The accepted
+   manuscript prefix remains visible, and no unseen tail or unsupported Archive
+   consequence is captured. Repeat Stop during Roleplay and confirm the visible
+   Loom prefix remains the canonical response.
+6. **Recall controls:** disable look-back, pin one exact earlier record, and
+   exclude another source Scene. Preview and Send must agree: the pin appears,
+   the excluded Scene does not, and a separate Timeline retrieves neither.
+7. **Conflict recovery:** queue a lore suggestion, edit that lore entry before
+   applying it, then Apply. The stale revision is rejected visibly; refreshing
+   and re-running retrieval produces a new revisioned suggestion rather than a
+   silent overwrite.
+8. **Reload recovery:** reload while a Story Archive capture is queued or after
+   a provider failure. Reopening the Scene resumes only the unapplied capture,
+   caps automatic retries, and never duplicates an already-applied receipt.
+
+For Suggest and Auto-safe coverage, verify `proposal.queued`,
+`auto-safe.applied`, `transaction.applied`, the Story Web receipt when
+applicable, and the corresponding retrieval receipt all carry the expected
+Timeline, source Scene, and document revision.

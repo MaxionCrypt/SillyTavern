@@ -1,5 +1,6 @@
 import { buildMechanicalSnapshot } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/mechanics-runtime.js';
 import { buildLoomContext } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-context.js';
+import { createTimelineGoal, getSceneGoals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js';
 import { createVariableValue } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
 import { __setExtensionSettings } from './util/st-context-stub.js';
 
@@ -54,4 +55,30 @@ test('once a Variable exists, an unmatched turn says so instead', async () => {
 
     const { mechanicsSkill } = buildLoomContext({ mechanics: snapshot }, { mechanicsEnabled: true });
     expect(mechanicsSkill).not.toMatch(/create it with variable\.create/i);
+});
+
+test('a Story-created Timeline Goal is retrievable in a later Roleplay Scene without copying its Scene link', async () => {
+    const storySceneId = 'scene-story-origin';
+    const roleplayScene = { id: 'scene-roleplay-later', timelineId: TIMELINE, title: 'The next morning' };
+    const goal = createTimelineGoal(TIMELINE, {
+        title: 'Find Rae before dawn',
+        description: 'Rae vanished after the party and must be found before dawn.',
+        successRate: 45,
+        originSceneId: storySceneId,
+    }, { sceneId: storySceneId, actor: 'loom' });
+
+    expect(getSceneGoals(storySceneId).map((item) => item.id)).toContain(goal.id);
+    expect(getSceneGoals(roleplayScene.id)).toEqual([]);
+
+    const snapshot = await buildMechanicalSnapshot(
+        roleplayScene,
+        'Wren searches the roof for Rae before dawn.',
+        [], null, [], { history: ['Rae never came back from the party.'] },
+    );
+
+    expect(snapshot.goals.map((item) => item.title)).toContain('Find Rae before dawn');
+    expect(snapshot.retrieval.goalsConsidered).toBe(1);
+    // Retrieval crosses the Scene boundary; persistence does not silently add
+    // a presentation link to the later Scene.
+    expect(getSceneGoals(roleplayScene.id)).toEqual([]);
 });

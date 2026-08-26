@@ -144,3 +144,71 @@ test('Story and Roleplay Archive evidence share one ordered Timeline index', () 
     });
     expect(candidates.map((candidate) => candidate.record.sceneId)).toEqual(['scene-rp-1', 'scene-story']);
 });
+
+test('mixed-mode continuity runs in both directions across Arc boundaries with source-mode provenance', () => {
+    __setExtensionSettings({ remodel: {
+        timelineV1: {
+            version: 1, timelineIds: [TIMELINE], activeTimelineId: TIMELINE,
+            timelines: { [TIMELINE]: { id: TIMELINE, title: 'Route', arcIds: ['arc-1', 'arc-2'], activeSceneId: 'rp-later' } },
+            arcs: {
+                'arc-1': { id: 'arc-1', timelineId: TIMELINE, title: 'Discovery', sceneIds: ['rp-earlier', 'story-earlier'] },
+                'arc-2': { id: 'arc-2', timelineId: TIMELINE, title: 'Consequences', sceneIds: ['story-later', 'rp-later'] },
+            },
+            scenes: {
+                'rp-earlier': { id: 'rp-earlier', timelineId: TIMELINE, arcId: 'arc-1', title: 'Played Discovery', mode: 'roleplay' },
+                'story-earlier': { id: 'story-earlier', timelineId: TIMELINE, arcId: 'arc-1', title: 'Written Decision', mode: 'story' },
+                'story-later': { id: 'story-later', timelineId: TIMELINE, arcId: 'arc-2', title: 'Written Fallout', mode: 'story' },
+                'rp-later': { id: 'rp-later', timelineId: TIMELINE, arcId: 'arc-2', title: 'Played Fallout', mode: 'roleplay' },
+            },
+        },
+    } });
+    recordEvent(TIMELINE, 'rp-earlier', 'Mara discovered the western gate key.');
+    recordEvent(TIMELINE, 'story-earlier', 'Mara sealed the western gate in the manuscript.');
+    const records = buildTimelineContinuityDocuments(TIMELINE).records;
+
+    const intoStory = scoreTimelineContinuityCandidates({
+        timelineId: TIMELINE, sceneId: 'story-later',
+        packet: buildWorldSenseQueryPacket({ action: 'Recall the western gate key and seal.' }), records,
+    });
+    expect(intoStory.map((candidate) => [candidate.record.sceneId, candidate.record.sceneMode, candidate.record.arcTitle])).toEqual([
+        ['rp-earlier', 'roleplay', 'Discovery'],
+        ['story-earlier', 'story', 'Discovery'],
+    ]);
+
+    const intoRoleplay = scoreTimelineContinuityCandidates({
+        timelineId: TIMELINE, sceneId: 'rp-later',
+        packet: buildWorldSenseQueryPacket({ action: 'Approach the western gate seal.' }), records,
+    });
+    expect(intoRoleplay).toEqual(expect.arrayContaining([
+        expect.objectContaining({ record: expect.objectContaining({ sceneId: 'story-earlier', sceneMode: 'story', arcId: 'arc-1' }) }),
+    ]));
+});
+
+test('continuity documents cannot cross Timeline boundaries even when scene text and ids resemble each other', () => {
+    const other = 'timeline-other';
+    const settings = __setExtensionSettings({ remodel: {
+        timelineV1: {
+            version: 1, timelineIds: [TIMELINE, other], activeTimelineId: TIMELINE,
+            timelines: {
+                [TIMELINE]: { id: TIMELINE, title: 'Route', arcIds: ['arc-main'] },
+                [other]: { id: other, title: 'Elsewhere', arcIds: ['arc-other'] },
+            },
+            arcs: {
+                'arc-main': { id: 'arc-main', timelineId: TIMELINE, title: 'Main', sceneIds: ['main-source', 'main-target'] },
+                'arc-other': { id: 'arc-other', timelineId: other, title: 'Other', sceneIds: ['other-source'] },
+            },
+            scenes: {
+                'main-source': { id: 'main-source', timelineId: TIMELINE, arcId: 'arc-main', title: 'Main Source', mode: 'story' },
+                'main-target': { id: 'main-target', timelineId: TIMELINE, arcId: 'arc-main', title: 'Main Target', mode: 'roleplay' },
+                'other-source': { id: 'other-source', timelineId: other, arcId: 'arc-other', title: 'Other Source', mode: 'story' },
+            },
+        },
+    } });
+    expect(settings).toBeTruthy();
+    recordEvent(TIMELINE, 'main-source', 'The silver bell rang in the main world.');
+    recordEvent(other, 'other-source', 'The silver bell revealed a forbidden second world.');
+
+    const source = buildTimelineContinuityDocuments(TIMELINE);
+    expect(source.records.map((record) => record.sceneId)).toEqual(['main-source']);
+    expect(JSON.stringify(source)).not.toContain('forbidden second world');
+});

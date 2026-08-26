@@ -1,7 +1,6 @@
 # Living Lore and World Sense
 
-**Status:** Implemented through Commit 15.5 on `feature/living-lore-world-sense`;
-Commit 16 below defines the remaining mixed-mode lifecycle hardening.
+**Status:** Implemented through Commit 16 on `feature/living-lore-world-sense`.
 
 ## 1. Product promise
 
@@ -774,6 +773,11 @@ existing review boundary.
 ### Commit 16 - Mixed-mode lifecycle hardening
 
 `test(remodel): harden Story and Roleplay continuity`
+
+**Implemented:** mixed-mode and cross-Arc continuity, recall controls, Timeline
+isolation, provenance-rich Debug prompt inclusion, pre-provenance StoryDoc
+migration and rollback, bounded large-manuscript work, and the manual recorder
+journeys are covered as the final hardening layer.
 
 - acceptance coverage for Story -> Story, Story -> Roleplay, Roleplay -> Story,
   cross-Arc, Timeline Web propagation, exclusion, pinning, and Timeline

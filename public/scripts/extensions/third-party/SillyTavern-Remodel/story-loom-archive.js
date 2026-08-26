@@ -313,8 +313,13 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
             ...captureReceipt(scene, docId, applied),
             requestCount: requests.length,
             transactionId,
-            loreProposalCount: lore.queued.length,
-            loreProposalRejectedCount: applied.loreProposalRejections.length,
+            webReceipt: summarizeWebReceipt(webReceipt),
+            loreOutcome: {
+                proposed: parsed.loreProposals.length,
+                queued: lore.queued.length,
+                queuedIds: lore.queued.map((item) => String(item.id)),
+                rejected: applied.loreProposalRejections.length,
+            },
         }, { correlationId, summary: `Story passage added ${requests.length} Archive operation(s) and ${lore.queued.length} Living Lore proposal(s)` });
         return applied;
     } catch (error) {
@@ -476,6 +481,7 @@ function captureReceipt(scene, docId, capture) {
     return {
         timelineId: String(scene?.timelineId || ''),
         sceneId: String(scene?.id || ''),
+        sceneMode: String(scene?.mode || 'story'),
         docId: String(docId || ''),
         captureId: capture?.id || null,
         origin: capture?.origin || null,
@@ -484,5 +490,22 @@ function captureReceipt(scene, docId, capture) {
         contentHash: capture?.contentHash || null,
         status: capture?.status || null,
         attempts: capture?.attempts || 0,
+        worldSenseReceiptId: capture?.worldSenseReceiptId || null,
+        webReceiptId: capture?.webReceipt?.id || null,
+    };
+}
+
+function summarizeWebReceipt(receipt) {
+    if (!receipt) return null;
+    return {
+        id: receipt.id,
+        sourceSceneId: receipt.sceneId,
+        documentRevision: receipt.bodyRevision,
+        sourceSpan: receipt.sourceSpan,
+        contentHash: receipt.contentHash,
+        worldSenseReceiptId: receipt.worldSenseReceiptId,
+        mechanics: receipt.mechanics,
+        loreProposalIds: receipt.loreProposalIds,
+        loreProposalRejections: receipt.loreProposalRejections,
     };
 }

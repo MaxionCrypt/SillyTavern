@@ -208,7 +208,7 @@ function receiptCandidate(candidate, decision) {
     if (candidate.kind === 'continuity') {
         return {
             kind: 'continuity', key: candidate.key,
-            sceneId: candidate.record.sceneId, sceneTitle: candidate.record.sceneTitle,
+            sceneId: candidate.record.sceneId, sceneTitle: candidate.record.sceneTitle, sceneMode: candidate.record.sceneMode,
             arcId: candidate.record.arcId, arcTitle: candidate.record.arcTitle,
             recordType: candidate.record.recordType, recordId: candidate.record.recordId, text: candidate.record.text,
             score: candidate.score, tokenCost: candidate.tokenCost, forced: candidate.forced, decision, reasons: candidate.reasons,

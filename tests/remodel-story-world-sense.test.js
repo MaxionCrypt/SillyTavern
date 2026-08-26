@@ -54,3 +54,17 @@ test('Story delivery keeps lore identities separate from provenance-labelled con
     });
     expect(formatStoryWorldSenseContinuity(result)).toContain('[Arrival / The Crossing / event] Mara sealed the gate.');
 });
+
+test('a large manuscript query stays tail-bounded and assembles inside the local budget', () => {
+    const body = Array.from({ length: 20000 }, (_value, index) => `Accepted manuscript paragraph ${index}.`).join('\n\n');
+    const startedAt = performance.now();
+    const options = buildStoryWorldSenseOptions({ doc: { body }, mode: 'continue' });
+    const elapsedMs = performance.now() - startedAt;
+    const serialized = JSON.stringify(options);
+
+    expect(options.history.length).toBeLessThanOrEqual(8);
+    expect(serialized.length).toBeLessThan(7000);
+    expect(serialized).toContain('Accepted manuscript paragraph 19999.');
+    expect(serialized).not.toContain('Accepted manuscript paragraph 0.');
+    expect(elapsedMs).toBeLessThan(250);
+});

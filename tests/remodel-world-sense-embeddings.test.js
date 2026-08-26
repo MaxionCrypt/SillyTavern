@@ -13,11 +13,13 @@ import {
     updateWorldSenseProfile,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-store.js';
 import { __setContextOverrides, __setExtensionSettings } from './util/st-context-stub.js';
+import { __clearDebugEvents, __getDebugEvents } from './util/debug-console-stub.js';
 
 const TIMELINE = 'timeline-embeddings';
 const nativeFetch = global.fetch;
 
 beforeEach(() => {
+    __clearDebugEvents();
     invalidateTimelineLoreCache();
     __setExtensionSettings({ remodel: { timelineV1: {
         version: 1, timelineIds: [TIMELINE], activeTimelineId: TIMELINE,
@@ -167,7 +169,7 @@ test('stores inspectable receipts and scene retrieval continuity', () => {
 
 test('Preview ranks the same deterministic lore without saving receipt or continuity', async () => {
     global.fetch = jest.fn(async () => { throw new Error('local model unavailable'); });
-    const scene = { id: 'scene-preview', timelineId: TIMELINE };
+    const scene = { id: 'scene-preview', timelineId: TIMELINE, mode: 'story' };
 
     const preview = await previewWorldSense(scene, { action: 'Approach the harbor.' });
 
@@ -180,10 +182,18 @@ test('Preview ranks the same deterministic lore without saving receipt or contin
     expect(getWorldSenseContinuity(scene.id)).toEqual([]);
 
     const turn = await resolveWorldSense(scene, { action: 'Approach the harbor.' });
-    expect(turn.receipt).toEqual(expect.objectContaining({ sceneId: scene.id }));
+    expect(turn.receipt).toEqual(expect.objectContaining({
+        sceneId: scene.id,
+        sceneMode: 'story',
+        querySources: expect.arrayContaining([expect.objectContaining({ kind: 'action', label: 'Current action', characters: 20 })]),
+        promptInclusion: [expect.objectContaining({ kind: 'lore', book: 'Living Book', uid: '1', included: true, rankingReasons: expect.arrayContaining(['action.primary']) })],
+    }));
     expect(turn.receipt).not.toHaveProperty('loomPacket');
     expect(turn.loomPacket.entries[0].content).toBe('A tidal port.');
     expect(listWorldSenseReceipts({ sceneId: scene.id })).toHaveLength(1);
+    const diagnostic = __getDebugEvents().find((event) => event.category === 'world-sense' && event.type === 'retrieval.receipt');
+    expect(diagnostic?.detail?.sceneMode).toBe('story');
+    expect(Array.isArray(diagnostic?.detail?.promptInclusion)).toBe(true);
 });
 
 test('one-turn pins and exclusions affect Preview but are consumed only by Send', async () => {

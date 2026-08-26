@@ -20,6 +20,7 @@ import {
     updateStoryDoc,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-doc.js';
 import { __setContextOverrides, __setExtensionSettings } from './util/st-context-stub.js';
+import { __clearDebugEvents, __getDebugEvents } from './util/debug-console-stub.js';
 
 const scene = {
     id: 'story-scene', timelineId: 'timeline-one', mode: 'story',
@@ -39,7 +40,10 @@ function makeCapture() {
     return { doc, capture };
 }
 
-beforeEach(() => __setExtensionSettings({ remodel: {} }));
+beforeEach(() => {
+    __clearDebugEvents();
+    __setExtensionSettings({ remodel: {} });
+});
 afterEach(() => setStoryLoomArchiveTestAdapter(null));
 
 test('Story and Roleplay Scenes appear in the same Timeline Archive list', () => {
@@ -212,6 +216,16 @@ test('accepted Story consequences create linked Timeline Web records without a r
     expect(listVariableValues({ timelineId: scene.timelineId })).toEqual([
         expect.objectContaining({ name: 'Watch Confidence', value: 35, loreLinks: [expect.objectContaining({ book: 'Living Story', uid: '7', hint: 'subject' })] }),
     ]);
+    expect(__getDebugEvents()).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+            category: 'story-archive', type: 'capture.applied',
+            detail: expect.objectContaining({
+                sceneMode: 'story', bodyRevision: 1, worldSenseReceiptId: expect.any(String),
+                webReceipt: expect.objectContaining({ sourceSceneId: scene.id, documentRevision: 1, sourceSpan: { start: 0, end: prose.length } }),
+                loreOutcome: expect.objectContaining({ proposed: 0, queued: 0 }),
+            }),
+        }),
+    ]));
 
     await supersedeStoryBeatArchive({ scene, docId: doc.id, beatId: 'web-beat' });
     expect(getTimelineGoals(scene.timelineId)).toEqual([]);
@@ -266,6 +280,28 @@ test('regenerating a beat rolls its prior accepted Archive transaction back', as
 
     await supersedeStoryBeatArchive({ scene, docId: doc.id, beatId: 'beat-one' });
     expect(getStoryArchiveCapture(doc.id, capture.id)).toMatchObject({ status: 'superseded', transactionId: null });
+    expect(listEvents(scene.timelineId, scene.id)).toEqual([]);
+});
+
+test('a migrated pre-provenance StoryDoc can catch up and roll its new transaction back', async () => {
+    __setExtensionSettings({ remodel: { storyDocsV1: {
+        version: 1, docIds: ['legacy'], docs: {
+            legacy: { id: 'legacy', title: 'Legacy', body: 'Mara opened the old gate.', guidance: '', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+        },
+    } } });
+    const preview = previewStoryArchiveCatchUp('legacy');
+    const capture = createStoryArchiveCapture('legacy', {
+        origin: 'user', text: preview.changes[0].afterText, start: 0, end: preview.changes[0].end,
+        beatId: 'legacy-catch-up', stableKey: 'legacy-catch-up',
+    });
+    setStoryLoomArchiveTestAdapter(async () => fence([
+        { id: 'event', capability: 'event.record', arguments: { summary: 'Mara opened the old gate.' }, reason: 'accepted legacy prose' },
+    ]));
+
+    const applied = await processStoryArchiveCapture({ scene, docId: 'legacy', captureId: capture.id });
+    expect(applied.status).toBe('applied');
+    expect(listEvents(scene.timelineId, scene.id)).toHaveLength(1);
+    await supersedeStoryBeatArchive({ scene, docId: 'legacy', beatId: 'legacy-catch-up' });
     expect(listEvents(scene.timelineId, scene.id)).toEqual([]);
 });
 

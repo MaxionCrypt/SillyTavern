@@ -84,3 +84,21 @@ test('large legacy additions split on exact bounded source spans', () => {
     expect(parts.map((part) => part.part)).toEqual(parts.map((_part, index) => index + 1));
     expect(new Set(parts.map((part) => part.totalParts))).toEqual(new Set([parts.length]));
 });
+
+test('large-manuscript catch-up preview and capture splitting remain bounded', () => {
+    const body = Array.from({ length: 7000 }, (_value, index) => `Passage ${index} records an accepted fact.`).join('\n\n');
+    const doc = createStoryDoc({ title: 'Large manuscript performance' });
+    updateStoryDoc(doc.id, { body });
+    const startedAt = performance.now();
+    const preview = previewStoryArchiveCatchUp(doc.id);
+    const parts = preview.changes.flatMap((change) => splitStoryArchiveAddition(change));
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(preview.changes).toHaveLength(1);
+    expect(parts.length).toBeGreaterThan(20);
+    expect(parts.every((part) => part.afterText.length <= STORY_ARCHIVE_PASSAGE_MAX_CHARS)).toBe(true);
+    expect(parts.map((part) => part.afterText).join('\n\n').replace(/\s+/g, ' ').trim()).toBe(body.replace(/\s+/g, ' ').trim());
+    // A roughly 280 KB legacy manuscript remains interactive even under Jest's
+    // instrumented VM. Individual API captures are still capped at 6 KB.
+    expect(elapsedMs).toBeLessThan(2500);
+});

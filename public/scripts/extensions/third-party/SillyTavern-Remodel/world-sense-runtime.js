@@ -1,6 +1,6 @@
 import { listCharStates, listEvents, listSceneFacts, getBeat } from './archivist-store.js';
 import { listLivingLoreMetadata } from './living-lore-store.js';
-import { getSceneGoals } from './story-goals-store.js';
+import { getTimelineGoals } from './story-goals-store.js';
 import { getTimelineStore } from './timeline-state.js';
 import { listVariableValues } from './variables-store.js';
 import { recordDebugEvent } from './debug-console.js';
@@ -116,7 +116,11 @@ async function resolveWorldSenseForPhase(scene, options, { persist, consumePrefe
 function prepareQuery(scene, options) {
     if (!scene?.id || !scene?.timelineId) return null;
     const timeline = getTimelineStore().timelines[String(scene.timelineId)] || {};
-    const goals = getSceneGoals(scene.id, { includeResolved: false, states: ['active', 'background'] });
+    // Goals are Timeline Web records. Scene links influence presentation, but
+    // cannot be the retrieval boundary: a Goal established in Story must be
+    // able to follow its linked lore into a later Roleplay Scene without being
+    // copied into that Scene first.
+    const goals = getTimelineGoals(scene.timelineId, { includeResolved: false });
     const facts = listSceneFacts(scene.timelineId, scene.id);
     const charStates = listCharStates(scene.timelineId, scene.id);
     const events = listEvents(scene.timelineId, scene.id).slice(-8);
@@ -159,6 +163,7 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
             archiveHash: buildTimelineContinuityDocuments(scene.timelineId).hash,
             queryHash: prepared.packet.hash,
             queryLength: prepared.packet.length,
+            querySources: summarizeQuerySources(prepared.packet),
             modelId: profile.modelId,
             indexRevision: [getWorldSenseIndexState(scene.timelineId)?.bookHash, getWorldSenseIndexState(scene.timelineId)?.archiveHash].filter(Boolean).join(':'),
             degraded: false,
@@ -239,6 +244,7 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         archiveHash: continuitySource.hash,
         queryHash: prepared.packet.hash,
         queryLength: prepared.packet.length,
+        querySources: summarizeQuerySources(prepared.packet),
         modelId: profile.modelId,
         indexRevision: [getWorldSenseIndexState(scene.timelineId)?.bookHash, getWorldSenseIndexState(scene.timelineId)?.archiveHash].filter(Boolean).join(':'),
         degraded: Boolean(semantic.degraded),
@@ -282,6 +288,7 @@ function saveReceipt(scene, result, { reusedPrefetch }) {
         archiveHash: result.archiveHash,
         queryHash: result.queryHash,
         queryLength: result.queryLength,
+        querySources: result.querySources || [],
         modelId: result.modelId,
         indexRevision: result.indexRevision,
         elapsedMs: result.elapsedMs,
@@ -295,6 +302,7 @@ function saveReceipt(scene, result, { reusedPrefetch }) {
         },
         propagation: result.propagation,
         continuity: result.continuity || [],
+        promptInclusion: describePromptInclusion(result.selected),
         selected: result.selected,
         rejected: result.rejected,
     });
@@ -308,4 +316,29 @@ function saveReceipt(scene, result, { reusedPrefetch }) {
         // Retrieval is useful without Debug; diagnostics cannot break a turn.
     }
     return receipt;
+}
+
+function summarizeQuerySources(packet) {
+    return (packet?.sources || []).map((source) => ({
+        kind: String(source.kind || ''),
+        label: String(source.label || ''),
+        characters: String(source.text || '').length,
+    }));
+}
+
+function describePromptInclusion(selected) {
+    return (selected || []).map((item) => item?.kind === 'continuity'
+        ? {
+            kind: 'continuity', included: true,
+            sourceSceneId: String(item.sceneId || ''),
+            sourceSceneMode: String(item.sceneMode || ''),
+            recordType: String(item.recordType || ''),
+            recordId: String(item.recordId || ''),
+            rankingReasons: (item.reasons || []).map((reason) => String(reason.channel || '')).filter(Boolean),
+        }
+        : {
+            kind: 'lore', included: true,
+            book: String(item?.book || ''), uid: String(item?.uid ?? ''), name: String(item?.name || ''),
+            rankingReasons: (item?.reasons || []).map((reason) => String(reason.channel || '')).filter(Boolean),
+        });
 }
