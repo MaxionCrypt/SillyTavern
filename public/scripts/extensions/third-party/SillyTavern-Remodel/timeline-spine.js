@@ -6590,12 +6590,8 @@ function ensureStoryEditor() {
                 <button type="button" data-remodel-storydoc-tool="guidance" title="Author guidance"><i class="fa-solid fa-compass" aria-hidden="true"></i><span>Guide</span></button>
                 <button type="button" data-remodel-storydoc-tool="state" title="Timeline State"><i class="fa-solid fa-chart-simple" aria-hidden="true"></i><span>State</span></button>
                 <button type="button" data-remodel-storydoc-tool="archive" title="Review manuscript changes for the Loom Archive"><i class="fa-solid fa-box-archive" aria-hidden="true"></i><span>Archive</span></button>
-                <span class="remodel-storydoc-tool-control remodel-storydoc-native-slot" data-remodel-storydoc-native-slot="options_button" title="Story options">
-                    <span class="remodel-storydoc-tool-label">Menu</span>
-                </span>
-                <span class="remodel-storydoc-tool-control remodel-storydoc-native-slot" data-remodel-storydoc-native-slot="extensionsMenuButton" title="Extensions">
-                    <span class="remodel-storydoc-tool-label">Tools</span>
-                </span>
+                <button type="button" data-remodel-storydoc-author-note title="Open Author's Note"><i class="fa-solid fa-note-sticky" aria-hidden="true"></i><span>Author's Note</span></button>
+                <button type="button" data-remodel-storydoc-tool="loom" title="Choose the Loom Archive recipe and connection"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i><span>Loom</span></button>
                 <button type="button" data-remodel-storydoc-continue title="Continue story"><i class="fa-solid fa-play" aria-hidden="true"></i><span>Continue</span></button>
                 <button type="button" data-remodel-storydoc-stop title="Stop generation" disabled><i class="fa-solid fa-stop" aria-hidden="true"></i><span>Stop</span></button>
                 <span class="remodel-storydoc-indicator" data-remodel-storydoc-indicator aria-live="polite"></span>
@@ -7409,6 +7405,13 @@ function bindStoryEditorEvents() {
             transitionToWindow({ kind: 'tavern', tab: 'timeline' });
             return;
         }
+        if (target.closest('[data-remodel-storydoc-author-note]')) {
+            event.preventDefault();
+            const authorNote = document.getElementById('option_toggle_AN');
+            if (authorNote instanceof HTMLElement) authorNote.click();
+            else showRoleplayToast("Author's Note is not available in this Tavern session.");
+            return;
+        }
         const promptChoice = target.closest('[data-remodel-scene-prompt-choice]');
         if (promptChoice) {
             event.preventDefault();
@@ -8197,6 +8200,41 @@ async function openStoryToolPanel(tool, trigger = null) {
             updateStoryDoc(activeStoryDocId, { scanGuidanceForLore: scanGuidance.checked });
             setStorySaveState('Saved');
         });
+        return;
+    }
+    if (tool === 'loom') {
+        const scene = getActiveScene();
+        const profiles = (getContext().extensionSettings?.connectionManager?.profiles || [])
+            .filter((profile) => {
+                const boundary = getContext().CONNECT_API_MAP?.[profile?.api]?.selected;
+                return profile?.id && profile?.name && ['openai', 'textgenerationwebui'].includes(boundary);
+            })
+            .sort((a, b) => a.name.localeCompare(b.name));
+        const currentProfileId = scene?.generationProfileIds?.loom || '';
+        const connectionOptions = [
+            '<option value="">Current SillyTavern connection</option>',
+            ...profiles.map((profile) => {
+                const detail = [profile.api, profile.model].filter(Boolean).join(' Â· ');
+                return `<option value="${escapeAttribute(profile.id)}">${escapeHtml(profile.name)}${detail ? ` â€” ${escapeHtml(detail)}` : ''}</option>`;
+            }),
+        ].join('');
+        title.textContent = 'Loom Archive';
+        body.innerHTML = `<p class="remodel-storydoc-panel-copy">The Loom reads accepted manuscript passages after they are written. It records durable continuity, Timeline Web changes, and Living Lore proposals; it does not rewrite your prose.</p><label class="remodel-storydoc-field-label">Loom prompt recipe${renderScenePromptChoice(scene, false, 'loom')}</label><label class="remodel-storydoc-field-label">Loom connection<select data-remodel-storydoc-loom-profile aria-label="Loom connection profile">${connectionOptions}</select></label><p class="remodel-storydoc-panel-foot">Both choices belong to this Scene only. The Loom uses the selected connection only for Archive and Timeline Web work.</p>`;
+        const connection = body.querySelector('[data-remodel-storydoc-loom-profile]');
+        if (connection instanceof HTMLSelectElement) {
+            connection.value = profiles.some((profile) => profile.id === currentProfileId) ? currentProfileId : '';
+            connection.addEventListener('change', () => {
+                const activeScene = getActiveScene();
+                if (!activeScene) return;
+                updateScene(activeScene.id, {
+                    generationProfileIds: {
+                        ...(activeScene.generationProfileIds || {}),
+                        loom: connection.value || null,
+                    },
+                });
+                setStorySaveState('Loom connection saved');
+            });
+        }
         return;
     }
     title.textContent = 'Generation context';
