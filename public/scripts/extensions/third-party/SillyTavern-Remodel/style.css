@@ -10594,11 +10594,13 @@ body.st-remodel-active .remodel-world-sense-auto-safe small {
 
 body.st-remodel-active .remodel-world-sense-grid {
   grid-template-columns: minmax(320px, 0.9fr) minmax(390px, 1.1fr);
-  min-height: 610px;
+  align-items: start;
+  min-height: 0;
 }
 
 body.st-remodel-active .remodel-world-sense-browser,
 body.st-remodel-active .remodel-world-sense-inspector {
+  align-self: start;
   min-width: 0;
   padding: 16px;
 }
@@ -13030,11 +13032,28 @@ body.st-remodel-active .remodel-archive-continuity-button {
     font: 600 .63rem/1 var(--remodel-sans, sans-serif) !important;
 }
 
+body.st-remodel-active .remodel-archive-continuity-state {
+    margin-left: 2px !important;
+    padding: 3px 5px !important;
+    color: rgba(235, 231, 218, .38) !important;
+    background: rgba(235, 231, 218, .05) !important;
+    border-radius: 999px !important;
+    font-size: .52rem !important;
+    letter-spacing: .08em !important;
+    text-transform: uppercase !important;
+}
+
 body.st-remodel-active .remodel-archive-continuity-button.is-active,
 body.st-remodel-active .remodel-archive-item-actions button.is-active {
     color: #eee568 !important;
-    border-color: rgba(215, 200, 0, .35) !important;
-    background: rgba(215, 200, 0, .11) !important;
+    border-color: rgba(215, 200, 0, .56) !important;
+    background: rgba(215, 200, 0, .16) !important;
+    box-shadow: inset 0 0 0 1px rgba(215, 200, 0, .08), 0 0 12px rgba(215, 200, 0, .07) !important;
+}
+
+body.st-remodel-active .remodel-archive-continuity-button.is-active .remodel-archive-continuity-state {
+    color: #141309 !important;
+    background: #d7c800 !important;
 }
 
 body.st-remodel-active .remodel-archive-sections {

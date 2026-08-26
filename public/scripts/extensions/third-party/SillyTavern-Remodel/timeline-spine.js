@@ -4233,7 +4233,7 @@ function renderArchiveViewToggle() {
 function renderArchiveContinuityButton(label, icon, active, action, data = {}) {
     const attrs = Object.entries(data).map(([key, value]) => `data-${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}="${escapeAttribute(String(value ?? ''))}"`).join(' ');
     return `<button type="button" class="remodel-archive-continuity-button ${active ? 'is-active' : ''}" aria-pressed="${active ? 'true' : 'false'}" data-remodel-timeline-action="${action}" ${attrs}>
-        <i class="fa-solid ${icon}" aria-hidden="true"></i><span>${escapeHtml(label)}</span>
+        <i class="fa-solid ${icon}" aria-hidden="true"></i><span>${escapeHtml(label)}</span><b class="remodel-archive-continuity-state" aria-hidden="true">${active ? 'On' : 'Off'}</b>
     </button>`;
 }
 
