@@ -369,6 +369,26 @@ test('a completed turn waits for the user and Continue advances the next one', a
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 });
 
+test('Continue answers an already-posted user action without posting or routing it twice', async () => {
+    const chat = __getChat();
+    const waitingAction = { name: 'User', is_user: true, is_system: false, mes: 'I tell Wren to open the gate.', extra: {} };
+    chat.push(waitingAction);
+    let receivedEnvelope = null;
+    setLiveDirectionTestAdapters({
+        generatePerformer: async ({ envelope }) => {
+            receivedEnvelope = envelope;
+            await speak();
+        },
+    });
+
+    await requestNextDirection(scene);
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    expect(receivedEnvelope?.currentPlayerAction).toBe(waitingAction.mes);
+    expect(chat.filter((message) => message.is_user)).toEqual([waitingAction]);
+    expect(chat).toHaveLength(2);
+    expect(chat[1].mes).toBe(RESPONSE);
+});
+
 test('STOP during a new private Narrator pass keeps the preceding completed output and reports no failure', async () => {
     const previous = { name: 'Wren', is_user: false, mes: 'The preceding turn must remain.', extra: {} };
     __getChat().push(previous);

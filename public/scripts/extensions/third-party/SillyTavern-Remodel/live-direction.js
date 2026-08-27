@@ -530,6 +530,29 @@ export async function requestNextDirection(scene = hooks.getActiveScene(), { not
     const sequence = activeRun?.autonomousSequence || 0;
     if (activeRun?.messageId != null) await finalizeRunMessage(activeRun, { state: 'complete' });
     activeRun = null;
+    // Continue has one important edge case: a user row can already be the
+    // newest accepted message because an earlier generation failed after the
+    // row was posted, or because the user deliberately left it waiting for a
+    // response. It is still the action this turn must answer. Treat that exact
+    // existing object like a retry's `postedMessage`: do not post it again,
+    // exclude it from the Loom's accepted-history window, and carry its text
+    // once through CURRENT PLAYER ACTION. The native Narrator still sees the
+    // row in context.chat normally.
+    const chat = getContext().chat || [];
+    const newest = chat[chat.length - 1];
+    const waitingPlayerAction = newest?.is_user
+        ? sanitizeDirectionText(newest.extra?.remodelDirection?.acceptedText ?? newest.mes ?? '').trim()
+        : '';
+    if (waitingPlayerAction) {
+        return beginDirection({
+            scene,
+            action: waitingPlayerAction,
+            insertUser: true,
+            postedMessage: newest,
+            autonomousSequence: sequence,
+            notebookTurn,
+        });
+    }
     return beginDirection({ scene, action: '[Continue the scene from accepted history.]', insertUser: false, autonomousSequence: sequence, notebookTurn });
 }
 
