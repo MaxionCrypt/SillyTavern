@@ -1,3 +1,5 @@
+import { normalizeReasoningEffortForModel } from '../../../reasoning-compat.js';
+
 /**
  * Make a retry materially different when an OpenRouter model used its whole
  * answer for reasoning and returned no visible prose.
@@ -17,7 +19,11 @@ export function applyNarratorRetryPolicy(request, retry = {}) {
     if (String(request.chat_completion_source || '').toLowerCase() !== 'openrouter') return false;
     if (Number(retry.emptyRetries) < 1 || Number(retry.previousReasoningLength) < 1) return false;
 
-    request.reasoning_effort = 'none';
+    request.reasoning_effort = normalizeReasoningEffortForModel(
+        request.chat_completion_source,
+        request.model,
+        'none',
+    );
     request.include_reasoning = false;
     return true;
 }

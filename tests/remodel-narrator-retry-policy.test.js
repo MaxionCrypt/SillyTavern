@@ -14,6 +14,19 @@ test('a reasoning-only OpenRouter retry disables reasoning on that request', () 
     expect(request.include_reasoning).toBe(false);
 });
 
+test('a GLM 5.3 retry hides thoughts but keeps the model at its minimum valid reasoning effort', () => {
+    const request = {
+        chat_completion_source: 'openrouter',
+        model: 'z-ai/glm-5.3',
+        reasoning_effort: 'low',
+        include_reasoning: true,
+    };
+
+    expect(applyNarratorRetryPolicy(request, { emptyRetries: 1, previousReasoningLength: 575 })).toBe(true);
+    expect(request.reasoning_effort).toBe('low');
+    expect(request.include_reasoning).toBe(false);
+});
+
 test('the first request and a genuinely silent retry preserve user settings', () => {
     const first = { chat_completion_source: 'openrouter', reasoning_effort: 'low', include_reasoning: true };
     const silent = { ...first };

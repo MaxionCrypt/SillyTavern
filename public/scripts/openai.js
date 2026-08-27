@@ -71,6 +71,7 @@ import { countTokensOpenAIAsync, getTokenizerModel } from './tokenizers.js';
 import { isMobile } from './RossAscends-mods.js';
 import { saveLogprobsForActiveMessage } from './logprobs.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
+import { normalizeReasoningEffortForModel } from './reasoning-compat.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from './slash-commands/SlashCommandArgument.js';
 import { renderTemplateAsync } from './templates.js';
@@ -2600,7 +2601,11 @@ function getReasoningEffort(settings = null, model = null) {
         }
     }
 
-    const reasoningEffort = resolveReasoningEffort();
+    const reasoningEffort = normalizeReasoningEffortForModel(
+        settings.chat_completion_source,
+        model,
+        resolveReasoningEffort(),
+    );
 
     // Check if the resolved effort supported by the model
     if (settings.chat_completion_source === chat_completion_sources.ELECTRONHUB) {
