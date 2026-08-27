@@ -4,7 +4,7 @@ import { STORY_ARCHIVE_CONTRACT, STORY_ARCHIVE_LOOM_RECIPE_NAME, STORY_ARCHIVE_P
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 22;
+const STORE_VERSION = 23;
 
 export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
@@ -59,6 +59,7 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         template('nativeContext', 'Native Roleplay Context', 'system', 'roleplay.native', { textOnly: true, locked: true }),
     ]),
     loom: Object.freeze([
+        template('playerAction', 'Current Player Action', 'user', 'player.action', { description: 'The current player-authored speech or attempted action only. It is authoritative over conflicting inference in the Narrator draft.' }),
         template('archiveState', 'Archive, Goals & Open Thread', 'system', 'loom.archive', { description: 'The Loom-readable scene facts, character state, recorded events, provisional open thread, and active Goals.', arguments: 'events=N limits “What happened”; goals=N limits active Goals. Zero hides that section.' }),
         template('mechanicsBoard', 'Archive Operations & Mechanics', 'system', 'loom.mechanics', { description: 'The Archive operations always available to the Loom, plus the current Goals and Variables board when mechanics are enabled.' }),
         template('livingLore', 'Selected Living Lore', 'system', 'loom.lore', { description: 'The bounded, revisioned Timeline lore entries selected by World Sense, plus the typed proposal contract. Proposals do not write directly.' }),
@@ -406,6 +407,7 @@ const PATCH_LOOM_RECIPE_NAME = 'Loom · Patch (fast)';
 function patchLoomBlocks() {
     return [
         createPromptBlock({ kind: 'message', role: 'system', content: LOOM_POLICY_PATCH }),
+        createPromptBlockFromTemplate('loom', 'playerAction'),
         createPromptBlockFromTemplate('loom', 'archiveState'),
         createPromptBlockFromTemplate('loom', 'mechanicsBoard'),
         createPromptBlockFromTemplate('loom', 'livingLore'),
@@ -424,6 +426,7 @@ function patchLoomBlocks() {
 function defaultLoomBlocks() {
     return [
         createPromptBlock({ kind: 'message', role: 'system', content: LOOM_POLICY_DEFAULT }),
+        createPromptBlockFromTemplate('loom', 'playerAction'),
         createPromptBlockFromTemplate('loom', 'archiveState'),
         createPromptBlockFromTemplate('loom', 'mechanicsBoard'),
         createPromptBlockFromTemplate('loom', 'livingLore'),
@@ -740,6 +743,16 @@ function normalizeStore(store, seed) {
         }
     }
 
+    // v23 makes the current player-authored turn a first-class Loom source.
+    // It was used for retrieval but disappeared when the post-Narrator Loom
+    // snapshot was rebuilt, forcing the model to infer the action from prose.
+    if (previousVersion < 23) {
+        for (const id of store.recipeIds) {
+            const recipe = store.recipes[id];
+            if (recipe?.mode === 'loom' && ensurePlayerActionSource(recipe.blocks)) changed = true;
+        }
+    }
+
     store.active = store.active && typeof store.active === 'object' ? store.active : {};
     if (store.active.director) { delete store.active.director; changed = true; }
     if (store.active.goalDirector) { delete store.active.goalDirector; changed = true; }
@@ -780,6 +793,14 @@ function ensureStoryGoalsSource(blocks) {
 function ensureLivingLoreSource(blocks) {
     if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*loom\.lore\b/i.test(block.content || ''))) return false;
     const source = createPromptBlockFromTemplate('loom', 'livingLore');
+    const draftIndex = blocks.findIndex((block) => /\{\{\s*narrator\.draft\b/i.test(block.content || ''));
+    blocks.splice(draftIndex >= 0 ? draftIndex : blocks.length, 0, source);
+    return true;
+}
+
+function ensurePlayerActionSource(blocks) {
+    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*player\.action\b/i.test(block.content || ''))) return false;
+    const source = createPromptBlockFromTemplate('loom', 'playerAction');
     const draftIndex = blocks.findIndex((block) => /\{\{\s*narrator\.draft\b/i.test(block.content || ''));
     blocks.splice(draftIndex >= 0 ? draftIndex : blocks.length, 0, source);
     return true;

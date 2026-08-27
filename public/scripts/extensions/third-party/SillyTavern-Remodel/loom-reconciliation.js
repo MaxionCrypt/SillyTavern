@@ -105,8 +105,15 @@ export function usesLoomReconciliation(scene) {
 }
 
 /** Dynamic context blocks available to every Loom recipe. */
-export function buildLoomRecipeSources({ draft, draftReasoning = '', narrativeState = '', mechanicsSkill = '', livingLore = '' }) {
+export function buildLoomRecipeSources({ draft, draftReasoning = '', playerAction = '', narrativeState = '', mechanicsSkill = '', livingLore = '' }) {
     return {
+        playerAction: String(playerAction || '').trim()
+            ? [
+                'CURRENT PLAYER ACTION — AUTHORITATIVE TURN INPUT',
+                'This is the player\'s explicit speech, voluntary action, or attempted action for this turn. It outranks conflicting inference in the Narrator draft. Preserve what the player explicitly said or attempted, judge only uncertain outcomes and world reactions, and never invent additional voluntary player speech, thoughts, decisions, or actions.',
+                String(playerAction).trim(),
+            ].join('\n')
+            : '',
         archiveState: String(narrativeState || '').trim()
             ? `Current Archive, Goals, and open thread:\n${String(narrativeState).trim()}`
             : '',
@@ -134,10 +141,10 @@ export function buildLoomRecipeSources({ draft, draftReasoning = '', narrativeSt
  * @param {{draft: string, draftReasoning?: string, narrativeState?: string, mechanicsSkill?: string, livingLore?: string}} input
  * @returns {{role: string, content: string}[]}
  */
-export function buildLoomPrompt({ draft, draftReasoning = '', narrativeState = '', mechanicsSkill = '', livingLore = '' }) {
-    const sources = buildLoomRecipeSources({ draft, draftReasoning, narrativeState, mechanicsSkill, livingLore });
+export function buildLoomPrompt({ draft, draftReasoning = '', playerAction = '', narrativeState = '', mechanicsSkill = '', livingLore = '' }) {
+    const sources = buildLoomRecipeSources({ draft, draftReasoning, playerAction, narrativeState, mechanicsSkill, livingLore });
     const system = [LOOM_POLICY_DEFAULT, sources.archiveState, sources.mechanicsBoard, sources.livingLore, LOOM_OUTPUT_CONTRACT_DEFAULT].filter(Boolean).join('\n\n');
-    const user = [sources.narratorDraft, sources.narratorReasoning].filter(Boolean).join('\n\n');
+    const user = [sources.playerAction, sources.narratorDraft, sources.narratorReasoning].filter(Boolean).join('\n\n');
     return [
         { role: 'system', content: system },
         { role: 'user', content: user },

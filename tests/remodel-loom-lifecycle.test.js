@@ -523,6 +523,8 @@ test('Loom preview and the real reconciliation share the exact recipe compiler',
     await runLoomReconciliation({ scene, snapshot: preview.snapshot, draft: RESPONSE, draftReasoning: reasoning });
     expect(sentPrompt).toEqual(preview.prompt);
     expect(preview.trace.length).toBeGreaterThan(0);
+    expect(sentPrompt.map((message) => message.content).join('\n')).toContain('Wren tests the gate.');
+    expect(sentPrompt.map((message) => message.content).join('\n')).toMatch(/AUTHORITATIVE TURN INPUT/);
 });
 
 test('Loom preview clearly marks the future Narrator values it cannot know yet', async () => {

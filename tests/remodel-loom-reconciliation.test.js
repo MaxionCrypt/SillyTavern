@@ -36,6 +36,7 @@ test('goal objectives render title + description, never the odds or status numbe
 
 test('the Loom prompt asks for complete final prose followed by the state fence', () => {
     const messages = buildLoomPrompt({
+        playerAction: 'I lower my voice and ask Marisol, “What is your mantra?”',
         draft: 'Eli leans in and Marissa melts into him.',
         draftReasoning: 'He goes for the kiss.',
         narrativeState: '## Scene\n- location: cafe',
@@ -52,6 +53,9 @@ test('the Loom prompt asks for complete final prose followed by the state fence'
     expect(system).toContain('Win Marissa over');                          // mechanical state (with numbers)
     expect(user).toContain('Eli leans in and Marissa melts into him.');    // the draft
     expect(user).toContain('He goes for the kiss.');                       // draft reasoning
+    expect(user).toContain('CURRENT PLAYER ACTION — AUTHORITATIVE TURN INPUT');
+    expect(user).toContain('What is your mantra?');
+    expect(user).toMatch(/outranks conflicting inference/i);
 });
 
 test('parseLoomReply reads swaps and requests from the state fence', () => {

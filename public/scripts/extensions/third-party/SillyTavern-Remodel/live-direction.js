@@ -993,7 +993,10 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         }
         if (token.aborted) return abandonPass(token, 'insert-user');
         advancePassStage(token, 'lore');
-        const snapshot = await buildDirectionSnapshot(scene, action, authorizedGoalIds, { excludeFromHistory: postedMessage });
+        const snapshot = await buildDirectionSnapshot(scene, action, authorizedGoalIds, {
+            excludeFromHistory: postedMessage,
+            currentPlayerAction: insertUser ? action : '',
+        });
         journal('snapshot', {
             passId: token.id,
             castCount: snapshot.cast.length,
@@ -1126,7 +1129,7 @@ function abandonPass(token, stage) {
     return false;
 }
 
-async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { preview = false, excludeFromHistory = null } = {}) {
+async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { preview = false, excludeFromHistory = null, currentPlayerAction = '' } = {}) {
     const context = getContext();
     const cast = hooks.getCast() || [];
     const persona = hooks.getPersona() || null;
@@ -1253,6 +1256,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     return {
         scene: { id: scene.id, timelineId: scene.timelineId, title: scene.title },
         currentAction: action,
+        currentPlayerAction: String(currentPlayerAction || ''),
         cast: performingCast
             .map((member) => ({ ref: member.ref || normalizeRef(member), label: member.label || member.name, description: member.description || '', personality: member.personality || '', scenario: member.scenario || '' })),
         narratorRef: scene.liveDirection?.narratorRef || null,
@@ -1781,6 +1785,7 @@ async function beginLoomVisibleStream(run, scene) {
 
     const snapshot = {
         ...await __buildLoomSnapshot({ id: run.sceneId, timelineId: run.timelineId }),
+        currentPlayerAction: run.envelope?.currentPlayerAction || '',
         livingLore: run.envelope?.livingLore || null,
         archiveProjection: run.envelope?.archiveProjection || null,
     };
@@ -1983,13 +1988,14 @@ function compileLoomRequest({ scene, snapshot, draft, draftReasoning = '' }) {
     const narrativeState = resolveArchive();
     const mechanicsSkill = buildLoomSkill(snapshot?.mechanics);
     const livingLore = formatLivingLorePacket(snapshot?.livingLore);
-    const sources = buildLoomRecipeSources({ draft, draftReasoning, narrativeState, mechanicsSkill, livingLore });
+    const playerAction = String(snapshot?.currentPlayerAction || '');
+    const sources = buildLoomRecipeSources({ draft, draftReasoning, playerAction, narrativeState, mechanicsSkill, livingLore });
     sources.archiveState = (args = {}) => buildLoomRecipeSources({ narrativeState: resolveArchive(args) }).archiveState;
     const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
     const compiled = compilePromptRecipe(recipe, sources, { trace: true });
     const usedFallback = !compiled.messages.length;
     const prompt = usedFallback
-        ? buildLoomPrompt({ draft, draftReasoning, narrativeState, mechanicsSkill, livingLore })
+        ? buildLoomPrompt({ draft, draftReasoning, playerAction, narrativeState, mechanicsSkill, livingLore })
         : compiled.messages;
     return { prompt, recipe, trace: usedFallback ? [] : compiled.trace, usedFallback, sources };
 }
@@ -2008,7 +2014,7 @@ export async function previewLoomPrompt(scene, { action = '', draft = '', draftR
         || '[PREVIEW PLACEHOLDER: the completed private Narrator draft will be inserted here before the Loom request is sent.]';
     const previewReasoning = String(draftReasoning || '').trim()
         || '[PREVIEW PLACEHOLDER: private Narrator reasoning will be inserted here when the selected model provides it.]';
-    const snapshot = await buildDirectionSnapshot(scene, previewAction, [], { preview: true });
+    const snapshot = await buildDirectionSnapshot(scene, previewAction, [], { preview: true, currentPlayerAction: previewAction });
     return {
         ...compileLoomRequest({ scene, snapshot, draft: previewDraft, draftReasoning: previewReasoning }),
         snapshot,
@@ -2738,6 +2744,7 @@ async function catchUpArchive(run, reason) {
     const sources = buildLoomRecipeSources({
         draft: prose,
         draftReasoning: narratorReasoning(run),
+        playerAction: run.envelope?.currentPlayerAction || '',
         narrativeState,
         mechanicsSkill,
         livingLore: formatLivingLorePacket(run.envelope?.livingLore),
@@ -2749,6 +2756,7 @@ async function catchUpArchive(run, reason) {
         : buildLoomPrompt({
             draft: prose,
             draftReasoning: narratorReasoning(run),
+            playerAction: run.envelope?.currentPlayerAction || '',
             narrativeState,
             mechanicsSkill,
             livingLore: formatLivingLorePacket(run.envelope?.livingLore),
@@ -3324,6 +3332,7 @@ function normalizeEnvelope(value, scene) {
         flow: { continueAfter: Boolean(value.flow?.continueAfter), hardPauseAfter: Boolean(value.flow?.hardPauseAfter) },
         mechanics: { pendingRequests },
         mechanicsSnapshot: value.mechanicsSnapshot ? structuredClone(value.mechanicsSnapshot) : null,
+        currentPlayerAction: String(value.currentPlayerAction || ''),
         worldSense: value.worldSense ? structuredClone(value.worldSense) : null,
         livingLore: value.livingLore ? structuredClone(value.livingLore) : null,
         archiveProjection: value.archiveProjection ? structuredClone(value.archiveProjection) : null,
