@@ -21,7 +21,7 @@ import { buildEmptyResponseNudge, buildNarratorArchivistSections, buildGoalObjec
 import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
 import { formatLivingLorePacket } from './living-lore-proposals.js';
 import { promotionEvidence } from './world-sense-promotion.js';
-import { saveWorldSensePromotionDecisionReceipt } from './world-sense-store.js';
+import { saveWorldSensePromotionDecisionReceipt, saveWorldSenseProposalRejections } from './world-sense-store.js';
 import {
     invalidateLivingLoreProposals,
     listLivingLoreProposals,
@@ -2634,6 +2634,13 @@ async function queueAcceptedLoreProposals(run, { proposals = null, phase = 'comp
         });
         run.loreProposalIds = mergeStrings(run.loreProposalIds, result.queued.map((record) => record.id));
         if (result.rejected.length) {
+            saveWorldSenseProposalRejections({
+                timelineId: run.timelineId,
+                sceneId: run.sceneId,
+                directionId: run.directionId,
+                phase,
+                rejected: result.rejected,
+            });
             run.checkpointDiagnostics = [
                 ...(run.checkpointDiagnostics || []),
                 ...result.rejected.map((item) => `Living Lore proposal rejected: ${item.code}.`),

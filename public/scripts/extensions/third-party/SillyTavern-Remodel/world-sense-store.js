@@ -2,7 +2,7 @@ import { getContext } from '../../../st-context.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'worldSenseV1';
-const STORE_VERSION = 2;
+const STORE_VERSION = 3;
 export const DEFAULT_WORLD_SENSE_MODEL = 'Xenova/all-MiniLM-L6-v2';
 export const WORLD_SENSE_MODES = Object.freeze(['off', 'observe', 'suggest', 'auto-safe']);
 
@@ -90,6 +90,30 @@ export function saveWorldSensePromotionDecisionReceipt(receiptId, { decisions = 
     return structuredClone(receipt.promotionDecision);
 }
 
+export function saveWorldSenseProposalRejections({ timelineId = '', sceneId = '', directionId = '', phase = '', rejected = [] } = {}) {
+    const items = (Array.isArray(rejected) ? rejected : []).map(compactProposalRejection).filter(Boolean);
+    if (!items.length) return null;
+    const store = getWorldSenseStore();
+    const record = {
+        id: `proposal-rejection-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        at: now(),
+        timelineId: String(timelineId || ''),
+        sceneId: String(sceneId || ''),
+        directionId: String(directionId || ''),
+        phase: String(phase || ''),
+        items,
+    };
+    store.proposalRejections.push(record);
+    if (store.proposalRejections.length > 100) store.proposalRejections.splice(0, store.proposalRejections.length - 100);
+    save();
+    return structuredClone(record);
+}
+
+export function listWorldSenseProposalRejections({ timelineId = '' } = {}) {
+    const records = getWorldSenseStore().proposalRejections;
+    return (timelineId ? records.filter((item) => item.timelineId === String(timelineId)) : records).map((item) => structuredClone(item));
+}
+
 export function getWorldSenseContinuity(sceneId) {
     return structuredClone(getWorldSenseStore().continuityByScene[String(sceneId)] || []);
 }
@@ -101,6 +125,7 @@ function emptyStore() {
         indexes: {},
         benchmark: null,
         receipts: [],
+        proposalRejections: [],
         continuityByScene: {},
     };
 }
@@ -130,7 +155,23 @@ function normalizeStore(store) {
     }
     store.benchmark = isObject(store.benchmark) ? store.benchmark : null;
     store.receipts = Array.isArray(store.receipts) ? store.receipts.filter(isObject).slice(-100) : [];
+    store.proposalRejections = Array.isArray(store.proposalRejections) ? store.proposalRejections.filter(isObject).slice(-100) : [];
     store.continuityByScene = isObject(store.continuityByScene) ? store.continuityByScene : {};
+}
+
+function compactProposalRejection(item) {
+    if (!isObject(item)) return null;
+    const proposal = isObject(item.proposal) ? item.proposal : {};
+    const target = isObject(proposal.target) ? proposal.target : {};
+    return {
+        index: Number.isInteger(item.index) ? item.index : -1,
+        code: String(item.code || 'rejected').slice(0, 120),
+        operation: String(proposal.operation || '').slice(0, 120),
+        target: [target.book, target.uid].filter((value) => value != null && String(value).trim()).map(String).join(' · ').slice(0, 300),
+        reason: String(proposal.reason || '').slice(0, 600),
+        evidence: (Array.isArray(proposal.evidence) ? proposal.evidence : [proposal.evidence])
+            .map((value) => String(value || '').trim()).filter(Boolean).slice(0, 6).map((value) => value.slice(0, 600)),
+    };
 }
 
 function save() { getContext().saveSettingsDebounced(); }

@@ -89,7 +89,8 @@ export function formatLivingLorePacket(packet) {
         'For an existing entry, copy target.book, target.uid, and target.revision exactly from this packet. A stale or unselected target is rejected.',
         'Sections are fixed: fact.append=Established, current.set=Current, thread.add=Open threads, alias.add=Aliases, entry.link=Links, entry.retire=Retirement. entry.create may use Established, Current, or Open threads and targets only the book.',
         'entry.link value is {"target":{"book":"...","uid":"...","revision":1},"relation":"..."}; both entries must be selected. Other non-retirement operations use a string value.',
-        'Shape: {"operation":"current.set","target":{"book":"Timeline Book","uid":"42","revision":7},"entryType":"entity","section":"Current","value":"...","evidence":"exact accepted prose or committed Archive fact","confidence":0.91,"reason":"one sentence"}',
+        'Shape: {"operation":"current.set","target":{"book":"Timeline Book","uid":"42","revision":7},"entryType":"entity","section":"Current","value":"...","evidence":["one exact accepted excerpt","archive:record-id"],"confidence":0.91,"reason":"one sentence"}',
+        'Evidence may be one string or an array of 1-6 independently checkable strings. Prefer archive:<record-id> for supplied Archive or promotion evidence. Never combine separate quotations into one string with "and" or semicolons.',
         'Use "loreProposals":[] when no durable lore change is warranted.',
         formatWorldSensePromotionPacket(packet.promotion),
     ].filter(Boolean).join('\n');
@@ -123,7 +124,7 @@ function validateProposal(proposal, packet) {
     if (String(proposal.target.book || '') !== String(packet.book)) return 'wrong-book';
     if (!LIVING_LORE_ENTRY_TYPES.includes(proposal.entryType)) return 'invalid-entry-type';
     if (!OPERATION_SECTIONS[proposal.operation].includes(proposal.section)) return 'invalid-section';
-    if (!nonempty(proposal.evidence)) return 'missing-evidence';
+    if (!validEvidence(proposal.evidence)) return 'missing-evidence';
     if (!nonempty(proposal.reason)) return 'missing-reason';
     if (!Number.isFinite(proposal.confidence) || proposal.confidence < 0 || proposal.confidence > 1) return 'invalid-confidence';
 
@@ -157,5 +158,9 @@ function validateLink(value, packet, source) {
 
 function isObject(value) { return Boolean(value && typeof value === 'object' && !Array.isArray(value)); }
 function nonempty(value) { return typeof value === 'string' && Boolean(value.trim()); }
+function validEvidence(value) {
+    if (nonempty(value)) return true;
+    return Array.isArray(value) && value.length >= 1 && value.length <= 6 && value.every(nonempty);
+}
 function clone(value) { return value == null ? value : structuredClone(value); }
 function positiveInteger(value, fallback) { const number = Number(value); return Number.isInteger(number) && number > 0 ? number : fallback; }

@@ -480,9 +480,17 @@ function isProtected(metadata, operation) {
 }
 
 function evidenceSource(evidence, acceptedProse, archiveFacts, promotionFacts = [], explicitInstructions = [], source = {}) {
-    const needle = normalized(evidence);
+    const items = evidenceItems(evidence);
+    if (!items.length) return '';
+    const sources = items.map((item) => singleEvidenceSource(item, acceptedProse, archiveFacts, promotionFacts, explicitInstructions, source));
+    if (sources.some((item) => !item)) return '';
+    return [...new Set(sources)].join('+');
+}
+
+function singleEvidenceSource(evidence, acceptedProse, archiveFacts, promotionFacts, explicitInstructions, source) {
+    const needle = evidenceNormalized(evidence);
     if (!needle) return '';
-    if (normalized(acceptedProse).includes(needle)) return 'accepted-prose';
+    if (evidenceNormalized(acceptedProse).includes(needle)) return 'accepted-prose';
     // Models naturally shorten a supporting quotation with an ellipsis. It is
     // still grounded when every substantial quoted span occurs, in order, in
     // this exact accepted passage. Do not admit paraphrases: without an
@@ -491,15 +499,37 @@ function evidenceSource(evidence, acceptedProse, archiveFacts, promotionFacts = 
     for (const fact of Array.isArray(archiveFacts) ? archiveFacts : []) {
         const id = String(fact?.id ?? '').trim();
         const summary = typeof fact === 'string' ? fact : String(fact?.summary ?? '');
-        if ((id && needle === normalized(`archive:${id}`)) || normalized(summary).includes(needle)) return 'archive';
+        if ((id && normalized(evidence) === normalized(`archive:${id}`)) || evidenceNormalized(summary).includes(needle)) return 'archive';
     }
     for (const fact of Array.isArray(promotionFacts) ? promotionFacts : []) {
         const id = String(fact?.id ?? '').trim();
         const summary = typeof fact === 'string' ? fact : String(fact?.summary ?? '');
-        if ((id && needle === normalized(`archive:${id}`)) || normalized(summary).includes(needle)) return 'promotion-candidate';
+        if ((id && normalized(evidence) === normalized(`archive:${id}`)) || evidenceNormalized(summary).includes(needle)) return 'promotion-candidate';
     }
-    if (source?.authority === 'owner' && (Array.isArray(explicitInstructions) ? explicitInstructions : []).some((instruction) => normalized(instruction).includes(needle) || needle.includes(normalized(instruction)))) return 'owner-instruction';
+    if (source?.authority === 'owner' && (Array.isArray(explicitInstructions) ? explicitInstructions : []).some((instruction) => evidenceNormalized(instruction).includes(needle) || needle.includes(evidenceNormalized(instruction)))) return 'owner-instruction';
     return '';
+}
+
+function evidenceItems(value) {
+    if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 6);
+    const raw = String(value || '').trim();
+    if (!raw) return [];
+    // Backward compatibility for models that followed the old single-string
+    // schema by joining several otherwise exact quotations with semicolons.
+    const compound = raw.split(/\s+;\s+/).map(stripEvidenceWrapper).filter(Boolean);
+    return compound.length > 1 ? compound.slice(0, 6) : [raw];
+}
+
+function stripEvidenceWrapper(value) {
+    return String(value || '').trim().replace(/^(?:and\s+)?["'\u201c\u201d\u2018\u2019]+|["'\u201c\u201d\u2018\u2019]+$/gi, '').trim();
+}
+
+function evidenceNormalized(value) {
+    return normalized(value)
+        .replace(/["'\u201c\u201d\u2018\u2019]/g, '')
+        .replace(/[\u2013\u2014]/g, '-')
+        .replace(/\s+/g, ' ')
+        .trim();
 }
 
 function matchesElidedEvidence(haystack, evidence) {
@@ -507,12 +537,12 @@ function matchesElidedEvidence(haystack, evidence) {
     if (!/[\u2026]|\.{3,}/.test(raw)) return false;
     const spans = raw
         .split(/(?:\u2026|\.{3,})/)
-        .map(normalized)
+        .map(evidenceNormalized)
         .filter(Boolean);
     // One tiny fragment on each side would be indistinguishable from a loose
     // keyword match. Require two useful spans and preserve their order.
     if (spans.length < 2 || spans.some((span) => span.length < 12)) return false;
-    const text = normalized(haystack);
+    const text = evidenceNormalized(haystack);
     let cursor = 0;
     for (const span of spans) {
         const index = text.indexOf(span, cursor);

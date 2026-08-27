@@ -51,6 +51,11 @@ test('accepts a typed change against the exact selected revision without applyin
     expect(result.rejected).toEqual([]);
 });
 
+test('accepts bounded multi-source evidence without flattening quotations together', () => {
+    const candidate = proposal({ evidence: ['Marissa closed her notebook.', 'She crossed the street to the archive.'] });
+    expect(parseLivingLoreProposals([candidate], packet())).toMatchObject({ accepted: [candidate], rejected: [] });
+});
+
 test.each([
     ['arbitrary replacement', proposal({ operation: 'entry.replace' }), 'unsupported-operation'],
     ['wrong book', proposal({ target: { book: 'Another Book', uid: '42', revision: 7 } }), 'wrong-book'],

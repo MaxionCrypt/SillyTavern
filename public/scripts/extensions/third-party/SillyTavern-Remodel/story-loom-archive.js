@@ -27,7 +27,7 @@ import { STORY_ARCHIVE_CONTRACT, STORY_ARCHIVE_POLICY } from './story-loom-contr
 import { splitStoryArchiveAddition, STORY_ARCHIVE_PASSAGE_MAX_CHARS } from './story-archive-provenance.js';
 import { buildStoryWorldSenseOptions, formatStoryWorldSenseContinuity } from './story-world-sense.js';
 import { resolveWorldSense } from './world-sense-runtime.js';
-import { saveWorldSensePromotionDecisionReceipt } from './world-sense-store.js';
+import { saveWorldSensePromotionDecisionReceipt, saveWorldSenseProposalRejections } from './world-sense-store.js';
 import {
     buildStoryTimelineWebPacket,
     createStoryWebReceipt,
@@ -377,6 +377,15 @@ async function queueStoryCaptureLore({ scene, docId, capture, packet }) {
             origin: capture.origin,
         },
     });
+    if (result.rejected?.length) {
+        saveWorldSenseProposalRejections({
+            timelineId: scene.timelineId,
+            sceneId: scene.id,
+            directionId: `story-archive:${capture.id}`,
+            phase: 'story-archive',
+            rejected: result.rejected,
+        });
+    }
     recordDebugEvent('story-archive', 'capture.lore-proposals', {
         ...captureReceipt(scene, docId, capture),
         proposed: proposals.length,

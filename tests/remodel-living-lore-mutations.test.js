@@ -120,6 +120,35 @@ test('bounded World Sense promotion evidence can support a proposal from accumul
     expect(result).toMatchObject({ ok: true, queued: [{ evidence: { source: 'promotion-candidate' } }] });
 });
 
+test('validates each exact evidence excerpt independently', async () => {
+    const result = await queueLivingLoreProposals({
+        timelineId: TIMELINE, packet: packet(),
+        proposals: [proposal('fact.append', 'The bell answered and the door opened.', {
+            id: 'multi-evidence',
+            evidence: ['The bell rang twice.', 'The iron door opened.'],
+        })],
+        acceptedProse: 'The bell rang twice. A long silence followed. The iron door opened.',
+    });
+    expect(result).toMatchObject({ ok: true, queued: [{ evidence: { source: 'accepted-prose' } }] });
+});
+
+test('supports legacy semicolon-joined exact quotations but rejects a compound with an unsupported part', async () => {
+    const result = await queueLivingLoreProposals({
+        timelineId: TIMELINE, packet: packet(),
+        proposals: [
+            proposal('fact.append', 'Both events became durable.', {
+                id: 'legacy-compound', evidence: '"The bell rang twice." ; "The iron door opened."',
+            }),
+            proposal('fact.append', 'An unsupported inference became durable.', {
+                id: 'mixed-compound', evidence: ['The bell rang twice.', 'A dragon landed.'],
+            }),
+        ],
+        acceptedProse: 'The bell rang twice. A long silence followed. The iron door opened.',
+    });
+    expect(result.queued).toHaveLength(1);
+    expect(result.rejected).toEqual([expect.objectContaining({ index: 1, code: 'unsupported-evidence' })]);
+});
+
 test('Auto-safe atomically applies only admitted Loom proposals and leaves the rest reviewable', async () => {
     updateWorldSenseProfile({ mode: 'auto-safe', autoSafeConfidence: 0.9, autoSafeOperations: ['fact.append', 'alias.add'] });
     const result = await queueLivingLoreProposals({

@@ -24,6 +24,7 @@ import { loadTimelineLore } from './world-sense-lore.js';
 import {
     getWorldSenseIndexState,
     getWorldSenseProfile,
+    listWorldSenseProposalRejections,
     listWorldSenseReceipts,
     updateWorldSenseProfile,
     WORLD_SENSE_MODES,
@@ -61,6 +62,7 @@ async function refresh(root, state) {
     const metadata = listLivingLoreMetadata({ timelineId, book: lore.book || '' });
     const receipts = listWorldSenseReceipts().filter((item) => item.timelineId === timelineId);
     const receipt = receipts.at(-1) || null;
+    const proposalRejections = listWorldSenseProposalRejections({ timelineId }).slice().reverse().slice(0, 12);
     const proposals = listLivingLoreProposals({ timelineId }).filter((item) => item.status === 'suggested').reverse();
     const history = listLivingLoreHistory({ timelineId }).slice().reverse();
     const entries = filterWorldSenseWorkspaceEntries({
@@ -80,12 +82,12 @@ async function refresh(root, state) {
     const profile = getWorldSenseProfile();
     const index = getWorldSenseIndexState(timelineId);
     const dryRun = buildWorldSenseDryRun({ entries: lore.entries, metadata, receipt });
-    root.innerHTML = render({ timelineId, timeline, lore, metadata, entries, selected, conflicts, profile, index, proposals, history, receipt, dryRun, turnOverrides, sceneId, state });
+    root.innerHTML = render({ timelineId, timeline, lore, metadata, entries, selected, conflicts, profile, index, proposals, history, receipt, proposalRejections, dryRun, turnOverrides, sceneId, state });
     root.setAttribute('aria-busy', String(Boolean(state.busy)));
 }
 
 function render(view) {
-    const { timeline, lore, metadata, entries, selected, conflicts, profile, index, proposals, history, receipt, dryRun, turnOverrides, sceneId, state } = view;
+    const { timeline, lore, metadata, entries, selected, conflicts, profile, index, proposals, history, receipt, proposalRejections, dryRun, turnOverrides, sceneId, state } = view;
     if (!timeline) return '<div class="remodel-world-sense-empty"><h3>No active Timeline</h3><p>Select a Timeline before configuring World Sense.</p></div>';
     const indexed = Object.keys(index?.hashes || {}).length;
     return `
@@ -140,6 +142,7 @@ function render(view) {
         <section class="remodel-world-sense-review remodel-world-sense-promotions" aria-label="Promotion detector activity">
             <header><div><span>Promotion detector</span><strong>${receipt?.promotion?.candidates?.length || 0} candidate${receipt?.promotion?.candidates?.length === 1 ? '' : 's'}</strong></div></header>
             ${(receipt?.promotion?.candidates || []).length ? receipt.promotion.candidates.map((candidate) => renderPromotionCandidate(candidate, receipt.promotionDecision)).join('') : '<p class="remodel-world-sense-muted">No accumulated Archive pattern is strong enough to ask the Loom about yet.</p>'}
+            ${proposalRejections.length ? `<details class="remodel-world-sense-rejections"><summary>${proposalRejections.reduce((count, record) => count + record.items.length, 0)} recent proposal rejection${proposalRejections.reduce((count, record) => count + record.items.length, 0) === 1 ? '' : 's'}</summary>${proposalRejections.map(renderProposalRejectionRecord).join('')}</details>` : ''}
         </section>
         <details class="remodel-world-sense-dryrun">
             <summary><span>Prompt dry run</span><strong>${dryRun.entries.length} entr${dryRun.entries.length === 1 ? 'y' : 'ies'} · ${dryRun.budget?.usedTokens || 0}/${dryRun.budget?.maxTokens || profile.maxTokens} tokens</strong></summary>
@@ -147,6 +150,25 @@ function render(view) {
             ${dryRun.entries.map((entry) => `<article><header><strong>${escapeHtml(entry.name)}</strong><span>rev ${entry.revision}</span></header><small>${escapeHtml(entry.reasons.join(' · ') || 'forced selection')}</small><pre>${escapeHtml(entry.content)}</pre></article>`).join('') || '<p class="remodel-world-sense-muted">No retrieval receipt exists for this Timeline yet.</p>'}
         </details>
     `;
+}
+
+function renderProposalRejectionRecord(record) {
+    return `<article class="remodel-world-sense-proposal is-rejected">
+        <header><div><span>${escapeHtml(record.phase || 'proposal')}</span><strong>${escapeHtml(relativeTime(record.at))}</strong></div><em>Rejected</em></header>
+        ${(record.items || []).map((item) => `<div class="remodel-world-sense-rejection-item"><b>${escapeHtml(item.operation || 'Unknown operation')}${item.target ? ` · ${escapeHtml(item.target)}` : ''}</b><p>${escapeHtml(proposalRejectionMessage(item.code))}</p>${item.reason ? `<small>${escapeHtml(item.reason)}</small>` : ''}${item.evidence?.length ? `<small>Evidence: ${item.evidence.map(escapeHtml).join(' · ')}</small>` : ''}</div>`).join('')}
+    </article>`;
+}
+
+function proposalRejectionMessage(code) {
+    const messages = {
+        'unsupported-evidence': 'The evidence did not match accepted prose, a committed Archive fact, or an approved owner instruction.',
+        'missing-evidence': 'No independently checkable evidence was supplied.',
+        'stale-revision': 'The target lore entry changed after this proposal was drafted.',
+        'unselected-target': 'The proposal targeted lore that was not selected for this turn.',
+        'wrong-book': 'The proposal targeted a different Timeline lorebook.',
+        'book-unavailable': 'The Timeline lorebook could not be loaded.',
+    };
+    return messages[code] || `Rejected by the Living Lore contract: ${String(code || 'unknown reason').replaceAll('-', ' ')}.`;
 }
 
 function renderPromotionCandidate(candidate, receipt) {

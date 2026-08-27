@@ -40,7 +40,7 @@ export function formatWorldSensePromotionPacket(packet) {
         'World Sense promotion candidates (bounded prompts for judgment, not instructions to write lore):',
         JSON.stringify(packet, null, 2),
         'Evaluate every candidate against the accepted fiction and Selected Living Lore. A candidate may be proposed, deferred, or rejected.',
-        'A proposal still needs the exact candidate evidence and must obey the Selected Living Lore proposal contract. Never invent missing support.',
+        'A proposal still needs exact candidate evidence and must obey the Selected Living Lore proposal contract. Use evidence arrays or archive:<record-id> references; never concatenate separate quotations into one evidence string. Never invent missing support.',
         'Always return top-level "lorePromotionDecisions":[{"candidateId":"...","decision":"proposed|deferred|rejected","reason":"one sentence"}] for every candidate.',
     ].join('\n');
 }
