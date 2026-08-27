@@ -1,5 +1,6 @@
 import { beforeEach, expect, jest, test } from '@jest/globals';
 import {
+    applyAutoSafeLivingLoreProposals,
     applyLivingLoreProposals,
     editLivingLoreProposalValue,
     invalidateLivingLoreProposals,
@@ -95,6 +96,39 @@ test('Suggest mode queues a field-level diff without writing native lore', async
     expect(listLivingLoreProposals({ timelineId: TIMELINE, status: 'suggested' })).toHaveLength(1);
     expect(nativeBook.entries[42].content).toContain('At rest.');
     expect(saves).toHaveLength(0);
+});
+
+test('adopts a native lore entry sidecar when applying its first queued proposal', async () => {
+    nativeBook.entries[88] = entry(88, { comment: 'New native entry' });
+    const proposed = proposal('current.set', 'Newly active.', {
+        id: 'native-without-sidecar',
+        target: { book: BOOK, uid: '88', revision: 1 },
+    });
+    const queued = await queueLivingLoreProposals({
+        timelineId: TIMELINE, packet: packet([nativeBook.entries[88]]), proposals: [proposed],
+        acceptedProse: 'The bell rang twice.',
+    });
+    expect(getLivingLoreMetadata(TIMELINE, { book: BOOK, uid: 88 })).toBeNull();
+
+    const applied = await applyLivingLoreProposals({ timelineId: TIMELINE, proposalIds: [queued.queued[0].id] });
+
+    expect(applied.ok).toBe(true);
+    expect(getLivingLoreMetadata(TIMELINE, { book: BOOK, uid: 88 })).toMatchObject({ revision: 2, entryType: 'entity' });
+    expect(nativeBook.entries[88].content).toContain('Current\nNewly active.');
+});
+
+test('manual Apply safe runs the safe policy even while World Sense is in suggest mode', async () => {
+    updateWorldSenseProfile({ mode: 'suggest', autoSafeConfidence: 0.9, autoSafeOperations: ['fact.append'] });
+    const queued = await queueLivingLoreProposals({
+        timelineId: TIMELINE, packet: packet(), acceptedProse: 'The bell rang twice.',
+        proposals: [proposal('fact.append', 'The bell now answers footsteps.', { id: 'manual-safe', confidence: 0.97 })],
+        source: { directionId: 'direction-manual-safe', stage: 'accepted-fiction' },
+    });
+
+    const result = await applyAutoSafeLivingLoreProposals({ timelineId: TIMELINE, proposalIds: [queued.queued[0].id], manual: true });
+
+    expect(result).toMatchObject({ ok: true, applied: [queued.queued[0].id] });
+    expect(nativeBook.entries[42].content).toContain('The bell now answers footsteps.');
 });
 
 test('explicit owner cultivation queues a reviewable proposal without pretending it is accepted fiction', async () => {

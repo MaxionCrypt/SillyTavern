@@ -1,6 +1,7 @@
 import { ensureWorldSenseIndex, queryWorldSense } from './world-sense-embeddings.js';
 import { LIVING_LORE_ENTRY_TYPES, LIVING_LORE_PROTECTED_FIELDS } from './living-lore-model.js';
 import {
+    applyAutoSafeLivingLoreProposals,
     applyLivingLoreProposals,
     editLivingLoreProposalValue,
     listLivingLoreHistory,
@@ -136,7 +137,7 @@ function render(view) {
             </section>
         </div>
         <section class="remodel-world-sense-review-grid">
-            <div class="remodel-world-sense-review" data-ws-review="proposals"><header><div><span>Review queue</span><strong>${proposals.length} suggestion${proposals.length === 1 ? '' : 's'}</strong></div></header>${proposals.length ? proposals.map(renderProposal).join('') : '<p class="remodel-world-sense-muted">Accepted fiction has not produced any pending lore changes.</p>'}</div>
+            <div class="remodel-world-sense-review" data-ws-review="proposals"><header><div><span>Review queue</span><strong>${proposals.length} suggestion${proposals.length === 1 ? '' : 's'}</strong></div>${proposals.length ? `<button type="button" data-ws-review-action="apply-all" ${proposals.length > 12 ? 'disabled title="Apply at most 12 proposals in one atomic transaction"' : ''}>Apply all</button>` : ''}</header>${proposals.length ? proposals.map(renderProposal).join('') : '<p class="remodel-world-sense-muted">Accepted fiction has not produced any pending lore changes.</p>'}</div>
             <div class="remodel-world-sense-review"><header><div><span>Change history</span><strong>${history.length} transaction${history.length === 1 ? '' : 's'}</strong></div></header>${history.length ? history.map(renderHistory).join('') : '<p class="remodel-world-sense-muted">Applied proposal transactions will appear here.</p>'}</div>
         </section>
         <section class="remodel-world-sense-review remodel-world-sense-promotions" aria-label="Promotion detector activity">
@@ -262,6 +263,8 @@ function bind(root, state) {
         if (action === 'reindex') await act(root, state, 'index', async () => ensureWorldSenseIndex(getTimelineStore().activeTimelineId, { force: true }), 'Index rebuilt.');
         const proposal = event.target.closest?.('[data-ws-proposal]');
         if (proposal) await handleProposal(root, state, proposal.dataset.wsProposal, proposal.dataset.id);
+        const reviewAction = event.target.closest?.('[data-ws-review-action]')?.dataset.wsReviewAction;
+        if (reviewAction === 'apply-all') await applyAllProposals(root, state);
         const rollback = event.target.closest?.('[data-ws-rollback]');
         if (rollback) await act(root, state, 'rollback', () => rollbackLivingLoreTransaction({ timelineId: getTimelineStore().activeTimelineId, transactionId: rollback.dataset.wsRollback }), 'Transaction rolled back.');
         const turn = event.target.closest?.('[data-ws-turn]');
@@ -332,6 +335,22 @@ function bind(root, state) {
     });
 }
 
+async function applyAllProposals(root, state) {
+    const timelineId = getTimelineStore().activeTimelineId;
+    const proposalIds = listLivingLoreProposals({ timelineId, status: 'suggested' }).map((record) => record.id);
+    if (!proposalIds.length) return;
+    if (proposalIds.length > 12) {
+        state.message = 'Apply all supports at most 12 proposals in one atomic transaction.';
+        await refresh(root, state);
+        return;
+    }
+    return act(root, state, 'proposal', () => applyLivingLoreProposals({
+        timelineId,
+        proposalIds,
+        application: { authority: 'owner-review', bulk: true },
+    }), `${proposalIds.length} lore changes applied in one transaction.`);
+}
+
 async function handleCultivationShortcut(root, state, action) {
     const timelineId = getTimelineStore().activeTimelineId;
     const lore = await loadTimelineLore(timelineId);
@@ -382,7 +401,12 @@ async function queueCultivationDraft(root, state) {
 async function handleProposal(root, state, action, id) {
     const timelineId = getTimelineStore().activeTimelineId;
     if (action === 'reject') return act(root, state, 'proposal', () => rejectLivingLoreProposal({ timelineId, proposalId: id }), 'Suggestion rejected.');
-    if (action === 'apply' || action === 'safe') return act(root, state, 'proposal', () => applyLivingLoreProposals({ timelineId, proposalIds: [id] }), 'Lore change applied.');
+    if (action === 'apply') return act(root, state, 'proposal', () => applyLivingLoreProposals({ timelineId, proposalIds: [id], application: { authority: 'owner-review' } }), 'Lore change applied.');
+    if (action === 'safe') return act(root, state, 'proposal', async () => {
+        const result = await applyAutoSafeLivingLoreProposals({ timelineId, proposalIds: [id], manual: true });
+        if (result.ok && !result.applied?.length) return { ok: false, code: `Not safe to apply: ${result.review?.[0]?.reason || 'policy refused it'}` };
+        return result;
+    }, 'Lore change passed the safe policy and was applied.');
     if (action === 'edit') {
         const record = listLivingLoreProposals({ timelineId }).find((item) => item.id === id);
         if (!record) return;

@@ -166,11 +166,12 @@ export function listLivingLoreHistory({ timelineId = '' } = {}) {
 /** Apply only proposals admitted by the pure Auto-safe policy. A failed batch
  * remains reviewable and never turns an otherwise successful roleplay save
  * into a generation failure. */
-export async function applyAutoSafeLivingLoreProposals({ timelineId = '', proposalIds = [] } = {}) {
+export async function applyAutoSafeLivingLoreProposals({ timelineId = '', proposalIds = [], manual = false } = {}) {
     const bucket = getTimelineLivingLoreState(timelineId, { create: false });
     const ids = uniqueStrings(proposalIds);
     const records = ids.map((id) => bucket?.proposals?.[id]).filter(Boolean);
-    const decision = classifyAutoSafeProposals(records, getWorldSenseProfile());
+    const profile = getWorldSenseProfile();
+    const decision = classifyAutoSafeProposals(records, manual ? { ...profile, mode: 'auto-safe' } : profile);
     if (!decision.eligible.length) {
         debug('auto-safe.review', { timelineId, review: decision.review, threshold: decision.threshold });
         return { ok: true, applied: [], review: decision.review, policy: decision };
@@ -178,7 +179,7 @@ export async function applyAutoSafeLivingLoreProposals({ timelineId = '', propos
     const eligibleIds = decision.eligible.map((item) => item.id);
     const applied = await applyLivingLoreProposals({
         timelineId, proposalIds: eligibleIds,
-        application: { authority: 'auto-safe', confidenceThreshold: decision.threshold, allowlist: decision.allowlist },
+        application: { authority: manual ? 'owner-safe-review' : 'auto-safe', confidenceThreshold: decision.threshold, allowlist: decision.allowlist },
     });
     if (!applied.ok) {
         debug('auto-safe.failed', { timelineId, proposalIds: eligibleIds, code: applied.code, review: decision.review }, 'warn');
@@ -213,7 +214,9 @@ export async function editLivingLoreProposalValue({ timelineId = '', proposalId 
     if (!data?.entries) return failure('book-unavailable');
     const proposal = { ...clone(record.proposal), value: clone(value) };
     if (String(typeof value === 'string' ? value : JSON.stringify(value ?? '')).length > MAX_VALUE_CHARS) return failure('value-too-large');
-    const validationCode = validateApply(proposal, bucket, data);
+    const metadata = clone(bucket.entries || {});
+    adoptNativeMetadata(metadata, data, proposal);
+    const validationCode = validateApply(proposal, metadata, data);
     if (validationCode) return failure(validationCode);
     const preview = previewProposal(data, bucket, proposal);
     if (!preview.ok) return failure(preview.code);
@@ -249,7 +252,8 @@ export async function applyLivingLoreProposals({ timelineId = '', proposalIds = 
     // revision. Mutating a clone ensures a late failure cannot partly land.
     for (const record of records) {
         const proposal = record.proposal;
-        const code = validateApply(proposal, bucket, original);
+        adoptNativeMetadata(metadataWorking, original, proposal);
+        const code = validateApply(proposal, metadataWorking, original);
         if (code) return failure(code, { proposalId: record.id });
         const result = mutateProposal(working, metadataWorking, proposal);
         if (!result.ok) return failure(result.code, { proposalId: record.id });
@@ -371,17 +375,28 @@ function validateSuggestion(proposal, { timelineId, bucket, data, acceptedProse,
     return '';
 }
 
-function validateApply(proposal, bucket, data) {
+function validateApply(proposal, metadata, data) {
     if (proposal.operation === 'entry.create') return '';
-    const metadata = bucket.entries[loreEntryKey(proposal.target)];
-    if (!metadata || metadata.revision !== proposal.target.revision) return 'stale-revision';
+    const sidecar = metadata[loreEntryKey(proposal.target)];
+    if (!sidecar || sidecar.revision !== proposal.target.revision) return 'stale-revision';
     if (!findNativeEntry(data, proposal.target.uid)) return 'missing-entry';
-    if (isProtected(metadata, proposal.operation)) return 'protected-field';
+    if (isProtected(sidecar, proposal.operation)) return 'protected-field';
     if (proposal.operation === 'entry.link') {
-        const linked = bucket.entries[loreEntryKey(proposal.value?.target)];
+        const linked = metadata[loreEntryKey(proposal.value?.target)];
         if (!linked || linked.revision !== proposal.value.target.revision) return 'stale-link-revision';
     }
     return '';
+}
+
+function adoptNativeMetadata(metadata, data, proposal) {
+    if (proposal.operation === 'entry.create') return;
+    const key = loreEntryKey(proposal.target);
+    if (metadata[key] || !findNativeEntry(data, proposal.target.uid)) return;
+    metadata[key] = normalizeLivingLoreMetadata({
+        entryType: proposal.entryType,
+        origin: 'user',
+        revision: proposal.target.revision,
+    }, proposal.target);
 }
 
 function previewProposal(data, bucket, proposal) {
