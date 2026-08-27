@@ -379,6 +379,25 @@ test('a revision changed after queueing makes the complete apply transaction sta
     expect(nativeBook.entries[42].content).toContain('Current\nAt rest.');
 });
 
+test('a stale additive fact rebases onto the current entry revision', async () => {
+    const queued = await queueLivingLoreProposals({
+        timelineId: TIMELINE, packet: packet(),
+        proposals: [proposal('fact.append', 'The bell remembers the second ringing.', { id: 'stale-addition' })],
+        acceptedProse: 'The bell rang twice.',
+    });
+    upsertLivingLoreMetadata(TIMELINE, { book: BOOK, uid: 42 }, {}, { incrementRevision: true });
+
+    const result = await applyLivingLoreProposals({ timelineId: TIMELINE, proposalIds: [queued.queued[0].id] });
+
+    expect(result).toMatchObject({ ok: true, proposalIds: ['stale-addition'] });
+    expect(nativeBook.entries[42].content).toContain('The bell remembers the second ringing.');
+    expect(listLivingLoreProposals({ timelineId: TIMELINE, status: 'applied' })[0]).toMatchObject({
+        rebasedFromRevision: 1,
+        proposal: { target: { revision: 2 } },
+    });
+    expect(getLivingLoreMetadata(TIMELINE, { book: BOOK, uid: 42 }).revision).toBe(3);
+});
+
 test('recovery is idempotent by direction and proposal identity', async () => {
     const input = {
         timelineId: TIMELINE, packet: packet(),

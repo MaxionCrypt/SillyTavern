@@ -20,6 +20,7 @@ const MAX_VALUE_CHARS = 6000;
 const MAX_ENTRY_CHARS = 12000;
 const MAX_ENTRY_TOKENS = 3000;
 const HISTORY_LIMIT = 500;
+const REBASEABLE_OPERATIONS = new Set(['fact.append', 'thread.add', 'alias.add']);
 const SECTION_NAMES = Object.freeze(['Identity', 'Established', 'Current', 'Open threads', 'Retirement']);
 const PROTECTED_BY_OPERATION = Object.freeze({
     'fact.append': ['established'],
@@ -247,13 +248,19 @@ export async function applyLivingLoreProposals({ timelineId = '', proposalIds = 
     const metadataWorking = clone(bucket.entries || {});
     const touched = new Set();
     const diffs = [];
+    const rebased = new Map();
 
     // All stale/protection checks happen against the same pre-transaction
     // revision. Mutating a clone ensures a late failure cannot partly land.
     for (const record of records) {
-        const proposal = record.proposal;
+        let proposal = record.proposal;
         adoptNativeMetadata(metadataWorking, original, proposal);
-        const code = validateApply(proposal, metadataWorking, original);
+        const rebase = rebaseAdditiveProposal(proposal, metadataWorking, original);
+        if (rebase.ok && rebase.rebased) {
+            proposal = rebase.proposal;
+            rebased.set(record.id, proposal);
+        }
+        const code = rebase.ok ? validateApply(proposal, metadataWorking, original) : rebase.code;
         if (code) return failure(code, { proposalId: record.id });
         const result = mutateProposal(working, metadataWorking, proposal);
         if (!result.ok) return failure(result.code, { proposalId: record.id });
@@ -265,7 +272,10 @@ export async function applyLivingLoreProposals({ timelineId = '', proposalIds = 
         const metadata = metadataWorking[key];
         if (!metadata) continue;
         const previous = bucket.entries[key];
-        metadata.revision = previous ? Number(previous.revision || 1) + 1 : 1;
+        const nativeExistedBefore = Boolean(findEntryByKey(original, key));
+        metadata.revision = previous
+            ? Number(previous.revision || 1) + 1
+            : nativeExistedBefore ? Number(metadata.revision || 1) + 1 : 1;
         metadata.updatedAt = now();
         metadata.createdAt ||= metadata.updatedAt;
     }
@@ -293,6 +303,11 @@ export async function applyLivingLoreProposals({ timelineId = '', proposalIds = 
     const transactionId = makeId('lore-transaction');
     bucket.entries = metadataWorking;
     for (const record of records) {
+        if (rebased.has(record.id)) {
+            record.rebasedFromRevision = Number(record.proposal.target.revision || 1);
+            record.proposal = clone(rebased.get(record.id));
+            record.rebasedAt = timestamp;
+        }
         record.status = 'applied';
         record.transactionId = transactionId;
         record.updatedAt = timestamp;
@@ -315,6 +330,25 @@ export async function applyLivingLoreProposals({ timelineId = '', proposalIds = 
     invalidateTimelineLoreCache(bucket.book);
     debug('transaction.applied', { timelineId, book: bucket.book, transactionId, proposalIds: ids, diffs });
     return { ok: true, transactionId, proposalIds: ids, diffs: clone(diffs) };
+}
+
+/** Additive changes commute with unrelated edits to the same entry. Rebase
+ * those proposals onto the current sidecar revision at apply time; replacement
+ * and destructive operations remain strictly revision-locked. */
+function rebaseAdditiveProposal(proposal, metadata, data) {
+    if (proposal?.operation === 'entry.create') return { ok: true, rebased: false, proposal };
+    const key = loreEntryKey(proposal?.target);
+    const sidecar = metadata[key];
+    if (!sidecar || !findNativeEntry(data, proposal?.target?.uid)) return { ok: false, code: sidecar ? 'missing-entry' : 'stale-revision' };
+    const currentRevision = Number(sidecar.revision || 1);
+    const proposedRevision = Number(proposal?.target?.revision || 1);
+    if (currentRevision === proposedRevision) return { ok: true, rebased: false, proposal };
+    if (!REBASEABLE_OPERATIONS.has(proposal?.operation)) return { ok: false, code: 'stale-revision' };
+    return {
+        ok: true,
+        rebased: true,
+        proposal: { ...clone(proposal), target: { ...clone(proposal.target), revision: currentRevision } },
+    };
 }
 
 export async function rollbackLivingLoreTransaction({ timelineId = '', transactionId = '' } = {}) {

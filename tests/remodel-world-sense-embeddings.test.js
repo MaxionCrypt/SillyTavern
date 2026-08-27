@@ -2,7 +2,7 @@ import { jest } from '@jest/globals';
 import { benchmarkWorldSense, ensureWorldSenseIndex, queryWorldSense } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-embeddings.js';
 import { invalidateTimelineLoreCache } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-lore.js';
 import { recordEvent } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
-import { getWorldSenseTurnOverrides, previewWorldSense, resolveWorldSense, setWorldSenseTurnOverride } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-runtime.js';
+import { getWorldSenseTurnOverrides, prefetchWorldSense, previewWorldSense, resolveWorldSense, setWorldSenseTurnOverride } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-runtime.js';
 import {
     DEFAULT_WORLD_SENSE_MODEL,
     getWorldSenseContinuity,
@@ -178,6 +178,22 @@ test('stores inspectable receipts and scene retrieval continuity', () => {
     expect(getWorldSenseContinuity('scene-1')).toEqual([{ book: 'Living Book', uid: '1' }]);
 });
 
+test('compacts heavyweight retrieval candidates and bounds receipt history', () => {
+    const oversized = {
+        kind: 'lore', book: 'Living Book', uid: '2', decision: 'no-evidence',
+        entry: { book: 'Living Book', uid: '2', name: 'Large entry', content: 'x'.repeat(20000), native: { content: 'x'.repeat(20000) } },
+        reasons: Array.from({ length: 20 }, (_, index) => ({ channel: `reason-${index}`, points: index, payload: 'y'.repeat(500) })),
+    };
+    for (let i = 0; i < 45; i += 1) saveWorldSenseReceipt({ id: `receipt-${i}`, sceneId: 'scene-compact', selected: [], rejected: [oversized] });
+
+    const receipts = listWorldSenseReceipts({ sceneId: 'scene-compact' });
+    expect(receipts).toHaveLength(40);
+    expect(receipts[0].id).toBe('receipt-5');
+    expect(receipts.at(-1).rejected[0]).not.toHaveProperty('entry');
+    expect(receipts.at(-1).rejected[0].reasons).toHaveLength(8);
+    expect(JSON.stringify(receipts).length).toBeLessThan(100 * 1024);
+});
+
 test('Preview ranks the same deterministic lore without saving receipt or continuity', async () => {
     global.fetch = jest.fn(async () => { throw new Error('local model unavailable'); });
     const scene = { id: 'scene-preview', timelineId: TIMELINE, mode: 'story' };
@@ -205,6 +221,18 @@ test('Preview ranks the same deterministic lore without saving receipt or contin
     const diagnostic = __getDebugEvents().find((event) => event.category === 'world-sense' && event.type === 'retrieval.receipt');
     expect(diagnostic?.detail?.sceneMode).toBe('story');
     expect(Array.isArray(diagnostic?.detail?.promptInclusion)).toBe(true);
+});
+
+test('Send reuses an exact completed composer prefetch', async () => {
+    global.fetch = jest.fn(async () => { throw new Error('local model unavailable'); });
+    const scene = { id: 'scene-prefetch', timelineId: TIMELINE, mode: 'roleplay' };
+    const options = { action: 'Approach the harbor.', cast: [], history: [] };
+
+    await prefetchWorldSense(scene, options);
+    const turn = await resolveWorldSense(scene, options);
+
+    expect(turn.reusedPrefetch).toBe(true);
+    expect(turn.receipt.reusedPrefetch).toBe(true);
 });
 
 test('one-turn pins and exclusions affect Preview but are consumed only by Send', async () => {

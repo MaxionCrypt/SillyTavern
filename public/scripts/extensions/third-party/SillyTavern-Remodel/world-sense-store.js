@@ -3,6 +3,9 @@ import { getContext } from '../../../st-context.js';
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'worldSenseV1';
 const STORE_VERSION = 3;
+const RECEIPT_LIMIT = 40;
+const PROPOSAL_REJECTION_LIMIT = 50;
+const RECEIPT_COMPACTION_VERSION = 1;
 export const DEFAULT_WORLD_SENSE_MODEL = 'Xenova/all-MiniLM-L6-v2';
 export const WORLD_SENSE_MODES = Object.freeze(['off', 'observe', 'suggest', 'auto-safe']);
 
@@ -61,10 +64,10 @@ export function saveWorldSenseBenchmark(result) {
 
 export function saveWorldSenseReceipt(receipt) {
     const store = getWorldSenseStore();
-    const saved = isObject(receipt) ? structuredClone(receipt) : null;
+    const saved = isObject(receipt) ? compactReceipt(receipt) : null;
     if (!saved) return null;
     store.receipts.push(saved);
-    if (store.receipts.length > 100) store.receipts.splice(0, store.receipts.length - 100);
+    if (store.receipts.length > RECEIPT_LIMIT) store.receipts.splice(0, store.receipts.length - RECEIPT_LIMIT);
     if (saved.sceneId) store.continuityByScene[String(saved.sceneId)] = (saved.selected || [])
         .filter(({ book, uid }) => book && uid != null)
         .map(({ book, uid }) => ({ book, uid })).slice(0, 20);
@@ -104,7 +107,7 @@ export function saveWorldSenseProposalRejections({ timelineId = '', sceneId = ''
         items,
     };
     store.proposalRejections.push(record);
-    if (store.proposalRejections.length > 100) store.proposalRejections.splice(0, store.proposalRejections.length - 100);
+    if (store.proposalRejections.length > PROPOSAL_REJECTION_LIMIT) store.proposalRejections.splice(0, store.proposalRejections.length - PROPOSAL_REJECTION_LIMIT);
     save();
     return structuredClone(record);
 }
@@ -127,6 +130,7 @@ function emptyStore() {
         receipts: [],
         proposalRejections: [],
         continuityByScene: {},
+        receiptCompactionVersion: RECEIPT_COMPACTION_VERSION,
     };
 }
 
@@ -136,6 +140,7 @@ function indexState(timelineId) {
 
 function normalizeStore(store) {
     const defaults = emptyStore();
+    const needsCompactionSave = Number(store.receiptCompactionVersion || 0) < RECEIPT_COMPACTION_VERSION;
     store.version = STORE_VERSION;
     store.profile = { ...defaults.profile, ...(isObject(store.profile) ? store.profile : {}) };
     store.profile.mode = WORLD_SENSE_MODES.includes(store.profile.mode) ? store.profile.mode : 'suggest';
@@ -154,9 +159,44 @@ function normalizeStore(store) {
         store.indexes[timelineId].hashes = isObject(store.indexes[timelineId].hashes) ? store.indexes[timelineId].hashes : {};
     }
     store.benchmark = isObject(store.benchmark) ? store.benchmark : null;
-    store.receipts = Array.isArray(store.receipts) ? store.receipts.filter(isObject).slice(-100) : [];
-    store.proposalRejections = Array.isArray(store.proposalRejections) ? store.proposalRejections.filter(isObject).slice(-100) : [];
+    store.receipts = Array.isArray(store.receipts) ? store.receipts.filter(isObject).slice(-RECEIPT_LIMIT).map(compactReceipt) : [];
+    store.proposalRejections = Array.isArray(store.proposalRejections) ? store.proposalRejections.filter(isObject).slice(-PROPOSAL_REJECTION_LIMIT) : [];
     store.continuityByScene = isObject(store.continuityByScene) ? store.continuityByScene : {};
+    if (needsCompactionSave) {
+        store.receiptCompactionVersion = RECEIPT_COMPACTION_VERSION;
+        getContext().saveSettingsDebounced();
+    }
+}
+
+function compactReceipt(receipt) {
+    const saved = structuredClone(receipt);
+    saved.selected = (Array.isArray(saved.selected) ? saved.selected : []).slice(0, 50).map(compactCandidate);
+    saved.rejected = (Array.isArray(saved.rejected) ? saved.rejected : []).slice(0, 60).map(compactCandidate);
+    saved.continuity = (Array.isArray(saved.continuity) ? saved.continuity : []).slice(0, 20).map(compactCandidate);
+    saved.promptInclusion = (Array.isArray(saved.promptInclusion) ? saved.promptInclusion : []).slice(0, 50).map(compactCandidate);
+    return saved;
+}
+
+function compactCandidate(candidate) {
+    if (!isObject(candidate)) return candidate;
+    const entry = isObject(candidate.entry) ? candidate.entry : {};
+    return {
+        kind: candidate.kind,
+        key: candidate.key,
+        book: candidate.book ?? entry.book,
+        uid: candidate.uid ?? entry.uid,
+        name: candidate.name ?? entry.name,
+        sceneId: candidate.sceneId,
+        recordType: candidate.recordType,
+        recordId: candidate.recordId,
+        score: candidate.score,
+        decision: candidate.decision,
+        included: candidate.included,
+        rankingReasons: Array.isArray(candidate.rankingReasons) ? candidate.rankingReasons.slice(0, 8) : undefined,
+        reasons: Array.isArray(candidate.reasons) ? candidate.reasons.slice(0, 8).map((reason) => isObject(reason) ? {
+            channel: reason.channel, points: reason.points, similarity: reason.similarity, rank: reason.rank,
+        } : reason) : undefined,
+    };
 }
 
 function compactProposalRejection(item) {

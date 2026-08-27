@@ -95,7 +95,11 @@ async function resolveWorldSenseForPhase(scene, options, { persist, consumePrefe
     let prefetchTimedOut = false;
     if (canReuseWorldSensePrefetch(cached, prepared.packet.hash, Date.now(), PREFETCH_TTL_MS)) {
         try {
-            const waitMs = Math.max(250, getWorldSenseProfile().warmQueryTargetMs * 2);
+            // An exact in-flight composer query is already the work this turn
+            // needs. Give the local model enough time to finish instead of
+            // abandoning it after ~1s and immediately doing a second degraded
+            // ranking pass. Completed prefetches still return synchronously.
+            const waitMs = Math.max(1000, Math.min(20000, getWorldSenseProfile().warmQueryTargetMs * 20));
             result = cached.result || await withTimeout(cached.promise, waitMs, 'Composer prefetch was still warming the local model.');
             const currentLore = await loadTimelineLore(scene.timelineId);
             const currentContinuity = buildTimelineContinuityDocuments(scene.timelineId);

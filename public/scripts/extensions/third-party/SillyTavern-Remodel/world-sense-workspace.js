@@ -137,7 +137,7 @@ function render(view) {
             </section>
         </div>
         <section class="remodel-world-sense-review-grid">
-            <div class="remodel-world-sense-review" data-ws-review="proposals"><header><div><span>Review queue</span><strong>${proposals.length} suggestion${proposals.length === 1 ? '' : 's'}</strong></div>${proposals.length ? `<button type="button" data-ws-review-action="apply-all" ${proposals.length > 12 ? 'disabled title="Apply at most 12 proposals in one atomic transaction"' : ''}>Apply all</button>` : ''}</header>${proposals.length ? proposals.map(renderProposal).join('') : '<p class="remodel-world-sense-muted">Accepted fiction has not produced any pending lore changes.</p>'}</div>
+            <div class="remodel-world-sense-review" data-ws-review="proposals"><header><div><span>Review queue</span><strong>${proposals.length} suggestion${proposals.length === 1 ? '' : 's'}</strong></div>${proposals.length ? `<button type="button" data-ws-review-action="apply-all" ${proposals.length > 12 ? 'disabled title="Apply at most 12 proposals in one atomic transaction"' : ''}>Apply all</button>` : ''}</header>${proposals.length ? proposals.map((record) => renderProposal(record, state.proposalErrors?.[record.id])).join('') : '<p class="remodel-world-sense-muted">Accepted fiction has not produced any pending lore changes.</p>'}</div>
             <div class="remodel-world-sense-review"><header><div><span>Change history</span><strong>${history.length} transaction${history.length === 1 ? '' : 's'}</strong></div></header>${history.length ? history.map(renderHistory).join('') : '<p class="remodel-world-sense-muted">Applied proposal transactions will appear here.</p>'}</div>
         </section>
         <section class="remodel-world-sense-review remodel-world-sense-promotions" aria-label="Promotion detector activity">
@@ -237,12 +237,13 @@ function renderCultivationDraft(draft) {
     return `<div class="remodel-world-sense-cultivation-preview"><header><strong>Proposal preview</strong><span>${escapeHtml(proposal.operation)}</span></header><p>${escapeHtml(typeof proposal.value === 'string' ? proposal.value : JSON.stringify(proposal.value))}</p><small>No lore has been changed.</small><button type="button" class="primary" data-ws-cultivation-queue>Send to review queue</button></div>`;
 }
 
-function renderProposal(record) {
+function renderProposal(record, error = '') {
     const rows = proposalDiffRows(record);
     const operation = record.proposal?.operation || 'change';
     return `<article class="remodel-world-sense-proposal"><header><div><strong>${escapeHtml(operation)}</strong><span>${escapeHtml(record.book)} · ${escapeHtml(record.proposal?.target?.uid ?? 'new')}</span></div><time>${escapeHtml(relativeTime(record.createdAt))}</time></header>
         <div class="remodel-world-sense-diff">${rows.map((row) => `<div><span>${escapeHtml(row.field)}</span><del>${escapeHtml(row.before || '—')}</del><ins>${escapeHtml(row.after || '—')}</ins></div>`).join('')}</div>
         <small>Evidence: ${escapeHtml(record.evidence?.source || record.source?.stage || 'accepted fiction')}</small>
+        ${error ? `<p class="remodel-world-sense-proposal-error" role="alert">${escapeHtml(proposalRejectionMessage(error))}</p>` : ''}
         <footer><button type="button" data-ws-proposal="edit" data-id="${escapeAttribute(record.id)}">Edit</button><button type="button" data-ws-proposal="reject" data-id="${escapeAttribute(record.id)}">Reject</button><button type="button" data-ws-proposal="safe" data-id="${escapeAttribute(record.id)}" ${SAFE_OPERATIONS.has(operation) ? '' : 'disabled'}>Apply safe</button><button type="button" class="primary" data-ws-proposal="apply" data-id="${escapeAttribute(record.id)}">Apply</button></footer>
     </article>`;
 }
@@ -400,13 +401,14 @@ async function queueCultivationDraft(root, state) {
 
 async function handleProposal(root, state, action, id) {
     const timelineId = getTimelineStore().activeTimelineId;
-    if (action === 'reject') return act(root, state, 'proposal', () => rejectLivingLoreProposal({ timelineId, proposalId: id }), 'Suggestion rejected.');
-    if (action === 'apply') return act(root, state, 'proposal', () => applyLivingLoreProposals({ timelineId, proposalIds: [id], application: { authority: 'owner-review' } }), 'Lore change applied.');
+    state.proposalErrors ??= {};
+    if (action === 'reject') return act(root, state, 'proposal', () => rejectLivingLoreProposal({ timelineId, proposalId: id }), 'Suggestion rejected.', { proposalId: id });
+    if (action === 'apply') return act(root, state, 'proposal', () => applyLivingLoreProposals({ timelineId, proposalIds: [id], application: { authority: 'owner-review' } }), 'Lore change applied.', { proposalId: id });
     if (action === 'safe') return act(root, state, 'proposal', async () => {
         const result = await applyAutoSafeLivingLoreProposals({ timelineId, proposalIds: [id], manual: true });
         if (result.ok && !result.applied?.length) return { ok: false, code: `Not safe to apply: ${result.review?.[0]?.reason || 'policy refused it'}` };
         return result;
-    }, 'Lore change passed the safe policy and was applied.');
+    }, 'Lore change passed the safe policy and was applied.', { proposalId: id });
     if (action === 'edit') {
         const record = listLivingLoreProposals({ timelineId }).find((item) => item.id === id);
         if (!record) return;
@@ -417,20 +419,22 @@ async function handleProposal(root, state, action, id) {
         if (typeof record.proposal?.value !== 'string') {
             try { value = JSON.parse(edited); } catch { state.message = 'That proposal value must remain valid JSON.'; await refresh(root, state); return; }
         }
-        return act(root, state, 'proposal', () => editLivingLoreProposalValue({ timelineId, proposalId: id, value }), 'Suggestion edited and revalidated.');
+        return act(root, state, 'proposal', () => editLivingLoreProposalValue({ timelineId, proposalId: id, value }), 'Suggestion edited and revalidated.', { proposalId: id });
     }
 }
 
-async function act(root, state, busy, task, success) {
+async function act(root, state, busy, task, success, { proposalId = '' } = {}) {
     state.busy = busy;
     state.message = '';
     await refresh(root, state);
     try {
         const result = await task();
         if (result?.ok === false) throw new Error(result.code || result.error || result.state?.error || 'The operation could not be completed.');
+        if (proposalId && state.proposalErrors) delete state.proposalErrors[proposalId];
         state.message = success;
     } catch (error) {
         state.message = String(error?.message || error);
+        if (proposalId) (state.proposalErrors ??= {})[proposalId] = state.message;
     } finally {
         state.busy = '';
         await refresh(root, state);

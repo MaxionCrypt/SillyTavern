@@ -10836,6 +10836,16 @@ body.st-remodel-active .remodel-world-sense-proposal footer {
   margin-top: 10px;
 }
 
+body.st-remodel-active .remodel-world-sense-proposal-error {
+    margin: 10px 0 0;
+    padding: 9px 11px;
+    border-left: 2px solid #d87a73;
+    background: rgba(110, 30, 34, 0.24);
+    color: #f1b5b0;
+    font-size: 0.76rem;
+    line-height: 1.4;
+}
+
 body.st-remodel-active .remodel-world-sense-dryrun {
   margin-top: 18px;
   padding: 14px 16px;

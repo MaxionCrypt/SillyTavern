@@ -54,6 +54,14 @@ test('the whole store stays small across many transactions — no exponential bl
     expect(storeBytes).toBeLessThan(200 * 1024);
 });
 
+test('keeps recent rollback checkpoints while compacting older transaction snapshots', () => {
+    for (let i = 0; i < 20; i += 1) createVar(i);
+    const txs = listMechanicsTransactions({ timelineId: TL });
+    expect(txs).toHaveLength(20);
+    expect(txs.slice(0, 8).every((tx) => tx.undo === undefined && tx.undoExpired === true)).toBe(true);
+    expect(txs.slice(-12).every((tx) => tx.undo?.variables && tx.undo?.goals)).toBe(true);
+});
+
 test('restoring an undo snapshot rolls back values but keeps the live ledger', () => {
     createVar(0);
     createVar(1);

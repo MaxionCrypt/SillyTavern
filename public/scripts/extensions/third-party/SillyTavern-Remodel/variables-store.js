@@ -6,6 +6,8 @@ const SETTINGS_KEY = 'storyVariablesV3';
 const STORE_VERSION = 3;
 const MAX_EVENTS = 800;
 const MAX_TRANSACTIONS = 300;
+const MAX_UNDO_TRANSACTIONS = 12;
+const TRANSACTION_COMPACTION_VERSION = 1;
 
 export const VARIABLE_TYPES = Object.freeze(['number', 'enum', 'text', 'boolean']);
 export const VARIABLE_KINDS = VARIABLE_TYPES;
@@ -246,6 +248,7 @@ export function recordMechanicsTransaction(transaction) {
     store.transactions[id] = { ...clone(transaction), id, createdAt: transaction?.createdAt || now() };
     store.transactionIds.push(id);
     trimMap(store.transactionIds, store.transactions, MAX_TRANSACTIONS);
+    compactTransactionLedger(store);
     saveVariableStore();
     return store.transactions[id];
 }
@@ -470,7 +473,7 @@ export function ownerKey(value) {
 
 function emptyStore() {
     return {
-        version: STORE_VERSION, timelines: {}, eventIds: [], events: {}, transactionIds: [], transactions: {}, vectorIndexState: {},
+        version: STORE_VERSION, timelines: {}, eventIds: [], events: {}, transactionIds: [], transactions: {}, vectorIndexState: {}, transactionCompactionVersion: TRANSACTION_COMPACTION_VERSION,
         mechanicsProfile: {
             enabled: false, handbookAdditions: '', contextBudget: 6000,
             retrievalWindow: 12, retrievalLimit: 8, automationPolicy: 'hybrid', failureBehavior: 'pause', updatedAt: now(),
@@ -509,6 +512,12 @@ function normalizeStore(store) {
     store.timelines ??= {}; store.events ??= {}; store.transactions ??= {}; store.vectorIndexState ??= {};
     store.eventIds = Array.isArray(store.eventIds) ? store.eventIds.filter((id) => store.events[id]) : [];
     store.transactionIds = Array.isArray(store.transactionIds) ? store.transactionIds.filter((id) => store.transactions[id]) : [];
+    const needsCompactionSave = Number(store.transactionCompactionVersion || 0) < TRANSACTION_COMPACTION_VERSION;
+    compactTransactionLedger(store);
+    if (needsCompactionSave) {
+        store.transactionCompactionVersion = TRANSACTION_COMPACTION_VERSION;
+        getContext().saveSettingsDebounced();
+    }
     store.mechanicsProfile = { ...emptyStore().mechanicsProfile, ...(store.mechanicsProfile || {}) };
     delete store.mechanicsProfile.directorResponseTokens;
     store.mechanicsProfile.retrievalWindow = clampInt(store.mechanicsProfile.retrievalWindow ?? store.mechanicsProfile.sweepWindow, 1, 60, 12);
@@ -528,6 +537,19 @@ function normalizeStore(store) {
         for (const id of Object.keys(normalized)) if (!bucket.variableIds.includes(id)) bucket.variableIds.push(id);
         delete bucket.values; delete bucket.valueIds;
         store.timelines[timelineId] = bucket;
+    }
+}
+
+/** Keep the complete audit ledger, but retain heavyweight whole-store undo
+ * checkpoints only for the recent window users can meaningfully reverse. */
+function compactTransactionLedger(store) {
+    trimMap(store.transactionIds, store.transactions, MAX_TRANSACTIONS);
+    const undoIds = new Set(store.transactionIds.slice(-MAX_UNDO_TRANSACTIONS));
+    for (const id of store.transactionIds) {
+        const transaction = store.transactions[id];
+        if (!transaction?.undo || undoIds.has(id)) continue;
+        delete transaction.undo;
+        transaction.undoExpired = true;
     }
 }
 

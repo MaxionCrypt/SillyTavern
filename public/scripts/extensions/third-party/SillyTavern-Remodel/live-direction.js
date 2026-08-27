@@ -45,6 +45,7 @@ import { limitBoundedChatHistory } from './prompt-history-limit.js';
 import { buildSceneArchiveProjection } from './archive-projection.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
+const AUTONOMOUS_CONTINUE_ACTION = '[Continue the scene from accepted history.]';
 const PACING = Object.freeze({
     slow: { cps: 28, wordMs: 35, min: 700, max: 2200, opening: 750 },
     natural: { cps: 45, wordMs: 25, min: 400, max: 1400, opening: 600 },
@@ -553,7 +554,7 @@ export async function requestNextDirection(scene = hooks.getActiveScene(), { not
             notebookTurn,
         });
     }
-    return beginDirection({ scene, action: '[Continue the scene from accepted history.]', insertUser: false, autonomousSequence: sequence, notebookTurn });
+    return beginDirection({ scene, action: AUTONOMOUS_CONTINUE_ACTION, insertUser: false, autonomousSequence: sequence, notebookTurn });
 }
 
 export function handleLiveDirectionDraft(value) {
@@ -600,7 +601,7 @@ function buildLiveDirectionLoreOptions(action) {
     return {
         action,
         history,
-        cast: hooks.getCast() || [],
+        cast: (hooks.getCast() || []).filter((member) => !member.disabled),
         persona: hooks.getPersona() || null,
     };
 }
@@ -2581,6 +2582,15 @@ async function persistFinalizedRunMessage(run, state) {
     if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)) message.swipes[message.swipe_id] = accepted;
     writeDirectionMetadata(message, serializeRun(run, state));
     await context.saveChat();
+    // The user normally reads a completed turn before pressing Continue. Spend
+    // that idle time warming the exact autonomous query instead of making the
+    // Continue click pay the local semantic-model cost serially.
+    if (state === 'complete') {
+        const scene = hooks.getActiveScene();
+        if (scene?.id === run.sceneId && isDirectedLiveScene(scene)) {
+            scheduleWorldSensePrefetch(scene, buildLiveDirectionLoreOptions(AUTONOMOUS_CONTINUE_ACTION));
+        }
+    }
 }
 
 
