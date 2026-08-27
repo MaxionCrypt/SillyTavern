@@ -137,12 +137,28 @@ function render(view) {
             <div class="remodel-world-sense-review" data-ws-review="proposals"><header><div><span>Review queue</span><strong>${proposals.length} suggestion${proposals.length === 1 ? '' : 's'}</strong></div></header>${proposals.length ? proposals.map(renderProposal).join('') : '<p class="remodel-world-sense-muted">Accepted fiction has not produced any pending lore changes.</p>'}</div>
             <div class="remodel-world-sense-review"><header><div><span>Change history</span><strong>${history.length} transaction${history.length === 1 ? '' : 's'}</strong></div></header>${history.length ? history.map(renderHistory).join('') : '<p class="remodel-world-sense-muted">Applied proposal transactions will appear here.</p>'}</div>
         </section>
+        <section class="remodel-world-sense-review remodel-world-sense-promotions" aria-label="Promotion detector activity">
+            <header><div><span>Promotion detector</span><strong>${receipt?.promotion?.candidates?.length || 0} candidate${receipt?.promotion?.candidates?.length === 1 ? '' : 's'}</strong></div></header>
+            ${(receipt?.promotion?.candidates || []).length ? receipt.promotion.candidates.map((candidate) => renderPromotionCandidate(candidate, receipt.promotionDecision)).join('') : '<p class="remodel-world-sense-muted">No accumulated Archive pattern is strong enough to ask the Loom about yet.</p>'}
+        </section>
         <details class="remodel-world-sense-dryrun">
             <summary><span>Prompt dry run</span><strong>${dryRun.entries.length} entr${dryRun.entries.length === 1 ? 'y' : 'ies'} · ${dryRun.budget?.usedTokens || 0}/${dryRun.budget?.maxTokens || profile.maxTokens} tokens</strong></summary>
             <p>This is the bounded Living Lore packet selected for the latest Preview/Narrator/Loom pass.</p>
             ${dryRun.entries.map((entry) => `<article><header><strong>${escapeHtml(entry.name)}</strong><span>rev ${entry.revision}</span></header><small>${escapeHtml(entry.reasons.join(' · ') || 'forced selection')}</small><pre>${escapeHtml(entry.content)}</pre></article>`).join('') || '<p class="remodel-world-sense-muted">No retrieval receipt exists for this Timeline yet.</p>'}
         </details>
     `;
+}
+
+function renderPromotionCandidate(candidate, receipt) {
+    const evidence = (candidate.evidence || []).map((item) => item.text).filter(Boolean).slice(0, 2);
+    const decision = (receipt?.decisions || []).find((item) => item.candidateId === candidate.id);
+    const missing = (receipt?.rejections || []).some((item) => item.candidateId === candidate.id && item.code === 'missing-decision');
+    return `<article class="remodel-world-sense-proposal">
+        <header><div><span>${escapeHtml(title(candidate.kind || 'candidate'))}</span><strong>${escapeHtml(candidate.subject || 'Archive pattern')}</strong></div><em>${decision ? escapeHtml(title(decision.decision)) : missing ? 'Not answered' : `${Number(candidate.occurrences || 0)} records · ${Number(candidate.sceneCount || 0)} scenes`}</em></header>
+        <p>${escapeHtml(candidate.rationale || '')}</p>
+        ${decision ? `<small>${escapeHtml(decision.reason)}</small>` : ''}
+        ${evidence.length ? `<small>${evidence.map(escapeHtml).join(' · ')}</small>` : ''}
+    </article>`;
 }
 
 function renderEntry(entry, selectedKey) {

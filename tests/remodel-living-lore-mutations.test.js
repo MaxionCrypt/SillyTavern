@@ -109,6 +109,17 @@ test('explicit owner cultivation queues a reviewable proposal without pretending
     expect(saves).toHaveLength(0);
 });
 
+test('bounded World Sense promotion evidence can support a proposal from accumulated Archive records', async () => {
+    const evidence = 'Miles has concealed the Gold Squad letter in two scenes.';
+    const result = await queueLivingLoreProposals({
+        timelineId: TIMELINE, packet: packet(),
+        proposals: [proposal('fact.append', 'Miles continues hiding the letter.', { evidence })],
+        acceptedProse: 'Nothing about the letter is restated in this turn.',
+        promotionFacts: [{ id: 'promotion-evidence-1', summary: evidence }],
+    });
+    expect(result).toMatchObject({ ok: true, queued: [{ evidence: { source: 'promotion-candidate' } }] });
+});
+
 test('Auto-safe atomically applies only admitted Loom proposals and leaves the rest reviewable', async () => {
     updateWorldSenseProfile({ mode: 'auto-safe', autoSafeConfidence: 0.9, autoSafeOperations: ['fact.append', 'alias.add'] });
     const result = await queueLivingLoreProposals({

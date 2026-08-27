@@ -1,10 +1,11 @@
-import { listCharStates, listEvents, listSceneFacts, getBeat } from './archivist-store.js';
+import { listCharStates, listEvents, listSceneFacts, listTimelineArchiveScenes, getBeat } from './archivist-store.js';
 import { listLivingLoreMetadata } from './living-lore-store.js';
 import { getTimelineGoals } from './story-goals-store.js';
 import { getTimelineStore } from './timeline-state.js';
 import { listVariableValues } from './variables-store.js';
 import { recordDebugEvent } from './debug-console.js';
 import { buildLivingLorePacket } from './living-lore-proposals.js';
+import { buildWorldSensePromotionPacket } from './world-sense-promotion.js';
 import { queryWorldSense } from './world-sense-embeddings.js';
 import { loadTimelineLore } from './world-sense-lore.js';
 import {
@@ -234,6 +235,13 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         metadata,
         limits: { maxEntries: profile.maxEntries },
     });
+    loomPacket.promotion = buildWorldSensePromotionPacket({
+        timelineId: scene.timelineId,
+        sceneId: scene.id,
+        livingLore: loomPacket,
+        knownLoreEntries: lore.entries,
+        scenes: listTimelineArchiveScenes(scene.timelineId),
+    });
     return {
         phase,
         sceneId: String(scene.id),
@@ -301,6 +309,7 @@ function saveReceipt(scene, result, { reusedPrefetch }) {
             semanticOnlyLimit: getWorldSenseProfile().semanticOnlyLimit,
         },
         propagation: result.propagation,
+        promotion: result.loomPacket?.promotion || null,
         continuity: result.continuity || [],
         promptInclusion: describePromptInclusion(result.selected),
         selected: result.selected,

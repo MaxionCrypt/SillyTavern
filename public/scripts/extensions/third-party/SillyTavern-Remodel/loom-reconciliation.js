@@ -1,4 +1,5 @@
 import { parseLivingLoreProposals } from './living-lore-proposals.js';
+import { parsePromotionDecisions } from './world-sense-promotion.js';
 
 export const LOOM_POLICY_V12 = `You are the Loom: the final continuity editor, mechanical referee, and live voice of the scene. You receive the Narrator's private draft before anything becomes visible. Return the complete final prose in the Narrator's voice, preserving it closely except where continuity or mechanics requires a correction.
 
@@ -82,18 +83,20 @@ export function isSupersededLoomPatchContract(value) {
 
 export const LOOM_OUTPUT_CONTRACT_PATCH = `Output NOTHING except one state fence. Do not restate the prose.
 \`\`\`state
-{"swaps":[],"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"},{"id":"r2","capability":"goal.edit","arguments":{"goalRef":"the exact Goal name","successRate":23},"reason":"how this turn changed its holder's position"},{"id":"r3","capability":"beat.set","arguments":{"directive":"the unresolved thread after this turn"},"reason":"why, one line"}],"loreProposals":[],"flow":{"continue":false}}
+{"swaps":[],"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"},{"id":"r2","capability":"goal.edit","arguments":{"goalRef":"the exact Goal name","successRate":23},"reason":"how this turn changed its holder's position"},{"id":"r3","capability":"beat.set","arguments":{"directive":"the unresolved thread after this turn"},"reason":"why, one line"}],"loreProposals":[],"lorePromotionDecisions":[],"flow":{"continue":false}}
 \`\`\`
 
 Every request is its own object. Close one with } and open the next with {, exactly as above. Never repeat "id" inside a single object.
 
 Always include the top-level loreProposals array. Leave it empty when the Durable Lore Check finds no warranted change; otherwise follow the Selected Living Lore proposal shape exactly.
 
+When promotion candidates are present, always include lorePromotionDecisions and account for every candidate ID. This receipt explains why accumulated Archive material did or did not become a proposal.
+
 Each swap is {"find":"exact text from the draft","replace":"what it becomes"}. A find that is not present verbatim in the draft is discarded, so copy it exactly.`;
 
 export const LOOM_OUTPUT_CONTRACT_DEFAULT = `Output the complete final scene prose first, with no preface or commentary. Then output exactly one state fence:
 \`\`\`state
-{"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"}],"loreProposals":[],"flow":{"continue":false}}
+{"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"}],"loreProposals":[],"lorePromotionDecisions":[],"flow":{"continue":false}}
 \`\`\``;
 
 /** True when a scene uses the Narrator draft -> Loom reconciliation pipeline. */
@@ -191,6 +194,7 @@ function readLoomEnvelope(text) {
 function isLoomEnvelope(value) {
     return value && typeof value === 'object' && !Array.isArray(value)
         && (Array.isArray(value.requests) || Array.isArray(value.swaps) || Array.isArray(value.loreProposals)
+            || Array.isArray(value.lorePromotionDecisions)
             || (value.flow && typeof value.flow === 'object' && !Array.isArray(value.flow)));
 }
 
@@ -246,6 +250,8 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
     let flow = null;
     let loreProposals = [];
     let loreProposalRejections = [];
+    let lorePromotionDecisions = [];
+    let lorePromotionDecisionRejections = [];
     if (envelope.parsed) {
         try {
             const parsed = envelope.value;
@@ -253,6 +259,11 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
             const proposals = parseLivingLoreProposals(parsed?.loreProposals, livingLorePacket);
             loreProposals = proposals.accepted;
             loreProposalRejections = proposals.rejected;
+            if (livingLorePacket?.promotion?.candidates?.length) {
+                const decisions = parsePromotionDecisions(parsed?.lorePromotionDecisions, livingLorePacket.promotion);
+                lorePromotionDecisions = decisions.accepted;
+                lorePromotionDecisionRejections = decisions.rejected;
+            }
             if (parsed?.flow && typeof parsed.flow === 'object') {
                 flow = {
                     continueAfter: Boolean(parsed.flow.continue ?? parsed.flow.continueAfter),
@@ -264,9 +275,12 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
                     && typeof s.find === 'string' && s.find.length > 0
                     && typeof s.replace === 'string');
             }
-        } catch { swaps = []; requests = []; flow = null; loreProposals = []; loreProposalRejections = []; }
+        } catch { swaps = []; requests = []; flow = null; loreProposals = []; loreProposalRejections = []; lorePromotionDecisions = []; lorePromotionDecisionRejections = []; }
     }
-    return { prose, swaps, requests, flow, loreProposals, loreProposalRejections };
+    return {
+        prose, swaps, requests, flow, loreProposals, loreProposalRejections,
+        ...(livingLorePacket?.promotion?.candidates?.length ? { lorePromotionDecisions, lorePromotionDecisionRejections } : {}),
+    };
 }
 
 /**
@@ -302,6 +316,8 @@ export function describeLoomReply(raw, { tailChars = 400, fenceChars = 2000 } = 
         swapCount: parsed.swaps.length,
         loreProposalCount: parsed.loreProposals.length,
         loreProposalRejectedCount: parsed.loreProposalRejections.length,
+        lorePromotionDecisionCount: parsed.lorePromotionDecisions?.length || 0,
+        lorePromotionDecisionRejectedCount: parsed.lorePromotionDecisionRejections?.length || 0,
         tail: text.slice(-tailChars),
     };
 }

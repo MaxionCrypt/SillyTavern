@@ -20,6 +20,8 @@ import { streamChatPrompt } from './story-stream.js';
 import { buildEmptyResponseNudge, buildNarratorArchivistSections, buildGoalObjectives } from './narrator-prompt.js';
 import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
 import { formatLivingLorePacket } from './living-lore-proposals.js';
+import { promotionEvidence } from './world-sense-promotion.js';
+import { saveWorldSensePromotionDecisionReceipt } from './world-sense-store.js';
 import {
     invalidateLivingLoreProposals,
     listLivingLoreProposals,
@@ -1805,6 +1807,8 @@ async function beginLoomVisibleStream(run, scene) {
     run.envelope.mechanics.pendingRequests = [...(result?.requests || [])];
     run.envelope.loreProposals = structuredClone(result?.loreProposals || []);
     run.envelope.loreProposalRejections = structuredClone(result?.loreProposalRejections || []);
+    run.envelope.lorePromotionDecisions = structuredClone(result?.lorePromotionDecisions || []);
+    run.envelope.lorePromotionDecisionRejections = structuredClone(result?.lorePromotionDecisionRejections || []);
     if (result?.flow) run.envelope.flow = result.flow;
     run.generationFinished = true;
     run.generationSettled = true;
@@ -2072,7 +2076,25 @@ export async function runLoomReconciliation({
     // did not advance — name the real cause here instead.
     await checkGenerationBudget({ text: raw, reasoning: '', label: 'The Loom pass', directionId: null });
     journalLoomReply(raw, 'loom-pass', scene?.id || null);
-    const { prose, swaps, requests, flow, loreProposals, loreProposalRejections } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
+    const { prose, swaps, requests, flow, loreProposals, loreProposalRejections, lorePromotionDecisions = [], lorePromotionDecisionRejections = [] } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
+    if (snapshot?.livingLore?.promotion?.candidates?.length) {
+        saveWorldSensePromotionDecisionReceipt(snapshot?.worldSense?.id, {
+            decisions: lorePromotionDecisions,
+            rejections: lorePromotionDecisionRejections,
+        });
+        try {
+            recordDebugEvent('world-sense', 'promotion.decisions', {
+                timelineId: scene?.timelineId || '', sceneId: scene?.id || '',
+                candidates: snapshot.livingLore.promotion.candidates,
+                decisions: lorePromotionDecisions,
+                rejections: lorePromotionDecisionRejections,
+            }, {
+                severity: lorePromotionDecisionRejections.length ? 'warn' : 'info',
+                correlationId: directionInFlight?.id || activeRun?.directionId || null,
+                summary: `Loom judged ${lorePromotionDecisions.length}/${snapshot.livingLore.promotion.candidates.length} World Sense promotion candidate(s)`,
+            });
+        } catch { /* diagnostics cannot break reconciliation */ }
+    }
     if (loreProposals.length || loreProposalRejections.length) {
         try {
             recordDebugEvent('world-sense', 'lore.proposals.parsed', {
@@ -2092,7 +2114,7 @@ export async function runLoomReconciliation({
     // Full-prose replies are the v12 contract. Preserve-and-patch remains a
     // compatibility fallback for owner-authored recipes using the old fence.
     const committedProse = prose || applySwaps(draft, swaps).prose;
-    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections };
+    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections, lorePromotionDecisions, lorePromotionDecisionRejections };
     try {
         const result = executeDirectionRequests(requests, {
             scene: { id: scene.id, timelineId: scene.timelineId },
@@ -2102,10 +2124,10 @@ export async function runLoomReconciliation({
             authorizedGoalIds: [],
         });
         journal('loom', { requestCount: requests.length, ok: result.ok, patched: committedProse !== draft }, { summary: 'Loom reconciled and recorded the turn' });
-        return { committedProse, requests, result, flow, loreProposals, loreProposalRejections };
+        return { committedProse, requests, result, flow, loreProposals, loreProposalRejections, lorePromotionDecisions, lorePromotionDecisionRejections };
     } catch (error) {
         journal('loom.failed', { phase: 'apply', error: String(error?.message || error) }, { severity: 'warn' });
-        return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections };
+        return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections, lorePromotionDecisions, lorePromotionDecisionRejections };
     }
 }
 
@@ -2420,6 +2442,8 @@ async function interruptLiveDirection({ preserveForIntervention }) {
     // set by confidence would still let hidden evidence become canon.
     run.envelope.loreProposals = [];
     run.envelope.loreProposalRejections = [];
+    run.envelope.lorePromotionDecisions = [];
+    run.envelope.lorePromotionDecisionRejections = [];
     run.archiveRequestsApplied = false;
 
     // Loom mode: Stop CUTS OFF, it does not delete. The reveal lags the buffer
@@ -2599,6 +2623,7 @@ async function queueAcceptedLoreProposals(run, { proposals = null, phase = 'comp
             proposals: candidates,
             acceptedProse: acceptedProse(run),
             archiveFacts: run.committedArchiveFacts || [],
+            promotionFacts: promotionEvidence(packet.promotion),
             source: {
                 directionId: run.directionId,
                 messageId: run.messageId,
@@ -2749,6 +2774,12 @@ async function catchUpArchive(run, reason) {
     });
     journalLoomReply(raw, `archive-catchup:${reason}`, run.sceneId, run.directionId);
     const parsed = parseLoomReply(raw, { livingLorePacket: run.envelope?.livingLore });
+    run.envelope.lorePromotionDecisions = structuredClone(parsed.lorePromotionDecisions || []);
+    run.envelope.lorePromotionDecisionRejections = structuredClone(parsed.lorePromotionDecisionRejections || []);
+    saveWorldSensePromotionDecisionReceipt(run.envelope?.worldSense?.id, {
+        decisions: parsed.lorePromotionDecisions || [],
+        rejections: parsed.lorePromotionDecisionRejections || [],
+    });
     const requests = parsed.requests.filter((request) => ARCHIVE_CAPABILITIES.has(request?.capability));
     const freshLoreProposals = parsed.loreProposals.filter((proposal) =>
         !(run.envelope?.loreProposals || []).some((existing) => sameLoreProposal(existing, proposal)));
@@ -3291,6 +3322,8 @@ function normalizeEnvelope(value, scene) {
         archiveProjection: value.archiveProjection ? structuredClone(value.archiveProjection) : null,
         loreProposals: Array.isArray(value.loreProposals) ? structuredClone(value.loreProposals) : [],
         loreProposalRejections: Array.isArray(value.loreProposalRejections) ? structuredClone(value.loreProposalRejections) : [],
+        lorePromotionDecisions: Array.isArray(value.lorePromotionDecisions) ? structuredClone(value.lorePromotionDecisions) : [],
+        lorePromotionDecisionRejections: Array.isArray(value.lorePromotionDecisionRejections) ? structuredClone(value.lorePromotionDecisionRejections) : [],
         sceneId: scene.id,
     };
 }

@@ -77,6 +77,19 @@ export function listWorldSenseReceipts({ sceneId = '' } = {}) {
     return (sceneId ? receipts.filter((item) => item.sceneId === String(sceneId)) : receipts).map((item) => structuredClone(item));
 }
 
+export function saveWorldSensePromotionDecisionReceipt(receiptId, { decisions = [], rejections = [] } = {}) {
+    const store = getWorldSenseStore();
+    const receipt = store.receipts.find((item) => item.id === String(receiptId || ''));
+    if (!receipt) return null;
+    receipt.promotionDecision = {
+        at: now(),
+        decisions: Array.isArray(decisions) ? structuredClone(decisions) : [],
+        rejections: Array.isArray(rejections) ? structuredClone(rejections) : [],
+    };
+    save();
+    return structuredClone(receipt.promotionDecision);
+}
+
 export function getWorldSenseContinuity(sceneId) {
     return structuredClone(getWorldSenseStore().continuityByScene[String(sceneId)] || []);
 }

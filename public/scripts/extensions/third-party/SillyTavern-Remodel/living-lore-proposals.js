@@ -3,6 +3,7 @@ import {
     normalizeLivingLoreMetadata,
     loreEntryKey,
 } from './living-lore-model.js';
+import { formatWorldSensePromotionPacket } from './world-sense-promotion.js';
 
 export const LIVING_LORE_OPERATIONS = Object.freeze([
     'entry.create',
@@ -77,10 +78,12 @@ export function buildLivingLorePacket({ timelineId = '', book = '', bookHash = '
 
 /** Render one recipe source with both the writable packet and its output rule. */
 export function formatLivingLorePacket(packet) {
-    if (!packet?.book || !Array.isArray(packet.entries) || !packet.entries.length) return '';
+    if (!packet?.book || !Array.isArray(packet.entries)) return '';
+    const lorePacket = { ...packet };
+    delete lorePacket.promotion;
     return [
         'Selected Living Lore (the only lorebook entries available for change proposals):',
-        JSON.stringify(packet, null, 2),
+        JSON.stringify(lorePacket, null, 2),
         'Do not rewrite lore directly. If accepted fiction warrants a durable change, add a top-level "loreProposals" array to the state fence.',
         'Each proposal uses only: entry.create, fact.append, current.set, thread.add, alias.add, entry.link, or entry.retire.',
         'For an existing entry, copy target.book, target.uid, and target.revision exactly from this packet. A stale or unselected target is rejected.',
@@ -88,7 +91,8 @@ export function formatLivingLorePacket(packet) {
         'entry.link value is {"target":{"book":"...","uid":"...","revision":1},"relation":"..."}; both entries must be selected. Other non-retirement operations use a string value.',
         'Shape: {"operation":"current.set","target":{"book":"Timeline Book","uid":"42","revision":7},"entryType":"entity","section":"Current","value":"...","evidence":"exact accepted prose or committed Archive fact","confidence":0.91,"reason":"one sentence"}',
         'Use "loreProposals":[] when no durable lore change is warranted.',
-    ].join('\n');
+        formatWorldSensePromotionPacket(packet.promotion),
+    ].filter(Boolean).join('\n');
 }
 
 /**

@@ -8,6 +8,7 @@ import {
 } from './prompt-studio.js';
 import { describeLoomReply, parseLoomReply } from './loom-reconciliation.js';
 import { formatLivingLorePacket } from './living-lore-proposals.js';
+import { promotionEvidence } from './world-sense-promotion.js';
 import { invalidateLivingLoreProposals, queueLivingLoreProposals } from './living-lore-mutations.js';
 import { streamChatPrompt } from './story-stream.js';
 import {
@@ -26,6 +27,7 @@ import { STORY_ARCHIVE_CONTRACT, STORY_ARCHIVE_POLICY } from './story-loom-contr
 import { splitStoryArchiveAddition, STORY_ARCHIVE_PASSAGE_MAX_CHARS } from './story-archive-provenance.js';
 import { buildStoryWorldSenseOptions, formatStoryWorldSenseContinuity } from './story-world-sense.js';
 import { resolveWorldSense } from './world-sense-runtime.js';
+import { saveWorldSensePromotionDecisionReceipt } from './world-sense-store.js';
 import {
     buildStoryTimelineWebPacket,
     createStoryWebReceipt,
@@ -242,6 +244,22 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
 
         const replyShape = describeLoomReply(raw);
         const parsed = parseLoomReply(raw, { livingLorePacket: worldSense?.loomPacket || null });
+        if (worldSense?.loomPacket?.promotion?.candidates?.length) {
+            saveWorldSensePromotionDecisionReceipt(worldSense?.receipt?.id, {
+                decisions: parsed.lorePromotionDecisions || [],
+                rejections: parsed.lorePromotionDecisionRejections || [],
+            });
+            recordDebugEvent('world-sense', 'promotion.decisions', {
+                timelineId: scene.timelineId, sceneId: scene.id, captureId: capture.id,
+                candidates: worldSense.loomPacket.promotion.candidates,
+                decisions: parsed.lorePromotionDecisions || [],
+                rejections: parsed.lorePromotionDecisionRejections || [],
+            }, {
+                correlationId: `story-archive:${capture.id}`,
+                severity: parsed.lorePromotionDecisionRejections?.length ? 'warn' : 'info',
+                summary: `Story Loom judged ${parsed.lorePromotionDecisions?.length || 0}/${worldSense.loomPacket.promotion.candidates.length} World Sense promotion candidate(s)`,
+            });
+        }
         const requests = parsed.requests.filter((request) => STORY_ARCHIVE_CAPABILITY_SET.has(request?.capability));
         const disabledRequests = parsed.requests.filter((request) => !STORY_ARCHIVE_CAPABILITY_SET.has(request?.capability));
         const archiveFacts = storyArchiveEvidence(requests);
@@ -257,6 +275,8 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
             timelineWebPacket: webPacket,
             loreProposals: parsed.loreProposals,
             loreProposalRejections: parsed.loreProposalRejections,
+            lorePromotionDecisions: parsed.lorePromotionDecisions || [],
+            lorePromotionDecisionRejections: parsed.lorePromotionDecisionRejections || [],
             archiveFacts,
         }, onStateChange);
         if (!requests.length && !parsed.loreProposals.length) {
@@ -344,6 +364,7 @@ async function queueStoryCaptureLore({ scene, docId, capture, packet }) {
         proposals,
         acceptedProse: formatStoryCaptureEvidence(capture),
         archiveFacts: capture.archiveFacts || [],
+        promotionFacts: promotionEvidence(packet.promotion),
         source: {
             mode: 'story',
             directionId: `story-archive:${capture.id}`,
