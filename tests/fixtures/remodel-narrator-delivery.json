@@ -1,0 +1,31 @@
+{
+    "request": {
+        "deliveryId": "direction-fixture-1",
+        "sceneId": "scene-fixture-1",
+        "performer": { "kind": "character", "id": "narrator", "label": "The Narrator" },
+        "prompt": {
+            "messages": [
+                { "role": "system", "content": "Continue accepted fiction without controlling the player." },
+                { "role": "user", "content": "Aiden asks what changed." }
+            ]
+        },
+        "route": { "profileId": "profile-glm", "provider": "openrouter", "model": "glm-fixture" }
+    },
+    "ordinary": [
+        { "type": "snapshot", "text": "The room", "reasoning": "" },
+        { "type": "snapshot", "text": "The room went quiet.", "reasoning": "" },
+        { "type": "complete", "finishReason": "stop" }
+    ],
+    "reasoningOnly": [
+        { "type": "snapshot", "text": "", "reasoning": "I should continue the scene carefully." },
+        { "type": "complete", "finishReason": "stop" }
+    ],
+    "recovered": [
+        { "type": "snapshot", "text": "Marisol answered.", "reasoning": "" },
+        { "type": "complete", "finishReason": "stop" }
+    ],
+    "truncated": [
+        { "type": "snapshot", "text": "The sentence stopped", "reasoning": "" },
+        { "type": "complete", "finishReason": "length" }
+    ]
+}
