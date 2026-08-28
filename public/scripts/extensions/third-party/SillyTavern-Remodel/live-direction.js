@@ -3061,6 +3061,11 @@ async function recoverLiveDirectionMessages() {
     }
 }
 
+/** Explicit, idempotent recovery seam for the directed-turn controller. */
+export function recoverLiveDirection() {
+    return recoverLiveDirectionMessages();
+}
+
 /**
  * Reconcile the current native swipe selection with the Suggest queue. This is
  * also the reload recovery path: a crash after message save but before queue

@@ -123,12 +123,6 @@ import {
 } from './variables-ui.js';
 import {
     canSendWithoutLiveDirection,
-    clearLiveDirectionFailure,
-    continueLiveDirection,
-    getLiveDirectionRun,
-    getLiveDirectionUiState,
-    handleLiveDirectionDraft,
-    initLiveDirection,
     describeNativeGenerationBlock,
     isDirectedLiveScene,
     isLatestUserMessage,
@@ -136,20 +130,13 @@ import {
     prefetchLiveDirectionLore,
     previewLiveDirectionLore,
     previewLoomPrompt,
-    regenerateLastDirectedResponse,
-    rerunDirectedRoleplayFromUserMessage,
-    requestNextDirection,
-    retryLiveStep,
-    continueLiveStep,
     describeLiveStepActions,
-    retryLiveDirection,
     sendWithoutLiveDirection,
     setLiveDirectionEnabled,
     setLiveDirectionPacing,
     setNextPerformerOverride,
-    stopLiveDirection,
-    submitDirectedRoleplay,
 } from './live-direction.js';
+import { directedTurnController } from './legacy-directed-turn-adapter.js';
 import { activateWorldSenseSelection } from './world-sense-activation.js';
 import { sanitizeDirectionText } from './live-direction-markers.js';
 import { buildNarratorArchivistSections } from './narrator-prompt.js';
@@ -404,7 +391,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
         requestRender: renderRoleplayScene,
         showToast: showRoleplayToast,
     });
-    initLiveDirection({
+    directedTurnController.initialize({
         getActiveScene,
         getCast: getLiveDirectionCast,
         getPersona: () => ({ kind: 'persona', id: currentPersonaAvatarId() || getContext().name1 || 'user', label: getContext().name1 || 'You' }),
@@ -9077,7 +9064,7 @@ function renderRoleplayComposer(root) {
     const goalIntents = activeScene ? getStoryGoalComposerIntents(activeScene.id) : [];
     const attachedGoals = new Set(goalIntents.map((item) => item.goalId));
     const goalChips = activeScene ? getSceneGoals(activeScene.id, { includeResolved: false, states: ['active', 'background'] }) : [];
-    const directionUi = getLiveDirectionUiState(activeScene);
+    const directionUi = directedTurnController.getUiState(activeScene);
 
     // Next speaker only means something in a group; in a solo scene there's
     // one character, so it's fixed to "AI decides" and not a menu.
@@ -9807,10 +9794,10 @@ async function handleRoleplaySend(root) {
     if (isDirectedLiveScene(scene)) {
         root.dataset.remodelRpSubmitting = 'true';
         setRoleplayGenerating(true);
-        refreshLiveDirectionChrome({ state: 'Directing', acceptedVisibleText: getLiveDirectionRun()?.acceptedVisibleText || '' });
+        refreshLiveDirectionChrome({ state: 'Directing', acceptedVisibleText: directedTurnController.getRun()?.acceptedVisibleText || '' });
         const intents = getStoryGoalComposerIntents(scene.id);
         try {
-            await submitDirectedRoleplay({ scene, text: value, authorizedGoalIds: intents.map((item) => item.goalId) });
+            await directedTurnController.start({ scene, text: value, authorizedGoalIds: intents.map((item) => item.goalId) });
         } finally {
             delete root.dataset.remodelRpSubmitting;
         }
@@ -9902,7 +9889,7 @@ function dismissDirectionFailureOnOutsideClick(panel) {
     });
 }
 
-function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
+function refreshLiveDirectionChrome(run = directedTurnController.getRun()) {
     clearTimeout(liveProgressRefreshTimer);
     liveProgressRefreshTimer = null;
     const root = getRealRoleplayRoot();
@@ -9923,7 +9910,7 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
     const zone = root.querySelector('[data-remodel-rp-composer]');
     const flow = zone?.querySelector('[data-remodel-live-flow]');
     if (flow) {
-        const ui = getLiveDirectionUiState(getActiveScene());
+        const ui = directedTurnController.getUiState(getActiveScene());
         // The mode label is left alone on purpose: it names which mode the
         // Scene is IN ("Directed" / "Free play") and must not be overwritten
         // with the transient run state, which is what used to make it
@@ -9973,7 +9960,7 @@ function refreshLiveDirectionChrome(run = getLiveDirectionRun()) {
     // the two calls that mean "a pass just started" (notifyTransient and
     // handleRoleplaySend both pass a placeholder), so a `!run` test closed
     // the card on exactly the calls that should have opened it.
-    const mode = resolveDirectionChromeMode({ run, uiState: getLiveDirectionUiState(getActiveScene()) });
+    const mode = resolveDirectionChromeMode({ run, uiState: directedTurnController.getUiState(getActiveScene()) });
     if (mode !== 'directing') {
         closeLoomReviewIndicator(root);
     }
@@ -10079,7 +10066,7 @@ function handleRoleplayAction(action) {
                 // unspoken and the performer otherwise. retryLiveStep decides
                 // that from the same resolver the button is labelled from, so
                 // the label and the action cannot disagree.
-                retryLiveStep(getActiveScene());
+                directedTurnController.retry(getActiveScene());
                 break;
             }
             // core's regenerate = swipe/regenerate the last message. Flip the
@@ -10100,7 +10087,7 @@ function handleRoleplayAction(action) {
                 // what is already there. When a direction is standing that
                 // means asking the performer to speak it — no second Loom
                 // call, which is the expensive half.
-                continueLiveStep(getActiveScene());
+                directedTurnController.continue(getActiveScene());
                 break;
             }
             // Advance the group's turn / continue — core's continue option.
@@ -10305,7 +10292,7 @@ function bindRoleplayComposerEvents() {
         if (target.closest('[data-remodel-direction-retry]')) {
             event.preventDefault();
             document.getElementById('remodel-direction-failure')?.remove();
-            retryLiveDirection();
+            directedTurnController.retryFailure();
             return;
         }
         if (target.closest('[data-remodel-direction-bypass]')) {
@@ -10323,7 +10310,7 @@ function bindRoleplayComposerEvents() {
         }
         if (target.closest('[data-remodel-live-stop]')) {
             event.preventDefault();
-            stopLiveDirection();
+            directedTurnController.stop();
             return;
         }
         if (target.closest('[data-remodel-rp-scene-back]')) {
@@ -10508,7 +10495,7 @@ function bindRoleplayComposerEvents() {
         const input = el.closest('[data-remodel-rp-input]');
         if (input instanceof HTMLTextAreaElement) {
             autosizeRoleplayInput(input);
-            handleLiveDirectionDraft(input.value);
+            directedTurnController.interrupt(input.value);
             prefetchLiveDirectionLore(getActiveScene(), input.value);
             return;
         }
@@ -10546,7 +10533,7 @@ function bindRoleplayGenerationFeedback() {
 
     const finish = () => {
         clearMechanicsReceiptInjection();
-        if (ownsLiveDirectionGeneration() || getLiveDirectionRun()) {
+        if (ownsLiveDirectionGeneration() || directedTurnController.getRun()) {
             return;
         }
         if (!document.body.classList.contains('remodel-roleplay-generating')) {
@@ -11049,7 +11036,7 @@ async function commitRoleplayBubbleEdit(mesId, row) {
     try {
         const scene = getActiveScene();
         if (isDirectedLiveScene(scene)) {
-            const reran = await rerunDirectedRoleplayFromUserMessage({ scene, messageId: mesId, text: newValue });
+            const reran = await directedTurnController.editAndRerun({ scene, messageId: mesId, text: newValue });
             if (!reran) throw new Error('The edited turn could not be rerun while another direction is active.');
         } else {
             // Free play has no Archive/mechanics transaction to unwind, but the
@@ -11169,7 +11156,7 @@ function renderRoleplayScene() {
         return;
     }
     stream.textContent = '';
-    const liveRun = getLiveDirectionRun();
+    const liveRun = directedTurnController.getRun();
 
     // context.chat is the canonical message list. Core briefly tears down and
     // rebuilds its hidden #chat rows while a generation settles; using those
@@ -11219,7 +11206,7 @@ function renderRoleplayScene() {
     // restated, so the two cannot disagree about what is on screen.
     const chromeMode = resolveDirectionChromeMode({
         run: liveRun,
-        uiState: getLiveDirectionUiState(activeRoleplayScene),
+        uiState: directedTurnController.getUiState(activeRoleplayScene),
     });
     if (chromeMode === 'speaking') {
         showRoleplayTypingIndicator(liveRun.performer);
