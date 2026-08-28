@@ -1,4 +1,5 @@
 import { executeMechanicsRequest, getCapabilityDictionary, MECHANICS_PROTOCOL, undoMechanicsTransaction } from './mechanics-capabilities.js';
+import { getContext } from '../../../st-context.js';
 import { buildNarratorArchivistSections } from './narrator-prompt.js';
 import {
     compilePromptRecipe,
@@ -34,6 +35,7 @@ import {
     formatStoryTimelineWebPacket,
     storyTimelineWebAddressing,
 } from './story-timeline-web.js';
+import { resolveGenerationRoute } from './generation-route.js';
 
 export const STORY_ARCHIVE_CAPABILITIES = Object.freeze([
     'scene.set', 'scene.clear', 'event.record',
@@ -232,9 +234,14 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
     });
 
     try {
+        const loomRoute = testAdapter ? null : resolveGenerationRoute({
+            scene,
+            role: 'loom',
+            profiles: getContext().extensionSettings?.connectionManager?.profiles || [],
+        });
         const response = testAdapter
             ? await testAdapter({ scene, doc: getStoryDoc(docId), capture, prompt })
-            : await streamChatPrompt({ prompt, profileId: scene.generationProfileIds?.loom || undefined });
+            : await streamChatPrompt({ prompt, profileId: loomRoute.profileId });
         const raw = typeof response === 'string' ? response : String(response?.text || '');
         recordApiTranscript('response', {
             mode: 'loom', purpose: 'story-archive', text: raw,

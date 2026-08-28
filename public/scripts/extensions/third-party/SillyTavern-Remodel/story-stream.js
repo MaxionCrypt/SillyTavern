@@ -1,4 +1,3 @@
-import { sendOpenAIRequest } from '../../../openai.js';
 import { extractReasoningFromData } from '../../../reasoning.js';
 import { getContext } from '../../../st-context.js';
 import { getMaxResponseTokens } from '../../../../script.js';
@@ -21,9 +20,6 @@ import { ConnectionManagerRequestService } from '../../shared.js';
 // We ask for type 'continue': it streams (not 'quiet'), it is in core's
 // `noMultiSwipeTypes` so a settings.n > 1 user cannot get a swipe fan-out from
 // one of these calls, and "continue what is here" is what both requests are.
-
-/** The type handed to core. See the note above for why it is not 'quiet'. */
-const STREAM_REQUEST_TYPE = 'continue';
 
 /**
  * Whether a Story request can stream right now.
@@ -60,18 +56,15 @@ export function canStreamStory() {
  *          the request — the caller should treat the text as a final answer.
  */
 export async function streamChatPrompt({ prompt, onChunk, signal, profileId } = {}) {
-    let response;
-    if (profileId) {
-        const routedPrompt = ConnectionManagerRequestService.constructPrompt(prompt, profileId);
-        response = await ConnectionManagerRequestService.sendRequest(
-            profileId,
-            routedPrompt,
-            getMaxResponseTokens(),
-            { stream: true, signal, extractData: true, includePreset: true, includeInstruct: true },
-        );
-    } else {
-        response = await sendOpenAIRequest(STREAM_REQUEST_TYPE, prompt, signal);
-    }
+    const route = String(profileId || '').trim();
+    if (!route) throw new Error('This generation job has no Connection Profile assigned.');
+    const routedPrompt = ConnectionManagerRequestService.constructPrompt(prompt, route);
+    const response = await ConnectionManagerRequestService.sendRequest(
+        route,
+        routedPrompt,
+        getMaxResponseTokens(),
+        { stream: true, signal, extractData: true, includePreset: true, includeInstruct: true },
+    );
 
     // A provider that ignores `stream` (or a source core refuses to stream, such
     // as o1) returns the plain response object instead of a generator.

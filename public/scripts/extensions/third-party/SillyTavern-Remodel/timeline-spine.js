@@ -203,6 +203,8 @@ import {
     setSuppressDrawerObserver,
     setTavernPanelObserver,
 } from './session-state.js';
+import { loadUiLocation, saveUiLocation } from './ui-location-store.js';
+import { resolveGenerationRoute } from './generation-route.js';
 
 import { resolveChatLorebook } from './chat-lorebook.js';
 // world-info.js's METADATA_KEY. Named locally rather than imported so this
@@ -239,6 +241,53 @@ const loomArchive = {
     // cursor position. The field is read directly from the DOM at Save time.
     editingId: '',
 };
+
+let restoredUiScroll = null;
+let uiLocationPersistTimer = null;
+
+function stableUiLocation(scrollTop = null) {
+    const state = getSessionState();
+    const prior = loadUiLocation();
+    const scroll = scrollTop === null
+        ? prior.scroll
+        : { key: uiLocationScrollKey(), top: scrollTop };
+    return {
+        currentWindow: state.currentWindow,
+        activeTavernTab: state.activeTavernTab,
+        focusedTimelineId: state.focusedTimelineId,
+        codexOpen: state.codexOpen,
+        archive: { open: loomArchive.open, sceneId: loomArchive.sceneId, view: loomArchive.view },
+        scroll,
+    };
+}
+
+function uiLocationScrollKey() {
+    const state = getSessionState();
+    const archive = loomArchive.open ? `archive:${loomArchive.sceneId || 'active'}` : state.codexOpen ? 'variables' : 'scenes';
+    return `${state.activeTavernTab}:${state.focusedTimelineId || 'deck'}:${archive}`;
+}
+
+function persistStableUiLocation(scrollTop = null) {
+    saveUiLocation(stableUiLocation(scrollTop));
+}
+
+function scheduleUiLocationPersistence(scrollTop) {
+    clearTimeout(uiLocationPersistTimer);
+    uiLocationPersistTimer = setTimeout(() => persistStableUiLocation(scrollTop), 120);
+}
+
+function hydrateStableUiLocation() {
+    const saved = loadUiLocation();
+    setActiveTavernTab(saved.activeTavernTab);
+    setFocusedTimelineId(saved.focusedTimelineId);
+    setCodexOpen(saved.codexOpen);
+    setCurrentWindow(saved.currentWindow);
+    loomArchive.open = saved.archive.open;
+    loomArchive.sceneId = saved.archive.sceneId;
+    loomArchive.view = saved.archive.view;
+    restoredUiScroll = saved.scroll;
+    return saved;
+}
 
 function resetLoomArchiveView() {
     loomArchive.open = false;
@@ -311,8 +360,12 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
         return;
     }
 
+    const restoredLocation = hydrateStableUiLocation();
     initDebugConsole();
     const drawer = ensureTimelineDrawer();
+    drawer.querySelector('.remodel-tavern-body')?.addEventListener('scroll', (event) => {
+        scheduleUiLocationPersistence(event.currentTarget.scrollTop);
+    }, { passive: true });
     bindDrawerToggle(drawer);
     bindTimelineEvents(drawer);
     bindSillyTavernEvents();
@@ -372,6 +425,10 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     syncStoryWorkspaceClass(getActiveScene());
     renderRoleplayScene();
     setInitialized(true);
+
+    if (restoredLocation.currentWindow.kind === 'tavern') {
+        void transitionToWindow(restoredLocation.currentWindow);
+    }
 
     // Belt-and-suspenders: Remodel's own init isn't guaranteed to run before
     // core's one-shot APP_READY event fires, so establish the correct state
@@ -455,6 +512,7 @@ async function transitionToWindow(next) {
     }
 
     setCurrentWindow(next);
+    persistStableUiLocation();
     queueRender();
 
     const desiredDrawerOpen = next.kind !== 'native';
@@ -3311,6 +3369,7 @@ async function handleAction(element) {
             break;
     }
 
+    persistStableUiLocation();
     queueRender();
 }
 
@@ -3473,6 +3532,7 @@ async function handleFieldChange(field) {
         case 'archive-scene':
             loomArchive.sceneId = value || null;
             loomArchive.editingId = '';
+            persistStableUiLocation();
             break;
         default:
             break;
@@ -3541,7 +3601,21 @@ function renderTimelinePanel() {
     tabsNav.innerHTML = renderTavernTabs();
 
     const body = viewport.querySelector('.remodel-tavern-body');
+    if (!body.dataset.remodelLocationBound) {
+        body.dataset.remodelLocationBound = 'true';
+        body.addEventListener('scroll', (event) => {
+            scheduleUiLocationPersistence(event.currentTarget.scrollTop);
+        }, { passive: true });
+    }
     body.innerHTML = renderActiveWorkspace(store);
+
+    if (restoredUiScroll?.key === uiLocationScrollKey()) {
+        const top = restoredUiScroll.top;
+        restoredUiScroll = null;
+        requestAnimationFrame(() => { body.scrollTop = top; });
+    } else {
+        restoredUiScroll = null;
+    }
 
     if (activeTavernTab === 'timeline' || activeTavernTab === 'characters' || activeTavernTab === 'prompts' || activeTavernTab === 'debug') {
         restoreAdoptedPanel();
@@ -5528,7 +5602,7 @@ function renderRoleplayNarratorPicker(overlay) {
     const total = overlay.querySelector('[data-remodel-rp-narrator-total]');
     if (total) total.textContent = `${characters.length} card${characters.length === 1 ? '' : 's'}`;
     const confirm = overlay.querySelector('[data-remodel-rp-narrator-confirm]');
-    if (confirm) confirm.toggleAttribute('disabled', !selected);
+    if (confirm) confirm.toggleAttribute('disabled', !selected || !state.narratorProfileId || !state.loomProfileId);
 
     const search = overlay.querySelector('[data-remodel-rp-narrator-search]');
     if (search instanceof HTMLInputElement && search.value.trim()) filterRoleplayNarratorGrid(overlay, search.value);
@@ -5542,7 +5616,7 @@ function renderRoleplayGenerationRoutes(overlay, context = getContext(), state =
         })
         .sort((a, b) => a.name.localeCompare(b.name));
     const options = [
-        '<option value="">Current SillyTavern connection</option>',
+        '<option value="" disabled>Choose a Connection Profile</option>',
         ...profiles.map((profile) => {
             const detail = [profile.api, profile.model].filter(Boolean).join(' · ');
             return `<option value="${escapeAttribute(profile.id)}">${escapeHtml(profile.name)}${detail ? ` — ${escapeHtml(detail)}` : ''}</option>`;
@@ -5562,6 +5636,9 @@ function renderRoleplayGenerationRoutes(overlay, context = getContext(), state =
         // clears references to profiles that were deleted or became invalid.
         state[stateKey] = select.value;
     }
+    const routesReady = Boolean(state.narratorProfileId && state.loomProfileId);
+    const apply = overlay.querySelector('[data-remodel-rp-connection-apply]');
+    if (apply instanceof HTMLButtonElement) apply.disabled = !routesReady;
 }
 
 /** Open the in-scene router for the two model-facing jobs. */
@@ -5640,6 +5717,10 @@ function bindRoleplayConnectionPickerEvents() {
         if (!target.closest('[data-remodel-rp-connection-apply]')) return;
         const state = overlay._remodelConnections;
         if (state.busy || roleplayConnectionApplication) return;
+        if (!state.narratorProfileId || !state.loomProfileId) {
+            showRoleplayToast('Choose both a Narrator and Loom Connection Profile.');
+            return;
+        }
         const scene = getScene(state.sceneId);
         if (!scene) {
             closeRoleplayConnectionPicker();
@@ -5689,6 +5770,7 @@ function bindRoleplayConnectionPickerEvents() {
         } else if (target.matches('[data-remodel-rp-loom-profile]')) {
             overlay._remodelConnections.loomProfileId = target.value;
         }
+        renderRoleplayGenerationRoutes(overlay, getContext(), overlay._remodelConnections);
     });
 }
 
@@ -5728,7 +5810,7 @@ function bindRoleplayNarratorPickerEvents() {
 
         if (target.closest('[data-remodel-rp-narrator-confirm]')) {
             const state = overlay._remodelNarrator;
-            if (!state.narratorAvatar) return;
+            if (!state.narratorAvatar || !state.narratorProfileId || !state.loomProfileId) return;
             const callback = state.onConfirm;
             closeRoleplayNarratorPicker();
             callback?.({
@@ -5749,6 +5831,7 @@ function bindRoleplayNarratorPickerEvents() {
         } else if (target.matches('[data-remodel-rp-loom-profile]')) {
             overlay._remodelNarrator.loomProfileId = target.value;
         }
+        renderRoleplayNarratorPicker(overlay);
     });
 
     document.addEventListener('input', (event) => {
@@ -6454,8 +6537,8 @@ function renderStoryPromptChoice(scene = getActiveScene()) {
     const profiles = getStoryConnectionProfiles();
     const coauthor = profiles.find((profile) => profile.id === scene?.generationProfileIds?.story);
     const loomConnection = profiles.find((profile) => profile.id === scene?.generationProfileIds?.loom);
-    const story = { recipe: { name: coauthor?.name || 'Current connection' } };
-    const loom = { recipe: { name: loomConnection?.name || 'Current connection' } };
+    const story = { recipe: { name: coauthor?.name || 'Connection required' } };
+    const loom = { recipe: { name: loomConnection?.name || 'Connection required' } };
     const inherited = !(coauthor || loomConnection);
     return `
         <button type="button" class="remodel-scene-prompt-choice is-compact" data-remodel-scene-prompt-choice data-prompt-mode="story-connections" title="Choose the co-author and Loom connections for this Scene">
@@ -6506,13 +6589,12 @@ function openStoryConnectionMenu(anchor, role = null) {
         const coauthor = profiles.find((profile) => profile.id === scene.generationProfileIds?.story);
         const loom = profiles.find((profile) => profile.id === scene.generationProfileIds?.loom);
         openRoleplayMenu(anchor, [
-            { id: 'story', label: 'Co-author connection', sublabel: coauthor?.name || 'Current SillyTavern connection' },
-            { id: 'loom', label: 'Loom connection', sublabel: loom?.name || 'Current SillyTavern connection' },
+            { id: 'story', label: 'Co-author connection', sublabel: coauthor?.name || 'Connection required' },
+            { id: 'loom', label: 'Loom connection', sublabel: loom?.name || 'Connection required' },
         ], (selectedRole) => openStoryConnectionMenu(anchor, selectedRole));
         return;
     }
     openRoleplayMenu(anchor, [
-        { id: '', label: 'Use current SillyTavern connection', sublabel: 'No Scene-specific connection' },
         ...profiles.map((profile) => ({
             id: profile.id,
             label: profile.name,
@@ -8257,7 +8339,7 @@ async function openStoryToolPanel(tool, trigger = null) {
             .sort((a, b) => a.name.localeCompare(b.name));
         const currentProfileId = scene?.generationProfileIds?.loom || '';
         const connectionOptions = [
-            '<option value="">Current SillyTavern connection</option>',
+            '<option value="" disabled>Choose a Connection Profile</option>',
             ...profiles.map((profile) => {
                 const detail = [profile.api, profile.model].filter(Boolean).join(' Â· ');
                 return `<option value="${escapeAttribute(profile.id)}">${escapeHtml(profile.name)}${detail ? ` â€” ${escapeHtml(detail)}` : ''}</option>`;
@@ -8713,7 +8795,13 @@ async function generateStory({ mode = 'continue', beat = '', beatId = null } = {
         storyStreamAbort = new AbortController();
         const live = openStoryStreamPreview(beatId);
         let prose = '';
-        const coauthorProfileId = getActiveScene()?.generationProfileIds?.story || null;
+        const generationScene = getActiveScene();
+        const coauthorRoute = resolveGenerationRoute({
+            scene: generationScene,
+            role: 'story',
+            profiles: getContext().extensionSettings?.connectionManager?.profiles || [],
+        });
+        const coauthorProfileId = coauthorRoute.profileId;
         try {
             ({ text: prose } = await generateProse({
                 prompt,

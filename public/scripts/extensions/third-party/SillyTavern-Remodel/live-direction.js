@@ -43,6 +43,7 @@ import { applyNarratorRetryPolicy } from './narrator-retry-policy.js';
 import { describeNarratorOutput } from './narrator-output-contract.js';
 import { limitBoundedChatHistory } from './prompt-history-limit.js';
 import { buildSceneArchiveProjection } from './archive-projection.js';
+import { snapshotGenerationRoutes } from './generation-route.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const AUTONOMOUS_CONTINUE_ACTION = '[Continue the scene from accepted history.]';
@@ -787,13 +788,19 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     // Retry is destructive only after its Narrator route is ready. Previously
     // the completed response and its mechanics were removed first, then a
     // slow profile reconnect failed, leaving the user with neither version.
-    const narratorProfileId = scene.generationProfileIds?.narrator;
-    if (narratorProfileId) {
-        try {
+    try {
+        const narratorProfileId = testAdapters
+            ? scene.generationProfileIds?.narrator
+            : snapshotGenerationRoutes({
+                scene,
+                roles: ['narrator'],
+                profiles: getContext().extensionSettings?.connectionManager?.profiles || [],
+            }).narrator.profileId;
+        if (narratorProfileId) {
             await hooks.activateConnectionProfile(narratorProfileId);
-        } catch (error) {
-            return directionFailure(error, { operation: 'regenerate', scene });
         }
+    } catch (error) {
+        return directionFailure(error, { operation: 'regenerate', scene });
     }
     // A background catch-up may still be creating suggestions for this take.
     // Join it before invalidating, otherwise it can land after the invalidation
@@ -1410,6 +1417,11 @@ function ownedByEmptyRetry(directionId) {
 }
 
 async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0, previousReasoningLength = 0, previousFailureCause = '' }) {
+    const generationRoutes = testAdapters ? null : snapshotGenerationRoutes({
+        scene,
+        roles: ['narrator', 'loom'],
+        profiles: getContext().extensionSettings?.connectionManager?.profiles || [],
+    });
     activeRun = {
         directionId: envelope.directionId,
         sceneId: scene.id,
@@ -1420,7 +1432,8 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         phase: 'narrator',
         narratorDraft: '',
         narratorGenerationFinished: false,
-        loomProfileId: scene.generationProfileIds?.loom || '',
+        generationRoutes,
+        loomProfileId: generationRoutes?.loom?.profileId || scene.generationProfileIds?.loom || '',
         loomController: null,
         rawBufferedText: '',
         acceptedVisibleText: '',
@@ -1513,7 +1526,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
                 count: repairedHistoryRoles,
             }, { correlationId: envelope.directionId });
         }
-        const narratorProfileId = scene.generationProfileIds?.narrator;
+        const narratorProfileId = activeRun.generationRoutes?.narrator?.profileId || scene.generationProfileIds?.narrator;
         if (narratorProfileId) {
             const activationStartedAt = Date.now();
             await hooks.activateConnectionProfile(narratorProfileId);
@@ -1821,6 +1834,7 @@ async function beginLoomVisibleStream(run, scene) {
         draftReasoning: narratorReasoning(run),
         token,
         deferRequests: true,
+        loomProfileId: run.generationRoutes?.loom?.profileId || run.loomProfileId,
         onChunk: ({ text }) => {
             if (activeRun !== run || run.loomController.signal.aborted) return;
             run.rawBufferedText = String(text || '');
@@ -2055,7 +2069,7 @@ export async function previewLoomPrompt(scene, { action = '', draft = '', draftR
  * unchanged. Dice inside goal.reach are code-rolled by the mechanics layer.
  */
 export async function runLoomReconciliation({
-    scene, snapshot, draft, draftReasoning = '', token = null, onChunk = null, deferRequests = false,
+    scene, snapshot, draft, draftReasoning = '', token = null, onChunk = null, deferRequests = false, loomProfileId = '',
 }) {
     const { prompt, recipe } = compileLoomRequest({ scene, snapshot, draft, draftReasoning });
     recordLoomPromptTranscript(recipe?.name, prompt);
@@ -2082,7 +2096,7 @@ export async function runLoomReconciliation({
             const out = await streamChatPrompt({
                 prompt,
                 signal: token?.controller?.signal,
-                profileId: scene.generationProfileIds?.loom || undefined,
+                profileId: loomProfileId || scene.generationProfileIds?.loom || undefined,
                 onChunk: ({ text, reasoning }) => onChunk?.({ text: readLoomProse(text), reasoning }),
             });
             raw = String(out?.text || '');
