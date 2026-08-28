@@ -132,6 +132,7 @@ import {
     previewLoomPrompt,
     describeLiveStepActions,
     sendWithoutLiveDirection,
+    setLiveDirectionDelivery,
     setLiveDirectionEnabled,
     setLiveDirectionPacing,
     setNextPerformerOverride,
@@ -8656,7 +8657,9 @@ function liveModeTitle(ui) {
     if (!ui?.active) {
         return 'Live Direction is OFF. This Scene is on Free play: replies come straight from SillyTavern, with no directing pass and no paced reveal. Click to turn Live Direction on.';
     }
-    const parts = ['Live Direction is ON. A hidden directing pass chooses the performer and paces the reply.'];
+    const parts = ui.delivery === 'canonical'
+        ? ['Live Direction is ON. The Narrator streams directly into the Scene; Loom and Archive are disconnected in this experimental stage.']
+        : ['Live Direction is ON. A hidden directing pass chooses the performer and paces the reply.'];
     if (ui.state) parts.push(`Right now: ${ui.state}.`);
     if (ui.performerLabel) parts.push(`Performer: ${ui.performerLabel}.`);
     parts.push('Click to switch this Scene back to Free play.');
@@ -9092,10 +9095,10 @@ function renderRoleplayComposer(root) {
                 ${inGroup ? '<i class="fa-solid fa-chevron-down remodel-rp-command-caret" aria-hidden="true"></i>' : ''}
             </button>
             <button type="button" class="remodel-rp-command remodel-rp-act" ${stepAttrs(step.retry, 'regenerate')} title="${escapeAttribute(step.retry.reason)}">
-                <span class="remodel-rp-command-icon"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i></span><span class="remodel-rp-command-label">${escapeHtml(stepLabel('Retry', step.retry))}</span>
+                <span class="remodel-rp-command-icon"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i></span><span class="remodel-rp-command-label">${escapeHtml(stepLabel('Retry', step.retry, directionUi.delivery))}</span>
             </button>
             <button type="button" class="remodel-rp-command remodel-rp-act" ${stepAttrs(step.continue, 'next')} title="${escapeAttribute(step.continue.reason)}">
-                <span class="remodel-rp-command-icon"><i class="fa-solid fa-forward-step" aria-hidden="true"></i></span><span class="remodel-rp-command-label">${escapeHtml(stepLabel('Continue', step.continue))}</span>
+                <span class="remodel-rp-command-icon"><i class="fa-solid fa-forward-step" aria-hidden="true"></i></span><span class="remodel-rp-command-label">${escapeHtml(stepLabel('Continue', step.continue, directionUi.delivery))}</span>
             </button>
             <button type="button" class="remodel-rp-command remodel-rp-act" data-remodel-rp-action="preview" title="Preview the final prompt">
                 <span class="remodel-rp-command-icon"><i class="fa-solid fa-eye" aria-hidden="true"></i></span><span class="remodel-rp-command-label">Preview</span>
@@ -9132,13 +9135,19 @@ function renderRoleplayComposer(root) {
         </div>
 
         <div class="remodel-live-pacing-row">
+            <label class="remodel-live-pacing">Delivery
+                <select data-remodel-live-delivery aria-label="Directed turn delivery">
+                    <option value="legacy"${activeScene?.liveDirection?.delivery !== 'canonical' ? ' selected' : ''}>Legacy Loom-reviewed</option>
+                    <option value="canonical"${activeScene?.liveDirection?.delivery === 'canonical' ? ' selected' : ''}>Experimental immediate Narrator</option>
+                </select>
+            </label>
             <label class="remodel-live-pacing">Pacing
                 <select data-remodel-live-pacing aria-label="Live Direction pacing">
                     ${['slow', 'natural', 'fast', 'instant'].map((value) => `<option value="${value}"${directionUi.pacing === value ? ' selected' : ''}>${value[0].toUpperCase() + value.slice(1)}</option>`).join('')}
                 </select>
             </label>
         </div>
-        ${directionUi.reasoningWarning ? `<div class="remodel-live-reasoning-warning" role="status" title="The Loom uses the Narrator's reasoning when it is available. This model returned none, so reconciliation used the prose alone.">⚠ No reasoning from this model — enable thinking or use a reasoning-capable model for more accurate reconciliation.</div>` : ''}
+        ${directionUi.delivery !== 'canonical' && directionUi.reasoningWarning ? `<div class="remodel-live-reasoning-warning" role="status" title="The Loom uses the Narrator's reasoning when it is available. This model returned none, so reconciliation used the prose alone.">⚠ No reasoning from this model — enable thinking or use a reasoning-capable model for more accurate reconciliation.</div>` : ''}
 
         <div class="remodel-rp-composer">
             <button type="button" class="remodel-rp-as-chip" data-remodel-rp-persona-menu title="Speak as… — click to switch persona">
@@ -9770,7 +9779,14 @@ function closeRoleplayPromptPreview() {
 // falls through to core's own continue behavior via the composer's own
 // keydown handling elsewhere; this explicit-send path always sends.
 async function handleRoleplaySend(root) {
-    if (root.dataset.remodelRpSubmitting === 'true') return;
+    const running = directedTurnController.getRun();
+    const canInterruptCanonical = running?.deliveryMode === 'canonical' && !running.acceptedComplete;
+    // The first handler remains awaited for the lifetime of the provider
+    // stream. Canonical delivery deliberately keeps the composer live during
+    // that window, so a second Send must be allowed through to interrupt the
+    // accepted prefix and begin the user's new turn. The direction controller
+    // still rejects genuine double-submits before a canonical run exists.
+    if (root.dataset.remodelRpSubmitting === 'true' && !canInterruptCanonical) return;
     const input = root.querySelector('[data-remodel-rp-input]');
     const textarea = document.getElementById('send_textarea');
     const sendBut = document.getElementById('send_but');
@@ -10047,11 +10063,12 @@ function stepAttrs(action, name) {
  * Continue that directs the next moment costs a Loom call as well. The
  * suffix is the only thing on screen that distinguishes them.
  */
-function stepLabel(verb, action) {
+function stepLabel(verb, action, delivery = 'legacy') {
     if (!action.target) return verb;
     // A resume costs nothing and acts on nothing new, so it takes no suffix.
     if (action.target === 'resume') return verb;
-    return `${verb} · ${action.target === 'loom' ? 'Loom' : 'Narrator'}`;
+    const target = action.target === 'loom' && delivery === 'canonical' ? 'Narrator' : action.target === 'loom' ? 'Loom' : 'Narrator';
+    return `${verb} · ${target}`;
 }
 
 // Maps the roleplay action buttons onto core's real controls. Reuses the
@@ -10507,6 +10524,12 @@ function bindRoleplayComposerEvents() {
     });
     document.addEventListener('change', (event) => {
         if (!isRealRoleplayWorkspaceActive()) return;
+        const delivery = event.target instanceof Element ? event.target.closest('[data-remodel-live-delivery]') : null;
+        if (delivery instanceof HTMLSelectElement) {
+            setLiveDirectionDelivery(getActiveScene(), delivery.value);
+            renderRoleplayScene();
+            return;
+        }
         const pacing = event.target instanceof Element ? event.target.closest('[data-remodel-live-pacing]') : null;
         if (pacing instanceof HTMLSelectElement) setLiveDirectionPacing(getActiveScene(), pacing.value);
     });

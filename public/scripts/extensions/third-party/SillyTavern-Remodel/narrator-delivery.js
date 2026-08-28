@@ -231,6 +231,16 @@ class NarratorDeliverySession {
                     const frame = normalizeFrame(rawFrame);
                     if (frame.type === 'snapshot') {
                         this.#receive(frame);
+                        // Backpressure at the delivery boundary while the user
+                        // types. The provider transport may keep filling its
+                        // private queue, but the accepted message consumes no
+                        // further snapshots until the hold clears. On resume,
+                        // queued snapshots therefore pass through transport
+                        // pacing instead of becoming one catch-up jump.
+                        if (this.#heldForDraft && this.#receivedText.length > this.#acceptedText.length && !this.#termination) {
+                            // eslint-disable-next-line no-await-in-loop
+                            await new Promise((resolve) => { this.#releaseHold = resolve; });
+                        }
                     } else {
                         sawCompletion = true;
                         this.#finishReason = frame.finishReason;

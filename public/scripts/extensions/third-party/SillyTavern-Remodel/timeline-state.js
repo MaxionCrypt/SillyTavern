@@ -472,6 +472,10 @@ function normalizeLiveDirection(value = {}) {
     return {
         enabled: value?.enabled !== false,
         mode: 'loom',
+        // Commit 3 experiment. Legacy remains the migration-safe default;
+        // canonical selects immediate Narrator delivery through the routed
+        // turn adapter. No transient run state is stored here.
+        delivery: value?.delivery === 'canonical' ? 'canonical' : 'legacy',
         pacing,
         autoplay: value?.autoplay !== false,
         autonomousResponseLimit: limit,

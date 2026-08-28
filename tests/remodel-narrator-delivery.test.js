@@ -132,15 +132,12 @@ test('a truncated response keeps and finalizes the accepted prefix', async () =>
 
 test('typed interruption preserves the visible prefix and discards the held suffix', async () => {
     let releaseSuffix;
-    let suffixYielded;
     const suffixGate = new Promise((resolve) => { releaseSuffix = resolve; });
-    const suffixSeen = new Promise((resolve) => { suffixYielded = resolve; });
     const transport = {
         async *stream() {
             yield { type: 'snapshot', text: 'Visible.', reasoning: '' };
             await suffixGate;
             yield { type: 'snapshot', text: 'Visible. Hidden tail.', reasoning: '' };
-            suffixYielded();
             yield { type: 'complete', finishReason: 'stop' };
         },
     };
@@ -148,7 +145,6 @@ test('typed interruption preserves the visible prefix and discards the held suff
     await until(() => session.snapshot.acceptedText === 'Visible.');
     session.updateDraft('The user is typing');
     releaseSuffix();
-    await suffixSeen;
     await until(() => session.snapshot.receivedLength > session.snapshot.acceptedLength);
     const result = await session.interrupt();
 
@@ -158,17 +154,15 @@ test('typed interruption preserves the visible prefix and discards the held suff
     expect(store.finalize).toHaveBeenCalledTimes(1);
 });
 
-test('clearing a typed hold appends its buffered suffix once before completion', async () => {
+test('clearing a typed hold resumes queued snapshots incrementally', async () => {
     let releaseSuffix;
-    let suffixYielded;
     const suffixGate = new Promise((resolve) => { releaseSuffix = resolve; });
-    const suffixSeen = new Promise((resolve) => { suffixYielded = resolve; });
     const transport = {
         async *stream() {
             yield { type: 'snapshot', text: 'Visible.', reasoning: '' };
             await suffixGate;
             yield { type: 'snapshot', text: 'Visible. Then more.', reasoning: '' };
-            suffixYielded();
+            yield { type: 'snapshot', text: 'Visible. Then more. Finally done.', reasoning: '' };
             yield { type: 'complete', finishReason: 'stop' };
         },
     };
@@ -176,15 +170,14 @@ test('clearing a typed hold appends its buffered suffix once before completion',
     await until(() => session.snapshot.acceptedText === 'Visible.');
     session.updateDraft('typing');
     releaseSuffix();
-    await suffixSeen;
     await until(() => session.snapshot.receivedLength > session.snapshot.acceptedLength);
     session.updateDraft('');
     const result = await session.completion;
 
     expect(result.status).toBe('complete');
-    expect(result.acceptedText).toBe('Visible. Then more.');
-    expect(store.records.get(result.messageId)).toBe('Visible. Then more.');
-    expect(store.append.mock.calls.map(([, delta]) => delta)).toEqual(['Visible.', ' Then more.']);
+    expect(result.acceptedText).toBe('Visible. Then more. Finally done.');
+    expect(store.records.get(result.messageId)).toBe('Visible. Then more. Finally done.');
+    expect(store.append.mock.calls.map(([, delta]) => delta)).toEqual(['Visible.', ' Then more.', ' Finally done.']);
 });
 
 test('Stop aborts delivery and finalizes the prefix without erasing it', async () => {
@@ -251,7 +244,7 @@ test('rejects a provider snapshot that rewrites an already delivered prefix', as
     expect(store.finalize).toHaveBeenCalledTimes(1);
 });
 
-test('remains disconnected from the production turn and legacy adapter', () => {
+test('keeps delivery internals behind the lifecycle seam rather than the UI or routing adapter', () => {
     const timelineSpine = fs.readFileSync('../public/scripts/extensions/third-party/SillyTavern-Remodel/timeline-spine.js', 'utf8');
     const adapter = fs.readFileSync('../public/scripts/extensions/third-party/SillyTavern-Remodel/legacy-directed-turn-adapter.js', 'utf8');
 

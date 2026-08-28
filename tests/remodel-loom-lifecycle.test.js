@@ -3,7 +3,7 @@
 // turn settles waiting for the user. (State recording by the Loom is covered by
 // remodel-loom-reconciliation-turn.test.js; this suite covers the shared turn
 // machinery — settle/Continue and empty-response handling.)
-import { test, expect, beforeEach, afterEach } from '@jest/globals';
+import { test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import {
     initLiveDirection,
     setLiveDirectionTestAdapters,
@@ -20,6 +20,7 @@ import {
     runLoomReconciliation,
     DIRECTION_PROTOCOL,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
+import { directedTurnController } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/legacy-directed-turn-adapter.js';
 import { listEvents, recordEvent } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { invalidateLivingLoreProposals, listLivingLoreProposals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-mutations.js';
 import { upsertLivingLoreMetadata } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
@@ -115,6 +116,143 @@ afterEach(async () => {
     clearLiveDirectionFailure();
     setLiveDirectionTestAdapters(null);
     delete scene.generationProfileIds;
+    scene.liveDirection.delivery = 'legacy';
+});
+
+test('experimental delivery reveals the Narrator before its request settles and never calls Loom', async () => {
+    scene.liveDirection.delivery = 'canonical';
+    scene.generationProfileIds = { narrator: 'canonical-route', loom: null };
+    __setContextOverrides({
+        async loadWorldInfo() { return structuredClone(nativeLore); },
+        async saveWorldInfo(_book, data) { nativeLore = structuredClone(data); },
+        addOneMessage() {},
+    });
+    let releaseCompletion;
+    const completionGate = new Promise((resolve) => { releaseCompletion = resolve; });
+    const loomReconciliation = jest.fn();
+    const capturedGenerationTypes = [];
+    const deliveredTurnBoundaries = [];
+    setLiveDirectionTestAdapters({
+        captureNarratorPrompt: async ({ generationType }) => {
+            capturedGenerationTypes.push(generationType);
+            return [{ role: 'system', content: 'Native prompt fixture.' }];
+        },
+        async *streamCanonicalNarrator({ prompt }) {
+            deliveredTurnBoundaries.push(prompt.messages.at(-1));
+            yield { type: 'snapshot', text: 'Wren answers immediately.', reasoning: '' };
+            await completionGate;
+            yield { type: 'complete', finishReason: 'stop' };
+        },
+        loomReconciliation,
+    });
+
+    const turn = directedTurnController.continue(scene);
+    expect(await until(() => __getChat().at(-1)?.mes === 'Wren answers immediately.')).toBe(true);
+    expect(getLiveDirectionRun()?.deliveryMode).toBe('canonical');
+    expect(getLiveDirectionRun()?.acceptedVisibleText).toBe('Wren answers immediately.');
+    expect(getLiveDirectionRun()?.acceptedComplete).not.toBe(true);
+    expect(loomReconciliation).not.toHaveBeenCalled();
+
+    releaseCompletion();
+    await turn;
+    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    expect(__getChat()).toHaveLength(1);
+    expect(__getChat()[0].extra.remodelDirection).toEqual(expect.objectContaining({
+        directionId: expect.any(String),
+        state: 'complete',
+        acceptedText: 'Wren answers immediately.',
+    }));
+    expect(loomReconciliation).not.toHaveBeenCalled();
+
+    // Advancing from a completed canonical row must not hand that row back
+    // through the legacy Loom finalizer before starting the next Narrator.
+    await directedTurnController.continue(scene);
+    expect(await until(() => __getChat().length === 2 && getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    expect(__getChat().map((message) => message.mes)).toEqual([
+        'Wren answers immediately.',
+        'Wren answers immediately.',
+    ]);
+    expect(capturedGenerationTypes).toEqual(['normal', 'normal']);
+    expect(deliveredTurnBoundaries).toHaveLength(2);
+    expect(deliveredTurnBoundaries.every((message) => message.role === 'user' && /Continue the scene autonomously/.test(message.content))).toBe(true);
+    expect(loomReconciliation).not.toHaveBeenCalled();
+});
+
+test('experimental Send interrupts a held stream and starts a normal user turn', async () => {
+    scene.liveDirection.delivery = 'canonical';
+    scene.generationProfileIds = { narrator: 'canonical-route', loom: null };
+    __setContextOverrides({
+        async loadWorldInfo() { return structuredClone(nativeLore); },
+        async saveWorldInfo(_book, data) { nativeLore = structuredClone(data); },
+        addOneMessage() {},
+    });
+    const capturedGenerationTypes = [];
+    const deliveredTurnBoundaries = [];
+    let requestNumber = 0;
+    setLiveDirectionTestAdapters({
+        captureNarratorPrompt: async ({ generationType }) => {
+            capturedGenerationTypes.push(generationType);
+            return [{ role: 'system', content: 'Native prompt fixture.' }];
+        },
+        async *streamCanonicalNarrator({ signal, prompt }) {
+            deliveredTurnBoundaries.push(prompt.messages.at(-1));
+            requestNumber += 1;
+            if (requestNumber === 1) {
+                yield { type: 'snapshot', text: 'The visible prefix.', reasoning: '' };
+                await new Promise((resolve, reject) => {
+                    signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+                });
+                return;
+            }
+            yield { type: 'snapshot', text: 'Wren reacts to the interruption.', reasoning: '' };
+            yield { type: 'complete', finishReason: 'stop' };
+        },
+    });
+
+    const autonomousTurn = directedTurnController.continue(scene);
+    expect(await until(() => __getChat().at(-1)?.mes === 'The visible prefix.')).toBe(true);
+    handleLiveDirectionDraft('I step between them.');
+    const intervention = directedTurnController.start({ scene, text: 'I step between them.' });
+    await Promise.all([autonomousTurn, intervention]);
+
+    expect(__getChat().map((message) => ({ user: Boolean(message.is_user), text: message.mes }))).toEqual([
+        { user: false, text: 'The visible prefix.' },
+        { user: true, text: 'I step between them.' },
+        { user: false, text: 'Wren reacts to the interruption.' },
+    ]);
+    expect(__getChat()[0].extra.remodelDirection.state).toBe('interrupted');
+    expect(capturedGenerationTypes).toEqual(['normal', 'normal']);
+    expect(deliveredTurnBoundaries[0]).toEqual(expect.objectContaining({ role: 'user', content: expect.stringMatching(/Continue the scene autonomously/) }));
+    expect(deliveredTurnBoundaries[1]).toEqual({ role: 'system', content: 'Native prompt fixture.' });
+});
+
+test('experimental Stop cuts off in place and preserves the visible prefix', async () => {
+    scene.liveDirection.delivery = 'canonical';
+    scene.generationProfileIds = { narrator: 'canonical-route', loom: null };
+    __setContextOverrides({
+        async loadWorldInfo() { return structuredClone(nativeLore); },
+        async saveWorldInfo(_book, data) { nativeLore = structuredClone(data); },
+        addOneMessage() {},
+    });
+    setLiveDirectionTestAdapters({
+        captureNarratorPrompt: async () => [{ role: 'system', content: 'Native prompt fixture.' }],
+        async *streamCanonicalNarrator({ signal }) {
+            yield { type: 'snapshot', text: 'This prefix stays.', reasoning: '' };
+            await new Promise((resolve, reject) => {
+                signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+            });
+        },
+    });
+
+    const turn = directedTurnController.continue(scene);
+    expect(await until(() => __getChat().at(-1)?.mes === 'This prefix stays.')).toBe(true);
+    await directedTurnController.stop();
+    await turn;
+
+    expect(__getChat()).toHaveLength(1);
+    expect(__getChat()[0].mes).toBe('This prefix stays.');
+    expect(__getChat()[0].extra.remodelDirection.state).toBe('stopped');
+    expect(getLiveDirectionRun()).toBeNull();
 });
 
 test('a Loom turn commits the Narrator draft and waits for the user', async () => {

@@ -38,6 +38,8 @@ export const main_api = 'openai';
 export function getMaxResponseTokens() { return 2048; }
 export const name1 = 'User';
 export const name2 = 'Character';
+export function setCharacterId() {}
+export function setCharacterName() {}
 
 export function saveSettingsDebounced() {}
 

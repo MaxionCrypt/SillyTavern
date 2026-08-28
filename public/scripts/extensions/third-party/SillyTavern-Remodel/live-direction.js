@@ -44,6 +44,8 @@ import { describeNarratorOutput } from './narrator-output-contract.js';
 import { limitBoundedChatHistory } from './prompt-history-limit.js';
 import { buildSceneArchiveProjection } from './archive-projection.js';
 import { snapshotGenerationRoutes } from './generation-route.js';
+import { createNarratorDelivery } from './narrator-delivery.js';
+import { captureNativeNarratorPrompt, createNativeNarratorTransport, prepareNativeNarratorPrompt } from './native-narrator-runtime.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const AUTONOMOUS_CONTINUE_ACTION = '[Continue the scene from accepted history.]';
@@ -413,7 +415,7 @@ export function getLiveDirectionRun() {
 }
 
 export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
-    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: 'loom' };
+    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: 'loom', delivery: scene?.liveDirection?.delivery || 'legacy' };
     // A hidden Loom pass is a busy pipeline with no visible run yet. It used
     // to report 'Ready' with Stop disabled, which is what invited the second
     // send that produced a second bubble — notifyTransient('Directing') is a
@@ -427,6 +429,7 @@ export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
         state: activeRun?.state || (directing ? 'Directing' : 'Ready'),
         pacing: scene.liveDirection?.pacing || 'natural',
         mode: 'loom',
+        delivery: scene.liveDirection?.delivery || 'legacy',
         openingLabel: activeRun?.openingLabel || '',
         canContinue: activeRun?.state === 'Waiting for you',
         canSend: !directing,
@@ -472,7 +475,7 @@ export function setNextPerformerOverride(ref) {
     performerOverride = ref ? normalizeRef(ref) : null;
 }
 
-export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = [] } = {}) {
+export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = [], deliveryMode = 'legacy' } = {}) {
     if (!isDirectedLiveScene(scene)) return false;
     const action = String(text || '');
     if (!action.trim()) return false;
@@ -500,13 +503,19 @@ export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = 
     pendingSubmission = submissionKey;
     try {
         if (activeRun?.acceptedComplete) {
-            await finalizeRunMessage(activeRun, { state: 'complete' });
+            // Canonical delivery owns its complete save transaction. Sending
+            // that row through the legacy finalizer here would apply Loom
+            // mechanics and archive settlement a second time on the next
+            // user turn.
+            if (activeRun.deliveryMode !== 'canonical') {
+                await finalizeRunMessage(activeRun, { state: 'complete' });
+            }
             activeRun = null;
             notifyState();
         } else if (activeRun) {
             await interruptLiveDirection({ preserveForIntervention: true });
         }
-        return await beginDirection({ scene, action, insertUser: true, authorizedGoalIds, autonomousSequence: 0 });
+        return await beginDirection({ scene, action, insertUser: true, authorizedGoalIds, autonomousSequence: 0, deliveryMode });
     } finally {
         if (pendingSubmission === submissionKey) pendingSubmission = null;
     }
@@ -519,7 +528,7 @@ export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = 
  *        Regenerate supplies it after discarding the superseded take, so the
  *        retake occupies the moment it is a retake OF.
  */
-export async function requestNextDirection(scene = hooks.getActiveScene(), { notebookTurn = null } = {}) {
+export async function requestNextDirection(scene = hooks.getActiveScene(), { notebookTurn = null, deliveryMode = 'legacy' } = {}) {
     if (!isDirectedLiveScene(scene) || activeRun && !['Waiting for you', 'Complete'].includes(activeRun.state)) return false;
     // Guarded as well as activeRun: between a completed reveal and the moment a
     // new run exists there is a multi-second hidden window in which activeRun is
@@ -530,7 +539,11 @@ export async function requestNextDirection(scene = hooks.getActiveScene(), { not
     }
     cancelAutoplay('manual-next');
     const sequence = activeRun?.autonomousSequence || 0;
-    if (activeRun?.messageId != null) await finalizeRunMessage(activeRun, { state: 'complete' });
+    // The canonical message store has already finalized and persisted its
+    // visible row. Only legacy runs still need the shared Loom finalizer.
+    if (activeRun?.messageId != null && activeRun.deliveryMode !== 'canonical') {
+        await finalizeRunMessage(activeRun, { state: 'complete' });
+    }
     activeRun = null;
     // Continue has one important edge case: a user row can already be the
     // newest accepted message because an earlier generation failed after the
@@ -553,13 +566,18 @@ export async function requestNextDirection(scene = hooks.getActiveScene(), { not
             postedMessage: newest,
             autonomousSequence: sequence,
             notebookTurn,
+            deliveryMode,
         });
     }
-    return beginDirection({ scene, action: AUTONOMOUS_CONTINUE_ACTION, insertUser: false, autonomousSequence: sequence, notebookTurn });
+    return beginDirection({ scene, action: AUTONOMOUS_CONTINUE_ACTION, insertUser: false, autonomousSequence: sequence, notebookTurn, deliveryMode });
 }
 
 export function handleLiveDirectionDraft(value) {
     if (!activeRun) return;
+    if (activeRun.deliveryMode === 'canonical' && activeRun.canonicalSession) {
+        activeRun.canonicalSession.updateDraft(value);
+        return;
+    }
     const meaningful = Boolean(String(value || '').trim());
     if (meaningful) {
         if (activeRun.holdReason !== 'hard') {
@@ -610,7 +628,7 @@ function buildLiveDirectionLoreOptions(action) {
 export function continueLiveDirection() {
     if (!activeRun || activeRun.state !== 'Waiting for you') return false;
     if (activeRun.waitingAtEnd) {
-        requestNextDirection(hooks.getActiveScene());
+        requestNextDirection(hooks.getActiveScene(), { deliveryMode: activeRun.deliveryMode || 'legacy' });
         return true;
     }
     activeRun.holdReason = '';
@@ -656,9 +674,9 @@ export async function stopLiveDirection() {
  * labelled from, so the button and the action cannot disagree about what
  * "last" means — they read one function.
  */
-export async function retryLiveStep(scene = hooks.getActiveScene()) {
+export async function retryLiveStep(scene = hooks.getActiveScene(), { deliveryMode = 'legacy' } = {}) {
     const { retry } = resolveDirectionActions(describeDirectionStep(scene));
-    if (retry.target === 'narrator') return regenerateLastDirectedResponse(scene);
+    if (retry.target === 'narrator') return regenerateLastDirectedResponse(scene, { deliveryMode });
     journal('retry.rejected', { reason: retry.reason }, { severity: 'warn' });
     return false;
 }
@@ -666,13 +684,13 @@ export async function retryLiveStep(scene = hooks.getActiveScene()) {
 /**
  * Continue: advance to the next turn, touching nothing that already exists.
  */
-export async function continueLiveStep(scene = hooks.getActiveScene()) {
+export async function continueLiveStep(scene = hooks.getActiveScene(), { deliveryMode = 'legacy' } = {}) {
     const { continue: advance } = resolveDirectionActions(describeDirectionStep(scene));
     // One control, two meanings: a held reveal resumes where it stopped, an
     // idle scene advances to the next turn. Resolved from the same function
     // the button is labelled from, so the two cannot disagree.
     if (advance.target === 'resume') return continueLiveDirection();
-    if (advance.target === 'loom') return requestNextDirection(scene);
+    if (advance.target === 'loom') return requestNextDirection(scene, { deliveryMode });
     journal('continue.rejected', { reason: advance.reason }, { severity: 'warn' });
     return false;
 }
@@ -706,7 +724,7 @@ export async function retryLiveDirection() {
     const retry = pendingFailure;
     pendingFailure = null;
     if (!retry) return false;
-    if (retry.operation === 'regenerate') return regenerateLastDirectedResponse(retry.scene);
+    if (retry.operation === 'regenerate') return regenerateLastDirectedResponse(retry.scene, { deliveryMode: retry.deliveryMode || 'legacy' });
     return beginDirection(retry);
 }
 
@@ -752,7 +770,7 @@ export function canSendWithoutLiveDirection() {
     return Boolean(pendingFailure?.insertUser) && !pendingFailure?.postedMessage;
 }
 
-export async function regenerateLastDirectedResponse(scene = hooks.getActiveScene()) {
+export async function regenerateLastDirectedResponse(scene = hooks.getActiveScene(), { deliveryMode = 'legacy' } = {}) {
     if (!isDirectedLiveScene(scene) || directionInFlight) return false;
     // A SETTLED run stays in activeRun so the finished turn keeps its chrome.
     // Loom envelopes are built with hardPauseAfter: true, so `hard` in
@@ -783,7 +801,7 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
             savedSceneId: saved.sceneId,
             sceneId: scene.id,
         }, { severity: 'warn' });
-        return requestNextDirection(scene);
+        return requestNextDirection(scene, { deliveryMode });
     }
     // Retry is destructive only after its Narrator route is ready. Previously
     // the completed response and its mechanics were removed first, then a
@@ -800,7 +818,7 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
             await hooks.activateConnectionProfile(narratorProfileId);
         }
     } catch (error) {
-        return directionFailure(error, { operation: 'regenerate', scene });
+        return directionFailure(error, { operation: 'regenerate', scene, deliveryMode });
     }
     // A background catch-up may still be creating suggestions for this take.
     // Join it before invalidating, otherwise it can land after the invalidation
@@ -828,7 +846,7 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     // same turn number rather than allocating a new one (a retake, not a new
     // turn).
     const savedTurn = toTurnNumber(saved.envelope?.notebookTurn);
-    return requestNextDirection(scene, { notebookTurn: savedTurn });
+    return requestNextDirection(scene, { notebookTurn: savedTurn, deliveryMode });
 }
 
 /**
@@ -855,7 +873,7 @@ export function isLatestUserMessage(messageId, chat = getContext().chat || []) {
  * line a second time.
  */
 export async function rerunDirectedRoleplayFromUserMessage({
-    scene = hooks.getActiveScene(), messageId, text,
+    scene = hooks.getActiveScene(), messageId, text, deliveryMode = 'legacy',
 } = {}) {
     if (!isDirectedLiveScene(scene) || directionInFlight) return false;
     if (activeRun && !['Waiting for you', 'Complete'].includes(activeRun.state)) return false;
@@ -930,17 +948,18 @@ export async function rerunDirectedRoleplayFromUserMessage({
         authorizedGoalIds,
         autonomousSequence: 0,
         notebookTurn,
+        deliveryMode,
     });
 }
 
-async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, postedMessage = null } = {}) {
+async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, postedMessage = null, deliveryMode = 'legacy' } = {}) {
     // Checked before the Loom call, not after: the Loom costs a real
     // request and ~17s, and there is no point spending either when the
     // performer that follows it cannot speak.
     const blocked = !scene ? 'No active Scene.' : describeNativeGenerationBlock();
     if (blocked) {
         journal('blocked', { reason: blocked }, { severity: 'warn' });
-        return directionFailure(new Error(blocked), { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage });
+        return directionFailure(new Error(blocked), { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage, deliveryMode });
     }
     // Last line of defence. Every caller checks the lock, but they are all async
     // and a caller that awaited something in between could still arrive here
@@ -1102,7 +1121,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         askedThePerformer = true;
         standingEnvelope = normalized;
         standingPerformer = performer;
-        return await generateDirectedPerformer({ scene, envelope: normalized, performer, autonomousSequence, token });
+        return await generateDirectedPerformer({ scene, envelope: normalized, performer, autonomousSequence, token, deliveryMode });
     } catch (error) {
         // Stop/supersede deliberately aborts whichever provider call owns the
         // pass. The resulting AbortError (often surfaced only as "Generation
@@ -1128,7 +1147,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             }, { correlationId: token.id, severity: 'warn', summary: 'direction.failed: suppressed, the empty-response retry owns this turn' });
             return false;
         }
-        return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage });
+        return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage, deliveryMode });
     } finally {
         // A take that never reached the performer produced nothing — no
         // message, no state change — so its entries must not bind the turn
@@ -1416,10 +1435,10 @@ function ownedByEmptyRetry(directionId) {
     return Boolean(directionId) && retryingEmpty.has(directionId);
 }
 
-async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0, previousReasoningLength = 0, previousFailureCause = '' }) {
+async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0, previousReasoningLength = 0, previousFailureCause = '', deliveryMode = 'legacy' }) {
     const generationRoutes = testAdapters ? null : snapshotGenerationRoutes({
         scene,
-        roles: ['narrator', 'loom'],
+        roles: deliveryMode === 'canonical' ? ['narrator'] : ['narrator', 'loom'],
         profiles: getContext().extensionSettings?.connectionManager?.profiles || [],
     });
     activeRun = {
@@ -1429,7 +1448,8 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         messageId: null,
         performer,
         envelope,
-        phase: 'narrator',
+        phase: deliveryMode === 'canonical' ? 'canonical' : 'narrator',
+        deliveryMode,
         narratorDraft: '',
         narratorGenerationFinished: false,
         generationRoutes,
@@ -1469,6 +1489,9 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     // be able to submit over a revealing response.
     releaseDirectionLock(token);
     notifyState();
+    if (deliveryMode === 'canonical') {
+        return generateCanonicalNarrator({ scene, run: activeRun, performer });
+    }
     // The Narrator generates natively — its full configured prompt (system
     // prompt, card, persona, world info, author's notes, examples, history) —
     // with the Loom's readable Archive state resolved into the recipe-owned
@@ -1622,6 +1645,171 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
 }
 
 /**
+ * Experimental canonical path. The Narrator's stream owns the visible row;
+ * Loom/Archive stays disconnected until its independent worker is rebuilt.
+ */
+async function generateCanonicalNarrator({ scene, run, performer }) {
+    const context = getContext();
+    const archivistState = buildNarratorArchivistSections(scene.timelineId, scene.id, {
+        archiveProjection: run.envelope.archiveProjection,
+    });
+    const groundingRouted = hooks.setNativePromptContent('narratorGrounding', (args = {}) => buildNarratorArchivistSections(
+        scene.timelineId,
+        scene.id,
+        {
+            events: args.events,
+            archiveProjection: run.envelope.archiveProjection,
+            archiveQuery: run.envelope.archiveProjection?.queryTerms || [],
+        },
+    ));
+    journal('canonical.notes.bridge', {
+        directionId: run.directionId,
+        routed: groundingRouted ? 'recipe-macro' : 'recipe-macro-disabled',
+        groundingChars: archivistState.length,
+    }, { correlationId: run.directionId });
+
+    try {
+        const repaired = repairDirectedNarratorRoles(context.chat);
+        if (repaired) await context.saveChat();
+        const profileId = run.generationRoutes?.narrator?.profileId || scene.generationProfileIds?.narrator;
+        if (!profileId) throw new Error('Narrator has no Connection Profile assigned.');
+        await hooks.activateConnectionProfile(profileId);
+        const activation = await activateWorldSenseSelection(context, run.envelope.worldSense, { phase: 'generation' });
+        journalWorldSenseActivation(activation, run.directionId);
+        if (run.canonicalCancelled || activeRun !== run) return false;
+        const autonomousContinue = !run.envelope.currentPlayerAction;
+        // A native Continue dry-run alone leaves some raw Connection Manager
+        // transports with an assistant-ended request and no explicit turn
+        // boundary. Capture the ordinary native prompt, then add one temporary
+        // user-role control message for this request only. It is never written
+        // to context.chat and therefore never becomes a player action.
+        const generationType = 'normal';
+        const capturedPrompt = testAdapters?.captureNarratorPrompt
+            ? await testAdapters.captureNarratorPrompt({ scene, run, performer, context, generationType })
+            : await captureNativeNarratorPrompt({ context, performer, generationType });
+        const prompt = prepareNativeNarratorPrompt(capturedPrompt, { autonomousContinue });
+        journal('canonical.prompt.captured', {
+            directionId: run.directionId,
+            generationType,
+            turnIntent: autonomousContinue ? 'autonomous-continue' : 'player-action',
+            messageCount: prompt.length,
+            connectionProfileId: profileId,
+        }, {
+            correlationId: run.directionId,
+            summary: `Canonical Narrator prompt captured as ${generationType}`,
+        });
+        hooks.setNativePromptContent('narratorGrounding', '');
+        if (run.canonicalCancelled || activeRun !== run) return false;
+
+        advancePassStage(run, 'reveal');
+        const transport = testAdapters?.streamCanonicalNarrator
+            ? { stream: (request) => testAdapters.streamCanonicalNarrator({ ...request, scene, run, performer, context }) }
+            : createNativeNarratorTransport({ pacing: run.pacing });
+        const delivery = createNarratorDelivery({
+            transport,
+            messageStore: createCanonicalMessageStore({ context, run, performer }),
+            onEvent: (event) => reflectCanonicalDeliveryEvent(run, event),
+        });
+        const session = delivery.start({
+            deliveryId: run.directionId,
+            sceneId: run.sceneId,
+            performer: run.performer,
+            prompt: { messages: prompt },
+            route: run.generationRoutes?.narrator || { profileId },
+        });
+        run.canonicalSession = session;
+        const result = await session.completion;
+        run.canonicalSession = null;
+        if (!result.acceptedText && ['empty', 'failed'].includes(result.status)) {
+            throw new Error(result.error?.message || 'The Narrator returned no visible prose.');
+        }
+        return true;
+    } finally {
+        hooks.setNativePromptContent('narratorGrounding', '');
+    }
+}
+
+function createCanonicalMessageStore({ context, run, performer }) {
+    let message = null;
+    return {
+        reserve() {
+            message = {
+                name: performer.name || performer.label || 'Narrator',
+                is_user: false,
+                is_system: false,
+                send_date: Date.now(),
+                mes: '',
+                extra: { type: 'narrator' },
+            };
+            context.chat.push(message);
+            run.messageId = context.chat.indexOf(message);
+            context.addOneMessage(message, { scroll: false });
+            notifyState();
+            return run.messageId;
+        },
+        append(messageId, delta) {
+            if (context.chat?.[messageId] !== message) throw new Error('The reserved Narrator message identity changed during delivery.');
+            message.mes += String(delta || '');
+            run.rawBufferedText = message.mes;
+            run.acceptedVisibleText = message.mes;
+            run.rawOffset = message.mes.length;
+            run.lastBreathOffset = message.mes.length;
+            notifyState();
+        },
+        async finalize(messageId, result) {
+            if (context.chat?.[messageId] !== message) throw new Error('The reserved Narrator message disappeared before finalization.');
+            run.rawBufferedText = result.acceptedText;
+            run.acceptedVisibleText = result.acceptedText;
+            run.rawOffset = result.acceptedLength;
+            run.lastBreathOffset = result.acceptedLength;
+            run.generationFinished = true;
+            run.generationSettled = true;
+            run.truncated = result.status === 'truncated' || result.status === 'failed';
+            run.interrupted = ['interrupted', 'stopped'].includes(result.status);
+            run.acceptedComplete = true;
+            run.waitingAtEnd = true;
+            run.holdReason = 'hard';
+            run.state = 'Waiting for you';
+            message.mes = result.acceptedText;
+            message.extra ??= {};
+            writeDirectionMetadata(message, serializeRun(run, result.status));
+            context.addOneMessage(message, { type: 'swipe', forceId: messageId, scroll: false });
+            advancePassStage(run, 'save');
+            await context.saveChat();
+            settlePassProgress(run, result.status === 'complete' ? 'complete' : result.status);
+            pendingFailure = null;
+            hooks.onRecovered();
+            notifyState();
+            await context.eventSource?.emit?.(context.eventTypes.MESSAGE_RECEIVED, messageId, 'normal');
+            hooks.onSettled();
+        },
+        async releaseEmpty(messageId, result) {
+            if (context.chat?.[messageId] === message) await context.deleteMessage(messageId);
+            run.messageId = null;
+            run.generationFinished = true;
+            run.generationSettled = true;
+            settlePassProgress(run, result.status);
+            if (activeRun === run) activeRun = null;
+            notifyState();
+            hooks.onSettled();
+        },
+    };
+}
+
+function reflectCanonicalDeliveryEvent(run, event) {
+    if (activeRun !== run) return;
+    const state = event?.snapshot?.state;
+    if (state === 'held') {
+        run.holdReason = 'typing';
+        run.state = 'Held while you write';
+    } else if (state === 'streaming') {
+        run.holdReason = '';
+        run.state = 'Speaking';
+    }
+    notifyState();
+}
+
+/**
  * The run's accepted prose, as it should be stored and read back.
  *
  * Markers out, then the scaffolding a performer echoed instead of speaking —
@@ -1637,6 +1825,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
  * lands; the alternative risks desyncing the reveal against the user's prose.
  */
 function acceptedProse(run) {
+    if (run?.deliveryMode === 'canonical') return String(run.acceptedVisibleText || '');
     return stripEchoedScaffolding(sanitizeDirectionText(run?.acceptedVisibleText), run?.performer?.label || '');
 }
 
@@ -2452,6 +2641,21 @@ async function failEmptyVisibleRun(run, { cause = 'empty', diagnosis = '' } = {}
 async function interruptLiveDirection({ preserveForIntervention }) {
     const run = activeRun;
     if (!run) return;
+    if (run.deliveryMode === 'canonical') {
+        cancelAutoplay('interrupted');
+        run.interrupted = true;
+        run.canonicalCancelled = true;
+        abortDirectionPass(runPassTokens.get(run));
+        if (run.canonicalSession) {
+            if (preserveForIntervention) await run.canonicalSession.interrupt();
+            else await run.canonicalSession.stop();
+        }
+        run.canonicalSession = null;
+        if (activeRun === run) activeRun = null;
+        notifyState();
+        hooks.onSettled();
+        return;
+    }
     cancelAutoplay('interrupted');
     clearRevealTimer();
     journal('interrupt', {
@@ -2992,7 +3196,7 @@ async function recoverLiveDirectionMessages() {
         const metadata = message?.extra?.remodelDirection;
         if (!metadata || message.is_user) continue;
         const hadMarkers = String(message.mes || '').includes('[[RM:');
-        const unfinished = !['complete', 'interrupted', 'stopped'].includes(metadata.state);
+        const unfinished = !['complete', 'interrupted', 'stopped', 'truncated', 'failed'].includes(metadata.state);
         if (!hadMarkers && !unfinished) continue;
         const previousState = metadata.state;
         const accepted = sanitizeDirectionText(metadata.acceptedText ?? message.mes ?? '');
@@ -3059,6 +3263,13 @@ async function recoverLiveDirectionMessages() {
             notifyState();
         }
     }
+}
+
+export function setLiveDirectionDelivery(scene, delivery) {
+    if (!scene || !['legacy', 'canonical'].includes(delivery)) return false;
+    updateScene(scene.id, { liveDirection: { ...scene.liveDirection, delivery } });
+    notifyState();
+    return true;
 }
 
 /** Explicit, idempotent recovery seam for the directed-turn controller. */
@@ -3265,7 +3476,12 @@ function publicRun(run) {
     // AbortController is private pipeline state. It is meaningless to the UI
     // and cannot be structured-cloned; exposing it here made
     // getLiveDirectionRun() throw after every Loom pass.
-    const { envelope: _envelope, loomController: _loomController, ...snapshot } = run;
+    const {
+        envelope: _envelope,
+        loomController: _loomController,
+        canonicalSession: _canonicalSession,
+        ...snapshot
+    } = run;
     return snapshot;
 }
 

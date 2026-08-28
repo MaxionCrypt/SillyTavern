@@ -55,7 +55,7 @@ export function canStreamStory() {
  *          `streamed: false` means the provider answered in one piece despite
  *          the request — the caller should treat the text as a final answer.
  */
-export async function streamChatPrompt({ prompt, onChunk, signal, profileId } = {}) {
+export async function streamChatPrompt({ prompt, onChunk, signal, profileId, overridePayload = {} } = {}) {
     const route = String(profileId || '').trim();
     if (!route) throw new Error('This generation job has no Connection Profile assigned.');
     const routedPrompt = ConnectionManagerRequestService.constructPrompt(prompt, route);
@@ -64,6 +64,7 @@ export async function streamChatPrompt({ prompt, onChunk, signal, profileId } = 
         routedPrompt,
         getMaxResponseTokens(),
         { stream: true, signal, extractData: true, includePreset: true, includeInstruct: true },
+        overridePayload,
     );
 
     // A provider that ignores `stream` (or a source core refuses to stream, such
