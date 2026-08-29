@@ -9139,7 +9139,7 @@ function renderRoleplayComposer(root) {
                 <span>${directionUi.active ? 'Directed' : 'Free play'}</span>
             </button>
             ${directionUi.active ? `<small class="remodel-live-state" data-remodel-live-state>${escapeHtml(directionUi.state)}</small>` : ''}
-            ${directionUi.archive?.label ? `<button type="button" class="remodel-live-archive-status is-${escapeAttribute(directionUi.archive.status)}" ${directionUi.archive.repairAction === 'retry' ? 'data-remodel-rp-action="archive-retry"' : 'disabled'} title="${escapeAttribute(directionUi.archive.error?.message || directionUi.archive.label)}"><i class="fa-solid fa-box-archive" aria-hidden="true"></i> ${escapeHtml(directionUi.archive.label)}</button>` : ''}
+            ${directionUi.archive?.label ? `<button type="button" class="remodel-live-archive-status is-${escapeAttribute(directionUi.archive.status)}" data-remodel-live-archive-status ${directionUi.archive.repairAction === 'retry' ? 'data-remodel-rp-action="archive-retry"' : 'disabled'} title="${escapeAttribute(directionUi.archive.error?.message || directionUi.archive.label)}"><i class="fa-solid fa-box-archive" aria-hidden="true"></i> ${escapeHtml(directionUi.archive.label)}</button>` : ''}
             ${directionUi.active ? `<small class="remodel-live-progress" data-remodel-live-progress role="status" aria-live="polite"${directionUi.progress ? ` title="${escapeAttribute(formatLiveProgressDiagnostics(directionUi.progress))}"` : ' hidden'}><i class="fa-solid fa-circle-notch" aria-hidden="true"></i><span>${directionUi.progress ? escapeHtml(formatLiveProgress(directionUi.progress)) : ''}</span></small>` : ''}
             ${directionUi.performerLabel ? `<small>${escapeHtml(directionUi.performerLabel)}</small>` : ''}
             <em data-remodel-live-opening${directionUi.openingLabel ? '' : ' hidden'}><i class="fa-regular fa-lightbulb"></i> <span>${escapeHtml(directionUi.openingLabel || '')}</span></em>
@@ -9947,6 +9947,7 @@ function refreshLiveDirectionChrome(run = directedTurnController.getRun()) {
     const flow = zone?.querySelector('[data-remodel-live-flow]');
     if (flow) {
         const ui = directedTurnController.getUiState(getActiveScene());
+        syncLiveArchiveStatus(flow, ui.archive);
         // The mode label is left alone on purpose: it names which mode the
         // Scene is IN ("Directed" / "Free play") and must not be overwritten
         // with the transient run state, which is what used to make it
@@ -10021,6 +10022,33 @@ function refreshLiveDirectionChrome(run = directedTurnController.getRun()) {
         removeRoleplayTypingIndicator();
         ensureLoomReviewIndicator(root, run?.phase);
     }
+}
+
+/** Keep the background worker badge live without rebuilding the Roleplay page. */
+function syncLiveArchiveStatus(flow, archive) {
+    let badge = flow?.querySelector('[data-remodel-live-archive-status]');
+    const label = String(archive?.label || '').trim();
+    if (!label) {
+        badge?.remove();
+        return;
+    }
+    if (!(badge instanceof HTMLButtonElement)) {
+        badge = document.createElement('button');
+        badge.type = 'button';
+        badge.dataset.remodelLiveArchiveStatus = '';
+        const progress = flow.querySelector('[data-remodel-live-progress]');
+        flow.insertBefore(badge, progress || null);
+    }
+    badge.className = `remodel-live-archive-status is-${String(archive.status || 'idle')}`;
+    badge.title = String(archive?.error?.message || label);
+    badge.disabled = archive?.repairAction !== 'retry';
+    if (archive?.repairAction === 'retry') badge.dataset.remodelRpAction = 'archive-retry';
+    else delete badge.dataset.remodelRpAction;
+    badge.replaceChildren();
+    const icon = document.createElement('i');
+    icon.className = 'fa-solid fa-box-archive';
+    icon.setAttribute('aria-hidden', 'true');
+    badge.append(icon, document.createTextNode(` ${label}`));
 }
 
 function formatLiveProgress(progress) {
