@@ -36,11 +36,18 @@ import {
     storyTimelineWebAddressing,
 } from './story-timeline-web.js';
 import { resolveGenerationRoute } from './generation-route.js';
+import {
+    ARCHIVE_CAPABILITY_NAMES,
+    createArchiveIngestion,
+    isArchiveCapability,
+} from './archive-ingestion.js';
+import {
+    legacyArchiveIngestionAdapter,
+    storyArchiveIngestionInput,
+} from './legacy-archive-ingestion-adapter.js';
 
 export const STORY_ARCHIVE_CAPABILITIES = Object.freeze([
-    'scene.set', 'scene.clear', 'event.record',
-    'char_state.set', 'char_state.clear', 'beat.set',
-    'secret.set', 'secret.clear',
+    ...ARCHIVE_CAPABILITY_NAMES,
     'goal.create', 'goal.edit', 'goal.delete', 'goal.relate',
     'goal.lore.attach', 'goal.lore.detach',
     'variable.create', 'variable.set', 'variable.adjust', 'variable.transition', 'variable.subvalue.set',
@@ -49,6 +56,7 @@ export const STORY_ARCHIVE_CAPABILITIES = Object.freeze([
 ]);
 
 const STORY_ARCHIVE_CAPABILITY_SET = new Set(STORY_ARCHIVE_CAPABILITIES);
+const legacyArchiveIngestion = createArchiveIngestion(legacyArchiveIngestionAdapter);
 const queues = new Map();
 let testAdapter = null;
 
@@ -251,6 +259,14 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
 
         const replyShape = describeLoomReply(raw);
         const parsed = parseLoomReply(raw, { livingLorePacket: worldSense?.loomPacket || null });
+        const archiveIngestion = await legacyArchiveIngestion.ingest(storyArchiveIngestionInput({
+            scene,
+            docId,
+            capture,
+            acceptedProse: passage,
+            candidateReply: raw,
+            archiveState,
+        }));
         if (worldSense?.loomPacket?.promotion?.candidates?.length) {
             saveWorldSensePromotionDecisionReceipt(worldSense?.receipt?.id, {
                 decisions: parsed.lorePromotionDecisions || [],
@@ -267,9 +283,15 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
                 summary: `Story Loom judged ${parsed.lorePromotionDecisions?.length || 0}/${worldSense.loomPacket.promotion.candidates.length} World Sense promotion candidate(s)`,
             });
         }
-        const requests = parsed.requests.filter((request) => STORY_ARCHIVE_CAPABILITY_SET.has(request?.capability));
+        const approvedArchiveOperations = [...archiveIngestion.operations];
+        const requests = parsed.requests.flatMap((request) => {
+            if (!STORY_ARCHIVE_CAPABILITY_SET.has(request?.capability)) return [];
+            if (!isArchiveCapability(request?.capability)) return [request];
+            const approved = approvedArchiveOperations.shift();
+            return approved ? [approved] : [];
+        });
         const disabledRequests = parsed.requests.filter((request) => !STORY_ARCHIVE_CAPABILITY_SET.has(request?.capability));
-        const archiveFacts = storyArchiveEvidence(requests);
+        const archiveFacts = archiveIngestion.archiveFacts;
         if (!replyShape.fenceParsed) {
             throw new Error('The Story Loom returned no readable state fence for this accepted passage.');
         }
@@ -409,23 +431,6 @@ async function queueStoryCaptureLore({ scene, docId, capture, packet }) {
 function invalidateStoryCaptureLore(timelineId, captureIds, reason) {
     const ids = (captureIds || []).map((id) => `story-archive:${String(id || '')}`).filter((id) => !id.endsWith(':'));
     if (ids.length) invalidateLivingLoreProposals({ timelineId, directionIds: ids, reason });
-}
-
-function storyArchiveEvidence(requests) {
-    const values = [];
-    for (const request of requests || []) {
-        const args = request?.arguments || {};
-        switch (request?.capability) {
-            case 'event.record': values.push(args.summary); break;
-            case 'scene.set': values.push(`${args.key}: ${args.value}`); break;
-            case 'scene.clear': values.push(`${args.key}: cleared`); break;
-            case 'char_state.set': values.push(`${args.charId} ${args.facet}: ${args.value}`); break;
-            case 'char_state.clear': values.push(`${args.charId} ${args.facet}: cleared`); break;
-            case 'beat.set': values.push(args.directive); break;
-            default: break;
-        }
-    }
-    return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
 }
 
 function createManualCatchUpCapture(docId, preview, change) {

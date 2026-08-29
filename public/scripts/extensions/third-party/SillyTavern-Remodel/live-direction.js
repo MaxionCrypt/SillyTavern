@@ -46,6 +46,15 @@ import { buildSceneArchiveProjection } from './archive-projection.js';
 import { snapshotGenerationRoutes } from './generation-route.js';
 import { createNarratorDelivery } from './narrator-delivery.js';
 import { captureNativeNarratorPrompt, createNativeNarratorTransport, prepareNativeNarratorPrompt } from './native-narrator-runtime.js';
+import {
+    archiveEvidenceFromOperations,
+    createArchiveIngestion,
+    isArchiveCapability,
+} from './archive-ingestion.js';
+import {
+    legacyArchiveIngestionAdapter,
+    roleplayArchiveIngestionInput,
+} from './legacy-archive-ingestion-adapter.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const AUTONOMOUS_CONTINUE_ACTION = '[Continue the scene from accepted history.]';
@@ -55,12 +64,8 @@ const PACING = Object.freeze({
     fast: { cps: 75, wordMs: 12, min: 150, max: 650, opening: 350 },
     instant: { cps: Infinity, wordMs: 0, min: 0, max: 0, opening: 0 },
 });
-const ARCHIVE_CAPABILITIES = new Set([
-    'scene.set', 'scene.clear', 'event.record',
-    'char_state.set', 'char_state.clear', 'beat.set',
-    'secret.set', 'secret.clear',
-]);
 const archiveCatchups = new Map();
+const legacyArchiveIngestion = createArchiveIngestion(legacyArchiveIngestionAdapter);
 
 const hooks = {
     getActiveScene: () => null,
@@ -2823,7 +2828,7 @@ function applyPendingRequests(run) {
     run.pendingRequestsApplied = true;
     const pending = run.envelope.mechanics.pendingRequests;
     if (!pending?.length) return;
-    const archiveRequestCount = pending.filter((request) => ARCHIVE_CAPABILITIES.has(request?.capability)).length;
+    const archiveRequestCount = pending.filter((request) => isArchiveCapability(request?.capability)).length;
     const scene = hooks.getActiveScene();
     if (!scene || scene.id !== run.sceneId) {
         journal('mechanics.accepted.skipped', {
@@ -2848,7 +2853,7 @@ function applyPendingRequests(run) {
     if (result.transaction?.id) run.checkpointTransactionIds.push(result.transaction.id);
     if (result.ok && archiveRequestCount) {
         run.archiveRequestsApplied = true;
-        run.committedArchiveFacts = mergeStrings(run.committedArchiveFacts, archiveEvidenceFromRequests(pending));
+        run.committedArchiveFacts = mergeStrings(run.committedArchiveFacts, archiveEvidenceFromOperations(pending));
     }
     // unresolvedReasons carries the specific reason (unknown vs. duplicated
     // name) that addressRequestsByName already worked out; folded in even on
@@ -2930,19 +2935,6 @@ async function queueAcceptedLoreProposals(run, { proposals = null, phase = 'comp
     }
 }
 
-function archiveEvidenceFromRequests(requests) {
-    const facts = [];
-    for (const request of Array.isArray(requests) ? requests : []) {
-        if (!ARCHIVE_CAPABILITIES.has(request?.capability)) continue;
-        const args = request.arguments || {};
-        for (const value of [args.summary, args.value, args.directive]) {
-            const text = String(value || '').trim();
-            if (text) facts.push(text);
-        }
-    }
-    return facts;
-}
-
 /**
  * Record what a Loom-shaped reply actually contained.
  *
@@ -2953,7 +2945,7 @@ function archiveEvidenceFromRequests(requests) {
 function journalLoomReply(raw, phase, sceneId, directionId = null) {
     try {
         const reply = describeLoomReply(raw);
-        const archiveCount = reply.capabilities.filter((name) => ARCHIVE_CAPABILITIES.has(name)).length;
+        const archiveCount = reply.capabilities.filter((name) => isArchiveCapability(name)).length;
         const reason = !reply.hasFence
             ? 'no state fence in the reply'
             : (!reply.fenceParsed
@@ -3046,7 +3038,14 @@ async function catchUpArchive(run, reason) {
         decisions: parsed.lorePromotionDecisions || [],
         rejections: parsed.lorePromotionDecisionRejections || [],
     });
-    const requests = parsed.requests.filter((request) => ARCHIVE_CAPABILITIES.has(request?.capability));
+    const ingestion = await legacyArchiveIngestion.ingest(roleplayArchiveIngestionInput({
+        run,
+        acceptedProse: prose,
+        candidateReply: raw,
+        archiveState: narrativeState,
+        reason,
+    }));
+    const requests = ingestion.operations;
     const freshLoreProposals = parsed.loreProposals.filter((proposal) =>
         !(run.envelope?.loreProposals || []).some((existing) => sameLoreProposal(existing, proposal)));
     if (!requests.length && !freshLoreProposals.length) {
@@ -3093,7 +3092,7 @@ async function catchUpArchive(run, reason) {
             }
         }
         if (result.ok && requests.length) {
-            run.committedArchiveFacts = mergeStrings(run.committedArchiveFacts, archiveEvidenceFromRequests(requests));
+            run.committedArchiveFacts = mergeStrings(run.committedArchiveFacts, ingestion.archiveFacts);
         }
         run.envelope.loreProposals = mergeLoreProposals(run.envelope.loreProposals, freshLoreProposals);
         run.envelope.loreProposalRejections = [
@@ -3152,7 +3151,7 @@ function buildLoomSkill(mechanics) {
         try { return buildLoomContext({ mechanics }, { mechanicsEnabled: true }).mechanicsSkill || ''; } catch { /* use the Archive-only guide below */ }
     }
     const guide = getCapabilityDictionary()
-        .filter((capability) => ARCHIVE_CAPABILITIES.has(capability.name))
+        .filter((capability) => isArchiveCapability(capability.name))
         .map((capability) => {
             const required = (capability.requiredArguments || [])
                 .map((argument) => `${argument.key} — ${argument.hint}`).join('; ');
