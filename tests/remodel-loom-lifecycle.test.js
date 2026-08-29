@@ -256,7 +256,7 @@ test('experimental Stop cuts off in place and preserves the visible prefix', asy
 });
 
 test('a Loom turn commits the Narrator draft and waits for the user', async () => {
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     // The Narrator's held draft became the committed message.
     expect(__getChat().at(-1).mes).toBe(RESPONSE);
@@ -264,7 +264,7 @@ test('a Loom turn commits the Narrator draft and waits for the user', async () =
 
 test('a turn records an inspectable Archive projection receipt', async () => {
     recordEvent(scene.timelineId, scene.id, 'Wren hid the gate key under the sundial.');
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     expect(__getDebugEvents()).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -282,7 +282,7 @@ test('a completed turn queues its evidence-backed lore suggestion exactly once a
         loomReconciliation: async () => `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [proposal], flow: { continue: false } })}\n\`\`\``,
     });
 
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     const suggestions = listLivingLoreProposals({ timelineId: scene.timelineId });
     expect(suggestions).toHaveLength(1);
@@ -308,9 +308,9 @@ test('Retry invalidates the superseded suggestion and queues the retake once', a
         },
     });
 
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
-    await regenerateLastDirectedResponse(scene);
+    await regenerateLastDirectedResponse(scene, { deliveryMode: 'legacy' });
     expect(await until(() => take === 2 && getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
     expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'invalidated' })).toHaveLength(1);
@@ -321,7 +321,7 @@ test('Retry invalidates the superseded suggestion and queues the retake once', a
 
 test('Retry preserves the completed response until its replacement connection is ready', async () => {
     scene.generationProfileIds = { narrator: 'slow-route', loom: 'slow-route' };
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     const original = structuredClone(__getChat());
     let reported = '';
@@ -330,7 +330,7 @@ test('Retry preserves the completed response until its replacement connection is
         onFailure: (error) => { reported = error.message; },
     });
 
-    expect(await regenerateLastDirectedResponse(scene)).toBe(false);
+    expect(await regenerateLastDirectedResponse(scene, { deliveryMode: 'legacy' })).toBe(false);
     expect(__getChat()).toEqual(original);
     expect(reported).toMatch(/Slow route/);
 
@@ -364,7 +364,7 @@ test('editing the latest user message rewinds its response and reruns without du
         },
     });
 
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     expect(isLatestUserMessage(0, chat)).toBe(true);
     expect(isLatestUserMessage(1, chat)).toBe(false);
@@ -373,6 +373,7 @@ test('editing the latest user message rewinds its response and reruns without du
         scene,
         messageId: 0,
         text: 'Wren crosses the gate and locks it behind her.',
+        deliveryMode: 'legacy',
     });
     expect(reran).toBe(true);
     expect(await until(() => take === 2 && getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
@@ -413,7 +414,7 @@ test('switching native swipes invalidates the superseded proposal set and restor
         livingLorePacket: livingLorePacket(),
         loomReconciliation: async () => `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [first], flow: { continue: false } })}\n\`\`\``,
     });
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
     const message = __getChat().at(-1);
@@ -487,7 +488,7 @@ test('Narrator Archive grounding resolves through the recipe macro and is cleare
         },
     });
 
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
     const grounding = promptContent.filter(([key]) => key === 'narratorGrounding');
@@ -498,11 +499,11 @@ test('Narrator Archive grounding resolves through the recipe macro and is cleare
 });
 
 test('a completed turn waits for the user and Continue advances the next one', async () => {
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     expect(__getChat().length).toBe(1);
     // Continue directs another moment from accepted history.
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => __getChat().length === 2)).toBe(true);
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 });
@@ -519,7 +520,7 @@ test('Continue answers an already-posted user action without posting or routing 
         },
     });
 
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     expect(receivedEnvelope?.currentPlayerAction).toBe(waitingAction.mes);
     expect(chat.filter((message) => message.is_user)).toEqual([waitingAction]);
@@ -540,7 +541,7 @@ test('STOP during a new private Narrator pass keeps the preceding completed outp
         stopGeneration: () => rejectGeneration?.(new Error('Generation was aborted.')),
     });
 
-    const pending = requestNextDirection(scene);
+    const pending = requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.phase === 'narrator' && rejectGeneration)).toBe(true);
     expect(getLiveDirectionRun()).not.toHaveProperty('passToken');
     await stopLiveDirection();
@@ -560,7 +561,7 @@ test('an empty performer response is reported, not silently accepted as a turn',
             await __emit('MESSAGE_RECEIVED', chat.length - 1);
         },
     });
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     // The empty run never becomes a finished turn: it does not reach the
     // waiting state with a kept message, and the empty row is not left behind.
     expect(await until(() => getLiveDirectionRun() === null || getLiveDirectionRun()?.state !== 'Speaking', 3000)).toBe(true);
@@ -592,7 +593,7 @@ test('a reasoning-only OpenRouter reply retries once with reasoning disabled and
         },
     });
 
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     expect(attempt).toBe(2);
     expect(requests[0]).toMatchObject({ reasoning_effort: 'low', include_reasoning: true });
@@ -619,7 +620,7 @@ test('an unfinished private Narrator draft is retried before the Loom can canoni
         },
     });
 
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     expect(attempt).toBe(2);
     expect(loomCalls).toBe(1);
@@ -653,7 +654,7 @@ test('visible reasoning or echoed commands are retried before the Loom sees them
         },
     });
 
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     expect(attempt).toBe(2);
     expect(loomCalls).toBe(1);
@@ -718,7 +719,7 @@ test('an intervention stores only the visible Loom prefix and never the private 
         },
     });
 
-    const pending = requestNextDirection(scene);
+    const pending = requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.acceptedVisibleText === visible)).toBe(true);
     handleLiveDirectionDraft('I catch his wrist.');
     pushTail();
@@ -758,7 +759,7 @@ test('Narrator grounding does not duplicate the recipe-owned Story Goals source'
         },
     });
 
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
     const grounding = promptContent.filter(([key]) => key === 'narratorGrounding');

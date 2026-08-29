@@ -37,10 +37,12 @@ export const canonicalDirectedTurnAdapter = Object.freeze({
     editAndRerun: (options) => rerunDirectedRoleplayFromUserMessage({ ...options, deliveryMode: 'canonical' }),
 });
 
-function implementationFor(scene) {
-    return scene?.liveDirection?.delivery === 'canonical'
-        ? canonicalDirectedTurnAdapter
-        : legacyDirectedTurnAdapter;
+// This branch exists to build and run the rebuilt pipeline, so canonical is not
+// a per-Scene choice here: it is what this branch is. The legacy adapter is
+// kept intact and callable as the rollback path, which is a branch switch, not
+// a runtime toggle.
+function implementationFor() {
+    return canonicalDirectedTurnAdapter;
 }
 
 /** The Scene chooses at one seam; the UI and controller know neither engine. */

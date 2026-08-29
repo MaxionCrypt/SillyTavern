@@ -11,19 +11,19 @@ const GOALS = [{ title: 'Reach the gate', status: 'active', successRate: 40, hol
 const applied = () => ({ ok: true, transaction: { id: 'tx', status: 'applied' }, receipts: [{ status: 'applied', roll: { roll: 9, rate: 40, hit: true } }] });
 const REBUILT = { id: 's1', timelineId: 't1', liveDirection: { pipeline: { mechanics: 'rebuilt' } } };
 
-test('a Scene that has not opted in stays on the legacy path', () => {
-    expect(isRebuiltMechanicsEnabled(undefined)).toBe(false);
-    expect(isRebuiltMechanicsEnabled({})).toBe(false);
-    expect(isRebuiltMechanicsEnabled({ liveDirection: {} })).toBe(false);
-    expect(isRebuiltMechanicsEnabled({ liveDirection: { pipeline: {} } })).toBe(false);
-    expect(isRebuiltMechanicsEnabled({ liveDirection: { pipeline: { mechanics: 'legacy' } } })).toBe(false);
+test('the rebuilt mechanics gateway is always on for this branch', () => {
+    // This branch exists to run the rebuilt pipeline, so no Scene field turns it
+    // off: rolling back is a branch switch, not a runtime toggle.
+    expect(isRebuiltMechanicsEnabled(undefined)).toBe(true);
+    expect(isRebuiltMechanicsEnabled({})).toBe(true);
+    expect(isRebuiltMechanicsEnabled({ liveDirection: { pipeline: { mechanics: 'legacy' } } })).toBe(true);
     expect(isRebuiltMechanicsEnabled(REBUILT)).toBe(true);
 });
 
-test('an un-opted-in Scene yields no mechanics dependency at all', () => {
-    expect(createTurnMechanics({ scene: {} })).toBeNull();
-    expect(createTurnMechanicsForScene({ scene: {}, run: {} })).toBeNull();
-    expect(createTurnMechanicsForScene({})).toBeNull();
+test('every Scene gets a mechanics dependency, however its fields are set', () => {
+    expect(createTurnMechanics({ scene: {} })).not.toBeNull();
+    expect(createTurnMechanicsForScene({ scene: { id: 's', timelineId: 't' }, run: {} })).not.toBeNull();
+    expect(createTurnMechanicsForScene({ scene: { liveDirection: { pipeline: { mechanics: 'legacy' } } }, run: {} })).not.toBeNull();
 });
 
 test('module selection is read per module and defaults to legacy', () => {

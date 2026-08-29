@@ -434,7 +434,7 @@ export function getLiveDirectionRun() {
 }
 
 export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
-    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: 'loom', delivery: scene?.liveDirection?.delivery || 'legacy' };
+    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: 'loom', delivery: 'canonical' };
     // A hidden Loom pass is a busy pipeline with no visible run yet. It used
     // to report 'Ready' with Stop disabled, which is what invited the second
     // send that produced a second bubble — notifyTransient('Directing') is a
@@ -448,7 +448,7 @@ export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
         state: activeRun?.state || (directing ? 'Directing' : 'Ready'),
         pacing: scene.liveDirection?.pacing || 'natural',
         mode: 'loom',
-        delivery: scene.liveDirection?.delivery || 'legacy',
+        delivery: 'canonical',
         openingLabel: activeRun?.openingLabel || '',
         canContinue: activeRun?.state === 'Waiting for you',
         canSend: !directing,
@@ -501,7 +501,7 @@ export function setNextPerformerOverride(ref) {
     performerOverride = ref ? normalizeRef(ref) : null;
 }
 
-export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = [], deliveryMode = 'legacy' } = {}) {
+export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = [], deliveryMode = 'canonical' } = {}) {
     if (!isDirectedLiveScene(scene)) return false;
     const action = String(text || '');
     if (!action.trim()) return false;
@@ -554,7 +554,7 @@ export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = 
  *        Regenerate supplies it after discarding the superseded take, so the
  *        retake occupies the moment it is a retake OF.
  */
-export async function requestNextDirection(scene = hooks.getActiveScene(), { notebookTurn = null, deliveryMode = 'legacy' } = {}) {
+export async function requestNextDirection(scene = hooks.getActiveScene(), { notebookTurn = null, deliveryMode = 'canonical' } = {}) {
     if (!isDirectedLiveScene(scene) || activeRun && !['Waiting for you', 'Complete'].includes(activeRun.state)) return false;
     // Guarded as well as activeRun: between a completed reveal and the moment a
     // new run exists there is a multi-second hidden window in which activeRun is
@@ -700,7 +700,7 @@ export async function stopLiveDirection() {
  * labelled from, so the button and the action cannot disagree about what
  * "last" means — they read one function.
  */
-export async function retryLiveStep(scene = hooks.getActiveScene(), { deliveryMode = 'legacy' } = {}) {
+export async function retryLiveStep(scene = hooks.getActiveScene(), { deliveryMode = 'canonical' } = {}) {
     const { retry } = resolveDirectionActions(describeDirectionStep(scene));
     if (retry.target === 'narrator') return regenerateLastDirectedResponse(scene, { deliveryMode });
     journal('retry.rejected', { reason: retry.reason }, { severity: 'warn' });
@@ -710,7 +710,7 @@ export async function retryLiveStep(scene = hooks.getActiveScene(), { deliveryMo
 /**
  * Continue: advance to the next turn, touching nothing that already exists.
  */
-export async function continueLiveStep(scene = hooks.getActiveScene(), { deliveryMode = 'legacy' } = {}) {
+export async function continueLiveStep(scene = hooks.getActiveScene(), { deliveryMode = 'canonical' } = {}) {
     const { continue: advance } = resolveDirectionActions(describeDirectionStep(scene));
     // One control, two meanings: a held reveal resumes where it stopped, an
     // idle scene advances to the next turn. Resolved from the same function
@@ -796,7 +796,7 @@ export function canSendWithoutLiveDirection() {
     return Boolean(pendingFailure?.insertUser) && !pendingFailure?.postedMessage;
 }
 
-export async function regenerateLastDirectedResponse(scene = hooks.getActiveScene(), { deliveryMode = 'legacy' } = {}) {
+export async function regenerateLastDirectedResponse(scene = hooks.getActiveScene(), { deliveryMode = 'canonical' } = {}) {
     if (!isDirectedLiveScene(scene) || directionInFlight) return false;
     // A SETTLED run stays in activeRun so the finished turn keeps its chrome.
     // Loom envelopes are built with hardPauseAfter: true, so `hard` in
@@ -899,7 +899,7 @@ export function isLatestUserMessage(messageId, chat = getContext().chat || []) {
  * line a second time.
  */
 export async function rerunDirectedRoleplayFromUserMessage({
-    scene = hooks.getActiveScene(), messageId, text, deliveryMode = 'legacy',
+    scene = hooks.getActiveScene(), messageId, text, deliveryMode = 'canonical',
 } = {}) {
     if (!isDirectedLiveScene(scene) || directionInFlight) return false;
     if (activeRun && !['Waiting for you', 'Complete'].includes(activeRun.state)) return false;
@@ -978,7 +978,7 @@ export async function rerunDirectedRoleplayFromUserMessage({
     });
 }
 
-async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, postedMessage = null, deliveryMode = 'legacy' } = {}) {
+async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, postedMessage = null, deliveryMode = 'canonical' } = {}) {
     // Checked before the Loom call, not after: the Loom costs a real
     // request and ~17s, and there is no point spending either when the
     // performer that follows it cannot speak.
@@ -1461,7 +1461,7 @@ function ownedByEmptyRetry(directionId) {
     return Boolean(directionId) && retryingEmpty.has(directionId);
 }
 
-async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0, previousReasoningLength = 0, previousFailureCause = '', deliveryMode = 'legacy' }) {
+async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0, previousReasoningLength = 0, previousFailureCause = '', deliveryMode = 'canonical' }) {
     const generationRoutes = testAdapters ? null : snapshotGenerationRoutes({
         scene,
         roles: deliveryMode === 'canonical' ? ['narrator'] : ['narrator', 'loom'],
@@ -2528,7 +2528,7 @@ async function completeVisibleRun(run) {
                 return;
             }
             journal('autoplay.fired', { autonomousSequence: sequence });
-            beginDirection({ scene: current, action: '[Autonomous continuation from accepted history.]', insertUser: false, autonomousSequence: sequence });
+            beginDirection({ scene: current, action: '[Autonomous continuation from accepted history.]', insertUser: false, autonomousSequence: sequence, deliveryMode: run.deliveryMode });
         }, 250);
         return;
     }
@@ -2655,6 +2655,9 @@ async function failEmptyVisibleRun(run, { cause = 'empty', diagnosis = '' } = {}
                 emptyRetries: run.emptyRetries + 1,
                 previousReasoningLength: reasoning.length,
                 previousFailureCause: cause,
+                // A retry belongs to the run that started it. Inheriting a
+                // module default here would flip delivery mid-flow.
+                deliveryMode: run.deliveryMode,
             });
         } catch (error) {
             // Nothing awaits this function. completeVisibleRun is driven by the

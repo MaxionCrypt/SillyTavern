@@ -100,7 +100,7 @@ test('Retry after an interruption rolls back the catch-up Archive event', async 
         }]),
     });
 
-    const pending = requestNextDirection(scene);
+    const pending = requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.acceptedVisibleText === visible)).toBe(true);
     handleLiveDirectionDraft('I catch his wrist.');
     pushTail();
@@ -112,7 +112,7 @@ test('Retry after an interruption rolls back the catch-up Archive event', async 
     // The retake records nothing of its own, so anything left in the Archive
     // afterwards is the undo's failure rather than the new turn's doing.
     setLiveDirectionTestAdapters({ generatePerformer: speak });
-    await regenerateLastDirectedResponse(scene);
+    await regenerateLastDirectedResponse(scene, { deliveryMode: 'legacy' });
 
     expect(listEvents(scene.timelineId, scene.id)).toHaveLength(0);
 });
@@ -136,11 +136,11 @@ test('Retry after a COMPLETED turn rolls back its catch-up Archive event', async
         }]),
     });
 
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => listEvents(scene.timelineId, scene.id).length === 1)).toBe(true);
 
     setLiveDirectionTestAdapters({ generatePerformer: speak });
-    await regenerateLastDirectedResponse(scene);
+    await regenerateLastDirectedResponse(scene, { deliveryMode: 'legacy' });
 
     expect(listEvents(scene.timelineId, scene.id)).toHaveLength(0);
 });

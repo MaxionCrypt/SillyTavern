@@ -67,7 +67,7 @@ afterEach(async () => {
 });
 
 test('a Loom turn posts reconciled prose, not the raw Narrator draft', async () => {
-    await requestNextDirection(scene);
+    await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
     // The committed prose is what lands — the draft is never stored.
     expect(__getChat().at(-1).mes).toBe(COMMITTED);

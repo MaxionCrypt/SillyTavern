@@ -133,10 +133,8 @@ import {
     describeLiveStepActions,
     retryLiveDirectionArchive,
     sendWithoutLiveDirection,
-    setLiveDirectionDelivery,
     setLiveDirectionEnabled,
     setLiveDirectionPacing,
-    setLiveDirectionMechanics,
     setNextPerformerOverride,
 } from './live-direction.js';
 import { directedTurnController } from './legacy-directed-turn-adapter.js';
@@ -9156,21 +9154,9 @@ function renderRoleplayComposer(root) {
         </div>
 
         <div class="remodel-live-pacing-row">
-            <label class="remodel-live-pacing">Delivery
-                <select data-remodel-live-delivery aria-label="Directed turn delivery">
-                    <option value="legacy"${activeScene?.liveDirection?.delivery !== 'canonical' ? ' selected' : ''}>Legacy Loom-reviewed</option>
-                    <option value="canonical"${activeScene?.liveDirection?.delivery === 'canonical' ? ' selected' : ''}>Experimental immediate Narrator</option>
-                </select>
-            </label>
             <label class="remodel-live-pacing">Pacing
                 <select data-remodel-live-pacing aria-label="Live Direction pacing">
                     ${['slow', 'natural', 'fast', 'instant'].map((value) => `<option value="${value}"${directionUi.pacing === value ? ' selected' : ''}>${value[0].toUpperCase() + value.slice(1)}</option>`).join('')}
-                </select>
-            </label>
-            <label class="remodel-live-pacing" title="Frozen receipts let the Narrator request a roll or a value change mid-turn. Code freezes the inputs, rolls, and applies the change exactly once; the Narrator must obey the receipt.">Mechanics
-                <select data-remodel-live-mechanics aria-label="Narrator mechanics implementation">
-                    <option value="legacy"${activeScene?.liveDirection?.pipeline?.mechanics !== 'rebuilt' ? ' selected' : ''}>Legacy — Loom only</option>
-                    <option value="rebuilt"${activeScene?.liveDirection?.pipeline?.mechanics === 'rebuilt' ? ' selected' : ''}>Experimental frozen receipts</option>
                 </select>
             </label>
         </div>
@@ -10584,20 +10570,6 @@ function bindRoleplayComposerEvents() {
     });
     document.addEventListener('change', (event) => {
         if (!isRealRoleplayWorkspaceActive()) return;
-        const delivery = event.target instanceof Element ? event.target.closest('[data-remodel-live-delivery]') : null;
-        if (delivery instanceof HTMLSelectElement) {
-            setLiveDirectionDelivery(getActiveScene(), delivery.value);
-            renderRoleplayScene();
-            return;
-        }
-        const mechanics = event.target instanceof Element ? event.target.closest('[data-remodel-live-mechanics]') : null;
-        if (mechanics instanceof HTMLSelectElement) {
-            // Re-render either way: a refused cutover must snap the select back
-            // to what is actually selected rather than showing a lie.
-            setLiveDirectionMechanics(getActiveScene(), mechanics.value);
-            renderRoleplayScene();
-            return;
-        }
         const pacing = event.target instanceof Element ? event.target.closest('[data-remodel-live-pacing]') : null;
         if (pacing instanceof HTMLSelectElement) setLiveDirectionPacing(getActiveScene(), pacing.value);
     });

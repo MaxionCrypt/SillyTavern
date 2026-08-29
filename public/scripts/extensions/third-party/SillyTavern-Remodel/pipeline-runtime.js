@@ -21,16 +21,18 @@ function normalizeToolName(name) {
     return NARRATOR_MECHANIC_TOOLS.includes(raw) ? raw : '';
 }
 
-/** Read the per-Scene selection. Absent means legacy — an experiment is chosen,
- * never inherited. */
+/** Read the per-Scene selection, for diagnostics. Absent means legacy. */
 export function isModuleRebuilt(scene, module) {
     return scene?.liveDirection?.pipeline?.[module] === 'rebuilt';
 }
 
-/** True when this Scene should route Narrator tool calls through the rebuilt
- * mechanics gateway rather than ignoring them. */
-export function isRebuiltMechanicsEnabled(scene) {
-    return isModuleRebuilt(scene, 'mechanics');
+/**
+ * Always true on this branch. The rebuilt mechanics gateway is what this branch
+ * is for, so Narrator tool calls always route through it; rolling back means
+ * switching branches, not flipping a Scene field.
+ */
+export function isRebuiltMechanicsEnabled() {
+    return true;
 }
 
 /**
