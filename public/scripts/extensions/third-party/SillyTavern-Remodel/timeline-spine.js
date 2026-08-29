@@ -4711,7 +4711,10 @@ function setRemodeledLorebooksGlobalLabel(panel) {
         label.dataset.remodelOriginalLorebooksI18n = label.getAttribute('data-i18n') || '';
     }
     label.textContent = 'Active Lorebooks for Roleplay & Story';
-    label.removeAttribute('data-i18n');
+    // Empty, not removed — same reason as the drawer icon in index.js:
+    // SillyTavern's i18n MutationObserver re-translates on any data-i18n
+    // change including removal, then calls .split() on the resulting null.
+    label.setAttribute('data-i18n', '');
 }
 
 function restoreNativeLorebooksGlobalLabel(panel) {
@@ -4719,8 +4722,9 @@ function restoreNativeLorebooksGlobalLabel(panel) {
     if (!(label instanceof HTMLElement) || !label.dataset.remodelOriginalLorebooksLabel) return;
     label.textContent = label.dataset.remodelOriginalLorebooksLabel;
     const i18n = label.dataset.remodelOriginalLorebooksI18n;
-    if (i18n) label.setAttribute('data-i18n', i18n);
-    else label.removeAttribute('data-i18n');
+    // Restoring an absent key sets it empty rather than removing it, for the
+    // same crash: an empty key resolves to nothing, a removed one throws.
+    label.setAttribute('data-i18n', i18n || '');
     delete label.dataset.remodelOriginalLorebooksLabel;
     delete label.dataset.remodelOriginalLorebooksI18n;
 }
