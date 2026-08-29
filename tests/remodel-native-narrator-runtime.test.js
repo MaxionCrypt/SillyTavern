@@ -200,3 +200,82 @@ test('the opening snapshot is never delayed by reveal pacing', async () => {
     expect(Date.now() - started).toBeLessThan(200);
     await collect(iterator);
 });
+
+// --- Commit 11-12 reconnection: resumable mechanics inside one logical turn ---
+
+const toolCall = (name, args) => ({ id: 'call-1', name, arguments: args });
+
+test('with no mechanics dependency the provider is called exactly once', async () => {
+    const send = jest.fn(async ({ onChunk }) => {
+        onChunk({ text: 'She reaches for the latch.', reasoning: '' });
+        return { text: 'She reaches for the latch.', reasoning: '', streamed: true, toolCalls: [toolCall('goal.attempt', {})] };
+    });
+    const transport = createNativeNarratorTransport({ pacing: 'instant', send });
+    await collect(transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } }));
+    expect(send).toHaveBeenCalledTimes(1);
+});
+
+test('a tool call pauses the turn, resolves locally, and resumes the same message', async () => {
+    let call = 0;
+    const send = jest.fn(async ({ onChunk }) => {
+        call += 1;
+        if (call === 1) {
+            onChunk({ text: 'She reaches for the latch.', reasoning: '' });
+            return { text: 'She reaches for the latch.', reasoning: '', streamed: true, toolCalls: [toolCall('goal.attempt', { target: 'Reach the gate' })] };
+        }
+        onChunk({ text: ' The lock gives.', reasoning: '' });
+        return { text: ' The lock gives.', reasoning: '', streamed: true };
+    });
+    const execute = jest.fn(async () => ({ status: 'applied', outcome: 'hit' }));
+    const transport = createNativeNarratorTransport({ pacing: 'instant', send, mechanics: { execute } });
+    const frames = await collect(transport.stream({ prompt: { messages: [{ role: 'user', content: 'go' }] }, route: { profileId: 'p' } }));
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0][0]).toMatchObject({ name: 'goal.attempt', arguments: { target: 'Reach the gate' } });
+
+    // One visible message: the continuation extends the prefix, never restarts it.
+    const snapshots = frames.filter((frame) => frame.type === 'snapshot').map((frame) => frame.text);
+    expect(snapshots.at(-1)).toBe('She reaches for the latch. The lock gives.');
+    for (let i = 1; i < snapshots.length; i += 1) expect(snapshots[i].startsWith(snapshots[i - 1])).toBe(true);
+});
+
+test('the receipt is handed back as a tool message on the continuation request', async () => {
+    let call = 0;
+    const send = jest.fn(async () => {
+        call += 1;
+        return call === 1
+            ? { text: 'A', reasoning: '', streamed: true, toolCalls: [toolCall('goal.attempt', { target: 'g' })] }
+            : { text: 'B', reasoning: '', streamed: true };
+    });
+    const execute = jest.fn(async () => ({ status: 'applied', outcome: 'miss', roll: { roll: 91 } }));
+    const transport = createNativeNarratorTransport({ pacing: 'instant', send, mechanics: { execute } });
+    await collect(transport.stream({ prompt: { messages: [{ role: 'user', content: 'go' }] }, route: { profileId: 'p' } }));
+
+    const second = send.mock.calls[1][0].prompt;
+    expect(second.at(-1)).toMatchObject({ role: 'tool', name: 'goal.attempt' });
+    expect(JSON.parse(second.at(-1).content)).toMatchObject({ status: 'applied', outcome: 'miss' });
+});
+
+test('continuations are bounded so a looping model cannot spend the turn', async () => {
+    const send = jest.fn(async () => ({ text: 'x', reasoning: '', streamed: true, toolCalls: [toolCall('goal.attempt', {})] }));
+    const execute = jest.fn(async () => ({ status: 'applied' }));
+    const transport = createNativeNarratorTransport({ pacing: 'instant', send, mechanics: { execute }, maxContinuations: 2 });
+    await collect(transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } }));
+    expect(send).toHaveBeenCalledTimes(3); // initial + 2 continuations
+});
+
+test('a refused mechanic still continues the turn rather than failing it', async () => {
+    let call = 0;
+    const send = jest.fn(async () => {
+        call += 1;
+        return call === 1
+            ? { text: 'A', reasoning: '', streamed: true, toolCalls: [toolCall('goal.attempt', { target: 'not-hers' })] }
+            : { text: 'B', reasoning: '', streamed: true };
+    });
+    const execute = jest.fn(async () => ({ status: 'refused', reason: 'piper does not hold it' }));
+    const transport = createNativeNarratorTransport({ pacing: 'instant', send, mechanics: { execute } });
+    const frames = await collect(transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } }));
+    expect(frames.at(-1)).toMatchObject({ type: 'complete' });
+    expect(JSON.parse(send.mock.calls[1][0].prompt.at(-1).content)).toMatchObject({ status: 'refused' });
+});

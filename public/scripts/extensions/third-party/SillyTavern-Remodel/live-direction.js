@@ -46,6 +46,7 @@ import { buildSceneArchiveProjection } from './archive-projection.js';
 import { snapshotGenerationRoutes } from './generation-route.js';
 import { createNarratorDelivery } from './narrator-delivery.js';
 import { captureNativeNarratorPrompt, createNativeNarratorTransport, prepareNativeNarratorPrompt } from './native-narrator-runtime.js';
+import { createTurnMechanicsForScene } from './pipeline-runtime.js';
 import {
     archiveEvidenceFromOperations,
     createArchiveIngestion,
@@ -1731,7 +1732,14 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
             // getPacing, not a captured value: setLiveDirectionPacing mutates
             // activeRun.pacing, and this run IS activeRun, so a mid-turn switch
             // reaches the reveal already in flight.
-            : createNativeNarratorTransport({ pacing: run.pacing, getPacing: () => run.pacing });
+            // mechanics is null unless this Scene selected the rebuilt gateway,
+            // and a null dependency leaves the transport on its legacy
+            // single-request path.
+            : createNativeNarratorTransport({
+                pacing: run.pacing,
+                getPacing: () => run.pacing,
+                mechanics: createTurnMechanicsForScene({ scene, run }),
+            });
         const delivery = createNarratorDelivery({
             transport,
             messageStore: createCanonicalMessageStore({ context, run, performer, scene }),

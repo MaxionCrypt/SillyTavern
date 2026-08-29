@@ -5,6 +5,7 @@ import { describeIncompleteProse } from './generation-budget.js';
 import { describeNarratorOutput } from './narrator-output-contract.js';
 import { limitBoundedChatHistory } from './prompt-history-limit.js';
 import { streamChatPrompt } from './story-stream.js';
+import { DEFAULT_MECHANICS_CONTINUATIONS, appendMechanicsContinuation, collectMechanicsToolCalls } from './mechanics-transport.js';
 
 /** Canonical reveal speed in characters per second, matching the legacy Live
  * Direction curve so the four settings feel the way they used to. The previous
@@ -76,7 +77,16 @@ export async function captureNativeNarratorPrompt({ context, performer, generati
 }
 
 /** Provider/profile transport for narrator-delivery.js's cumulative frames. */
-export function createNativeNarratorTransport({ pacing = 'natural', getPacing = null, send = streamChatPrompt } = {}) {
+export function createNativeNarratorTransport({
+    pacing = 'natural',
+    getPacing = null,
+    send = streamChatPrompt,
+    // Absent by default: with no mechanics dependency the loop below runs
+    // exactly once and this transport behaves as it did before the gateway
+    // existed, which is what keeps an un-opted-in Scene on the legacy path.
+    mechanics = null,
+    maxContinuations = DEFAULT_MECHANICS_CONTINUATIONS,
+} = {}) {
     // Read per tick, never captured once: switching Pacing mid-turn has to take
     // effect on the prose still being revealed, not only on the next turn.
     const readCps = () => {
@@ -107,23 +117,50 @@ export function createNativeNarratorTransport({ pacing = 'natural', getPacing = 
             const overridePayload = recovery?.requestReasoning === false
                 ? reasoningDisabledPayload(route?.profileId)
                 : {};
-            const request = send({
-                prompt: Array.isArray(prompt?.messages) ? prompt.messages : prompt,
-                profileId: route?.profileId,
-                signal,
-                overridePayload,
-                onChunk: ({ text, reasoning }) => push({ type: 'snapshot', text, reasoning }),
-            }).then((result) => {
-                final = result || final;
-                // Streaming transports commonly trim their returned final
-                // value even though the last cumulative snapshot retains a
-                // trailing space. A shorter final value is not a rewrite and
-                // must not be emitted as one. A non-streamed response, or a
-                // genuine final extension, still becomes a snapshot.
-                if (final.text && final.text !== latestText && (!latestText || final.text.startsWith(latestText))) {
-                    push({ type: 'snapshot', text: final.text, reasoning: final.reasoning });
+            const request = (async () => {
+                let messages = Array.isArray(prompt?.messages) ? prompt.messages : prompt;
+                // Text already accepted earlier in this SAME logical turn. A
+                // mechanics continuation is a second HTTP request but still one
+                // visible message, so its snapshots must extend what is on
+                // screen rather than restart it.
+                let carry = '';
+                let continuations = 0;
+                for (;;) {
+                    // eslint-disable-next-line no-await-in-loop
+                    const result = await send({
+                        prompt: messages,
+                        profileId: route?.profileId,
+                        signal,
+                        overridePayload,
+                        onChunk: ({ text, reasoning }) => push({ type: 'snapshot', text: carry + String(text || ''), reasoning }),
+                    });
+                    final = result || final;
+                    const whole = carry + String(final.text || '');
+                    // Streaming transports commonly trim their returned final
+                    // value even though the last cumulative snapshot retains a
+                    // trailing space. A shorter final value is not a rewrite and
+                    // must not be emitted as one. A non-streamed response, or a
+                    // genuine final extension, still becomes a snapshot.
+                    if (whole && whole !== latestText && (!latestText || whole.startsWith(latestText))) {
+                        push({ type: 'snapshot', text: whole, reasoning: final.reasoning });
+                    }
+                    const calls = mechanics ? collectMechanicsToolCalls(final) : [];
+                    if (!calls.length || continuations >= maxContinuations) {
+                        final = { ...final, text: whole };
+                        return;
+                    }
+                    // Pause the logical turn, resolve the mechanic locally, and
+                    // resume the same message from its authoritative receipt.
+                    const receipts = [];
+                    for (const call of calls) {
+                        // eslint-disable-next-line no-await-in-loop
+                        receipts.push(await mechanics.execute(call));
+                    }
+                    messages = appendMechanicsContinuation(messages, final, receipts);
+                    carry = whole;
+                    continuations += 1;
                 }
-            }).catch((error) => {
+            })().catch((error) => {
                 failure = error;
             }).finally(() => {
                 settled = true;
