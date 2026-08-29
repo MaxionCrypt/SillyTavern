@@ -47,6 +47,7 @@ import { snapshotGenerationRoutes } from './generation-route.js';
 import { createNarratorDelivery } from './narrator-delivery.js';
 import { captureNativeNarratorPrompt, createNativeNarratorTransport, prepareNativeNarratorPrompt } from './native-narrator-runtime.js';
 import { createTurnMechanicsForScene } from './pipeline-runtime.js';
+import { selectImplementation } from './pipeline-diagnostics.js';
 import {
     archiveEvidenceFromOperations,
     createArchiveIngestion,
@@ -3329,6 +3330,30 @@ export function setLiveDirectionDelivery(scene, delivery) {
     updateScene(scene.id, { liveDirection: { ...scene.liveDirection, delivery } });
     notifyState();
     return true;
+}
+
+/**
+ * Select which mechanics implementation this Scene runs. Routed through
+ * `selectImplementation` rather than writing the field directly, so the module
+ * and implementation names are validated and the mid-turn prose-ownership rule
+ * is enforced in one place instead of being restated here.
+ */
+export function setLiveDirectionMechanics(scene, implementation) {
+    if (!scene) return false;
+    try {
+        const pipeline = selectImplementation(
+            scene.liveDirection?.pipeline || {},
+            'mechanics',
+            implementation,
+            { turnActive: Boolean(activeRun) },
+        );
+        updateScene(scene.id, { liveDirection: { ...scene.liveDirection, pipeline } });
+        notifyState();
+        return true;
+    } catch {
+        // A refused cutover is not a crash: the select simply does not move.
+        return false;
+    }
 }
 
 /** Explicit, idempotent recovery seam for the directed-turn controller. */
