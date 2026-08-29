@@ -3582,6 +3582,7 @@ function renderTimelinePanel() {
     viewport.classList.toggle('is-timeline-focus', isTimelineFocused);
     viewport.classList.toggle('is-personas-workspace', activeTavernTab === 'personas');
     viewport.classList.toggle('is-lorebooks-workspace', activeTavernTab === 'lorebooks');
+    viewport.classList.toggle('is-prompts-workspace', activeTavernTab === 'prompts');
     viewport.classList.toggle('is-debug-workspace', activeTavernTab === 'debug');
 
     // Header and tabs are persistent so their collapse/slide animates; only their

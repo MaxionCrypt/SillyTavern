@@ -669,7 +669,7 @@ function renderMacroReference(recipe) {
             <summary><code>{{${escapeHtml(item.macro)}}}</code><small>${escapeHtml(item.label)}</small>${item.arguments ? '<em title="Takes named arguments">args</em>' : ''}</summary>
             ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ''}
             ${item.arguments ? `<p><strong>Arguments</strong> · ${escapeHtml(item.arguments)}</p>` : '<p>Takes no arguments.</p>'}
-            <button type="button" data-remodel-macro-insert="${escapeAttribute(insert)}">Insert into the message I was editing</button>
+            <button type="button" data-remodel-macro-insert="${escapeAttribute(insert)}">Insert at my cursor</button>
         </details>`;
     }).join('');
     return `<details class="remodel-prompt-macro-reference">
