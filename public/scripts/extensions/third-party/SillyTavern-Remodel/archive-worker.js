@@ -144,6 +144,7 @@ export function createArchiveWorker({
                 sceneId: running.sceneId,
                 mode: running.mode,
                 provenance: running.provenance,
+                acceptedProse: running.acceptedProse,
                 operations: result.operations,
                 archiveFacts: result.archiveFacts,
                 ingestionReceipt: result.receipt,

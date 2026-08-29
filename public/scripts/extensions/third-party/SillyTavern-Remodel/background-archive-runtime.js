@@ -10,6 +10,7 @@ import { legacyArchiveIngestionAdapter } from './legacy-archive-ingestion-adapte
 import { createArchiveJobRepository } from './archive-job-store.js';
 import { createArchiveWorker } from './archive-worker.js';
 import { recordApiTranscript, recordDebugEvent } from './debug-console.js';
+import { createArchiveSettlementEvent, publishArchiveSettlement } from './archive-consequences.js';
 
 const ARCHIVE_CAPABILITY_SET = new Set(ARCHIVE_CAPABILITY_NAMES);
 const ARCHIVE_POLICY = `You are the Loom's background Archive clerk. The accepted prose is already canonical and visible to the user. Read it as evidence and update only the shared Loom Archive.
@@ -261,21 +262,44 @@ function getProductionRuntime() {
     return productionRuntime;
 }
 
-function commitArchiveOperations({ jobId, timelineId, sceneId, provenance, operations, archiveFacts, ingestionReceipt }) {
-    if (!operations.length) return { ok: true, transactionId: null, archiveFacts, ingestionReceipt };
-    const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests: operations }, {
-        timelineId,
-        sceneId,
-        turnId: provenance.sourceId,
-        directionId: jobId,
-        messageId: provenance.messageId,
-        checkpointId: jobId,
-        variableRefs: {},
-        goalRefs: {},
-        source: { kind: 'background-archive', mode: provenance.kind, documentId: provenance.documentId },
-    });
-    if (!result.ok) throw new Error((result.errors || []).join(' ') || 'The Archive transaction was rejected.');
-    return { ok: true, transactionId: result.transaction?.id || null, archiveFacts, ingestionReceipt };
+async function commitArchiveOperations({ jobId, timelineId, sceneId, mode, provenance, acceptedProse, operations, archiveFacts, ingestionReceipt }) {
+    let transactionId = null;
+    if (operations.length) {
+        const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests: operations }, {
+            timelineId,
+            sceneId,
+            turnId: provenance.sourceId,
+            directionId: jobId,
+            messageId: provenance.messageId,
+            checkpointId: jobId,
+            variableRefs: {},
+            goalRefs: {},
+            source: { kind: 'background-archive', mode: provenance.kind, documentId: provenance.documentId },
+        });
+        if (!result.ok) throw new Error((result.errors || []).join(' ') || 'The Archive transaction was rejected.');
+        transactionId = result.transaction?.id || null;
+    }
+    let consequenceReceipt = null;
+    try {
+        const event = createArchiveSettlementEvent({
+            jobId, timelineId, sceneId, mode, provenance, acceptedProse,
+            operations, archiveFacts, ingestionReceipt, transactionId,
+        });
+        consequenceReceipt = await publishArchiveSettlement(event);
+    } catch (error) {
+        // The base Archive transaction has already committed. Consequence
+        // projection is a downstream concern and must never turn that durable
+        // success (or accepted prose) into a failed/retried Archive job.
+        consequenceReceipt = {
+            protocol: 'remodel/archive-settlement/1',
+            status: 'failed-isolated',
+            error: { name: String(error?.name || 'Error'), message: String(error?.message || error) },
+        };
+        recordDebugEvent('archive-consequences', 'dispatch.failed', {
+            jobId, timelineId, sceneId, error: consequenceReceipt.error,
+        }, { correlationId: jobId, severity: 'warn', summary: 'Archive saved; downstream consequence dispatch failed in isolation' });
+    }
+    return { ok: true, transactionId, archiveFacts, ingestionReceipt, consequenceReceipt };
 }
 
 function resolveSceneLoomRecipe(scene, mode) {
