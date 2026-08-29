@@ -1,5 +1,6 @@
 import { jest } from '@jest/globals';
 import {
+    buildProviderToolDefinitions,
     MechanicsGatewayError,
     NARRATOR_MECHANIC_TOOLS,
     buildNarratorToolAdvertisement,
@@ -141,4 +142,31 @@ test('a rejected engine result surfaces its reason rather than inventing an outc
     const result = resolveMechanicsAttempt(frozenAttempt(), { execute, listTransactions: () => [] });
     expect(result.ok).toBe(false);
     expect(result.receipt).toMatchObject({ status: 'rejected', outcome: null, rejectionReason: 'A Timeline is required.' });
+});
+
+// --- provider tool definitions: the model must be OFFERED a verb to use it ---
+
+test('tool definitions are provider-shaped and cover the bounded vocabulary', () => {
+    const tools = buildProviderToolDefinitions();
+    expect(tools.map((tool) => tool.function.name)).toEqual([...NARRATOR_MECHANIC_TOOLS]);
+    for (const tool of tools) {
+        expect(tool.type).toBe('function');
+        expect(tool.function.description).toBeTruthy();
+        expect(tool.function.parameters.required).toContain('actor');
+        expect(tool.function.parameters.required).toContain('target');
+    }
+});
+
+test('a value-changing verb requires a value; an attempt does not', () => {
+    const byName = Object.fromEntries(buildProviderToolDefinitions().map((tool) => [tool.function.name, tool.function]));
+    expect(byName['variable.adjust'].parameters.required).toContain('value');
+    expect(byName['goal.adjust'].parameters.required).toContain('value');
+    expect(byName['goal.attempt'].parameters.required).not.toContain('value');
+    expect(byName['mechanic.check'].parameters.required).not.toContain('value');
+});
+
+test('only advertised verbs are offered, and nothing outside the vocabulary', () => {
+    expect(buildProviderToolDefinitions(['goal.attempt']).map((tool) => tool.function.name)).toEqual(['goal.attempt']);
+    expect(buildProviderToolDefinitions(['goal.delete', 'sudo'])).toEqual([]);
+    expect(buildProviderToolDefinitions([])).toEqual([]);
 });

@@ -86,6 +86,9 @@ export function createNativeNarratorTransport({
     // existed, which is what keeps an un-opted-in Scene on the legacy path.
     mechanics = null,
     maxContinuations = DEFAULT_MECHANICS_CONTINUATIONS,
+    // Advertised to the provider so the model knows the verbs exist at all.
+    // Empty means the recipe advertised none, and no tool field is sent.
+    tools = [],
 } = {}) {
     // Read per tick, never captured once: switching Pacing mid-turn has to take
     // effect on the prose still being revealed, not only on the next turn.
@@ -114,9 +117,10 @@ export function createNativeNarratorTransport({
                 wake?.();
                 wake = null;
             };
-            const overridePayload = recovery?.requestReasoning === false
-                ? reasoningDisabledPayload(route?.profileId)
-                : {};
+            const overridePayload = {
+                ...(recovery?.requestReasoning === false ? reasoningDisabledPayload(route?.profileId) : {}),
+                ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
+            };
             const request = (async () => {
                 let messages = Array.isArray(prompt?.messages) ? prompt.messages : prompt;
                 // Text already accepted earlier in this SAME logical turn. A

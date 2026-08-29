@@ -279,3 +279,20 @@ test('a refused mechanic still continues the turn rather than failing it', async
     expect(frames.at(-1)).toMatchObject({ type: 'complete' });
     expect(JSON.parse(send.mock.calls[1][0].prompt.at(-1).content)).toMatchObject({ status: 'refused' });
 });
+
+test('advertised tools reach the provider payload', async () => {
+    const send = jest.fn(async () => ({ text: 'x', reasoning: '', streamed: true }));
+    const tools = [{ type: 'function', function: { name: 'goal.attempt' } }];
+    const transport = createNativeNarratorTransport({ pacing: 'instant', send, tools });
+    await collect(transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } }));
+    expect(send.mock.calls[0][0].overridePayload).toMatchObject({ tools, tool_choice: 'auto' });
+});
+
+test('no tools advertised means no tool field is sent at all', async () => {
+    const send = jest.fn(async () => ({ text: 'x', reasoning: '', streamed: true }));
+    const transport = createNativeNarratorTransport({ pacing: 'instant', send });
+    await collect(transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } }));
+    const payload = send.mock.calls[0][0].overridePayload;
+    expect(payload.tools).toBeUndefined();
+    expect(payload.tool_choice).toBeUndefined();
+});

@@ -4,7 +4,7 @@ import { STORY_ARCHIVE_CONTRACT, STORY_ARCHIVE_LOOM_RECIPE_NAME, STORY_ARCHIVE_P
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 24;
+const STORE_VERSION = 26;
 
 export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
@@ -14,6 +14,11 @@ const CURATED_NARRATOR_RECIPE_NAME = 'Narrator · Archive-Grounded';
 export const PROMPT_MODES = ['story', 'roleplay', 'loom'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
 export const PROMPT_ROLES = ['system', 'instruction', 'user', 'assistant'];
+
+/** The seeded Continue wording. A default, not a rule: it lives in the recipe
+ * block's macro argument from the moment the block exists, so editing it is
+ * ordinary recipe work rather than a code change. */
+export const CONTINUE_DIRECTIVE_DEFAULT = 'Continue the scene autonomously from the accepted history. Return only the next new passage of scene prose. Do not repeat, summarize, or explain existing prose, and do not wait for player input.';
 
 export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
     story: Object.freeze([
@@ -56,12 +61,31 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         // exposing it as an alias preserves that real marker boundary.
         template('currentInput', 'Current Input (via history)', 'user', 'chat.input', { nativeIdentifier: 'chatHistory', structured: true }),
         template('generationNudge', 'Generation Nudge', 'instruction', 'generation.nudge', { nativeIdentifier: 'quietPrompt' }),
+        // Used only on a turn with no player action — Continue. The wording
+        // lives in the macro argument so it is yours to edit; code decides only
+        // whether the turn is autonomous, never what to say about it.
+        template('continueDirective', 'Autonomous Continue', 'user', 'narrator.continue', {
+            nativeIdentifier: 'remodel_narrator_continue',
+            content: `{{narrator.continue text="${CONTINUE_DIRECTIVE_DEFAULT}"}}`,
+            description: 'Sent only when a turn begins with no player action (Continue). Empty on any turn the player typed something.',
+            arguments: 'text="…" is the instruction sent when the turn is autonomous.',
+        }),
+        // Declares which mechanics verbs the Narrator is offered this turn. The
+        // list is yours: an empty or removed block advertises nothing, and the
+        // Narrator is then never told the verbs exist.
+        template('mechanicsTools', 'Narrator Mechanics', 'user', 'narrator.mechanics', {
+            nativeIdentifier: 'remodel_narrator_mechanics',
+            content: '{{narrator.mechanics tools="goal.attempt,goal.adjust,variable.adjust,mechanic.check"}}',
+            description: 'Offers the Narrator bounded mechanics it may request mid-turn. Code freezes inputs, rolls, and applies exactly once.',
+            arguments: 'tools="a,b,c" advertises only those verbs. Remove the block to advertise none.',
+        }),
         template('nativeContext', 'Native Roleplay Context', 'system', 'roleplay.native', { textOnly: true, locked: true }),
     ]),
     loom: Object.freeze([
         template('playerAction', 'Current Player Action', 'user', 'player.action', { description: 'The current player-authored speech or attempted action only. It is authoritative over conflicting inference in the Narrator draft.' }),
         template('archiveState', 'Archive, Goals & Open Thread', 'system', 'loom.archive', { description: 'The Loom-readable scene facts, character state, recorded events, provisional open thread, and active Goals.', arguments: 'events=N limits “What happened”; goals=N limits active Goals. Zero hides that section.' }),
         template('mechanicsBoard', 'Archive Operations & Mechanics', 'system', 'loom.mechanics', { description: 'The Archive operations always available to the Loom, plus the current Goals and Variables board when mechanics are enabled.' }),
+        template('lifecycleBoard', 'Goal & Variable Lifecycle Board', 'system', 'loom.lifecycle', { description: 'The exact open Goal and existing Variable addresses this pass may propose against. Placed on its own, it moves independently; left out of the recipe, it rides on the end of Archive Operations & Mechanics.' }),
         template('livingLore', 'Selected Living Lore', 'system', 'loom.lore', { description: 'The bounded, revisioned Timeline lore entries selected by World Sense, plus the typed proposal contract. Proposals do not write directly.' }),
         template('narratorDraft', 'Narrator Draft', 'user', 'narrator.draft', { description: 'The held Narrator prose being reconciled before it becomes visible.' }),
         template('narratorReasoning', 'Narrator Reasoning', 'user', 'narrator.reasoning', { description: 'The Narrator model\'s private reasoning for this draft, when the provider supplies it.' }),
@@ -475,6 +499,8 @@ function defaultBlocksFor(mode, apiType) {
         createPromptBlockFromTemplate('roleplay', 'worldInfoAfter'),
         createPromptBlockFromTemplate('roleplay', 'dialogueExamples'),
         createPromptBlockFromTemplate('roleplay', 'chatHistory'),
+        createPromptBlockFromTemplate('roleplay', 'continueDirective'),
+        createPromptBlockFromTemplate('roleplay', 'mechanicsTools'),
         createPromptBlockFromTemplate('roleplay', 'generationNudge'),
     ]);
 }
@@ -663,7 +689,6 @@ function normalizeStore(store, seed) {
             transport: null,
         });
         if (patchRecipe?.id) {
-            store.active = store.active && typeof store.active === 'object' ? store.active : {};
             store.active.loom ??= {};
             store.active.loom.chat = patchRecipe.id;
         }
@@ -778,6 +803,18 @@ function normalizeStore(store, seed) {
         }
     }
 
+    // v26 moves the autonomous Continue instruction out of code and into the
+    // Roleplay recipe, and offers the Narrator its mechanics verbs there too,
+    // so both are owner-editable like any other block.
+    if (previousVersion < 26) {
+        for (const id of store.recipeIds) {
+            const recipe = store.recipes[id];
+            if (recipe?.mode !== 'roleplay') continue;
+            if (ensureContinueDirectiveSource(recipe.blocks)) changed = true;
+            if (ensureMechanicsToolsSource(recipe.blocks)) changed = true;
+        }
+    }
+
     store.active = store.active && typeof store.active === 'object' ? store.active : {};
     if (store.active.director) { delete store.active.director; changed = true; }
     if (store.active.goalDirector) { delete store.active.goalDirector; changed = true; }
@@ -820,6 +857,25 @@ function ensureLivingLoreSource(blocks) {
     const source = createPromptBlockFromTemplate('loom', 'livingLore');
     const draftIndex = blocks.findIndex((block) => /\{\{\s*narrator\.draft\b/i.test(block.content || ''));
     blocks.splice(draftIndex >= 0 ? draftIndex : blocks.length, 0, source);
+    return true;
+}
+
+/** Give a Roleplay recipe the Continue block, placed after Chat History so the
+ * instruction lands next to the history it is asked to continue from. */
+function ensureContinueDirectiveSource(blocks) {
+    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*narrator\.continue\b/i.test(block.content || ''))) return false;
+    const source = createPromptBlockFromTemplate('roleplay', 'continueDirective');
+    const historyIndex = blocks.findIndex((block) => /\{\{\s*chat\.(history|input)\b/i.test(block.content || ''));
+    blocks.splice(historyIndex >= 0 ? historyIndex + 1 : blocks.length, 0, source);
+    return true;
+}
+
+/** Give a Roleplay recipe the Narrator Mechanics block, after Continue. */
+function ensureMechanicsToolsSource(blocks) {
+    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*narrator\.mechanics\b/i.test(block.content || ''))) return false;
+    const source = createPromptBlockFromTemplate('roleplay', 'mechanicsTools');
+    const continueIndex = blocks.findIndex((block) => /\{\{\s*narrator\.continue\b/i.test(block.content || ''));
+    blocks.splice(continueIndex >= 0 ? continueIndex + 1 : blocks.length, 0, source);
     return true;
 }
 

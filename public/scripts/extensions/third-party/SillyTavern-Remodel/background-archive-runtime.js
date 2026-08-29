@@ -16,6 +16,15 @@ import { buildTimelineLifecyclePromptContext, ensureTimelineLifecycleProjectionR
 import { ensureTimelineLoreProjectionRegistered } from './timeline-lore-projection.js';
 
 const ARCHIVE_CAPABILITY_SET = new Set(ARCHIVE_CAPABILITY_NAMES);
+
+/** Loom source keys to the macro an owner writes in a block. */
+const LOOM_SOURCE_MACROS = Object.freeze({
+    archiveState: 'loom.archive',
+    mechanicsBoard: 'loom.mechanics',
+    lifecycleBoard: 'loom.lifecycle',
+    playerAction: 'player.action',
+    narratorDraft: 'narrator.draft',
+});
 const ARCHIVE_POLICY = `You are the Loom's background Archive clerk and lifecycle observer. The accepted prose is already canonical and visible to the user. Read it as evidence and update the shared Loom Archive. When lifecycle proposal operations are advertised, you may also propose only those bounded Goal or Variable lifecycle changes; code applies them later through a separate authority boundary.
 
 Record distinct new events, changed scene facts, changed character state, hidden truths, and the unresolved open beat. Compare against the Current Archive. Do not duplicate, paraphrase an existing entry, invent facts, rewrite prose, continue the scene, roll or adjudicate unresolved Goals, change existing Variables, or propose lore.`;
@@ -164,23 +173,28 @@ export function prepareBackgroundArchiveJob({
 }
 
 export function compileArchivePrompt({ acceptedProse, currentPlayerAction = '', archiveContext = '', recipe, lifecycleProjection = {}, lifecycleContext = '' } = {}) {
-    const capabilityGuide = [buildArchiveCapabilityGuide(lifecycleProjection), String(lifecycleContext || '').trim()].filter(Boolean).join('\n\n');
+    const capabilities = buildArchiveCapabilityGuide(lifecycleProjection);
+    const lifecycle = String(lifecycleContext || '').trim();
+    // The lifecycle board has its own macro so it can be positioned on its own.
+    // A recipe that does not place it still receives it, appended to the
+    // mechanics board exactly as before, so splitting the macro out cannot
+    // silently drop it from a recipe written before the macro existed.
+    const lifecyclePlaced = recipeUsesSource(recipe, 'lifecycleBoard');
     const sources = buildLoomRecipeSources({
         draft: acceptedProse,
         playerAction: currentPlayerAction,
         narrativeState: archiveContext,
-        mechanicsSkill: capabilityGuide,
+        mechanicsSkill: lifecyclePlaced ? capabilities : [capabilities, lifecycle].filter(Boolean).join('\n\n'),
         livingLore: '',
     });
     sources.narratorDraft = `Accepted canonical prose (evidence only; never reproduce it):\n${String(acceptedProse || '').trim()}`;
     sources.archiveState = `Current Loom Archive:\n${String(archiveContext || '').trim() || '[empty]'}`;
-    sources.mechanicsBoard = capabilityGuide;
+    sources.mechanicsBoard = lifecyclePlaced ? capabilities : [capabilities, lifecycle].filter(Boolean).join('\n\n');
+    sources.lifecycleBoard = lifecycle;
     const messages = [...compilePromptRecipe(recipe, sources).messages];
+    // Policy and contract only. Everything else is the recipe's to place, move,
+    // or leave out: a block the owner removed must stay removed.
     ensureMessage(messages, ARCHIVE_POLICY, 'system', true);
-    ensureMessage(messages, sources.archiveState, 'system');
-    ensureMessage(messages, sources.mechanicsBoard, 'system');
-    ensureMessage(messages, sources.playerAction, 'user');
-    ensureMessage(messages, sources.narratorDraft, 'user');
     ensureMessage(messages, ARCHIVE_CONTRACT, 'system');
     return {
         recipeId: String(recipe?.id || ''),
@@ -325,6 +339,18 @@ function buildArchiveCapabilityGuide(lifecycleProjection = {}) {
         }).join('\n');
     const lifecycleGuide = buildTimelineLifecyclePromptGuide(lifecycleProjection);
     return [`[ARCHIVE OPERATIONS — always enabled]\n${guide}`, lifecycleGuide].filter(Boolean).join('\n\n');
+}
+
+/**
+ * Does this recipe place a given Loom source itself? Read from the recipe's own
+ * enabled blocks rather than from a compiled result, because the question is
+ * what the owner arranged, not what happened to render.
+ */
+function recipeUsesSource(recipe, sourceKey) {
+    const macro = LOOM_SOURCE_MACROS[sourceKey];
+    if (!macro) return false;
+    return (recipe?.blocks || []).some((block) => block?.enabled !== false
+        && String(block?.content || '').includes(`{{${macro}}}`));
 }
 
 function ensureMessage(messages, content, role, prepend = false) {

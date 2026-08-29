@@ -47,6 +47,7 @@ import { snapshotGenerationRoutes } from './generation-route.js';
 import { createNarratorDelivery } from './narrator-delivery.js';
 import { captureNativeNarratorPrompt, createNativeNarratorTransport, prepareNativeNarratorPrompt } from './native-narrator-runtime.js';
 import { createTurnMechanicsForScene } from './pipeline-runtime.js';
+import { buildProviderToolDefinitions } from './mechanics-gateway.js';
 import { selectImplementation } from './pipeline-diagnostics.js';
 import {
     archiveEvidenceFromOperations,
@@ -1706,14 +1707,31 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
         const autonomousContinue = !run.envelope.currentPlayerAction;
         // A native Continue dry-run alone leaves some raw Connection Manager
         // transports with an assistant-ended request and no explicit turn
-        // boundary. Capture the ordinary native prompt, then add one temporary
-        // user-role control message for this request only. It is never written
-        // to context.chat and therefore never becomes a player action.
+        // boundary, so this turn needs an explicit one. The wording is the
+        // recipe's: this only decides whether the turn is autonomous and lets
+        // the Autonomous Continue block say what it says. A recipe that removed
+        // the block sends nothing, which is the owner's call to make.
+        const continueRouted = hooks.setNativePromptContent(
+            'continueDirective',
+            (args = {}) => (autonomousContinue ? String(args.text || '') : ''),
+        );
+        // Which verbs this turn offers is the recipe's call. Captured from the
+        // block's own argument while the prompt assembles; a removed block
+        // leaves this empty and the Narrator is never told the verbs exist.
+        let advertisedTools = [];
+        hooks.setNativePromptContent('mechanicsTools', (args = {}) => {
+            advertisedTools = String(args.tools || '').split(',').map((name) => name.trim()).filter(Boolean);
+            return advertisedTools.length
+                ? `Mechanics you may request this turn: ${advertisedTools.join(', ')}. Code freezes the inputs and rolls; obey the receipt you get back.`
+                : '';
+        });
         const generationType = 'normal';
         const capturedPrompt = testAdapters?.captureNarratorPrompt
             ? await testAdapters.captureNarratorPrompt({ scene, run, performer, context, generationType })
             : await captureNativeNarratorPrompt({ context, performer, generationType });
-        const prompt = prepareNativeNarratorPrompt(capturedPrompt, { autonomousContinue });
+        // Only fall back to the request-only control message when the recipe has
+        // no Continue block to carry it.
+        const prompt = prepareNativeNarratorPrompt(capturedPrompt, { autonomousContinue: autonomousContinue && !continueRouted });
         journal('canonical.prompt.captured', {
             directionId: run.directionId,
             generationType,
@@ -1725,6 +1743,7 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
             summary: `Canonical Narrator prompt captured as ${generationType}`,
         });
         hooks.setNativePromptContent('narratorGrounding', '');
+        hooks.setNativePromptContent('continueDirective', '');
         if (run.canonicalCancelled || activeRun !== run) return false;
 
         advancePassStage(run, 'reveal');
@@ -1740,6 +1759,7 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
                 pacing: run.pacing,
                 getPacing: () => run.pacing,
                 mechanics: createTurnMechanicsForScene({ scene, run }),
+                tools: buildProviderToolDefinitions(advertisedTools),
             });
         const delivery = createNarratorDelivery({
             transport,
@@ -1762,6 +1782,7 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
         return true;
     } finally {
         hooks.setNativePromptContent('narratorGrounding', '');
+        hooks.setNativePromptContent('continueDirective', '');
     }
 }
 

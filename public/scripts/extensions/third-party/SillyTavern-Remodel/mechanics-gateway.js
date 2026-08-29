@@ -36,6 +36,43 @@ const TOOL_CAPABILITY = Object.freeze({
 
 export class MechanicsGatewayError extends Error {}
 
+/** One-line purpose per verb, sent to the provider as the tool description. */
+const TOOL_DESCRIPTIONS = Object.freeze({
+    'goal.attempt': 'Declare one decisive attempt against an advertised Goal whose outcome is genuinely uncertain. Code freezes the odds and rolls; you never choose the result.',
+    'goal.adjust': 'Change an advertised Goal\'s success rate when accepted events warrant it, without rolling.',
+    'variable.adjust': 'Change an advertised numeric Variable by a bounded amount when accepted events warrant it.',
+    'mechanic.check': 'Calculate against an advertised Goal or Variable without closing anything. Use when you need to know, not to act.',
+});
+
+/**
+ * Provider-shaped tool definitions. Until these are sent, the model is never
+ * told the verbs exist and the whole gateway is unreachable — a tool call has
+ * to be offered before it can be made.
+ *
+ * @param {string[]} names the verbs the recipe advertises this turn
+ */
+export function buildProviderToolDefinitions(names = NARRATOR_MECHANIC_TOOLS) {
+    const advertised = names.filter((name) => NARRATOR_MECHANIC_TOOLS.includes(name));
+    return advertised.map((name) => Object.freeze({
+        type: 'function',
+        function: {
+            name,
+            description: TOOL_DESCRIPTIONS[name],
+            parameters: {
+                type: 'object',
+                properties: {
+                    actor: { type: 'string', description: 'Who is acting. Must be an advertised actor.' },
+                    target: { type: 'string', description: 'The exact advertised Goal or Variable name.' },
+                    stakes: { type: 'string', description: 'What is at risk, in one clause.' },
+                    reason: { type: 'string', description: 'Why the accepted fiction warrants this.' },
+                    ...(name === 'goal.attempt' || name === 'mechanic.check' ? {} : { value: { type: 'number', description: 'The proposed change.' } }),
+                },
+                required: name === 'goal.attempt' || name === 'mechanic.check' ? ['actor', 'target'] : ['actor', 'target', 'value'],
+            },
+        },
+    }));
+}
+
 /**
  * What the Narrator may name this turn, and nothing else. An address book the
  * model did not receive is an address it cannot legitimately reference, so the
