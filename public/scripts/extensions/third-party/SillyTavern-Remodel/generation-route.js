@@ -33,12 +33,22 @@ export function resolveGenerationRoute({ scene, role, profiles = [] } = {}) {
         });
     }
 
+    const model = String(profile.model || '').trim();
+    const excludedFields = new Set(Object.values(profile.exclude || {}).map((field) => String(field || '').trim()));
+    if (!model || excludedFields.has('model')) {
+        throw new GenerationRouteError(`${label} Connection Profile "${String(profile.name || profileId)}" does not include a model. Edit that profile and save Model as part of it.`, {
+            role: normalizedRole,
+            profileId,
+            reason: 'model-unbound',
+        });
+    }
+
     return Object.freeze({
         role: normalizedRole,
         profileId,
         profileName: String(profile.name || profileId),
         api: String(profile.api || ''),
-        model: String(profile.model || ''),
+        model,
     });
 }
 
@@ -52,4 +62,3 @@ export function snapshotGenerationRoutes({ scene, roles = [], profiles = [] } = 
     }
     return Object.freeze(routes);
 }
-

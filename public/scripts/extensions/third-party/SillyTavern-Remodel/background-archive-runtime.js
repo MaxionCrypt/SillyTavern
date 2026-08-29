@@ -12,7 +12,7 @@ import { createArchiveWorker } from './archive-worker.js';
 import { recordApiTranscript, recordDebugEvent } from './debug-console.js';
 import { createArchiveSettlementEvent, publishArchiveSettlement } from './archive-consequences.js';
 import { buildTimelineLifecyclePromptGuide } from './timeline-lifecycle-contract.js';
-import { ensureTimelineLifecycleProjectionRegistered, getTimelineLifecycleProjectionSwitches } from './timeline-lifecycle-projection.js';
+import { buildTimelineLifecyclePromptContext, ensureTimelineLifecycleProjectionRegistered, getTimelineLifecycleProjectionSwitches } from './timeline-lifecycle-projection.js';
 import { ensureTimelineLoreProjectionRegistered } from './timeline-lore-projection.js';
 
 const ARCHIVE_CAPABILITY_SET = new Set(ARCHIVE_CAPABILITY_NAMES);
@@ -148,7 +148,8 @@ export function prepareBackgroundArchiveJob({
     const routeSnapshot = resolveGenerationRoute({ scene, role: 'loom', profiles });
     const context = String(archiveContext || buildNarratorArchivistSections(scene.timelineId, scene.id));
     const lifecycleProjection = getTimelineLifecycleProjectionSwitches();
-    const promptSnapshot = compileArchivePrompt({ acceptedProse, currentPlayerAction, archiveContext: context, recipe: resolvedRecipe, lifecycleProjection });
+    const lifecycleContext = buildTimelineLifecyclePromptContext(scene.timelineId, lifecycleProjection);
+    const promptSnapshot = compileArchivePrompt({ acceptedProse, currentPlayerAction, archiveContext: context, recipe: resolvedRecipe, lifecycleProjection, lifecycleContext });
     return {
         mode,
         timelineId: scene.timelineId,
@@ -162,8 +163,8 @@ export function prepareBackgroundArchiveJob({
     };
 }
 
-export function compileArchivePrompt({ acceptedProse, currentPlayerAction = '', archiveContext = '', recipe, lifecycleProjection = {} } = {}) {
-    const capabilityGuide = buildArchiveCapabilityGuide(lifecycleProjection);
+export function compileArchivePrompt({ acceptedProse, currentPlayerAction = '', archiveContext = '', recipe, lifecycleProjection = {}, lifecycleContext = '' } = {}) {
+    const capabilityGuide = [buildArchiveCapabilityGuide(lifecycleProjection), String(lifecycleContext || '').trim()].filter(Boolean).join('\n\n');
     const sources = buildLoomRecipeSources({
         draft: acceptedProse,
         playerAction: currentPlayerAction,

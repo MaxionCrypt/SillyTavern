@@ -184,6 +184,20 @@ describe.each([
     });
 });
 
+test('provider cause details survive in the repairable Archive error', async () => {
+    const caused = new Error('Got response status 400');
+    const wrapped = new Error('API request failed', { cause: caused });
+    const { worker } = harness({ maxAttempts: 1, transport: async () => { throw wrapped; } });
+    worker.enqueue(job());
+
+    const failed = await worker.runNext('timeline-1');
+
+    expect(failed).toMatchObject({
+        status: ARCHIVE_JOB_STATUS.FAILED_REPAIRABLE,
+        error: { message: 'API request failed <- Got response status 400' },
+    });
+});
+
 test('manual retry clears attention, preserves the frozen route, and can recover', async () => {
     let fail = true;
     const { worker, commit } = harness({ maxAttempts: 1, transport: async ({ job }) => {

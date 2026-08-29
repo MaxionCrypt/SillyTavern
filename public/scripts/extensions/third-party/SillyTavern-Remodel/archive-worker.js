@@ -262,8 +262,21 @@ function retryableError(code, message) {
 function serializeError(error) {
     return Object.freeze({
         code: String(error?.code || (isAbortError(error) ? 'aborted' : 'worker-error')),
-        message: String(error?.message || error || 'Archive worker failed.'),
+        message: errorChain(error),
     });
+}
+
+function errorChain(error) {
+    const messages = [];
+    const seen = new Set();
+    let current = error;
+    while (current && messages.length < 4 && !seen.has(current)) {
+        seen.add(current);
+        const message = String(current?.message || current || '').trim();
+        if (message && !messages.includes(message)) messages.push(message);
+        current = current?.cause;
+    }
+    return messages.join(' <- ') || 'Archive worker failed.';
 }
 
 function isAbortError(error) {

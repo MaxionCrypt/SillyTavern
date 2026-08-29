@@ -57,7 +57,7 @@ afterEach(() => {
 });
 
 test('production Story capture queues the shared background Archive without Goals, Variables, or lore', async () => {
-    __setExtensionSettings({ remodel: {}, connectionManager: { profiles: [{ id: 'loom-profile', name: 'Loom' }] } });
+    __setExtensionSettings({ remodel: {}, connectionManager: { profiles: [{ id: 'loom-profile', name: 'Loom', api: 'openrouter', model: 'test/archive-model' }] } });
     const commit = jest.fn(async ({ operations }) => ({ transactionId: 'archive-only', count: operations.length }));
     const runtime = createBackgroundArchiveRuntime({
         repository: createArchiveJobRepository({ persistence: createMemoryArchiveJobPersistence() }),

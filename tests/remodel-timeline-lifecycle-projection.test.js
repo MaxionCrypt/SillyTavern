@@ -6,6 +6,7 @@ import {
     validateTimelineLifecycleProposal,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/timeline-lifecycle-contract.js';
 import {
+    buildTimelineLifecyclePromptContext,
     createTimelineLifecycleProjector,
     getTimelineLifecycleProjectionSwitches,
     setTimelineLifecycleProjectionSwitch,
@@ -122,6 +123,26 @@ test('Goal and Variable projection switches are independently persisted', () => 
     expect(getTimelineLifecycleProjectionSwitches()).toEqual({ goals: true, variables: true });
     expect(setTimelineLifecycleProjectionSwitch('goals', false)).toEqual({ goals: false, variables: true });
     expect(setTimelineLifecycleProjectionSwitch('variables', false)).toEqual({ goals: false, variables: false });
+});
+
+test('the Archive lifecycle prompt exposes exact open Goal addresses and omits terminal Goals', () => {
+    createTimelineGoal(TIMELINE, {
+        title: 'Marisol: covert watch on Piper', description: 'Watch Piper without her noticing.',
+        holderRefs: [{ kind: 'character', id: 'marisol', label: 'Marisol' }], successRate: 30,
+    }, { sceneId: SCENE });
+    const ended = createTimelineGoal(TIMELINE, {
+        title: 'Old completed task', description: 'Already over.',
+        holderRefs: [{ kind: 'character', id: 'wren', label: 'Wren' }], successRate: 95,
+    }, { sceneId: SCENE });
+    createTimelineLifecycleProjector().project('goals', event([
+        request('g1', 'goal.edit', { goalRef: ended.title, status: 'achieved' }),
+    ]));
+
+    const context = buildTimelineLifecyclePromptContext(TIMELINE, { goals: true, variables: false });
+
+    expect(context).toContain('goalRef "Marisol: covert watch on Piper"');
+    expect(context).toContain('holders Marisol');
+    expect(context).not.toContain('Old completed task');
 });
 
 test('a rolled-back lifecycle batch reports failure without touching the base Archive authority', () => {

@@ -39,6 +39,14 @@ test('a deleted profile fails with a repairable role-specific error', () => {
     })).toThrow('Loom Connection Profile "deleted-route" is unavailable');
 });
 
+test('a profile that excludes its model is rejected instead of inheriting mutable global state', () => {
+    expect(() => resolveGenerationRoute({
+        scene: { generationProfileIds: { loom: 'unbound-route' } },
+        role: 'loom',
+        profiles: [{ id: 'unbound-route', name: 'Kimi profile', api: 'openrouter', exclude: { 0: 'model' } }],
+    })).toThrow('Loom Connection Profile "Kimi profile" does not include a model');
+});
+
 test('a turn snapshots independent immutable Narrator and Loom routes', () => {
     const scene = { generationProfileIds: { narrator: 'narrator-route', loom: 'loom-route' } };
     const routes = snapshotGenerationRoutes({ scene, roles: ['narrator', 'loom'], profiles });
@@ -51,4 +59,3 @@ test('a turn snapshots independent immutable Narrator and Loom routes', () => {
     expect(Object.isFrozen(routes)).toBe(true);
     expect(Object.isFrozen(routes.loom)).toBe(true);
 });
-

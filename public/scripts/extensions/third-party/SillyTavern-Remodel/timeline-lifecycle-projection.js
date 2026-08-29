@@ -16,6 +16,8 @@ import {
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'timelineLifecycleProjectionV1';
 const DEFAULT_SWITCHES = Object.freeze({ goals: true, variables: true });
+const LIFECYCLE_PROMPT_MAX_ITEMS = 24;
+const LIFECYCLE_PROMPT_MAX_CHARS = 8_000;
 
 export function createTimelineLifecycleProjector({
     execute = executeMechanicsRequest,
@@ -74,6 +76,33 @@ export function getTimelineLifecycleProjectionSwitches() {
     }
     const stored = context.extensionSettings[SETTINGS_NAMESPACE][SETTINGS_KEY];
     return { goals: stored.goals !== false, variables: stored.variables !== false };
+}
+
+/** Give the Archive observer the exact lifecycle addresses it is allowed to
+ * propose against. Archive prose alone can mention an outcome without proving
+ * that a real Goal object exists; omitting this board made models either guess
+ * a goalRef or skip a warranted closure altogether. */
+export function buildTimelineLifecyclePromptContext(timelineId, switches = getTimelineLifecycleProjectionSwitches()) {
+    const sections = [];
+    if (switches.goals) {
+        const openGoals = getTimelineGoals(String(timelineId || ''))
+            .filter((goal) => !['achieved', 'abandoned', 'impossible'].includes(String(goal?.status || '').toLowerCase()))
+            .slice(0, LIFECYCLE_PROMPT_MAX_ITEMS);
+        sections.push(openGoals.length
+            ? ['GOALS — address goal.edit and goal.relate by the exact goalRef shown:', ...openGoals.map((goal) => {
+                const holders = (goal.holderRefs || []).map((holder) => holder.label || holder.id).filter(Boolean).join(', ');
+                return `- goalRef ${JSON.stringify(String(goal.title || ''))} · status ${String(goal.status || 'active')} · holders ${holders || 'unspecified'}\n  ${String(goal.description || '').trim() || '[no description]'}`;
+            })].join('\n')
+            : 'GOALS — none currently open.');
+    }
+    if (switches.variables) {
+        const existing = listVariableValues({ timelineId: String(timelineId || '') }).slice(0, LIFECYCLE_PROMPT_MAX_ITEMS);
+        sections.push(existing.length
+            ? ['VARIABLES — these names already exist; variable.create must not duplicate them:', ...existing.map((variable) => `- ${JSON.stringify(String(variable.name || ''))}: ${String(variable.description || '').trim() || '[no description]'}`)].join('\n')
+            : 'VARIABLES — none currently exist.');
+    }
+    const text = sections.length ? `[EXISTING TIMELINE LIFECYCLE — exact addresses]\n${sections.join('\n\n')}` : '';
+    return text.length > LIFECYCLE_PROMPT_MAX_CHARS ? `${text.slice(0, LIFECYCLE_PROMPT_MAX_CHARS)}\n[bounded]` : text;
 }
 
 export function setTimelineLifecycleProjectionSwitch(channel, value) {
