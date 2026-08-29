@@ -1,3 +1,5 @@
+import { selectTimelineLifecycleProposals } from './timeline-lifecycle-contract.js';
+
 export const ARCHIVE_INGESTION_PROTOCOL = 'remodel-archive-ingestion/1';
 export const ARCHIVE_STATE_MAX_CHARS = 16_000;
 export const ARCHIVE_ACTION_MAX_CHARS = 4_000;
@@ -98,6 +100,10 @@ function normalizeArchiveIngestionOutput(output, request) {
     if (operations.length !== (Array.isArray(value.operations) ? value.operations.length : 0)) {
         throw new Error('Archive ingestion returned an operation outside the Archive capability boundary.');
     }
+    const lifecycleProposals = selectTimelineLifecycleProposals(value.lifecycleProposals);
+    if (lifecycleProposals.length !== (Array.isArray(value.lifecycleProposals) ? value.lifecycleProposals.length : 0)) {
+        throw new Error('Archive ingestion returned a proposal outside the Timeline lifecycle boundary.');
+    }
     return immutable({
         protocol: ARCHIVE_INGESTION_PROTOCOL,
         jobId: request.jobId,
@@ -105,6 +111,7 @@ function normalizeArchiveIngestionOutput(output, request) {
         timelineId: request.timelineId,
         sceneId: request.sceneId,
         operations,
+        lifecycleProposals,
         archiveFacts: archiveEvidenceFromOperations(operations, { mode: request.mode }),
         rejected: Array.isArray(value.rejected) ? structuredClone(value.rejected) : [],
         receipt: value.receipt && typeof value.receipt === 'object' ? structuredClone(value.receipt) : {},

@@ -26,7 +26,7 @@ ${JSON.stringify({
 })}
 \`\`\``;
 
-test('legacy ingestion returns Archive operations only and cannot own prose or Timeline Web output', async () => {
+test('legacy ingestion separates Archive operations from bounded lifecycle proposals', async () => {
     const ingestion = createArchiveIngestion(legacyArchiveIngestionAdapter);
     const result = await ingestion.ingest({
         mode: 'roleplay',
@@ -45,7 +45,8 @@ test('legacy ingestion returns Archive operations only and cannot own prose or T
             expect.objectContaining({ id: 'a2', capability: 'scene.set' }),
         ],
         archiveFacts: ['The gate opened.', 'North gate'],
-        rejected: [expect.objectContaining({ requestId: 'w1', capability: 'goal.edit', code: 'outside-archive-boundary' })],
+        lifecycleProposals: [expect.objectContaining({ id: 'w1', capability: 'goal.edit' })],
+        rejected: [],
     }));
     expect(result).not.toHaveProperty('prose');
     expect(result).not.toHaveProperty('swaps');

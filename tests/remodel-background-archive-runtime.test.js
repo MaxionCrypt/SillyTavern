@@ -69,14 +69,14 @@ test('each accepted turn freezes its assigned Loom profile before profiles chang
     expect(seen).toEqual(['loom-a', 'loom-b']);
 });
 
-test('the background boundary commits Archive operations and discards goals, lore and prose edits', async () => {
+test('the background boundary separates Archive operations from bounded lifecycle proposals', async () => {
     __setExtensionSettings({ remodel: {} });
     const commit = jest.fn(async () => ({ transactionId: 'tx-1' }));
     const { runtime, runScheduled } = harness({
         commit,
         transport: async () => fence([
             { id: 'e1', capability: 'event.record', arguments: { summary: 'Mara opened the gate.' } },
-            { id: 'g1', capability: 'goal.create', arguments: { name: 'Forbidden' } },
+            { id: 'g1', capability: 'goal.create', arguments: { title: 'Open the gate', description: 'Get the gate open.' }, reason: 'Mara is trying to open it.' },
             { id: 'v1', capability: 'variable.set', arguments: { variableRef: 'x', value: 2 } },
         ]),
     });
@@ -85,6 +85,9 @@ test('the background boundary commits Archive operations and discards goals, lor
     expect(commit).toHaveBeenCalledTimes(1);
     expect(commit.mock.calls[0][0].operations).toEqual([
         expect.objectContaining({ capability: 'event.record' }),
+    ]);
+    expect(commit.mock.calls[0][0].lifecycleProposals).toEqual([
+        expect.objectContaining({ id: 'g1', capability: 'goal.create' }),
     ]);
 });
 

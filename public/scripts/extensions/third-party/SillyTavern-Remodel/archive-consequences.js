@@ -33,6 +33,7 @@ export function createArchiveSettlementEvent(input = {}, now = () => Date.now())
         evidence: {
             acceptedProse: String(input.acceptedProse || ''),
             operations: clone(Array.isArray(input.operations) ? input.operations : []),
+            lifecycleProposals: clone(Array.isArray(input.lifecycleProposals) ? input.lifecycleProposals : []),
             archiveFacts: clone(Array.isArray(input.archiveFacts) ? input.archiveFacts : []),
             ingestionReceipt: clone(input.ingestionReceipt || {}),
         },

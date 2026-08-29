@@ -1,13 +1,15 @@
 import { describeLoomReply, parseLoomReply } from './loom-reconciliation.js';
 import { isArchiveCapability, selectArchiveOperations } from './archive-ingestion.js';
+import { isTimelineLifecycleCapability, selectTimelineLifecycleProposals } from './timeline-lifecycle-contract.js';
 
 /** Existing Loom state-fence parser behind the new Archive-only port. */
 export const legacyArchiveIngestionAdapter = Object.freeze({
     async ingest(request) {
         const parsed = parseLoomReply(request.candidateReply);
         const operations = selectArchiveOperations(parsed.requests);
+        const lifecycleProposals = selectTimelineLifecycleProposals(parsed.requests);
         const rejected = (parsed.requests || [])
-            .filter((candidate) => !isArchiveCapability(candidate?.capability))
+            .filter((candidate) => !isArchiveCapability(candidate?.capability) && !isTimelineLifecycleCapability(candidate?.capability))
             .map((candidate, index) => ({
                 index,
                 requestId: String(candidate?.id || ''),
@@ -17,12 +19,14 @@ export const legacyArchiveIngestionAdapter = Object.freeze({
         const reply = describeLoomReply(request.candidateReply);
         return {
             operations,
+            lifecycleProposals,
             rejected,
             receipt: {
                 hasFence: reply.hasFence,
                 fenceParsed: reply.fenceParsed,
                 requestCount: reply.requestCount,
                 archiveOperationCount: operations.length,
+                lifecycleProposalCount: lifecycleProposals.length,
             },
         };
     },

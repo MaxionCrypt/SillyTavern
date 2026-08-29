@@ -146,6 +146,7 @@ export function createArchiveWorker({
                 provenance: running.provenance,
                 acceptedProse: running.acceptedProse,
                 operations: result.operations,
+                lifecycleProposals: result.lifecycleProposals,
                 archiveFacts: result.archiveFacts,
                 ingestionReceipt: result.receipt,
             });

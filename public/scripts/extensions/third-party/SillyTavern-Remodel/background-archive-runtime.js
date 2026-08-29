@@ -11,17 +11,19 @@ import { createArchiveJobRepository } from './archive-job-store.js';
 import { createArchiveWorker } from './archive-worker.js';
 import { recordApiTranscript, recordDebugEvent } from './debug-console.js';
 import { createArchiveSettlementEvent, publishArchiveSettlement } from './archive-consequences.js';
+import { buildTimelineLifecyclePromptGuide } from './timeline-lifecycle-contract.js';
+import { ensureTimelineLifecycleProjectionRegistered, getTimelineLifecycleProjectionSwitches } from './timeline-lifecycle-projection.js';
 
 const ARCHIVE_CAPABILITY_SET = new Set(ARCHIVE_CAPABILITY_NAMES);
-const ARCHIVE_POLICY = `You are the Loom's background Archive clerk. The accepted prose is already canonical and visible to the user. Read it as evidence and update only the shared Loom Archive.
+const ARCHIVE_POLICY = `You are the Loom's background Archive clerk and lifecycle observer. The accepted prose is already canonical and visible to the user. Read it as evidence and update the shared Loom Archive. When lifecycle proposal operations are advertised, you may also propose only those bounded Goal or Variable lifecycle changes; code applies them later through a separate authority boundary.
 
-Record distinct new events, changed scene facts, changed character state, hidden truths, and the unresolved open beat. Compare against the Current Archive. Do not duplicate, paraphrase an existing entry, invent facts, rewrite prose, continue the scene, judge Goals, change Variables, or propose lore.`;
+Record distinct new events, changed scene facts, changed character state, hidden truths, and the unresolved open beat. Compare against the Current Archive. Do not duplicate, paraphrase an existing entry, invent facts, rewrite prose, continue the scene, roll or adjudicate unresolved Goals, change existing Variables, or propose lore.`;
 const ARCHIVE_CONTRACT = `Output NOTHING except one state fence:
 \`\`\`state
 {"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"the accepted prose establishes it"}]}
 \`\`\`
 
-Use only the advertised Archive operations. An empty requests array is valid when the accepted prose adds nothing new.`;
+Use only the operations advertised in this request. Lifecycle requests are proposals, never Archive facts or prose instructions. An empty requests array is valid when the accepted prose adds nothing new.`;
 
 let productionRuntime = null;
 const listeners = new Set();
@@ -144,7 +146,8 @@ export function prepareBackgroundArchiveJob({
     const resolvedRecipe = recipe || resolveSceneLoomRecipe(scene, mode);
     const routeSnapshot = resolveGenerationRoute({ scene, role: 'loom', profiles });
     const context = String(archiveContext || buildNarratorArchivistSections(scene.timelineId, scene.id));
-    const promptSnapshot = compileArchivePrompt({ acceptedProse, currentPlayerAction, archiveContext: context, recipe: resolvedRecipe });
+    const lifecycleProjection = getTimelineLifecycleProjectionSwitches();
+    const promptSnapshot = compileArchivePrompt({ acceptedProse, currentPlayerAction, archiveContext: context, recipe: resolvedRecipe, lifecycleProjection });
     return {
         mode,
         timelineId: scene.timelineId,
@@ -158,17 +161,18 @@ export function prepareBackgroundArchiveJob({
     };
 }
 
-export function compileArchivePrompt({ acceptedProse, currentPlayerAction = '', archiveContext = '', recipe } = {}) {
+export function compileArchivePrompt({ acceptedProse, currentPlayerAction = '', archiveContext = '', recipe, lifecycleProjection = {} } = {}) {
+    const capabilityGuide = buildArchiveCapabilityGuide(lifecycleProjection);
     const sources = buildLoomRecipeSources({
         draft: acceptedProse,
         playerAction: currentPlayerAction,
         narrativeState: archiveContext,
-        mechanicsSkill: buildArchiveCapabilityGuide(),
+        mechanicsSkill: capabilityGuide,
         livingLore: '',
     });
     sources.narratorDraft = `Accepted canonical prose (evidence only; never reproduce it):\n${String(acceptedProse || '').trim()}`;
     sources.archiveState = `Current Loom Archive:\n${String(archiveContext || '').trim() || '[empty]'}`;
-    sources.mechanicsBoard = buildArchiveCapabilityGuide();
+    sources.mechanicsBoard = capabilityGuide;
     const messages = [...compilePromptRecipe(recipe, sources).messages];
     ensureMessage(messages, ARCHIVE_POLICY, 'system', true);
     ensureMessage(messages, sources.archiveState, 'system');
@@ -241,6 +245,7 @@ export function setBackgroundArchiveRuntimeForTests(runtime = null) {
 
 function getProductionRuntime() {
     if (productionRuntime) return productionRuntime;
+    ensureTimelineLifecycleProjectionRegistered();
     productionRuntime = createBackgroundArchiveRuntime({
         transport: async ({ job, promptSnapshot, routeSnapshot, signal }) => {
             const response = await streamChatPrompt({ prompt: promptSnapshot.messages, profileId: routeSnapshot.profileId, signal });
@@ -262,7 +267,7 @@ function getProductionRuntime() {
     return productionRuntime;
 }
 
-async function commitArchiveOperations({ jobId, timelineId, sceneId, mode, provenance, acceptedProse, operations, archiveFacts, ingestionReceipt }) {
+async function commitArchiveOperations({ jobId, timelineId, sceneId, mode, provenance, acceptedProse, operations, lifecycleProposals, archiveFacts, ingestionReceipt }) {
     let transactionId = null;
     if (operations.length) {
         const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests: operations }, {
@@ -283,7 +288,7 @@ async function commitArchiveOperations({ jobId, timelineId, sceneId, mode, prove
     try {
         const event = createArchiveSettlementEvent({
             jobId, timelineId, sceneId, mode, provenance, acceptedProse,
-            operations, archiveFacts, ingestionReceipt, transactionId,
+            operations, lifecycleProposals, archiveFacts, ingestionReceipt, transactionId,
         });
         consequenceReceipt = await publishArchiveSettlement(event);
     } catch (error) {
@@ -308,14 +313,15 @@ function resolveSceneLoomRecipe(scene, mode) {
     return mode === 'story' ? getStoryArchivePromptStudioRecipe() : getCurrentPromptStudioRecipe('loom', 'chat');
 }
 
-function buildArchiveCapabilityGuide() {
+function buildArchiveCapabilityGuide(lifecycleProjection = {}) {
     const guide = getCapabilityDictionary()
         .filter((capability) => ARCHIVE_CAPABILITY_SET.has(capability.name))
         .map((capability) => {
             const required = (capability.requiredArguments || []).map((argument) => `${argument.key}: ${argument.hint}`).join('; ');
             return `- ${capability.name}: ${capability.description}${required ? `\n  arguments: ${required}` : ''}`;
         }).join('\n');
-    return `[ARCHIVE OPERATIONS — the only capabilities enabled]\n${guide}`;
+    const lifecycleGuide = buildTimelineLifecyclePromptGuide(lifecycleProjection);
+    return [`[ARCHIVE OPERATIONS — always enabled]\n${guide}`, lifecycleGuide].filter(Boolean).join('\n\n');
 }
 
 function ensureMessage(messages, content, role, prepend = false) {
