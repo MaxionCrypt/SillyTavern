@@ -55,6 +55,14 @@ import {
     legacyArchiveIngestionAdapter,
     roleplayArchiveIngestionInput,
 } from './legacy-archive-ingestion-adapter.js';
+import {
+    describeBackgroundArchive,
+    enqueueBackgroundArchive,
+    prepareBackgroundArchiveJob,
+    recoverBackgroundArchive,
+    retryBackgroundArchive,
+    subscribeBackgroundArchive,
+} from './background-archive-runtime.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const AUTONOMOUS_CONTINUE_ACTION = '[Continue the scene from accepted history.]';
@@ -271,6 +279,10 @@ export function initLiveDirection(options = {}) {
     Object.assign(hooks, Object.fromEntries(Object.entries(options).filter(([, value]) => typeof value === 'function')));
     if (initialized) return;
     initialized = true;
+    subscribeBackgroundArchive(() => {
+        notifyState();
+    });
+    recoverBackgroundArchive();
     const context = getContext();
     context.eventSource.on(context.eventTypes.STREAM_TOKEN_RECEIVED, (text) => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
@@ -445,7 +457,14 @@ export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
         // ran on prose alone, which is less accurate. The toolbar surfaces this
         // as a prompt to enable thinking or switch to a reasoning-capable model.
         reasoningWarning: reasoningAbsentByScene.get(String(scene.id)) === true,
+        archive: describeBackgroundArchive(scene.timelineId),
     };
+}
+
+export function retryLiveDirectionArchive(scene = hooks.getActiveScene()) {
+    const archive = describeBackgroundArchive(scene?.timelineId);
+    if (archive.repairAction !== 'retry' || !archive.jobId) return null;
+    return retryBackgroundArchive(archive.jobId);
 }
 
 export function clearLiveDirectionFailure() {
@@ -1712,7 +1731,7 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
             : createNativeNarratorTransport({ pacing: run.pacing });
         const delivery = createNarratorDelivery({
             transport,
-            messageStore: createCanonicalMessageStore({ context, run, performer }),
+            messageStore: createCanonicalMessageStore({ context, run, performer, scene }),
             onEvent: (event) => reflectCanonicalDeliveryEvent(run, event),
         });
         const session = delivery.start({
@@ -1734,7 +1753,7 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
     }
 }
 
-function createCanonicalMessageStore({ context, run, performer }) {
+function createCanonicalMessageStore({ context, run, performer, scene }) {
     let message = null;
     return {
         reserve() {
@@ -1781,6 +1800,7 @@ function createCanonicalMessageStore({ context, run, performer }) {
             context.addOneMessage(message, { type: 'swipe', forceId: messageId, scroll: false });
             advancePassStage(run, 'save');
             await context.saveChat();
+            queueCanonicalArchive({ scene, run, message, messageId, result });
             settlePassProgress(run, result.status === 'complete' ? 'complete' : result.status);
             pendingFailure = null;
             hooks.onRecovered();
@@ -1799,6 +1819,35 @@ function createCanonicalMessageStore({ context, run, performer }) {
             hooks.onSettled();
         },
     };
+}
+
+function queueCanonicalArchive({ scene, run, message, messageId, result }) {
+    try {
+        const interrupted = ['interrupted', 'stopped', 'truncated'].includes(result.status);
+        const prepared = prepareBackgroundArchiveJob({
+            scene,
+            mode: 'roleplay',
+            acceptedProse: result.acceptedText,
+            currentPlayerAction: String(run.envelope?.currentPlayerAction || ''),
+            provenance: {
+                kind: interrupted ? 'interrupted-prefix' : 'current-turn',
+                sourceId: run.directionId,
+                messageId,
+                checkpointId: 'accepted',
+                interrupted,
+            },
+        });
+        const job = enqueueBackgroundArchive(prepared);
+        message.extra ??= {};
+        message.extra.remodelArchiveJobId = job.jobId;
+    } catch (error) {
+        journal('archive.background.enqueue.failed', {
+            directionId: run.directionId,
+            timelineId: run.timelineId,
+            sceneId: run.sceneId,
+            error: String(error?.message || error),
+        }, { correlationId: run.directionId, severity: 'warn', summary: 'Accepted prose was saved, but could not be queued for the Loom Archive' });
+    }
 }
 
 function reflectCanonicalDeliveryEvent(run, event) {

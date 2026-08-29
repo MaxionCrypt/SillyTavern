@@ -1,4 +1,8 @@
-import { afterEach, beforeEach, expect, test } from '@jest/globals';
+import { afterEach, beforeEach, expect, jest, test } from '@jest/globals';
+import { createArchiveJobRepository, createMemoryArchiveJobPersistence } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archive-job-store.js';
+import { createArchiveIngestion } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archive-ingestion.js';
+import { legacyArchiveIngestionAdapter } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/legacy-archive-ingestion-adapter.js';
+import { createBackgroundArchiveRuntime, setBackgroundArchiveRuntimeForTests } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/background-archive-runtime.js';
 import { listEvents, listSceneFacts } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { listArchiveSceneDescriptors } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archive-scene-list.js';
 import { listLivingLoreProposals, queueLivingLoreProposals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-mutations.js';
@@ -8,6 +12,7 @@ import { listVariableValues } from '../public/scripts/extensions/third-party/Sil
 import {
     buildStoryArchivePrompt,
     captureStoryArchiveCatchUp,
+    queueStoryArchiveCapture,
     processStoryArchiveCapture,
     setStoryLoomArchiveTestAdapter,
     supersedeStoryBeatArchive,
@@ -45,7 +50,30 @@ beforeEach(() => {
     __clearDebugEvents();
     __setExtensionSettings({ remodel: {} });
 });
-afterEach(() => setStoryLoomArchiveTestAdapter(null));
+afterEach(() => {
+    setStoryLoomArchiveTestAdapter(null);
+    setBackgroundArchiveRuntimeForTests(null);
+});
+
+test('production Story capture queues the shared background Archive without Goals, Variables, or lore', async () => {
+    __setExtensionSettings({ remodel: {}, connectionManager: { profiles: [{ id: 'loom-profile', name: 'Loom' }] } });
+    const commit = jest.fn(async ({ operations }) => ({ transactionId: 'archive-only', count: operations.length }));
+    const runtime = createBackgroundArchiveRuntime({
+        repository: createArchiveJobRepository({ persistence: createMemoryArchiveJobPersistence() }),
+        transport: async () => fence([
+            { id: 'archive', capability: 'event.record', arguments: { summary: 'Mara locked the door.' } },
+            { id: 'goal', capability: 'goal.create', arguments: { title: 'Must not run' } },
+        ], [{ operation: 'fact.append', value: 'Must not queue' }]),
+        ingestion: createArchiveIngestion(legacyArchiveIngestionAdapter),
+        commit,
+    });
+    setBackgroundArchiveRuntimeForTests(runtime);
+    const { doc, capture } = makeCapture();
+    const applied = await queueStoryArchiveCapture({ scene, docId: doc.id, captureId: capture.id });
+    expect(applied.status).toBe('applied');
+    expect(commit.mock.calls[0][0].operations).toEqual([expect.objectContaining({ capability: 'event.record' })]);
+    expect(applied.loreProposalIds).toEqual([]);
+});
 
 test('Story and Roleplay Scenes appear in the same Timeline Archive list', () => {
     const timeline = { arcIds: ['arc-1'] };

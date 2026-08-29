@@ -131,6 +131,7 @@ import {
     previewLiveDirectionLore,
     previewLoomPrompt,
     describeLiveStepActions,
+    retryLiveDirectionArchive,
     sendWithoutLiveDirection,
     setLiveDirectionDelivery,
     setLiveDirectionEnabled,
@@ -9120,6 +9121,7 @@ function renderRoleplayComposer(root) {
                 <span>${directionUi.active ? 'Directed' : 'Free play'}</span>
             </button>
             ${directionUi.active ? `<small class="remodel-live-state" data-remodel-live-state>${escapeHtml(directionUi.state)}</small>` : ''}
+            ${directionUi.archive?.label ? `<button type="button" class="remodel-live-archive-status is-${escapeAttribute(directionUi.archive.status)}" ${directionUi.archive.repairAction === 'retry' ? 'data-remodel-rp-action="archive-retry"' : 'disabled'} title="${escapeAttribute(directionUi.archive.error?.message || directionUi.archive.label)}"><i class="fa-solid fa-box-archive" aria-hidden="true"></i> ${escapeHtml(directionUi.archive.label)}</button>` : ''}
             ${directionUi.active ? `<small class="remodel-live-progress" data-remodel-live-progress role="status" aria-live="polite"${directionUi.progress ? ` title="${escapeAttribute(formatLiveProgressDiagnostics(directionUi.progress))}"` : ' hidden'}><i class="fa-solid fa-circle-notch" aria-hidden="true"></i><span>${directionUi.progress ? escapeHtml(formatLiveProgress(directionUi.progress)) : ''}</span></small>` : ''}
             ${directionUi.performerLabel ? `<small>${escapeHtml(directionUi.performerLabel)}</small>` : ''}
             <em data-remodel-live-opening${directionUi.openingLabel ? '' : ' hidden'}><i class="fa-regular fa-lightbulb"></i> <span>${escapeHtml(directionUi.openingLabel || '')}</span></em>
@@ -10119,6 +10121,11 @@ function handleRoleplayAction(action) {
         }
         case 'connections': {
             openRoleplayConnectionPicker();
+            break;
+        }
+        case 'archive-retry': {
+            retryLiveDirectionArchive(getActiveScene());
+            renderTimelinePanel();
             break;
         }
         case 'add-cast': {

@@ -45,6 +45,14 @@ import {
     legacyArchiveIngestionAdapter,
     storyArchiveIngestionInput,
 } from './legacy-archive-ingestion-adapter.js';
+import {
+    enqueueBackgroundArchive,
+    getBackgroundArchiveJob,
+    prepareBackgroundArchiveJob,
+    retryBackgroundArchive,
+    supersedeBackgroundArchive,
+    waitForBackgroundArchive,
+} from './background-archive-runtime.js';
 
 export const STORY_ARCHIVE_CAPABILITIES = Object.freeze([
     ...ARCHIVE_CAPABILITY_NAMES,
@@ -100,12 +108,63 @@ export function queueStoryArchiveCapture({ scene, docId, captureId, onStateChang
     const key = String(scene?.id || '');
     if (!key || !docId || !captureId) return Promise.resolve(null);
     const prior = queues.get(key) || Promise.resolve();
-    const task = prior.catch(() => {}).then(() => processStoryArchiveCapture({ scene, docId, captureId, onStateChange }));
+    const task = prior.catch(() => {}).then(() => testAdapter
+        ? processStoryArchiveCapture({ scene, docId, captureId, onStateChange })
+        : processStoryBackgroundArchiveCapture({ scene, docId, captureId, onStateChange }));
     queues.set(key, task);
     task.finally(() => {
         if (queues.get(key) === task) queues.delete(key);
     });
     return task;
+}
+
+async function processStoryBackgroundArchiveCapture({ scene, docId, captureId, onStateChange = null } = {}) {
+    let capture = getStoryArchiveCapture(docId, captureId);
+    if (!scene?.timelineId || !scene?.id || !capture || capture.status === 'applied' || capture.status === 'superseded') return capture;
+    capture = updateCapture(docId, capture.id, {
+        status: 'processing',
+        attempts: Number(capture.attempts || 0) + 1,
+        error: '',
+    }, onStateChange);
+    try {
+        const passage = formatStoryCaptureEvidence(capture);
+        const selectedRecipe = getPromptStudioRecipe(scene.promptRecipeIds?.loom);
+        const recipe = selectedRecipe?.mode === 'loom' && selectedRecipe?.apiType === 'chat'
+            ? selectedRecipe
+            : getStoryArchivePromptStudioRecipe();
+        const prepared = prepareBackgroundArchiveJob({
+            scene,
+            mode: 'story',
+            acceptedProse: passage,
+            recipe,
+            provenance: {
+                kind: 'story-passage',
+                sourceId: capture.generationId || capture.id,
+                documentId: docId,
+                checkpointId: capture.id,
+                supersedesJobIds: (capture.supersedesCaptureIds || []).map((id) => `story-archive:${id}`),
+            },
+        });
+        const job = enqueueBackgroundArchive({ ...prepared, jobId: `story-archive:${capture.id}` });
+        if (job.status === 'failed-repairable') retryBackgroundArchive(job.jobId);
+        await waitForBackgroundArchive(scene.timelineId);
+        const stored = getBackgroundArchiveJob(job.jobId);
+        if (stored?.status !== 'succeeded') {
+            throw new Error(stored?.error?.message || 'The Loom Archive background job did not complete.');
+        }
+        return updateCapture(docId, capture.id, {
+            status: 'applied',
+            transactionId: stored.result?.commitReceipt?.transactionId || null,
+            archiveFacts: stored.result?.archiveFacts || [],
+            error: '',
+            appliedAt: new Date().toISOString(),
+        }, onStateChange);
+    } catch (error) {
+        return updateCapture(docId, capture.id, {
+            status: 'failed',
+            error: String(error?.message || error),
+        }, onStateChange);
+    }
 }
 
 export function resumeStoryArchiveCaptures({ scene, docId, onStateChange = null } = {}) {
@@ -139,6 +198,9 @@ export function captureStoryArchiveCatchUp({ scene, docId, previewToken, onState
         }
         if (change.supersedesCaptureIds.length && partCaptures.length) {
             supersedeStoryArchiveCaptures(docId, change.supersedesCaptureIds, partCaptures[0].id);
+            for (const captureId of change.supersedesCaptureIds) {
+                supersedeBackgroundArchive(`story-archive:${captureId}`, `story-archive:${partCaptures[0].id}`);
+            }
             invalidateStoryCaptureLore(scene.timelineId, change.supersedesCaptureIds, 'story-source-edited');
         }
     }
@@ -170,6 +232,7 @@ export async function waitForStoryArchive(sceneId) {
 export async function supersedeStoryBeatArchive({ scene, docId, beatId, onStateChange = null } = {}) {
     if (!scene?.id || !docId || !beatId) return [];
     const captures = supersedeStoryArchiveCapturesForBeat(docId, beatId);
+    for (const capture of captures) supersedeBackgroundArchive(`story-archive:${capture.id}`);
     invalidateStoryCaptureLore(scene.timelineId, captures.map((capture) => capture.id), 'story-generation-superseded');
     for (const capture of captures) {
         if (!capture.transactionId) continue;
