@@ -57,6 +57,9 @@ const state = {
     previewRecipe: null,
     openSource: null,
     nativeSyncGuard: false,
+    // Where a macro insert should land: the message textarea the owner was last
+    // editing, and the caret offset inside it.
+    lastEditedBlock: null,
     nativeSignature: '',
     roleplayTextPending: false,
     roleplayTextPendingTimer: null,
@@ -628,12 +631,50 @@ function renderPromptBlock(recipe, block, index) {
     `;
 }
 
+/**
+ * Put a macro where the owner was last typing. Refuses rather than guessing
+ * when no message has been touched yet: dropping a macro into an arbitrary
+ * block would be worse than doing nothing.
+ */
+function insertMacroIntoLastEditedBlock(macro) {
+    const text = String(macro || '');
+    const recipe = getPromptRecipe(state.selectedRecipeId);
+    const target = state.lastEditedBlock;
+    const block = recipe?.blocks?.find((item) => item.id === target?.blockId);
+    if (!text || !block) {
+        toastr.info('Click into the message you want it in first, then choose a macro.', 'Nowhere to insert');
+        return;
+    }
+    const content = String(block.content || '');
+    const caret = Math.max(0, Math.min(content.length, Number(target.caret) || 0));
+    block.content = content.slice(0, caret) + text + content.slice(caret);
+    state.lastEditedBlock = { blockId: block.id, caret: caret + text.length };
+    updatePromptRecipe(recipe.id, { blocks: recipe.blocks });
+    onRecipeChanged(recipe);
+    state.requestRender();
+}
+
 function renderMacroReference(recipe) {
     const definitions = getSourceDefinitions(recipe).filter((item) => !item.textOnly || recipe.apiType === 'text');
     if (!definitions.length) return '';
+    // Each macro opens on click to show what it is and which arguments it
+    // takes, and inserts itself into the message you were last editing. The
+    // arguments were always recorded on the template; until now they were only
+    // legible as one dense run-on line.
+    const entries = definitions.map((item) => {
+        // Insert the template's own default form, so a macro that ships with
+        // arguments arrives with them filled in rather than bare.
+        const insert = String(item.content || `{{${item.macro}}}`);
+        return `<details class="remodel-prompt-macro-entry">
+            <summary><code>{{${escapeHtml(item.macro)}}}</code><small>${escapeHtml(item.label)}</small>${item.arguments ? '<em title="Takes named arguments">args</em>' : ''}</summary>
+            ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ''}
+            ${item.arguments ? `<p><strong>Arguments</strong> · ${escapeHtml(item.arguments)}</p>` : '<p>Takes no arguments.</p>'}
+            <button type="button" data-remodel-macro-insert="${escapeAttribute(insert)}">Insert into the message I was editing</button>
+        </details>`;
+    }).join('');
     return `<details class="remodel-prompt-macro-reference">
-        <summary><i class="fa-solid fa-braces" aria-hidden="true"></i> Available macros <small>Named arguments supported</small></summary>
-        <div>${definitions.map((item) => `<span><code>{{${escapeHtml(item.macro)}}}</code><small>${escapeHtml(item.label)}${item.arguments ? ` · ${escapeHtml(item.arguments)}` : ''}</small></span>`).join('')}</div>
+        <summary><i class="fa-solid fa-braces" aria-hidden="true"></i> Available macros <small>Click one for its arguments</small></summary>
+        <div>${entries}</div>
         <p>Arguments use <code>name=value</code>, for example <code>{{world.info.depth messages=3}}</code>. Structural macros such as chat history should remain alone in their message so their original roles and ordering are preserved.</p>
     </details>`;
 }
@@ -770,10 +811,28 @@ function bindPromptStudioEvents() {
     // Tavern's adopted drawer surfaces may stop a bubbled click before it
     // reaches document. Capture here so Studio controls remain native-feeling
     // regardless of which workspace was open immediately before Prompts.
+    for (const type of ['focusin', 'keyup', 'mouseup']) {
+        document.addEventListener(type, (event) => {
+            const field = event.target instanceof Element ? event.target.closest('[data-remodel-prompt-block-content]') : null;
+            const card = field?.closest('[data-remodel-prompt-block]');
+            if (!field || !card) return;
+            state.lastEditedBlock = {
+                blockId: card.dataset.remodelPromptBlock,
+                caret: Number.isInteger(field.selectionStart) ? field.selectionStart : field.value.length,
+            };
+        });
+    }
+
     document.addEventListener('click', async (event) => {
         const target = event.target instanceof Element ? event.target : null;
         const studio = target?.closest('.remodel-prompt-studio');
         if (!studio) return;
+
+        const macroInsert = target.closest('[data-remodel-macro-insert]');
+        if (macroInsert) {
+            insertMacroIntoLastEditedBlock(macroInsert.dataset.remodelMacroInsert);
+            return;
+        }
 
         const filter = target.closest('[data-remodel-prompt-filter]');
         if (filter) {
