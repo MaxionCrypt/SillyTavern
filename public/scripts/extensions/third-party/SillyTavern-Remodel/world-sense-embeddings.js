@@ -2,6 +2,9 @@ import { getRequestHeaders } from '../../../../script.js';
 import { loadTimelineLore } from './world-sense-lore.js';
 import { getWorldSenseIndexState, getWorldSenseProfile, saveWorldSenseBenchmark, updateWorldSenseIndexState } from './world-sense-store.js';
 import { buildTimelineContinuityDocuments } from './world-sense-continuity.js';
+import { createLoreIndexScheduler } from './lore-index-scheduler.js';
+import { getTimelineStore } from './timeline-state.js';
+import { getContext } from '../../../st-context.js';
 
 const indexingByCollection = new Map();
 
@@ -137,4 +140,61 @@ function unavailable(timelineId, error) {
 
 function isRecoverableIndexError(error) {
     return /\b(?:corrupt|invalid index|index.*not found|collection.*not found|unknown collection)\b/i.test(String(error?.message || error));
+}
+
+
+/**
+ * Keep the vector index current without anyone pressing Reindex.
+ *
+ * `ensureWorldSenseIndex` was already incremental — it diffs by content hash
+ * and embeds only what changed — but nothing ever called it except the Debug
+ * console and the workspace button, so everything the Loom wrote stayed
+ * invisible to semantic search. This supplies the missing trigger.
+ */
+const indexScheduler = createLoreIndexScheduler({
+    index: (timelineId) => ensureWorldSenseIndex(timelineId),
+    onError: (error, timelineId) => {
+        console.warn('[Remodel] World Sense index refresh failed', timelineId, error);
+    },
+});
+
+let autoRefreshBound = false;
+
+/** Which Timelines read from this book. A book may back more than one. */
+export function timelinesForLoreBook(book) {
+    const name = String(book || '').trim();
+    if (!name) return [];
+    const store = getTimelineStore();
+    return (store?.timelineIds || [])
+        .map((id) => store.timelines?.[id])
+        .filter((timeline) => String(timeline?.lorebookName || '').trim() === name)
+        .map((timeline) => timeline.id);
+}
+
+/** Ask for a refresh of every Timeline backed by this book. */
+export function requestWorldSenseIndexRefresh(book) {
+    const timelines = timelinesForLoreBook(book);
+    for (const timelineId of timelines) indexScheduler.request(timelineId);
+    return timelines;
+}
+
+/** Idempotent: safe to call from init on every load. */
+export function ensureLoreIndexAutoRefresh() {
+    if (autoRefreshBound) return false;
+    try {
+        const context = getContext();
+        // The same signal the lore cache already invalidates on, so the index
+        // refreshes from the same truth the reader will see.
+        context.eventSource.on(context.eventTypes.WORLDINFO_UPDATED, (book) => {
+            requestWorldSenseIndexRefresh(typeof book === 'string' ? book : '');
+        });
+        autoRefreshBound = true;
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+export function __getLoreIndexScheduler() {
+    return indexScheduler;
 }
