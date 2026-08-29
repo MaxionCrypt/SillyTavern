@@ -164,12 +164,16 @@ function readLoomEnvelope(text) {
         try {
             return { present: true, parsed: true, format: 'state', json: stateMatch[1], value: JSON.parse(stateMatch[1]) };
         } catch {
-            const repaired = repairQuotedRequestObjects(stateMatch[1]);
+            const quotedRepair = repairQuotedRequestObjects(stateMatch[1]);
+            const repaired = repairExtraArrayObjectCloser(quotedRepair);
             if (repaired !== stateMatch[1]) {
                 try {
                     const value = JSON.parse(repaired);
                     if (isLoomEnvelope(value)) {
-                        return { present: true, parsed: true, format: 'state-quoted-object-repaired', json: repaired, value };
+                        const format = repaired !== quotedRepair
+                            ? 'state-extra-closer-repaired'
+                            : 'state-quoted-object-repaired';
+                        return { present: true, parsed: true, format, json: repaired, value };
                     }
                 } catch { /* a bounded repair did not make the whole envelope valid */ }
             }
@@ -213,6 +217,56 @@ function isLoomEnvelope(value) {
  */
 function repairQuotedRequestObjects(json) {
     return String(json || '').replace(/([,\[]\s*)"\s*(\{\s*"id"\s*:)/g, '$1$2');
+}
+
+/**
+ * Some structured-output providers close a request twice before the next
+ * array item: `..."reason":"why"}}, {"id":...`. Remove only a closing brace
+ * that cannot match the current JSON stack, occurs while the parser is inside
+ * an array, and is immediately followed by that array's comma or terminator.
+ *
+ * This is deliberately narrower than a general JSON repair. It never invents
+ * structure, edits strings or values, or guesses where a missing token belongs;
+ * the complete repaired envelope still has to pass JSON.parse and the Loom
+ * envelope shape check.
+ */
+function repairExtraArrayObjectCloser(json) {
+    const source = String(json || '');
+    const stack = [];
+    let output = '';
+    let inString = false;
+    let escaped = false;
+    let changed = false;
+    for (let index = 0; index < source.length; index += 1) {
+        const char = source[index];
+        if (inString) {
+            output += char;
+            if (escaped) escaped = false;
+            else if (char === '\\') escaped = true;
+            else if (char === '"') inString = false;
+            continue;
+        }
+        if (char === '"') {
+            inString = true;
+            output += char;
+            continue;
+        }
+        if (char === '{') stack.push('}');
+        else if (char === '[') stack.push(']');
+        else if (char === '}' || char === ']') {
+            if (stack.at(-1) === char) stack.pop();
+            else {
+                const next = source.slice(index + 1).match(/\S/)?.[0] || '';
+                if (char === '}' && stack.at(-1) === ']' && (next === ',' || next === ']')) {
+                    changed = true;
+                    continue;
+                }
+                return source;
+            }
+        }
+        output += char;
+    }
+    return changed ? output : source;
 }
 
 /** Return only the prose portion of a cumulative Loom response. While the

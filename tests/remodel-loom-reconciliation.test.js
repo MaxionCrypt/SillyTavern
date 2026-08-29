@@ -153,6 +153,16 @@ test('repairs quoted request objects at array boundaries without general JSON gu
     expect(describeLoomReply(unrelatedDamage)).toMatchObject({ hasFence: true, fenceParsed: false });
 });
 
+test('repairs one structurally impossible extra request closer without guessing missing JSON', () => {
+    const malformed = '```state\n{"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"one"},"reason":"accepted"}},{"id":"r2","capability":"beat.set","arguments":{"directive":"next"},"reason":"open"}}],"flow":{"continue":false}}\n```';
+    const described = describeLoomReply(malformed);
+    expect(described).toMatchObject({ hasFence: true, fenceParsed: true, fenceFormat: 'state-extra-closer-repaired', requestCount: 2 });
+    expect(parseLoomReply(malformed).requests.map((request) => request.id)).toEqual(['r1', 'r2']);
+
+    const missingCloser = '```state\n{"requests":[{"id":"r1","arguments":{"summary":"one"}],"flow":{"continue":false}}\n```';
+    expect(describeLoomReply(missingCloser)).toMatchObject({ hasFence: true, fenceParsed: false });
+});
+
 test('a valid fence reports the capabilities it named', () => {
     const fence = JSON.stringify({ requests: [
         { id: 'r1', capability: 'event.record', arguments: { summary: 'x' } },

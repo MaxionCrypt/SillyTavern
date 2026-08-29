@@ -98,6 +98,24 @@ test('exact-once identity survives reload and commits one validated Archive tran
     expect(reloaded.worker.get(queued.jobId).promptSnapshot.contentHash).toMatch(/^[a-f0-9]{8}$/);
 });
 
+test('a bounded extra request closer is repaired locally instead of spending another Archive attempt', async () => {
+    const malformed = '```state\n{"requests":[{"id":"event-1","capability":"event.record","arguments":{"summary":"The gate opened."},"reason":"accepted"}},{"id":"beat-1","capability":"beat.set","arguments":{"directive":"Someone tests the gate."},"reason":"open"}}]}\n```';
+    const transport = jest.fn(async () => malformed);
+    const { worker, commit } = harness({ transport });
+    const queued = worker.enqueue(job());
+
+    const result = await worker.runNext('timeline-1');
+
+    expect(result).toMatchObject({ jobId: queued.jobId, status: ARCHIVE_JOB_STATUS.SUCCEEDED, attempts: 1 });
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(commit).toHaveBeenCalledWith(expect.objectContaining({
+        operations: [
+            expect.objectContaining({ id: 'event-1', capability: 'event.record' }),
+            expect.objectContaining({ id: 'beat-1', capability: 'beat.set' }),
+        ],
+    }));
+});
+
 test('the default repository persists jobs through Remodel extension settings', () => {
     __setExtensionSettings({ remodel: {} });
     const first = createArchiveJobRepository({ now: () => 1000 });
