@@ -54,6 +54,7 @@ test('the lifecycle vocabulary excludes rolls and existing numeric value changes
 test('background Goal edits cannot smuggle odds changes or reopen a closed Goal', () => {
     expect(validateTimelineLifecycleProposal(request('g1', 'goal.edit', { goalRef: 'Hold', successRate: 90 }), 'goals')).toMatchObject({ ok: false, code: 'unsupported-numeric-change' });
     expect(validateTimelineLifecycleProposal(request('g2', 'goal.edit', { goalRef: 'Hold', status: 'active' }), 'goals')).toMatchObject({ ok: false, code: 'unsupported-goal-transition' });
+    expect(validateTimelineLifecycleProposal(request('g3', 'goal.create', { title: 'Hold', description: 'Keep holding.', holderRefs: [], visibility: 'private' }), 'goals')).toMatchObject({ ok: false, code: 'unsupported-goal-visibility' });
 });
 
 test('world Goals can be created, related, and closed through deterministic mechanics receipts', () => {

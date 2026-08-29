@@ -17,6 +17,7 @@ export const TIMELINE_LIFECYCLE_CAPABILITIES = Object.freeze([
 
 const CAPABILITY_SET = new Set(TIMELINE_LIFECYCLE_CAPABILITIES);
 const TERMINAL_GOAL_STATUSES = new Set(['achieved', 'abandoned', 'impossible']);
+const GOAL_VISIBILITIES = new Set(['public', 'secret']);
 const ALLOWED_ARGUMENTS = Object.freeze({
     'goal.create': new Set(['alias', 'title', 'description', 'visibility', 'holderRefs', 'targetRefs']),
     'goal.edit': new Set(['goalRef', 'goalId', 'title', 'description', 'visibility', 'status']),
@@ -51,6 +52,9 @@ export function validateTimelineLifecycleProposal(candidate, channel) {
     if (capability === 'goal.edit' && request.arguments.status !== undefined && !TERMINAL_GOAL_STATUSES.has(request.arguments.status)) {
         return rejected('unsupported-goal-transition', 'The background Loom may close a Goal, but may not reopen it.');
     }
+    if (capability.startsWith('goal.') && request.arguments.visibility !== undefined && !GOAL_VISIBILITIES.has(request.arguments.visibility)) {
+        return rejected('unsupported-goal-visibility', 'Goal visibility must be public or secret.');
+    }
     if (capability === 'goal.edit' && !['title', 'description', 'visibility', 'status'].some((key) => request.arguments[key] !== undefined)) {
         return rejected('empty-annotation', 'A Goal lifecycle edit must close or annotate the Goal.');
     }
@@ -61,8 +65,8 @@ export function buildTimelineLifecyclePromptGuide({ goals = false, variables = f
     const lines = [];
     if (goals) {
         lines.push(
-            '- goal.create: create a new unresolved world or character Goal. arguments: title; description; holderRefs (at least one typed owner, shaped like [{"kind":"character","id":"<cast name>","label":"<cast name>"}]); optional alias, targetRefs in the same typed-owner shape, and visibility. Give same-batch Goals aliases before relating them. Do not set odds.',
-            '- goal.edit: close or annotate an existing Goal. arguments: goalRef plus status (achieved, abandoned, or impossible), title, description, and/or visibility. Never change successRate.',
+            '- goal.create: create a new unresolved world or character Goal. arguments: title; description; holderRefs (at least one typed owner, shaped like [{"kind":"character","id":"<cast name>","label":"<cast name>"}]); optional alias, targetRefs in the same typed-owner shape, and visibility (public or secret only). Give same-batch Goals aliases before relating them. Do not set odds.',
+            '- goal.edit: close or annotate an existing Goal. arguments: goalRef plus status (achieved, abandoned, or impossible), title, description, and/or visibility (public or secret only). Never change successRate.',
             '- goal.relate: relate two existing or same-batch Goals. arguments: fromGoalRef; toGoalRef; type (antagonistic or sympathetic).',
         );
     }
