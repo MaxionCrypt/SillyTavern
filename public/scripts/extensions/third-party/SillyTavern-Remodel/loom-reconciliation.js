@@ -73,9 +73,27 @@ Each swap is {"find":"exact text from the draft","replace":"what it becomes"}. A
 export const LOOM_OUTPUT_CONTRACT_PATCH_PRE_LORE = LOOM_OUTPUT_CONTRACT_PATCH_V21
     .replace('],"loreProposals":[],"flow"', '],"flow"');
 
+/** The contract that shipped between durable-lore cultivation and the World
+ * Sense promotion receipt. It advertises loreProposals but predates
+ * lorePromotionDecisions, so a store seeded in that window hands the Loom
+ * promotion candidates it has no contracted way to answer. Frozen as a literal
+ * on purpose: deriving it from the current contract would silently rot the
+ * moment that contract is edited again. */
+export const LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION = `Output NOTHING except one state fence. Do not restate the prose.
+\`\`\`state
+{"swaps":[],"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"},{"id":"r2","capability":"goal.edit","arguments":{"goalRef":"the exact Goal name","successRate":23},"reason":"how this turn changed its holder's position"},{"id":"r3","capability":"beat.set","arguments":{"directive":"the unresolved thread after this turn"},"reason":"why, one line"}],"loreProposals":[],"flow":{"continue":false}}
+\`\`\`
+
+Every request is its own object. Close one with } and open the next with {, exactly as above. Never repeat "id" inside a single object.
+
+Always include the top-level loreProposals array. Leave it empty when the Durable Lore Check finds no warranted change; otherwise follow the Selected Living Lore proposal shape exactly.
+
+Each swap is {"find":"exact text from the draft","replace":"what it becomes"}. A find that is not present verbatim in the draft is discarded, so copy it exactly.`;
+
 export function isSupersededLoomPatchContract(value) {
     return value === LOOM_OUTPUT_CONTRACT_PATCH_V21
         || value === LOOM_OUTPUT_CONTRACT_PATCH_PRE_LORE
+        || value === LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION
         // The compact v15 contract persisted in stores seeded before the
         // expanded goal examples were introduced.
         || policyFingerprint(value) === '397:3fa9c0d4';

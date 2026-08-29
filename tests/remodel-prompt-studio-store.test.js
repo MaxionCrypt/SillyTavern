@@ -70,7 +70,7 @@ test('v13 stores migrate old hidden grounding into an editable recipe policy and
 
     const store = initializePromptStudioStore();
     const recipe = store.recipes.rp;
-    expect(store.version).toBe(23);
+    expect(store.version).toBe(24);
     expect(recipe.blocks.some((block) => block.content === '{{loom.context}}')).toBe(false);
     expect(recipe.blocks).toEqual(expect.arrayContaining([
         expect.objectContaining({ content: NARRATOR_POLICY_DEFAULT, locked: false }),
@@ -104,7 +104,7 @@ test('v15 seeds the patch Loom recipe, activates it, and leaves the existing one
     });
     const store = initializePromptStudioStore();
 
-    expect(store.version).toBe(23);
+    expect(store.version).toBe(24);
     // The user's recipe is untouched and still selectable.
     expect(store.recipes.mine).toBeTruthy();
     expect(store.recipes.mine.blocks[0].content).toBe('my own carefully edited policy');
@@ -154,7 +154,7 @@ test('v18 migrates the untouched full policy and never an edited one', async () 
     __setExtensionSettings({ remodel: { promptStudioV1: { version: 17, recipeIds: ids, recipes, active: { loom: { chat: 'full' } } } } });
 
     const store = initializePromptStudioStore();
-    expect(store.version).toBe(23);
+    expect(store.version).toBe(24);
     expect(store.recipes.full.blocks[0].content).toBe(LOOM_POLICY_DEFAULT);
     expect(store.recipes.edited.blocks[0].content).toBe('my own policy');
 });
@@ -189,7 +189,7 @@ test('v21 repairs the contradictory untouched Story Archive recipe and exposes L
 
     const store = initializePromptStudioStore();
     const contents = store.recipes['story-archive'].blocks.map((block) => block.content);
-    expect(store.version).toBe(23);
+    expect(store.version).toBe(24);
     expect(contents).toContain(STORY_ARCHIVE_POLICY);
     expect(contents).toContain(STORY_ARCHIVE_CONTRACT);
     expect(contents).toContain('{{loom.lore}}');
@@ -225,7 +225,7 @@ test('v22 gives the untouched Patch Loom a durable lore check and preserves auth
     const store = initializePromptStudioStore();
     const patchContents = store.recipes.patch.blocks.map((block) => block.content);
     const authoredContents = store.recipes.mine.blocks.map((block) => block.content);
-    expect(store.version).toBe(23);
+    expect(store.version).toBe(24);
     expect(patchContents).toContain(LOOM_POLICY_PATCH);
     expect(patchContents).toContain(LOOM_OUTPUT_CONTRACT_PATCH);
     expect(LOOM_POLICY_PATCH).toMatch(/STEP 4 - Durable Lore Check/);
@@ -248,7 +248,7 @@ test('v19 adds the editable selected-lore macro without changing authored Loom t
 
     const store = initializePromptStudioStore();
     const contents = store.recipes.mine.blocks.map((block) => block.content);
-    expect(store.version).toBe(23);
+    expect(store.version).toBe(24);
     expect(contents).toContain('my authored policy');
     expect(contents).toContain('{{loom.lore}}');
     expect(contents.indexOf('{{loom.lore}}')).toBeLessThan(contents.indexOf('{{narrator.draft}}'));
@@ -267,8 +267,49 @@ test('v23 adds the current player action macro without changing authored Loom po
 
     const store = initializePromptStudioStore();
     const contents = store.recipes.mine.blocks.map((block) => block.content);
-    expect(store.version).toBe(23);
+    expect(store.version).toBe(24);
     expect(contents).toContain('my authored policy');
     expect(contents).toContain('{{player.action}}');
     expect(contents.indexOf('{{player.action}}')).toBeLessThan(contents.indexOf('{{narrator.draft}}'));
+});
+
+test('v24 rescues a Patch Loom stranded on the pre-promotion contract', async () => {
+    const { LOOM_OUTPUT_CONTRACT_PATCH, LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION, LOOM_POLICY_PATCH } = await import('../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js');
+    __setExtensionSettings({ remodel: { promptStudioV1: {
+        version: 23,
+        recipeIds: ['patch', 'mine'],
+        recipes: {
+            patch: {
+                id: 'patch', name: 'Loom (fast)', mode: 'loom', apiType: 'chat',
+                blocks: [
+                    { id: 'policy', kind: 'message', role: 'system', content: LOOM_POLICY_PATCH, enabled: true },
+                    { id: 'contract', kind: 'message', role: 'system', content: LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION, enabled: true },
+                ],
+            },
+            mine: {
+                id: 'mine', name: 'My Loom', mode: 'loom', apiType: 'chat',
+                blocks: [
+                    { id: 'contract', kind: 'message', role: 'system', content: 'my private output contract', enabled: true },
+                ],
+            },
+        },
+        active: { loom: { chat: 'patch' } },
+    } } });
+
+    const store = initializePromptStudioStore();
+    const patchContents = store.recipes.patch.blocks.map((block) => block.content);
+
+    expect(store.version).toBe(24);
+    expect(patchContents).toContain(LOOM_OUTPUT_CONTRACT_PATCH);
+    expect(patchContents).not.toContain(LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION);
+    expect(store.recipes.mine.blocks.map((block) => block.content)).toContain('my private output contract');
+});
+
+test('the pre-promotion contract is exactly the one that omits the promotion receipt', async () => {
+    const { LOOM_OUTPUT_CONTRACT_PATCH, LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION } = await import('../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js');
+    expect(LOOM_OUTPUT_CONTRACT_PATCH).toContain('"lorePromotionDecisions":[]');
+    expect(LOOM_OUTPUT_CONTRACT_PATCH).toContain('When promotion candidates are present');
+    expect(LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION).not.toContain('lorePromotionDecisions');
+    expect(LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION).not.toContain('When promotion candidates are present');
+    expect(LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION).toContain('Always include the top-level loreProposals array');
 });

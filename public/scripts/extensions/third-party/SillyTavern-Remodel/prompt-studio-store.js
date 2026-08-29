@@ -4,7 +4,7 @@ import { STORY_ARCHIVE_CONTRACT, STORY_ARCHIVE_LOOM_RECIPE_NAME, STORY_ARCHIVE_P
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 23;
+const STORE_VERSION = 24;
 
 export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
@@ -750,6 +750,31 @@ function normalizeStore(store, seed) {
         for (const id of store.recipeIds) {
             const recipe = store.recipes[id];
             if (recipe?.mode === 'loom' && ensurePlayerActionSource(recipe.blocks)) changed = true;
+        }
+    }
+
+    // v24 restores the promotion receipt to seeded Patch Loom text. Durable
+    // lore cultivation (v22) and the World Sense promotion receipt shipped in
+    // separate commits, so a store seeded between them advertises loreProposals
+    // but never lorePromotionDecisions: the Loom is handed promotion candidates
+    // it has no contracted way to answer and silently judges none of them. The
+    // v22 block cannot repair this, because it only runs for stores below 22.
+    // Owner-authored policy and contracts remain untouched, as they did in v22.
+    if (previousVersion < 24) {
+        for (const id of store.recipeIds) {
+            const recipe = store.recipes[id];
+            if (!recipe || recipe.mode !== 'loom') continue;
+            for (const block of recipe.blocks || []) {
+                if (isSupersededLoomPatchPolicy(block.content)) {
+                    block.content = LOOM_POLICY_PATCH;
+                    changed = true;
+                    continue;
+                }
+                if (isSupersededLoomPatchContract(block.content)) {
+                    block.content = LOOM_OUTPUT_CONTRACT_PATCH;
+                    changed = true;
+                }
+            }
         }
     }
 
