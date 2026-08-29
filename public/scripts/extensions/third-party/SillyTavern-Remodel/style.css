@@ -13258,3 +13258,8 @@ body.st-remodel-active .remodel-archive .remodel-notebook-empty {
     body.st-remodel-active .remodel-archive-continuity { grid-template-columns: 1fr !important; }
     body.st-remodel-active .remodel-archive-continuity-actions { justify-content: flex-start !important; }
 }
+/* Core opens Group Controls while loading a group chat. Scene navigation uses
+   that loader as infrastructure, not as a request to show its editor. */
+body.remodel-programmatic-group-open #rm_group_chats_block {
+  display:none !important;
+}

@@ -144,6 +144,7 @@ import { sanitizeDirectionText } from './live-direction-markers.js';
 import { buildNarratorArchivistSections } from './narrator-prompt.js';
 import { resolveRoleplayMessageIds } from './roleplay-message-list.js';
 import { resolveDirectionChromeMode } from './turn-chrome.js';
+import { isLinkedGroupChatLoaded } from './scene-open-state.js';
 import {
     handleDebugConsoleChange,
     handleDebugConsoleClick,
@@ -1349,7 +1350,7 @@ async function handleStoryRegenerateClick(button) {
 
 function handleStoryUserMessageRendered() {
     refreshStoryMessageDecorations();
-    renderRoleplayScene(); // no-ops unless the current scene is a roleplay scene
+    queueRoleplaySceneRender(); // coalesces CHAT_CHANGED with explicit Scene entry
     closeStoryComposer();
     // A new user Scene Beat means the next AI turn (whether typed, Regenerated,
     // or the first turn of a subsequent Play run) is responding to genuinely
@@ -3338,7 +3339,7 @@ async function handleAction(element) {
             break;
         }
         case 'select-scene':
-            setActiveScene(element.dataset.sceneId);
+            await openScene(element.dataset.sceneId);
             break;
         case 'rename-scene':
             setRenamingSceneId(element.dataset.sceneId);
@@ -5014,7 +5015,7 @@ async function enterSceneViewport(scene = getActiveScene()) {
     await transitionToWindow({ kind: 'native' });
 
     if (scene?.mode === 'roleplay') {
-        renderRoleplayScene();
+        queueRoleplaySceneRender();
     }
 }
 
@@ -5058,24 +5059,41 @@ async function openScene(sceneId) {
         }
 
         setActiveScene(sceneId);
-        // openGroupById selects the group and loads its current chat. If the
-        // scene is bound to a specific, non-current chat within that group,
-        // switch to it afterward (openGroupChat only works once the group is
-        // already selected — which openGroupById has just done). Pass core's
-        // own id types; its guards use strict === / includes().
-        await openGroupById(group.id);
-        if (String(group.chat_id) !== String(chatMatch)) {
-            await context.openGroupChat(group.id, chatMatch);
-        }
-        await waitForChatIdSettled();
-        dismissProgrammaticGroupEditor();
-        writeSceneMetadata(scene);
-        updateScene(sceneId, { status: 'active' });
-        if (scene.mode === 'story') {
-            migrateLoadedLegacyStoryScene(sceneId);
-            await openStoryDocScene(sceneId);
-        } else {
-            await enterSceneViewport(getScene(sceneId));
+        document.body.classList.add('remodel-programmatic-group-open');
+        try {
+            const alreadyLoaded = isLinkedGroupChatLoaded({
+                selectedGroupId: context.groupId,
+                groupId: group.id,
+                currentChatId: group.chat_id,
+                targetChatId: chatMatch,
+            });
+            if (!alreadyLoaded) {
+                // openGroupById selects the group and opens Group Controls as a
+                // side effect. Start it only when the target chat is not already
+                // loaded, and close that incidental surface both immediately
+                // and after the asynchronous group load settles.
+                if (String(context.groupId) !== String(group.id)) {
+                    const opening = openGroupById(group.id);
+                    dismissProgrammaticGroupEditor();
+                    await opening;
+                }
+                if (String(group.chat_id) !== String(chatMatch)) {
+                    await context.openGroupChat(group.id, chatMatch);
+                }
+                await waitForChatIdSettled();
+            }
+            dismissProgrammaticGroupEditor();
+            writeSceneMetadata(scene);
+            updateScene(sceneId, { status: 'active' });
+            if (scene.mode === 'story') {
+                migrateLoadedLegacyStoryScene(sceneId);
+                await openStoryDocScene(sceneId);
+            } else {
+                await enterSceneViewport(getScene(sceneId));
+            }
+        } finally {
+            dismissProgrammaticGroupEditor();
+            document.body.classList.remove('remodel-programmatic-group-open');
         }
         return;
     }
@@ -6196,7 +6214,7 @@ function syncStoryWorkspaceClass(scene) {
 // user to edit the group, so dismiss that page before exposing Roleplay.
 function dismissProgrammaticGroupEditor() {
     const groupPanel = document.getElementById('rm_group_chats_block');
-    if (groupPanel && getComputedStyle(groupPanel).display !== 'none') {
+    if (groupPanel && (document.body.classList.contains('remodel-programmatic-group-open') || getComputedStyle(groupPanel).display !== 'none')) {
         selectRightMenuWithAnimation(null);
     }
 }
@@ -11158,6 +11176,17 @@ function formatRoleplayTime(sendDate) {
     return String(sendDate);
 }
 
+let roleplaySceneRenderQueued = false;
+
+function queueRoleplaySceneRender() {
+    if (roleplaySceneRenderQueued) return;
+    roleplaySceneRenderQueued = true;
+    requestAnimationFrame(() => {
+        roleplaySceneRenderQueued = false;
+        renderRoleplayScene();
+    });
+}
+
 // Top-level roleplay render — the counterpart to renderManuscriptOverlay.
 // Rebuilds the whole bubble stream from chat[]. Gated the same way the
 // manuscript render is: bail unless the CURRENT scene is genuinely a
@@ -11294,7 +11323,11 @@ function ensureRoleplayStatePanel() {
         `;
         getRealSheld()?.appendChild(panel);
     }
-    refreshVariableLore().then(refreshVariableStateSurfaces);
+    const timelineId = String(getTimelineStore().activeTimelineId || '');
+    if (panel.dataset.remodelLoreTimeline !== timelineId) {
+        panel.dataset.remodelLoreTimeline = timelineId;
+        refreshVariableLore().then(refreshVariableStateSurfaces);
+    }
 }
 
 /**

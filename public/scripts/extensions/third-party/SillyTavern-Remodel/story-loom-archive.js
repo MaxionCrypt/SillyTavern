@@ -78,6 +78,16 @@ export function describeStoryArchiveCaptureState(docId) {
     if (captures.some((capture) => capture.status === 'pending')) return { status: 'pending', label: 'Archive queued' };
     const latest = [...captures].reverse().find((capture) => capture.status !== 'superseded');
     if (latest?.status === 'failed') return { status: 'failed', label: 'Archive needs attention', error: latest.error };
+    const doc = getStoryDoc(docId);
+    const archivedRevision = captures
+        .filter((capture) => capture.status === 'applied' && capture.sourceStatus !== 'obsolete')
+        .reduce((highest, capture) => Math.max(highest, Number(capture.bodyRevision) || 0), 0);
+    if (Number(doc?.bodyRevision || 0) > archivedRevision) {
+        return {
+            status: 'catch-up',
+            label: 'Archive catch-up available',
+        };
+    }
     if (latest?.status === 'applied') return { status: 'applied', label: 'Saved Â· Archived' };
     return { status: 'idle', label: 'Saved' };
 }

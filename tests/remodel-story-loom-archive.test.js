@@ -12,6 +12,7 @@ import { listVariableValues } from '../public/scripts/extensions/third-party/Sil
 import {
     buildStoryArchivePrompt,
     captureStoryArchiveCatchUp,
+    describeStoryArchiveCaptureState,
     queueStoryArchiveCapture,
     processStoryArchiveCapture,
     setStoryLoomArchiveTestAdapter,
@@ -73,6 +74,15 @@ test('production Story capture queues the shared background Archive without Goal
     expect(applied.status).toBe('applied');
     expect(commit.mock.calls[0][0].operations).toEqual([expect.objectContaining({ capability: 'event.record' })]);
     expect(applied.loreProposalIds).toEqual([]);
+});
+
+test('manual manuscript changes advertise Archive catch-up instead of looking fully saved', () => {
+    const doc = createStoryDoc({ title: 'Manual archive signal' });
+    updateStoryDoc(doc.id, { body: 'A new off-screen threat entered the story.' });
+    expect(describeStoryArchiveCaptureState(doc.id)).toMatchObject({
+        status: 'catch-up',
+        label: 'Archive catch-up available',
+    });
 });
 
 test('Story and Roleplay Scenes appear in the same Timeline Archive list', () => {
