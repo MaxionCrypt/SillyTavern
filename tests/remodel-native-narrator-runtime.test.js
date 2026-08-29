@@ -135,3 +135,68 @@ test('prompt capture uses native dry-run assembly and restores group ordering', 
     expect(group.generation_mode).toBe(0);
     expect(listeners.size).toBe(0);
 });
+
+test('reveal pacing subdivides a growing snapshot instead of throttling it whole', async () => {
+    const send = jest.fn(async ({ onChunk }) => {
+        onChunk({ text: 'Open.', reasoning: '' });
+        onChunk({ text: 'Open. She crossed the room.', reasoning: '' });
+        return { text: 'Open. She crossed the room.', reasoning: '', streamed: true };
+    });
+    const transport = createNativeNarratorTransport({ pacing: 'fast', send });
+    const frames = await collect(transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } }));
+    const snapshots = frames.filter((frame) => frame.type === 'snapshot').map((frame) => frame.text);
+
+    expect(snapshots[0]).toBe('Open.');
+    expect(snapshots.length).toBeGreaterThan(2);
+    expect(snapshots.at(-1)).toBe('Open. She crossed the room.');
+    for (let i = 1; i < snapshots.length; i += 1) {
+        expect(snapshots[i].startsWith(snapshots[i - 1])).toBe(true);
+    }
+});
+
+test('instant reveals every snapshot whole, adding no intermediate frames', async () => {
+    const send = jest.fn(async ({ onChunk }) => {
+        onChunk({ text: 'Open.', reasoning: '' });
+        onChunk({ text: 'Open. She crossed the room.', reasoning: '' });
+        return { text: 'Open. She crossed the room.', reasoning: '', streamed: true };
+    });
+    const transport = createNativeNarratorTransport({ pacing: 'instant', send });
+    const frames = await collect(transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } }));
+
+    expect(frames.filter((frame) => frame.type === 'snapshot').map((frame) => frame.text))
+        .toEqual(['Open.', 'Open. She crossed the room.']);
+});
+
+test('switching Pacing mid-turn takes effect on prose still being revealed', async () => {
+    let pacing = 'slow';
+    const send = jest.fn(async ({ onChunk }) => {
+        onChunk({ text: 'A.', reasoning: '' });
+        onChunk({ text: 'A. ' + 'x'.repeat(60), reasoning: '' });
+        return { text: 'A. ' + 'x'.repeat(60), reasoning: '', streamed: true };
+    });
+    const transport = createNativeNarratorTransport({ getPacing: () => pacing, send });
+    const frames = [];
+    for await (const frame of transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } })) {
+        frames.push(frame);
+        // Flip to instant as soon as the paced reveal starts; the rest of the
+        // text must arrive at once rather than finishing at the slow rate.
+        if (frames.filter((f) => f.type === 'snapshot').length === 2) pacing = 'instant';
+    }
+    const snapshots = frames.filter((frame) => frame.type === 'snapshot');
+    expect(snapshots.length).toBeLessThan(10);
+    expect(snapshots.at(-1).text).toBe('A. ' + 'x'.repeat(60));
+});
+
+test('the opening snapshot is never delayed by reveal pacing', async () => {
+    const send = jest.fn(async ({ onChunk }) => {
+        onChunk({ text: 'x'.repeat(200), reasoning: '' });
+        return { text: 'x'.repeat(200), reasoning: '', streamed: true };
+    });
+    const transport = createNativeNarratorTransport({ pacing: 'slow', send });
+    const started = Date.now();
+    const iterator = transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } });
+    const first = await iterator.next();
+    expect(first.value.text).toBe('x'.repeat(200));
+    expect(Date.now() - started).toBeLessThan(200);
+    await collect(iterator);
+});

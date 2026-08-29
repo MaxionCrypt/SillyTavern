@@ -6,7 +6,17 @@ import { describeNarratorOutput } from './narrator-output-contract.js';
 import { limitBoundedChatHistory } from './prompt-history-limit.js';
 import { streamChatPrompt } from './story-stream.js';
 
-const PACING_DELAYS = Object.freeze({ slow: 75, natural: 30, fast: 10, instant: 0 });
+/** Canonical reveal speed in characters per second, matching the legacy Live
+ * Direction curve so the four settings feel the way they used to. The previous
+ * implementation throttled each whole provider snapshot by 0-75ms, which almost
+ * never bound: network chunks rarely arrive closer together than that, so every
+ * setting looked identical. */
+const PACING_REVEAL_CPS = Object.freeze({ slow: 28, natural: 45, fast: 75, instant: Infinity });
+const REVEAL_TICK_MS = 50;
+/** A provider can outrun the slowest reveal. Cap how many ticks may be spent
+ * draining what is pending so visible prose can never fall unboundedly behind
+ * the accepted text. */
+const MAX_CATCHUP_TICKS = 40;
 const AUTONOMOUS_CONTINUE_REQUEST = 'Continue the scene autonomously from the accepted history. Return only the next new passage of scene prose. Do not repeat, summarize, or explain existing prose, and do not wait for player input.';
 
 /** Add a request-only turn boundary without writing a fake player chat row. */
@@ -66,8 +76,13 @@ export async function captureNativeNarratorPrompt({ context, performer, generati
 }
 
 /** Provider/profile transport for narrator-delivery.js's cumulative frames. */
-export function createNativeNarratorTransport({ pacing = 'natural', send = streamChatPrompt } = {}) {
-    const delayMs = PACING_DELAYS[pacing] ?? PACING_DELAYS.natural;
+export function createNativeNarratorTransport({ pacing = 'natural', getPacing = null, send = streamChatPrompt } = {}) {
+    // Read per tick, never captured once: switching Pacing mid-turn has to take
+    // effect on the prose still being revealed, not only on the next turn.
+    const readCps = () => {
+        const name = (typeof getPacing === 'function' ? getPacing() : pacing) || pacing;
+        return PACING_REVEAL_CPS[name] ?? PACING_REVEAL_CPS.natural;
+    };
     return Object.freeze({
         async *stream({ prompt, route, recovery, signal } = {}) {
             const queue = [];
@@ -124,13 +139,33 @@ export function createNativeNarratorTransport({ pacing = 'natural', send = strea
                     continue;
                 }
                 const frame = queue.shift();
-                if (delayMs && previousLength && frame.text.length > previousLength) {
-                    // Reveal pacing throttles provider snapshots; it never waits
-                    // for Loom, Archive, saving, or another model.
-                    // eslint-disable-next-line no-await-in-loop
-                    await abortableDelay(delayMs, signal);
+                const text = String(frame.text || '');
+                // The opening characters are never delayed: time to first token
+                // stays gated by the Narrator alone. Non-snapshot frames and
+                // snapshots that do not grow the text pass straight through.
+                if (frame.type !== 'snapshot' || !previousLength || text.length <= previousLength) {
+                    previousLength = Math.max(previousLength, text.length);
+                    yield frame;
+                    continue;
                 }
-                previousLength = frame.text.length;
+                // Reveal the NEW characters at the configured speed rather than
+                // throttling the snapshot as a whole. Frames are cumulative, so
+                // emitting intermediate slices is what the delivery layer
+                // already expects. Reveal pacing never waits for Loom, Archive,
+                // saving, or another model.
+                while (previousLength < text.length) {
+                    const cps = readCps();
+                    if (cps === Infinity) break;
+                    const pending = text.length - previousLength;
+                    const step = Math.max(Math.ceil(cps / (1000 / REVEAL_TICK_MS)), Math.ceil(pending / MAX_CATCHUP_TICKS));
+                    const take = Math.min(step, pending);
+                    // eslint-disable-next-line no-await-in-loop
+                    await abortableDelay(Math.round((take / cps) * 1000), signal);
+                    previousLength += take;
+                    if (previousLength >= text.length) break;
+                    yield { ...frame, text: text.slice(0, previousLength) };
+                }
+                previousLength = text.length;
                 yield frame;
             }
             await request;

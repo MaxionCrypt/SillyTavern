@@ -1728,7 +1728,10 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
         advancePassStage(run, 'reveal');
         const transport = testAdapters?.streamCanonicalNarrator
             ? { stream: (request) => testAdapters.streamCanonicalNarrator({ ...request, scene, run, performer, context }) }
-            : createNativeNarratorTransport({ pacing: run.pacing });
+            // getPacing, not a captured value: setLiveDirectionPacing mutates
+            // activeRun.pacing, and this run IS activeRun, so a mid-turn switch
+            // reaches the reveal already in flight.
+            : createNativeNarratorTransport({ pacing: run.pacing, getPacing: () => run.pacing });
         const delivery = createNarratorDelivery({
             transport,
             messageStore: createCanonicalMessageStore({ context, run, performer, scene }),
