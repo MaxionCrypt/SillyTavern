@@ -38,9 +38,11 @@ const PROTECTED_BY_OPERATION = Object.freeze({
  * deliberately left to the caller (Commit 9).
  */
 export async function queueLivingLoreProposals({
-    timelineId = '', packet = null, proposals = [], acceptedProse = '', archiveFacts = [], promotionFacts = [], explicitInstructions = [], source = {},
+    timelineId = '', packet = null, proposals = [], acceptedProse = '', archiveFacts = [], promotionFacts = [], explicitInstructions = [], source = {}, automationModeOverride = '',
 } = {}) {
-    const automationMode = getWorldSenseProfile().mode || 'suggest';
+    const automationMode = ['off', 'observe', 'suggest', 'auto-safe'].includes(automationModeOverride)
+        ? automationModeOverride
+        : getWorldSenseProfile().mode || 'suggest';
     if (automationMode === 'off' || automationMode === 'observe') {
         return { ok: true, queued: [], rejected: [], observed: automationMode === 'observe' };
     }

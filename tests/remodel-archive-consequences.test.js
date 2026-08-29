@@ -30,6 +30,7 @@ test('settlement events freeze canonical evidence and explicit authority boundar
         type: ARCHIVE_SETTLEMENT_TYPE,
         eventId: 'archive-settlement:archive:turn-1',
         committedAt: 42,
+        projection: { routeSnapshot: {}, recipeId: '' },
         baseArchive: { status: 'applied', transactionId: 'transaction-1' },
         authority: { acceptedProse: 'canonical', baseArchive: 'committed', consequences: 'projection-only' },
         rollback: { subscriberMayRollbackBaseArchive: false },

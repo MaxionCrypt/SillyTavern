@@ -89,6 +89,10 @@ test('the background boundary separates Archive operations from bounded lifecycl
     expect(commit.mock.calls[0][0].lifecycleProposals).toEqual([
         expect.objectContaining({ id: 'g1', capability: 'goal.create' }),
     ]);
+    expect(commit.mock.calls[0][0]).toMatchObject({
+        routeSnapshot: { profileId: 'loom-a' },
+        recipeId: 'recipe-1',
+    });
 });
 
 test('reload recovery resumes an interrupted job exactly once', async () => {

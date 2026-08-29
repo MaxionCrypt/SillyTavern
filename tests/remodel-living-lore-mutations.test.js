@@ -98,6 +98,21 @@ test('Suggest mode queues a field-level diff without writing native lore', async
     expect(saves).toHaveLength(0);
 });
 
+test('a downstream Archive projection can force review-only while guarded automation is still being evaluated', async () => {
+    updateWorldSenseProfile({ mode: 'auto-safe', autoSafeConfidence: 0.9, autoSafeOperations: ['fact.append'] });
+    const result = await queueLivingLoreProposals({
+        timelineId: TIMELINE, packet: packet(), acceptedProse: 'The bell rang twice.',
+        proposals: [proposal('fact.append', 'The bell answers footsteps.', { confidence: 0.99 })],
+        automationModeOverride: 'suggest', source: { stage: 'archive-settlement' },
+    });
+
+    expect(result.queued).toHaveLength(1);
+    expect(result.queued[0].status).toBe('suggested');
+    expect(result.autoSafe.applied).toEqual([]);
+    expect(nativeBook.entries[42].content).not.toContain('The bell answers footsteps.');
+    expect(saves).toHaveLength(0);
+});
+
 test('adopts a native lore entry sidecar when applying its first queued proposal', async () => {
     nativeBook.entries[88] = entry(88, { comment: 'New native entry' });
     const proposed = proposal('current.set', 'Newly active.', {

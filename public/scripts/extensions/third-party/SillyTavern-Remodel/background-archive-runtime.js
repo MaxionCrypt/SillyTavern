@@ -13,6 +13,7 @@ import { recordApiTranscript, recordDebugEvent } from './debug-console.js';
 import { createArchiveSettlementEvent, publishArchiveSettlement } from './archive-consequences.js';
 import { buildTimelineLifecyclePromptGuide } from './timeline-lifecycle-contract.js';
 import { ensureTimelineLifecycleProjectionRegistered, getTimelineLifecycleProjectionSwitches } from './timeline-lifecycle-projection.js';
+import { ensureTimelineLoreProjectionRegistered } from './timeline-lore-projection.js';
 
 const ARCHIVE_CAPABILITY_SET = new Set(ARCHIVE_CAPABILITY_NAMES);
 const ARCHIVE_POLICY = `You are the Loom's background Archive clerk and lifecycle observer. The accepted prose is already canonical and visible to the user. Read it as evidence and update the shared Loom Archive. When lifecycle proposal operations are advertised, you may also propose only those bounded Goal or Variable lifecycle changes; code applies them later through a separate authority boundary.
@@ -246,6 +247,7 @@ export function setBackgroundArchiveRuntimeForTests(runtime = null) {
 function getProductionRuntime() {
     if (productionRuntime) return productionRuntime;
     ensureTimelineLifecycleProjectionRegistered();
+    ensureTimelineLoreProjectionRegistered();
     productionRuntime = createBackgroundArchiveRuntime({
         transport: async ({ job, promptSnapshot, routeSnapshot, signal }) => {
             const response = await streamChatPrompt({ prompt: promptSnapshot.messages, profileId: routeSnapshot.profileId, signal });
@@ -267,7 +269,7 @@ function getProductionRuntime() {
     return productionRuntime;
 }
 
-async function commitArchiveOperations({ jobId, timelineId, sceneId, mode, provenance, acceptedProse, operations, lifecycleProposals, archiveFacts, ingestionReceipt }) {
+async function commitArchiveOperations({ jobId, timelineId, sceneId, mode, provenance, routeSnapshot, recipeId, acceptedProse, operations, lifecycleProposals, archiveFacts, ingestionReceipt }) {
     let transactionId = null;
     if (operations.length) {
         const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests: operations }, {
@@ -287,7 +289,7 @@ async function commitArchiveOperations({ jobId, timelineId, sceneId, mode, prove
     let consequenceReceipt = null;
     try {
         const event = createArchiveSettlementEvent({
-            jobId, timelineId, sceneId, mode, provenance, acceptedProse,
+            jobId, timelineId, sceneId, mode, provenance, routeSnapshot, recipeId, acceptedProse,
             operations, lifecycleProposals, archiveFacts, ingestionReceipt, transactionId,
         });
         consequenceReceipt = await publishArchiveSettlement(event);

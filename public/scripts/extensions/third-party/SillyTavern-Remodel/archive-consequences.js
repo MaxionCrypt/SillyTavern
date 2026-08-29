@@ -30,6 +30,10 @@ export function createArchiveSettlementEvent(input = {}, now = () => Date.now())
         mode,
         committedAt: Number(now()) || Date.now(),
         provenance: clone(input.provenance || {}),
+        projection: {
+            routeSnapshot: clone(input.routeSnapshot || {}),
+            recipeId: String(input.recipeId || ''),
+        },
         evidence: {
             acceptedProse: String(input.acceptedProse || ''),
             operations: clone(Array.isArray(input.operations) ? input.operations : []),
