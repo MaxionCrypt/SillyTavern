@@ -43,7 +43,7 @@ test('a profile that excludes its model is rejected instead of inheriting mutabl
     expect(() => resolveGenerationRoute({
         scene: { generationProfileIds: { loom: 'unbound-route' } },
         role: 'loom',
-        profiles: [{ id: 'unbound-route', name: 'Kimi profile', api: 'openrouter', exclude: { 0: 'model' } }],
+        profiles: [{ id: 'unbound-route', name: 'Kimi profile', api: 'openrouter', exclude: ['model'] }],
     })).toThrow('Loom Connection Profile "Kimi profile" does not include a model');
 });
 
