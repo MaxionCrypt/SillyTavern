@@ -2,6 +2,7 @@ import { extractReasoningFromData } from '../../../reasoning.js';
 import { getContext } from '../../../st-context.js';
 import { getMaxResponseTokens } from '../../../../script.js';
 import { ConnectionManagerRequestService } from '../../shared.js';
+import { collectMechanicsToolCalls, readMechanicsFinishReason } from './mechanics-transport.js';
 
 // Streaming transport for Remodel's own hidden Chat Completion calls — Story
 // prose and the Loom's notebook both go out through here.
@@ -45,13 +46,13 @@ export function canStreamStory() {
  * this function's business — it carries messages out and text back.
  *
  * @param {object[]} prompt   compiled chat-style messages
- * @param {(update: { text: string, reasoning: string }) => void} onChunk
+ * @param {(update: { text: string, reasoning: string, toolCalls?: object[], finishReason?: string }) => void} onChunk
  *        called with the CUMULATIVE text and reasoning so far — core's
  *        generator accumulates rather than emitting deltas, and passing that
  *        through unchanged keeps the caller from having to reassemble it
  * @param {AbortSignal} [signal]
  * @param {string} [profileId] optional Connection Manager route
- * @returns {Promise<{ text: string, reasoning: string, streamed: boolean }>}
+ * @returns {Promise<{ text: string, reasoning: string, streamed: boolean, toolCalls?: object[], finishReason?: string }>}
  *          `streamed: false` means the provider answered in one piece despite
  *          the request — the caller should treat the text as a final answer.
  */
@@ -70,20 +71,28 @@ export async function streamChatPrompt({ prompt, onChunk, signal, profileId, ove
     // A provider that ignores `stream` (or a source core refuses to stream, such
     // as o1) returns the plain response object instead of a generator.
     if (typeof response !== 'function') {
-        return { text: readWholeResponse(response), reasoning: readWholeReasoning(response), streamed: false };
+        return {
+            text: readWholeResponse(response), reasoning: readWholeReasoning(response), streamed: false,
+            toolCalls: collectMechanicsToolCalls(response), finishReason: readMechanicsFinishReason(response),
+        };
     }
 
     let text = '';
     let reasoning = '';
+    let toolCalls = [];
+    let finishReason = '';
     for await (const chunk of response()) {
         if (signal?.aborted) {
             break;
         }
         text = String(chunk?.text ?? text);
         reasoning = String(chunk?.state?.reasoning ?? reasoning);
-        onChunk?.({ text, reasoning });
+        const detectedCalls = collectMechanicsToolCalls(chunk);
+        if (detectedCalls.length) toolCalls = detectedCalls;
+        finishReason = readMechanicsFinishReason(chunk) || finishReason;
+        onChunk?.({ text, reasoning, toolCalls, finishReason });
     }
-    return { text: text.trim(), reasoning: reasoning.trim(), streamed: true };
+    return { text: text.trim(), reasoning: reasoning.trim(), streamed: true, toolCalls, finishReason };
 }
 
 /**
