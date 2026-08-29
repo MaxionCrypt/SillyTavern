@@ -70,7 +70,7 @@ Every request is its own object. Close one with } and open the next with {, exac
 
 Each swap is {"find":"exact text from the draft","replace":"what it becomes"}. A find that is not present verbatim in the draft is discarded, so copy it exactly.`;
 
-const LOOM_OUTPUT_CONTRACT_PATCH_PRE_LORE = LOOM_OUTPUT_CONTRACT_PATCH_V21
+export const LOOM_OUTPUT_CONTRACT_PATCH_PRE_LORE = LOOM_OUTPUT_CONTRACT_PATCH_V21
     .replace('],"loreProposals":[],"flow"', '],"flow"');
 
 export function isSupersededLoomPatchContract(value) {

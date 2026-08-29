@@ -197,11 +197,9 @@ test('v21 repairs the contradictory untouched Story Archive recipe and exposes L
 });
 
 test('v22 gives the untouched Patch Loom a durable lore check and preserves authored text', async () => {
-    const { LOOM_OUTPUT_CONTRACT_PATCH, LOOM_POLICY_PATCH } = await import('../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js');
+    const { LOOM_OUTPUT_CONTRACT_PATCH, LOOM_OUTPUT_CONTRACT_PATCH_PRE_LORE, LOOM_POLICY_PATCH } = await import('../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js');
     const priorPolicy = LOOM_POLICY_PATCH.replace(/\nSTEP 4 - Durable Lore Check\.[\s\S]*$/, '');
-    const priorContract = LOOM_OUTPUT_CONTRACT_PATCH
-        .replace('\n\nAlways include the top-level loreProposals array. Leave it empty when the Durable Lore Check finds no warranted change; otherwise follow the Selected Living Lore proposal shape exactly.', '')
-        .replace('],"loreProposals":[],"flow"', '],"flow"');
+    const priorContract = LOOM_OUTPUT_CONTRACT_PATCH_PRE_LORE;
     __setExtensionSettings({ remodel: { promptStudioV1: {
         version: 21,
         recipeIds: ['patch', 'mine'],
