@@ -281,7 +281,7 @@ function hashString(value) {
  */
 export function scoreLivingLoreCandidatesByTraversal({
     packet, entries = [], semanticMatches = [], metadata = [], goals = [], variables = [], pins = [], continuity = [],
-    gate, depthPenalty, maxDepth,
+    gate, depthPenalty, maxDepth, semanticAvailable = true,
 } = {}) {
     const metadataByKey = new Map(metadata.map((item) => [entryKey(item), item]));
     const continuityKeys = new Set((continuity || []).map(entryKey).filter(Boolean));
@@ -340,9 +340,19 @@ export function scoreLivingLoreCandidatesByTraversal({
         graph,
         similarity: scoreByGraphId,
         known: new Set(byGraphId.keys()),
-        ...(Number.isFinite(Number(gate)) ? { gate: Number(gate) } : {}),
-        ...(Number.isFinite(Number(depthPenalty)) ? { depthPenalty: Number(depthPenalty) } : {}),
-        ...(Number.isFinite(Number(maxDepth)) ? { maxDepth: Number(maxDepth) } : {}),
+        // With no working vector there is nothing to gate WITH, and scoring
+        // every proposal zero would refuse them all — turning a slow local
+        // model into an empty packet rather than a slightly worse one. A
+        // mention is still real evidence, so fall back to trusting the first
+        // ring of them and stop there: without a discriminator, wandering
+        // further would be guessing.
+        ...(semanticAvailable
+            ? {
+                ...(Number.isFinite(Number(gate)) ? { gate: Number(gate) } : {}),
+                ...(Number.isFinite(Number(depthPenalty)) ? { depthPenalty: Number(depthPenalty) } : {}),
+                ...(Number.isFinite(Number(maxDepth)) ? { maxDepth: Number(maxDepth) } : {}),
+            }
+            : { gate: 0, depthPenalty: 0, maxDepth: 1 }),
         maxEntries: Infinity,
         maxTokens: Infinity,
         tokensFor: (id) => estimateEntryTokens(byGraphId.get(id) || {}),

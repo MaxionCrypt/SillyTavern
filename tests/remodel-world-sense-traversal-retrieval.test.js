@@ -114,3 +114,27 @@ test('an empty book produces nothing rather than throwing', () => {
     const result = scoreLivingLoreCandidatesByTraversal({ packet: PACKET, entries: [], semanticMatches: [] });
     expect(result).toEqual({ candidates: [], rejected: [], receipt: null });
 });
+
+test('a degraded semantic pass falls back to mentions instead of refusing everything', () => {
+    // Same book, no semantic matches at all — as when the local model times out.
+    const degraded = scoreLivingLoreCandidatesByTraversal({
+        packet: PACKET, entries: ENTRIES, semanticMatches: [], semanticAvailable: false,
+    });
+    // The Warden is mentioned by Piper, so it still comes through.
+    expect(keys(degraded)).toContain('Book.2');
+
+    // With the vector available and nothing scoring, the same input refuses it.
+    const gated = scoreLivingLoreCandidatesByTraversal({
+        packet: PACKET, entries: ENTRIES, semanticMatches: [], semanticAvailable: true,
+    });
+    expect(keys(gated)).not.toContain('Book.2');
+});
+
+test('the degraded fallback takes one ring only, never wandering deeper', () => {
+    const degraded = scoreLivingLoreCandidatesByTraversal({
+        packet: PACKET, entries: ENTRIES, semanticMatches: [], semanticAvailable: false,
+    });
+    // Charter is two mentions away; without a discriminator we do not guess.
+    expect(keys(degraded)).not.toContain('Book.3');
+    expect(degraded.candidates.every((candidate) => candidate.reasons.some((r) => r.channel === 'scene' || r.channel === 'mention'))).toBe(true);
+});

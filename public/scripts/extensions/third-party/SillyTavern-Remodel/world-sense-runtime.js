@@ -26,6 +26,9 @@ const prefetches = new Map();
 const prefetchTimers = new Map();
 const turnOverrides = new Map();
 const PREFETCH_DELAY_MS = 350;
+/** Ceiling for one semantic query. Matches the transport cap, so lore is
+ * never crowded out of the results by continuity documents. */
+const WORLD_SENSE_QUERY_TOP_K = 500;
 const PREFETCH_TTL_MS = 120000;
 
 export function setWorldSenseTurnOverride(sceneId, ref, disposition = '') {
@@ -192,10 +195,14 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
                 // low-scoring entry, which is indistinguishable from "never
                 // scored" — so a refusal receipt could not say which happened.
                 queryWorldSense(scene.timelineId, prepared.packet.text, {
-                    // Sized against the whole index, not the lore count: the
-                    // collection also holds continuity documents, and asking
-                    // for too few lets them crowd every lore entry out.
-                    topK: Math.min(500, Math.max(50, Object.keys(getWorldSenseIndexState(scene.timelineId)?.hashes || {}).length)),
+                    // A flat ceiling, deliberately not derived from index state.
+                    // The collection holds continuity documents alongside lore,
+                    // so asking for too few lets continuity crowd every lore
+                    // entry out — and index state is not always hydrated when
+                    // the first retrieval of a session runs, which silently
+                    // produced exactly that starved query. Over-asking a local
+                    // vector search costs nothing; under-asking corrupts the gate.
+                    topK: WORLD_SENSE_QUERY_TOP_K,
                     threshold: 0,
                 }),
                 timeoutMs,
@@ -223,6 +230,10 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         pins: prepared.pins,
         continuity: getWorldSenseContinuity(scene.id),
         gate: profile.semanticThreshold,
+        // A degraded semantic pass means every proposal would score zero and be
+        // refused. Say so, and let the scorer fall back to mentions instead of
+        // silently emptying the packet.
+        semanticAvailable: !semantic.degraded,
     });
     const loreCandidates = traversal.candidates;
     const continuitySource = buildTimelineContinuityDocuments(scene.timelineId);
