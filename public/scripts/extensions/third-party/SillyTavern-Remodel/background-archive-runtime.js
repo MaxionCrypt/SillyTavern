@@ -13,7 +13,6 @@ import { recordApiTranscript, recordDebugEvent } from './debug-console.js';
 import { createArchiveSettlementEvent, publishArchiveSettlement } from './archive-consequences.js';
 import { buildTimelineLifecyclePromptGuide } from './timeline-lifecycle-contract.js';
 import { buildTimelineLifecyclePromptContext, ensureTimelineLifecycleProjectionRegistered, getTimelineLifecycleProjectionSwitches } from './timeline-lifecycle-projection.js';
-import { ensureTimelineLoreProjectionRegistered } from './timeline-lore-projection.js';
 
 const ARCHIVE_CAPABILITY_SET = new Set(ARCHIVE_CAPABILITY_NAMES);
 
@@ -262,7 +261,6 @@ export function setBackgroundArchiveRuntimeForTests(runtime = null) {
 function getProductionRuntime() {
     if (productionRuntime) return productionRuntime;
     ensureTimelineLifecycleProjectionRegistered();
-    ensureTimelineLoreProjectionRegistered();
     productionRuntime = createBackgroundArchiveRuntime({
         transport: async ({ job, promptSnapshot, routeSnapshot, signal }) => {
             const response = await streamChatPrompt({ prompt: promptSnapshot.messages, profileId: routeSnapshot.profileId, signal });
