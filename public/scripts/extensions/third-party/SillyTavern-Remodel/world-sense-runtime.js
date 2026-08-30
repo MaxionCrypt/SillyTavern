@@ -218,6 +218,7 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         goals: prepared.goals,
         variables,
         pins: prepared.pins,
+        continuity: getWorldSenseContinuity(scene.id),
         gate: profile.semanticThreshold,
     });
     const loreCandidates = traversal.candidates;

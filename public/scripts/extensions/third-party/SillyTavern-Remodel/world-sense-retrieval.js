@@ -280,10 +280,11 @@ function hashString(value) {
  * it; traversal runs unbounded and hands over everything it would allow.
  */
 export function scoreLivingLoreCandidatesByTraversal({
-    packet, entries = [], semanticMatches = [], metadata = [], goals = [], variables = [], pins = [],
+    packet, entries = [], semanticMatches = [], metadata = [], goals = [], variables = [], pins = [], continuity = [],
     gate, depthPenalty, maxDepth,
 } = {}) {
     const metadataByKey = new Map(metadata.map((item) => [entryKey(item), item]));
+    const continuityKeys = new Set((continuity || []).map(entryKey).filter(Boolean));
     const live = entries.filter((entry) => {
         const sidecar = metadataByKey.get(entryKey(entry));
         return entryKey(entry) && !entry.native?.disable && !sidecar?.worldSense?.excluded;
@@ -375,6 +376,10 @@ export function scoreLivingLoreCandidatesByTraversal({
         if (Number.isFinite(item.similarity) && item.similarity > 0) {
             add(candidate, Math.round(item.similarity * 20), 'semantic', { score: item.similarity });
         }
+        // A small nudge for entries this scene has already been leaning on.
+        // Recency orders entries at the same distance; it never admits one, so
+        // it stays a tie-breaker rather than a fifth way in.
+        if (continuityKeys.has(candidate.key)) add(candidate, 14, 'continuity');
         return candidate;
     });
 
