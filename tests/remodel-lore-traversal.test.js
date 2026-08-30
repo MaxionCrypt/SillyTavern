@@ -29,7 +29,7 @@ test('a mention proposes and a good score admits it', () => {
     const result = gateWith({ piper: 1, warden: 0.9, gate: 0.9 });
     expect(idsAt(result, 1)).toEqual(['gate', 'warden']);
     expect(result.admitted.find((item) => item.id === 'warden').via)
-        .toEqual({ from: 'piper', key: 'Warden', relation: 'names' });
+        .toEqual({ from: 'piper', key: 'Warden', relation: 'names', through: null });
 });
 
 test('a poor score no longer refuses a connected entry', () => {

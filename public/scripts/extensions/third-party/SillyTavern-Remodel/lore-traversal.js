@@ -121,7 +121,7 @@ export function gateLoreTraversal({
         for (const source of frontier) {
             for (const link of neighbours.get(source) || []) {
                 if (seen.has(link.to)) continue;
-                proposals.push({ id: link.to, via: { from: source, key: link.key, relation: link.relation } });
+                proposals.push({ id: link.to, via: { from: source, key: link.key, relation: link.relation, through: link.through || null } });
             }
         }
 

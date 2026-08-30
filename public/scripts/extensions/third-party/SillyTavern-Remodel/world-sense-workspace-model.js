@@ -61,7 +61,10 @@ export function nameReasonSources(reasons = [], entriesByKey = new Map()) {
         if (reason?.channel !== 'mention' || !reason.from) return reason;
         const fromKey = String(reason.from).replace('::', '.');
         const fromName = entriesByKey.get(fromKey)?.name || '';
-        return fromName ? { ...reason, fromName } : reason;
+        const throughKey = reason.through ? String(reason.through).replace('::', '.') : '';
+        const throughName = throughKey ? entriesByKey.get(throughKey)?.name || '' : '';
+        if (!fromName && !throughName) return reason;
+        return { ...reason, ...(fromName ? { fromName } : {}), ...(throughName ? { throughName } : {}) };
     });
 }
 
@@ -83,7 +86,15 @@ export function describeWorldSenseReasons(reasons = []) {
         // which entry vouched for it, is the whole reason it is here.
         if (reason.channel === 'mention') {
             const via = reason.fromName || String(reason.from || '').split('::').pop();
-            return `mention · depth ${Number(reason.depth) || 1}${via ? ` · via ${via}` : ''}${reason.key ? ` ("${reason.key}")` : ''}`;
+            const depth = `depth ${Number(reason.depth) || 1}`;
+            // A co-mention is caused by whichever entry named both, so quoting
+            // the sibling's own key there says nothing. Name the mediator.
+            if (reason.relation === 'co-mentioned') {
+                const through = reason.throughName || String(reason.through || '').split('::').pop();
+                return `co-mentioned · ${depth}${via ? ` · via ${via}` : ''}${through ? ` · by ${through}` : ''}`;
+            }
+            const label = reason.relation === 'named-by' ? 'named by' : 'mention';
+            return `${label} · ${depth}${via ? ` · via ${via}` : ''}${reason.key ? ` ("${reason.key}")` : ''}`;
         }
         if (reason.channel === 'general') {
             const band = describeLoreTier(reason.tier);

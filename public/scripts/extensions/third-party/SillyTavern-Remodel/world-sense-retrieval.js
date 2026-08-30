@@ -384,6 +384,7 @@ export function scoreLivingLoreCandidatesByTraversal({
             add(candidate, Math.max(100, 1000 - item.depth * 100), 'mention', {
                 depth: item.depth, from: item.via?.from || null, key: item.via?.key || null,
                 relation: item.via?.relation || 'names',
+                through: item.via?.through || null,
             });
         }
         // The hierarchy orders the walk: among entries reached at the same

@@ -210,6 +210,10 @@ function compactCandidate(candidate) {
         reasons: Array.isArray(candidate.reasons) ? candidate.reasons.slice(0, 8).map((reason) => isObject(reason) ? {
             channel: reason.channel, points: reason.points, similarity: reason.similarity, rank: reason.rank,
             depth: reason.depth, from: reason.from, key: reason.key,
+            // Relation and mediator: a co-mention is explained by the entry that
+            // named both, and dropping it leaves the receipt quoting a key that
+            // explains nothing.
+            relation: reason.relation, through: reason.through,
         } : reason) : undefined,
     };
 }
