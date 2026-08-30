@@ -37,12 +37,11 @@ test('a mention is followed and a good score admits it', () => {
     expect(channelsFor(result, 'Book.2')).toContain('mention');
 });
 
-test('a mention with a poor score is refused, and says so', () => {
+test('a poor score does not withhold something the world connected', () => {
     const result = scoreLivingLoreCandidatesByTraversal({
         packet: PACKET, entries: ENTRIES, semanticMatches: semantic({ 2: 0.01 }),
     });
-    expect(keys(result)).not.toContain('Book.2');
-    expect(result.rejected.find((item) => item.key === 'Book.2').decision).toBe('below-gate');
+    expect(keys(result)).toContain('Book.2');
 });
 
 test('similarity alone never admits an entry nothing mentions', () => {
@@ -115,19 +114,13 @@ test('an empty book produces nothing rather than throwing', () => {
     expect(result).toEqual({ candidates: [], rejected: [], receipt: null });
 });
 
-test('a degraded semantic pass falls back to mentions instead of refusing everything', () => {
-    // Same book, no semantic matches at all — as when the local model times out.
+test('a degraded semantic pass still delivers the connected lore', () => {
+    // As when the local model times out: no scores at all.
     const degraded = scoreLivingLoreCandidatesByTraversal({
         packet: PACKET, entries: ENTRIES, semanticMatches: [], semanticAvailable: false,
     });
-    // The Warden is mentioned by Piper, so it still comes through.
+    // The Warden is mentioned by Piper, so it comes through regardless.
     expect(keys(degraded)).toContain('Book.2');
-
-    // With the vector available and nothing scoring, the same input refuses it.
-    const gated = scoreLivingLoreCandidatesByTraversal({
-        packet: PACKET, entries: ENTRIES, semanticMatches: [], semanticAvailable: true,
-    });
-    expect(keys(gated)).not.toContain('Book.2');
 });
 
 test('the degraded fallback takes one ring only, never wandering deeper', () => {
@@ -173,21 +166,23 @@ test('the hierarchy never outranks distance', () => {
     expect(score('Book.1')).toBeGreaterThan(score('Book.4'));
 });
 
-test('a tier never buys admission the vector refused', () => {
+test('a tier orders but never reaches: an unconnected entry stays out', () => {
+    // Nothing names the Almanac and it names nothing, so no tier can reach it.
     const result = scoreLivingLoreCandidatesByTraversal({
-        packet: TIERED_PACKET, entries: TIERED,
-        // The broadest entry in the book, scoring far below the gate.
-        semanticMatches: semantic({ 4: 0.01 }),
+        packet: PACKET, entries: ENTRIES, semanticMatches: semantic({ 4: 0.99 }),
     });
     expect(result.candidates.map((c) => c.key)).not.toContain('Book.4');
-    expect(result.rejected.find((item) => item.key === 'Book.4').decision).toBe('below-gate');
 });
 
 test('a refusal carries the tier so the workspace can show which layer it was', () => {
+    // Squeeze the budget so the walk has to turn something away.
     const result = scoreLivingLoreCandidatesByTraversal({
-        packet: TIERED_PACKET, entries: TIERED, semanticMatches: semantic({ 4: 0.01 }),
+        packet: TIERED_PACKET, entries: TIERED, semanticMatches: semantic({ 4: 0.9 }),
     });
-    expect(result.rejected.find((item) => item.key === 'Book.4').tier).toBe(0);
+    const ranking = selectWorldSenseCandidates(result.candidates, { budget: { maxEntries: 1, maxTokens: 9999 } });
+    const refused = ranking.rejected.find((item) => item.uid === '4');
+    expect(refused).toBeTruthy();
+    expect(result.candidates.find((c) => c.key === 'Book.4').reasons.find((r) => r.channel === 'general').tier).toBe(0);
 });
 
 test('a seed is ranked by its scene match, not by the hierarchy', () => {

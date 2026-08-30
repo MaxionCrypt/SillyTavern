@@ -1,45 +1,56 @@
-// Mentions propose, the vector disposes.
+// Mentions connect, the vector chooses.
 //
-// The old arrangement had it backwards: semantic search picked entries and
-// everything else existed to restrain it — a similarity floor, a cap on how
-// many entries could ride on similarity alone, a blend of competing channels.
-// All of that is compensation for asking an embedding model to make a judgement
-// it cannot make. It measures whether words are near each other in meaning; it
-// has no idea whether a fact matters to this scene.
+// The original arrangement had semantic search picking entries and everything
+// else restraining it — a similarity floor, a cap on how many entries could
+// ride on similarity alone, a blend of competing channels. All of that is
+// compensation for asking an embedding model to make a judgement it cannot
+// make. It measures whether words are near each other in meaning; it has no
+// idea whether a fact matters to this scene.
 //
-// Here each mechanism does only what it is good at. A textual mention is
-// high-precision evidence that something is connected — the entry literally
-// names it — so mentions decide what is even considered. The vector then
-// answers the one question it can answer well: of the things connected to what
-// is already in play, which are close enough to what is happening right now?
+// So mentions decide what is connected. A textual mention is high-precision
+// evidence: the entry literally names the thing. The vector is secondary — it
+// orders what the mentions already found, and matters only when there is more
+// connected lore than the budget can carry. It never refuses an entry on its
+// own, because "these words are not very close in meaning" is not a reason to
+// withhold something the world explicitly linked to what is in play.
 //
-// Seeds are never gated. They matched a key in the actual scene text, which is
-// stronger evidence than any similarity score, and second-guessing that with a
-// weaker signal is how relevant lore goes missing.
+// The graph is a MESH, not a one-way walk:
 //
-// Tiers order the walk. The vector says which mentions are eligible; the
-// hierarchy says which of them goes first, so the broad frame is in place
-// before specific detail fills whatever budget is left. Two limits are
-// deliberate. A tier never moves the bar, because being a general entry is not
-// evidence of being relevant to THIS scene, and letting generality buy
-// admission would readmit exactly the flooding the gate exists to stop. And
-// the hierarchy governs only the walk outward: seeds are what the scene itself
-// named, and they are ranked by how they matched it, never reordered by how
-// often the rest of the book happens to refer to them.
+//  - Naming runs both ways. If Halloway Residence names Teo, then Teo is
+//    reachable from Halloway AND Halloway is reachable from Teo. A reference
+//    is a statement that two things belong together, and which one happened to
+//    be written down inside the other is an accident of authoring.
+//  - Things named together are connected to each other. An entry saying "the
+//    Other Skin is kept in Halloway Residence 4B" links those two, even though
+//    neither one names the other. This is how new lore joins the mesh: write
+//    one entry mentioning two existing things and they become neighbours.
+//
+// It therefore starts from anywhere. Any seed is a valid entrance and the
+// neighbourhood around it comes into reach, which is why this behaves as hubs
+// rather than chains: one hop already reaches everything a subject is involved
+// with, in either direction.
+//
+// Seeds are what the scene named directly. They are admitted unconditionally
+// and ranked by how they matched the scene, never reordered by the hierarchy.
+//
+// Tiers order the walk: among entries reached at the same distance, general
+// before specific, so the broad frame lands before the detail. A tier is worth
+// less than a step of distance, so a broad entry never overtakes a closer one.
 
-export const DEFAULT_TRAVERSAL_GATE = 0.35;
-export const DEFAULT_DEPTH_PENALTY = 0.1;
-export const DEFAULT_MAX_DEPTH = 3;
+export const DEFAULT_MAX_DEPTH = 2;
 
 export const TRAVERSAL_REJECTIONS = Object.freeze([
-    'below-gate', 'depth-exhausted', 'entry-budget', 'token-budget', 'unknown-entry',
+    'depth-exhausted', 'entry-budget', 'token-budget', 'unknown-entry',
 ]);
+
+export const TRAVERSAL_RELATIONS = Object.freeze(['names', 'named-by', 'co-mentioned']);
 
 /**
  * @param {object} options
  * @param {string[]} options.seeds ids that matched the scene directly
  * @param {{edges: Array<{from: string, to: string, key: string}>}} options.graph mention graph
  * @param {Record<string, number>|Map} options.similarity id → 0..1 against the current context
+ * @param {Record<string, number>|Map} options.tiers id → 0..n, 0 being the most general
  */
 export function gateLoreTraversal({
     seeds = [],
@@ -47,8 +58,6 @@ export function gateLoreTraversal({
     similarity = {},
     tiers = {},
     known = null,
-    gate = DEFAULT_TRAVERSAL_GATE,
-    depthPenalty = DEFAULT_DEPTH_PENALTY,
     maxDepth = DEFAULT_MAX_DEPTH,
     maxEntries = 12,
     maxTokens = Infinity,
@@ -67,13 +76,7 @@ export function gateLoreTraversal({
     };
     const byTierThenSimilarity = (a, b) => a.tier - b.tier || b.similarity - a.similarity;
 
-    // Who each entry mentions. Traversal follows the mention outward, which is
-    // the same direction the native scanner recurses.
-    const mentions = new Map();
-    for (const edge of graph?.edges || []) {
-        if (!mentions.has(edge.from)) mentions.set(edge.from, []);
-        mentions.get(edge.from).push(edge);
-    }
+    const neighbours = buildMesh(graph);
 
     const admitted = [];
     const rejected = [];
@@ -97,7 +100,7 @@ export function gateLoreTraversal({
     };
 
     // Depth 0: the scene named these itself. Admitted unconditionally and in
-    // the order given -- the hierarchy governs the walk outward, never the
+    // the order given — the hierarchy governs the walk outward, never the
     // entries the scene named directly. Those are ranked by how they matched
     // the scene, which the caller has already decided.
     for (const id of unique(seeds)) {
@@ -110,24 +113,21 @@ export function gateLoreTraversal({
         admit(id, 0, null, score(id));
     }
 
-    // Then outward, one depth at a time, so a closer connection always gets
-    // first claim on the budget.
+    // Then outward through the mesh, one ring at a time, so a closer connection
+    // always gets first claim on the budget.
     let frontier = admitted.map((item) => item.id);
     for (let depth = 1; depth <= maxDepth; depth += 1) {
-        // The bar rises with distance: something three mentions away has to be
-        // markedly more relevant to earn the same place as a direct connection.
-        const bar = gate + depthPenalty * (depth - 1);
         const proposals = [];
         for (const source of frontier) {
-            for (const edge of mentions.get(source) || []) {
-                if (seen.has(edge.to)) continue;
-                proposals.push({ id: edge.to, via: { from: source, key: edge.key } });
+            for (const link of neighbours.get(source) || []) {
+                if (seen.has(link.to)) continue;
+                proposals.push({ id: link.to, via: { from: source, key: link.key, relation: link.relation } });
             }
         }
 
-        // General first, then best first within a tier: the budget buys the
-        // broad frame before the detail, rather than whichever entry happened
-        // to be mentioned earliest.
+        // General first, then closest in meaning within a tier: when the budget
+        // cannot carry everything connected, the vector decides which of the
+        // connected entries earn the remaining room.
         const ranked = dedupe(proposals)
             .map((item) => ({ ...item, similarity: score(item.id), tier: tierOf(item.id) }))
             .sort(byTierThenSimilarity);
@@ -139,10 +139,6 @@ export function gateLoreTraversal({
                 rejected.push({ ...proposal, depth, reason: 'unknown-entry' });
                 continue;
             }
-            if (proposal.similarity < bar) {
-                rejected.push({ ...proposal, depth, bar: round(bar), reason: 'below-gate' });
-                continue;
-            }
             if (admit(proposal.id, depth, proposal.via, proposal.similarity)) next.push(proposal.id);
         }
         frontier = next;
@@ -150,13 +146,16 @@ export function gateLoreTraversal({
     }
 
     // Anything still reachable past the depth limit is reported, not silently
-    // dropped: "we stopped looking" and "we looked and said no" are different
+    // dropped: "we stopped looking" and "we ran out of room" are different
     // answers and a receipt that conflates them cannot be debugged.
     for (const source of frontier) {
-        for (const edge of mentions.get(source) || []) {
-            if (seen.has(edge.to)) continue;
-            seen.add(edge.to);
-            rejected.push({ id: edge.to, depth: maxDepth + 1, via: { from: source, key: edge.key }, similarity: score(edge.to), tier: tierOf(edge.to), reason: 'depth-exhausted' });
+        for (const link of neighbours.get(source) || []) {
+            if (seen.has(link.to)) continue;
+            seen.add(link.to);
+            rejected.push({
+                id: link.to, depth: maxDepth + 1, similarity: score(link.to), tier: tierOf(link.to),
+                via: { from: source, key: link.key, relation: link.relation }, reason: 'depth-exhausted',
+            });
         }
     }
 
@@ -170,11 +169,53 @@ export function gateLoreTraversal({
             deepest: admitted.reduce((deep, item) => Math.max(deep, item.depth), 0),
             broadest: admitted.reduce((broad, item) => Math.min(broad, item.tier), Number.MAX_SAFE_INTEGER),
             tokens: spentTokens,
-            gate,
-            depthPenalty,
             maxDepth,
         }),
     });
+}
+
+/**
+ * Undirected adjacency plus co-mention links.
+ *
+ * Every edge contributes both directions, and every pair of entries named by
+ * the same entry becomes adjacent through it. Co-mention is what lets a newly
+ * written entry join two existing subjects together without either of them
+ * being edited.
+ */
+export function buildMesh(graph = { edges: [] }) {
+    const neighbours = new Map();
+    const link = (from, to, key, relation) => {
+        if (!from || !to || from === to) return;
+        if (!neighbours.has(from)) neighbours.set(from, []);
+        const list = neighbours.get(from);
+        // Keep the first relation found for a pair. Direct naming is discovered
+        // before co-mention, so a real reference is never relabelled as a
+        // weaker sibling link.
+        if (list.some((item) => item.to === to)) return;
+        list.push({ to, key, relation });
+    };
+
+    const namedBy = new Map();
+    for (const edge of graph?.edges || []) {
+        link(edge.from, edge.to, edge.key, 'names');
+        link(edge.to, edge.from, edge.key, 'named-by');
+        if (!namedBy.has(edge.from)) namedBy.set(edge.from, []);
+        namedBy.get(edge.from).push(edge);
+    }
+
+    for (const [source, edges] of namedBy) {
+        for (let i = 0; i < edges.length; i += 1) {
+            for (let j = i + 1; j < edges.length; j += 1) {
+                // The key recorded is the one that reached the sibling, so a
+                // receipt can say which mention put them in the same sentence.
+                link(edges[i].to, edges[j].to, edges[j].key, 'co-mentioned');
+                link(edges[j].to, edges[i].to, edges[i].key, 'co-mentioned');
+            }
+        }
+        void source;
+    }
+
+    return neighbours;
 }
 
 function unique(values) {
@@ -185,8 +226,4 @@ function dedupe(proposals) {
     const byId = new Map();
     for (const proposal of proposals) if (!byId.has(proposal.id)) byId.set(proposal.id, proposal);
     return [...byId.values()];
-}
-
-function round(value) {
-    return Math.round(value * 1000) / 1000;
 }

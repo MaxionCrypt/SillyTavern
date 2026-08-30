@@ -81,7 +81,7 @@ function render(view) {
                 <label>Model<input type="text" value="${escapeAttribute(profile.modelId)}" data-ws-profile="modelId"></label>
                 <label>Entry budget<input type="number" min="1" max="50" value="${profile.maxEntries}" data-ws-profile="maxEntries"></label>
                 <label>Token budget<input type="number" min="100" max="12000" value="${profile.maxTokens}" data-ws-profile="maxTokens"></label>
-                <label>Similarity gate<input type="number" min="0" max="1" step="0.05" value="${profile.semanticThreshold}" data-ws-profile="semanticThreshold"></label>
+                <label>Continuity similarity<input type="number" min="0" max="1" step="0.05" value="${profile.semanticThreshold}" data-ws-profile="semanticThreshold"></label>
             </div>
         </details>
         <div class="remodel-world-sense-grid">

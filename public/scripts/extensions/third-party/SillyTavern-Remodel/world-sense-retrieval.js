@@ -281,7 +281,7 @@ function hashString(value) {
  */
 export function scoreLivingLoreCandidatesByTraversal({
     packet, entries = [], semanticMatches = [], metadata = [], goals = [], variables = [], pins = [], continuity = [],
-    gate, depthPenalty, maxDepth, semanticAvailable = true,
+    maxDepth, semanticAvailable = true,
 } = {}) {
     const metadataByKey = new Map(metadata.map((item) => [entryKey(item), item]));
     const continuityKeys = new Set((continuity || []).map(entryKey).filter(Boolean));
@@ -348,19 +348,13 @@ export function scoreLivingLoreCandidatesByTraversal({
         similarity: scoreByGraphId,
         tiers: tierByGraphId,
         known: new Set(byGraphId.keys()),
-        // With no working vector there is nothing to gate WITH, and scoring
-        // every proposal zero would refuse them all — turning a slow local
-        // model into an empty packet rather than a slightly worse one. A
-        // mention is still real evidence, so fall back to trusting the first
-        // ring of them and stop there: without a discriminator, wandering
-        // further would be guessing.
+        // The vector no longer admits or refuses anything, so losing it costs
+        // ordering, not lore. It does cost the ability to choose between rings,
+        // though, so a degraded pass takes the immediate neighbourhood only
+        // rather than pulling in a mesh it cannot rank.
         ...(semanticAvailable
-            ? {
-                ...(Number.isFinite(Number(gate)) ? { gate: Number(gate) } : {}),
-                ...(Number.isFinite(Number(depthPenalty)) ? { depthPenalty: Number(depthPenalty) } : {}),
-                ...(Number.isFinite(Number(maxDepth)) ? { maxDepth: Number(maxDepth) } : {}),
-            }
-            : { gate: 0, depthPenalty: 0, maxDepth: 1 }),
+            ? { ...(Number.isFinite(Number(maxDepth)) ? { maxDepth: Number(maxDepth) } : {}) }
+            : { maxDepth: 1 }),
         maxEntries: Infinity,
         maxTokens: Infinity,
         tokensFor: (id) => estimateEntryTokens(byGraphId.get(id) || {}),
@@ -389,6 +383,7 @@ export function scoreLivingLoreCandidatesByTraversal({
         } else {
             add(candidate, Math.max(100, 1000 - item.depth * 100), 'mention', {
                 depth: item.depth, from: item.via?.from || null, key: item.via?.key || null,
+                relation: item.via?.relation || 'names',
             });
         }
         // The hierarchy orders the walk: among entries reached at the same
@@ -431,7 +426,7 @@ export function scoreLivingLoreCandidatesByTraversal({
             similarity: item.similarity,
             ...(Number.isFinite(item.tier) && item.tier < DEFAULT_LORE_TIERS ? { tier: item.tier } : {}),
             ...(item.bar === undefined ? {} : { bar: item.bar }),
-            reasons: item.via ? [{ channel: 'mention', from: item.via.from, key: item.via.key }] : [],
+            reasons: item.via ? [{ channel: 'mention', from: item.via.from, key: item.via.key, relation: item.via.relation }] : [],
         }));
 
     return { candidates, rejected, receipt: walked.receipt };

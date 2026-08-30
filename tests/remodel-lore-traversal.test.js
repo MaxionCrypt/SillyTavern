@@ -29,13 +29,24 @@ test('a mention proposes and a good score admits it', () => {
     const result = gateWith({ piper: 1, warden: 0.9, gate: 0.9 });
     expect(idsAt(result, 1)).toEqual(['gate', 'warden']);
     expect(result.admitted.find((item) => item.id === 'warden').via)
-        .toEqual({ from: 'piper', key: 'Warden' });
+        .toEqual({ from: 'piper', key: 'Warden', relation: 'names' });
 });
 
-test('a mention proposes and a poor score refuses it', () => {
+test('a poor score no longer refuses a connected entry', () => {
+    // The vector is secondary. Something the world explicitly linked to what is
+    // in play is not withheld because its wording sits far apart in meaning.
     const result = gateWith({ piper: 1, warden: 0.05, gate: 0.9 });
+    expect(idsAt(result, 1)).toEqual(['gate', 'warden']);
+    // Only the depth limit turns anything away; nothing is refused for scoring.
+    expect(result.rejected.map((item) => item.reason)).toEqual(
+        result.rejected.map(() => 'depth-exhausted'),
+    );
+});
+
+test('the vector decides only when there is not room for everything', () => {
+    const result = gateWith({ piper: 1, warden: 0.05, gate: 0.9 }, { maxEntries: 2 });
     expect(idsAt(result, 1)).toEqual(['gate']);
-    expect(reasonFor(result, 'warden')).toBe('below-gate');
+    expect(reasonFor(result, 'warden')).toBe('entry-budget');
 });
 
 test('an entry nothing mentions is never considered, however relevant it looks', () => {
@@ -46,28 +57,52 @@ test('an entry nothing mentions is never considered, however relevant it looks',
     expect(result.admitted.map((item) => item.id)).not.toContain('founding');
 });
 
-test('the bar rises with distance', () => {
-    const flat = 0.4;
+test('distance, not similarity, decides who gets the budget first', () => {
     const result = gateLoreTraversal({
-        seeds: ['piper'], graph, known,
-        similarity: { piper: 1, warden: flat, charter: flat, founding: flat },
-        gate: 0.35, depthPenalty: 0.1,
+        seeds: ['piper'], graph, known, maxEntries: 2,
+        // charter is two hops out and scores far better than either neighbour.
+        similarity: { piper: 1, warden: 0.2, gate: 0.1, charter: 0.99 },
     });
-    // 0.4 clears depth 1 (bar .35) but not depth 2 (bar .45).
-    expect(idsAt(result, 1)).toContain('warden');
-    expect(reasonFor(result, 'charter')).toBe('below-gate');
-    expect(result.rejected.find((item) => item.id === 'charter').bar).toBe(0.45);
+    expect(idsAt(result, 1)).toEqual(['warden']);
+    expect(result.admitted.map((item) => item.id)).not.toContain('charter');
 });
 
-test('a strong enough score still reaches the far end of a chain', () => {
+test('a chain is still walkable when the caller asks for the depth', () => {
     const result = gateLoreTraversal({
-        seeds: ['piper'], graph, known,
+        seeds: ['piper'], graph, known, maxDepth: 3,
         similarity: { piper: 1, warden: 0.95, charter: 0.95, founding: 0.95 },
     });
     expect(result.admitted.map((item) => item.id)).toEqual(
         expect.arrayContaining(['warden', 'charter', 'founding']),
     );
     expect(result.receipt.deepest).toBe(3);
+});
+
+test('naming runs both ways, so the walk can start from either end', () => {
+    // Nothing names piper; piper names warden. Entering at warden must still
+    // reach piper, because a reference says the two belong together.
+    const result = gateLoreTraversal({ seeds: ['warden'], graph, known, similarity: {} });
+    expect(idsAt(result, 1)).toContain('piper');
+    expect(result.admitted.find((item) => item.id === 'piper').via.relation).toBe('named-by');
+});
+
+test('two things named by the same entry become neighbours', () => {
+    // piper names both warden and gate. Neither names the other, but they were
+    // put in the same entry, so they are connected through it.
+    const result = gateLoreTraversal({ seeds: ['warden'], graph, known, maxDepth: 1, similarity: {} });
+    expect(idsAt(result, 1)).toContain('gate');
+    expect(result.admitted.find((item) => item.id === 'gate').via.relation).toBe('co-mentioned');
+});
+
+test('a new entry joins two existing subjects without either being edited', () => {
+    // The note is new and nothing refers to it. It names two entries that had
+    // no connection, and that alone makes them reachable from each other.
+    const withNote = { edges: [...graph.edges, { from: 'note', to: 'gate', key: 'gate' }, { from: 'note', to: 'founding', key: 'Founding' }] };
+    const result = gateLoreTraversal({
+        seeds: ['gate'], graph: withNote, known: new Set([...known, 'note']), maxDepth: 1, similarity: {},
+    });
+    expect(result.admitted.map((item) => item.id)).toContain('founding');
+    expect(result.admitted.find((item) => item.id === 'founding').via.relation).toBe('co-mentioned');
 });
 
 test('depth is bounded, and what was cut off says so', () => {

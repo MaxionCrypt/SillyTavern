@@ -229,10 +229,9 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         variables,
         pins: prepared.pins,
         continuity: getWorldSenseContinuity(scene.id),
-        gate: profile.semanticThreshold,
-        // A degraded semantic pass means every proposal would score zero and be
-        // refused. Say so, and let the scorer fall back to mentions instead of
-        // silently emptying the packet.
+        // A degraded semantic pass costs ordering, not lore: nothing is
+        // admitted or refused on similarity. It does cost the ability to
+        // choose between rings, so the walk stays local when it happens.
         semanticAvailable: !semantic.degraded,
     });
     const loreCandidates = traversal.candidates;
