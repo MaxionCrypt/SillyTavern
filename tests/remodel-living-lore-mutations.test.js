@@ -64,6 +64,9 @@ function proposal(operation, value, overrides = {}) {
 beforeEach(() => {
     __clearDebugEvents();
     __setExtensionSettings({ remodel: {} });
+    // Automation is retired by default now, so a test that exercises queueing
+    // has to ask for it. The engine's behaviour under 'suggest' is unchanged.
+    updateWorldSenseProfile({ mode: 'suggest' });
     nativeBook = { entries: { 42: entry(42), 77: entry(77, { comment: 'Second entry' }) } };
     saves = [];
     __setContextOverrides({

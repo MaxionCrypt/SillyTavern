@@ -23,6 +23,7 @@ import {
 import { directedTurnController } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/legacy-directed-turn-adapter.js';
 import { listEvents, recordEvent } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { invalidateLivingLoreProposals, listLivingLoreProposals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-mutations.js';
+import { updateWorldSenseProfile } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-store.js';
 import { upsertLivingLoreMetadata } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
 import { buildLivingLorePacket } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-proposals.js';
 import { __setContextOverrides, __setExtensionSettings, __getChat, __emit, __onEvent } from './util/st-context-stub.js';
@@ -83,6 +84,9 @@ async function until(predicate, timeoutMs = 3000) {
 beforeEach(() => {
     __clearDebugEvents();
     __setExtensionSettings({});
+    // Automation is retired by default now, so a lifecycle test that asserts
+    // proposals are queued has to ask for it explicitly.
+    updateWorldSenseProfile({ mode: 'suggest' });
     nativeLore = { entries: { 42: { uid: 42, key: ['Wren'], keysecondary: [], comment: 'Wren', content: 'Current\nWren watches the gate.', disable: false } } };
     __setContextOverrides({
         async loadWorldInfo() { return structuredClone(nativeLore); },

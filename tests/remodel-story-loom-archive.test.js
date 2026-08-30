@@ -142,7 +142,7 @@ test('accepted Story evidence can queue a typed Living Lore proposal alongside t
             arcs: { arc: { id: 'arc', timelineId: scene.timelineId, sceneIds: [scene.id] } },
             scenes: { [scene.id]: { ...scene, arcId: 'arc' } },
         },
-        worldSenseV1: { version: 2, profile: { mode: 'suggest', maxEntries: 12, maxTokens: 1800 }, indexes: {}, receipts: [], continuityByScene: {} },
+        worldSenseV1: { version: 4, profile: { mode: 'suggest', maxEntries: 12, maxTokens: 1800 }, indexes: {}, receipts: [], continuityByScene: {} },
     } });
     __setContextOverrides({
         loadWorldInfo: async () => ({ entries: {
@@ -179,7 +179,7 @@ test('accepted Story evidence can queue a typed Living Lore proposal alongside t
 
 test('an ordered elided Story quotation remains valid proposal evidence', async () => {
     const timelineId = 'timeline-elided-evidence';
-    __setExtensionSettings({ remodel: { worldSenseV1: { version: 2, profile: { mode: 'suggest' }, indexes: {}, receipts: [], continuityByScene: {} } } });
+    __setExtensionSettings({ remodel: { worldSenseV1: { version: 4, profile: { mode: 'suggest' }, indexes: {}, receipts: [], continuityByScene: {} } } });
     __setContextOverrides({
         loadWorldInfo: async () => ({ entries: {
             2: { uid: 2, comment: 'Vesper House', key: ['Vesper House'], content: 'Identity\nA residence hall.', disable: false },
@@ -212,7 +212,7 @@ test('regenerating Story evidence invalidates its unapplied Living Lore suggesti
             arcs: { arc: { id: 'arc', timelineId: scene.timelineId, sceneIds: [scene.id] } },
             scenes: { [scene.id]: { ...scene, arcId: 'arc' } },
         },
-        worldSenseV1: { version: 2, profile: { mode: 'suggest', maxEntries: 12, maxTokens: 1800 }, indexes: {}, receipts: [], continuityByScene: {} },
+        worldSenseV1: { version: 4, profile: { mode: 'suggest', maxEntries: 12, maxTokens: 1800 }, indexes: {}, receipts: [], continuityByScene: {} },
     } });
     __setContextOverrides({
         loadWorldInfo: async () => ({ entries: {
@@ -252,7 +252,7 @@ test('accepted Story consequences create linked Timeline Web records without a r
             arcs: { arc: { id: 'arc', timelineId: scene.timelineId, sceneIds: [scene.id] } },
             scenes: { [scene.id]: { ...scene, arcId: 'arc' } },
         },
-        worldSenseV1: { version: 2, profile: { mode: 'suggest', maxEntries: 12, maxTokens: 1800 }, indexes: {}, receipts: [], continuityByScene: {} },
+        worldSenseV1: { version: 4, profile: { mode: 'suggest', maxEntries: 12, maxTokens: 1800 }, indexes: {}, receipts: [], continuityByScene: {} },
     } });
     __setContextOverrides({ loadWorldInfo: async () => ({ entries: {
         7: { uid: 7, comment: 'Mara', key: ['Mara', 'hunt'], keysecondary: [], content: 'Identity\nMara leads the observatory watch.', disable: false },

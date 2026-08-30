@@ -111,7 +111,21 @@ test('rebuilds a corrupt collection once when query hashes have no local identit
 
 test('migrates Auto-safe settings to the guarded allowlist and threshold', () => {
     __setExtensionSettings({ remodel: { worldSenseV1: { version: 1, profile: { mode: 'auto-safe', autoSafeConfidence: 0.1, autoSafeOperations: ['entry.retire', 'fact.append'] } } } });
-    expect(getWorldSenseProfile()).toMatchObject({ mode: 'auto-safe', autoSafeConfidence: 0.5, autoSafeOperations: ['fact.append'] });
+    // The allowlist and threshold are still clamped, so a legacy store cannot
+    // smuggle an unguarded operation back in.
+    expect(getWorldSenseProfile()).toMatchObject({ autoSafeConfidence: 0.5, autoSafeOperations: ['fact.append'] });
+});
+
+test('retires Living Lore automation for stores written before the workspace lost its review queue', () => {
+    __setExtensionSettings({ remodel: { worldSenseV1: { version: 3, profile: { mode: 'auto-safe' } } } });
+    // 'observe', not 'off': nothing may propose lore changes any more, but
+    // retrieval has to keep working -- 'off' would disable that too.
+    expect(getWorldSenseProfile().mode).toBe('observe');
+});
+
+test('a store already on this version keeps the mode it was given', () => {
+    __setExtensionSettings({ remodel: { worldSenseV1: { version: 4, profile: { mode: 'suggest' } } } });
+    expect(getWorldSenseProfile().mode).toBe('suggest');
 });
 
 test('requests and preserves real vector similarity scores', async () => {
