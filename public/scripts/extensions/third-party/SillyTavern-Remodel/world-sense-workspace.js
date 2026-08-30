@@ -11,6 +11,7 @@ import {
 import {
     buildWorldSenseDryRun,
     buildWorldSenseRefusals,
+    describeLoreTier,
     describeWorldSenseReasons,
     filterWorldSenseWorkspaceEntries,
 } from './world-sense-workspace-model.js';
@@ -121,6 +122,8 @@ function renderRefusal(row) {
     const facts = [];
     if (row.via) facts.push(`via ${escapeHtml(row.via)}${row.viaKey ? ` (“${escapeHtml(row.viaKey)}”)` : ''}`);
     if (Number.isFinite(row.depth) && row.depth > 0) facts.push(`depth ${row.depth}`);
+    const band = describeLoreTier(row.tier);
+    if (band) facts.push(escapeHtml(band));
     if (Number.isFinite(row.similarity)) {
         const scored = `scored ${Math.round(row.similarity * 100)}%`;
         facts.push(Number.isFinite(row.bar) ? `${scored} against ${Math.round(row.bar * 100)}%` : scored);

@@ -138,3 +138,54 @@ test('the degraded fallback takes one ring only, never wandering deeper', () => 
     expect(keys(degraded)).not.toContain('Book.3');
     expect(degraded.candidates.every((candidate) => candidate.reasons.some((r) => r.channel === 'scene' || r.channel === 'mention'))).toBe(true);
 });
+
+// A book with a real general/specific split. The Harbour Authority is named by
+// three other entries, so the mention graph rates it the broad idea; Locker 12
+// is named by one and names nothing, so it is the specific one.
+const TIERED = [
+    entry(1, 'Piper', ['Piper'], 'A runner who answers to the Harbour Authority and keeps Locker 12.'),
+    entry(2, 'The Warden', ['Warden'], 'Speaks for the Harbour Authority.'),
+    entry(3, 'The Dock Ledger', ['Ledger'], 'Kept on behalf of the Harbour Authority.'),
+    entry(4, 'Harbour Authority', ['Harbour Authority'], 'The body that runs the harbour.'),
+    entry(5, 'Locker 12', ['Locker 12'], 'A dented steel locker.'),
+];
+const TIERED_PACKET = buildWorldSenseQueryPacket({ action: 'Piper runs for the door.' });
+
+test('at equal distance the general entry outranks the specific one', () => {
+    const result = scoreLivingLoreCandidatesByTraversal({
+        packet: TIERED_PACKET, entries: TIERED,
+        // Identical similarity, so only the hierarchy can separate them.
+        semanticMatches: semantic({ 4: 0.9, 5: 0.9 }),
+    });
+    const score = (key) => result.candidates.find((c) => c.key === key)?.score ?? -1;
+    expect(score('Book.4')).toBeGreaterThan(score('Book.5'));
+    const reasons = result.candidates.find((c) => c.key === 'Book.4').reasons;
+    expect(reasons.map((r) => r.channel)).toContain('general');
+});
+
+test('the hierarchy never outranks distance', () => {
+    const result = scoreLivingLoreCandidatesByTraversal({
+        packet: TIERED_PACKET, entries: TIERED, semanticMatches: semantic({ 4: 0.9, 5: 0.9, 2: 0.9 }),
+    });
+    const score = (key) => result.candidates.find((c) => c.key === key)?.score ?? -1;
+    // Piper is the seed. However broad the Harbour Authority is, a depth-1
+    // entry must never overtake the entry the scene actually named.
+    expect(score('Book.1')).toBeGreaterThan(score('Book.4'));
+});
+
+test('a tier never buys admission the vector refused', () => {
+    const result = scoreLivingLoreCandidatesByTraversal({
+        packet: TIERED_PACKET, entries: TIERED,
+        // The broadest entry in the book, scoring far below the gate.
+        semanticMatches: semantic({ 4: 0.01 }),
+    });
+    expect(result.candidates.map((c) => c.key)).not.toContain('Book.4');
+    expect(result.rejected.find((item) => item.key === 'Book.4').decision).toBe('below-gate');
+});
+
+test('a refusal carries the tier so the workspace can show which layer it was', () => {
+    const result = scoreLivingLoreCandidatesByTraversal({
+        packet: TIERED_PACKET, entries: TIERED, semanticMatches: semantic({ 4: 0.01 }),
+    });
+    expect(result.rejected.find((item) => item.key === 'Book.4').tier).toBe(0);
+});

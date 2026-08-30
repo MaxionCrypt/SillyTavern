@@ -16,6 +16,13 @@
 // Seeds are never gated. They matched a key in the actual scene text, which is
 // stronger evidence than any similarity score, and second-guessing that with a
 // weaker signal is how relevant lore goes missing.
+//
+// Tiers order what survives. The vector says who is eligible; the hierarchy
+// says who goes first, so the broad frame is in place before specific detail
+// fills whatever budget is left. Ordering only, deliberately: a tier never
+// moves the bar, because being a general entry is not evidence of being
+// relevant to THIS scene, and letting generality buy admission would readmit
+// exactly the flooding the gate exists to stop.
 
 export const DEFAULT_TRAVERSAL_GATE = 0.35;
 export const DEFAULT_DEPTH_PENALTY = 0.1;
@@ -35,6 +42,7 @@ export function gateLoreTraversal({
     seeds = [],
     graph = { edges: [] },
     similarity = {},
+    tiers = {},
     known = null,
     gate = DEFAULT_TRAVERSAL_GATE,
     depthPenalty = DEFAULT_DEPTH_PENALTY,
@@ -48,6 +56,13 @@ export function gateLoreTraversal({
         return Number.isFinite(Number(value)) ? Number(value) : 0;
     };
     const exists = (id) => (known ? known.has(id) : true);
+    // Unknown entries sort last: with no hierarchy for them we must not promote
+    // them ahead of entries the graph actually placed.
+    const tierOf = (id) => {
+        const value = tiers instanceof Map ? tiers.get(id) : tiers?.[id];
+        return Number.isFinite(Number(value)) ? Number(value) : Number.MAX_SAFE_INTEGER;
+    };
+    const byTierThenSimilarity = (a, b) => a.tier - b.tier || b.similarity - a.similarity;
 
     // Who each entry mentions. Traversal follows the mention outward, which is
     // the same direction the native scanner recurses.
@@ -64,28 +79,33 @@ export function gateLoreTraversal({
 
     const admit = (id, depth, via, similarityScore) => {
         const tokens = Math.max(0, Number(tokensFor(id)) || 0);
+        const tier = tierOf(id);
         if (admitted.length >= maxEntries) {
-            rejected.push({ id, depth, via, similarity: similarityScore, reason: 'entry-budget' });
+            rejected.push({ id, depth, via, similarity: similarityScore, tier, reason: 'entry-budget' });
             return false;
         }
         if (spentTokens + tokens > maxTokens) {
-            rejected.push({ id, depth, via, similarity: similarityScore, reason: 'token-budget' });
+            rejected.push({ id, depth, via, similarity: similarityScore, tier, reason: 'token-budget' });
             return false;
         }
         spentTokens += tokens;
-        admitted.push({ id, depth, via, similarity: similarityScore, tokens });
+        admitted.push({ id, depth, via, similarity: similarityScore, tier, tokens });
         return true;
     };
 
-    // Depth 0: the scene named these itself. Admitted unconditionally.
-    for (const id of unique(seeds)) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-        if (!exists(id)) {
-            rejected.push({ id, depth: 0, via: null, similarity: 0, reason: 'unknown-entry' });
+    // Depth 0: the scene named these itself. Admitted unconditionally -- but
+    // they compete for the same budget, so the general ones go in first.
+    const orderedSeeds = unique(seeds)
+        .map((id) => ({ id, tier: tierOf(id), similarity: score(id) }))
+        .sort(byTierThenSimilarity);
+    for (const seed of orderedSeeds) {
+        if (seen.has(seed.id)) continue;
+        seen.add(seed.id);
+        if (!exists(seed.id)) {
+            rejected.push({ id: seed.id, depth: 0, via: null, similarity: 0, tier: seed.tier, reason: 'unknown-entry' });
             continue;
         }
-        admit(id, 0, null, score(id));
+        admit(seed.id, 0, null, seed.similarity);
     }
 
     // Then outward, one depth at a time, so a closer connection always gets
@@ -103,11 +123,12 @@ export function gateLoreTraversal({
             }
         }
 
-        // Best first, so the budget buys the most relevant proposals rather than
-        // whichever happened to be mentioned earliest.
+        // General first, then best first within a tier: the budget buys the
+        // broad frame before the detail, rather than whichever entry happened
+        // to be mentioned earliest.
         const ranked = dedupe(proposals)
-            .map((item) => ({ ...item, similarity: score(item.id) }))
-            .sort((a, b) => b.similarity - a.similarity);
+            .map((item) => ({ ...item, similarity: score(item.id), tier: tierOf(item.id) }))
+            .sort(byTierThenSimilarity);
 
         const next = [];
         for (const proposal of ranked) {
@@ -133,7 +154,7 @@ export function gateLoreTraversal({
         for (const edge of mentions.get(source) || []) {
             if (seen.has(edge.to)) continue;
             seen.add(edge.to);
-            rejected.push({ id: edge.to, depth: maxDepth + 1, via: { from: source, key: edge.key }, similarity: score(edge.to), reason: 'depth-exhausted' });
+            rejected.push({ id: edge.to, depth: maxDepth + 1, via: { from: source, key: edge.key }, similarity: score(edge.to), tier: tierOf(edge.to), reason: 'depth-exhausted' });
         }
     }
 
@@ -145,6 +166,7 @@ export function gateLoreTraversal({
             admittedCount: admitted.length,
             rejectedCount: rejected.length,
             deepest: admitted.reduce((deep, item) => Math.max(deep, item.depth), 0),
+            broadest: admitted.reduce((broad, item) => Math.min(broad, item.tier), Number.MAX_SAFE_INTEGER),
             tokens: spentTokens,
             gate,
             depthPenalty,

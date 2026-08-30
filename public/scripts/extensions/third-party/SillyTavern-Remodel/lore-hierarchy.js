@@ -108,9 +108,12 @@ export function buildLoreMentionGraph(entries = []) {
 // mention graph rates equally. At even weights a single extra alias could
 // outvote being referenced twice as often, which inverts the signal the
 // hierarchy is built on.
-export function scoreLoreGenerality(entries = [], { mentionWeight = 0.7, breadthWeight = 0.3 } = {}) {
+export function scoreLoreGenerality(entries = [], { mentionWeight = 0.7, breadthWeight = 0.3, graph = null } = {}) {
     const live = entries.filter((entry) => entry && !entry.native?.disable);
-    const { inDegree, outDegree } = buildLoreMentionGraph(live);
+    // Building the graph is O(entries squared) in key matching. Retrieval has
+    // already built one for traversal, so let it hand the same graph over
+    // rather than paying for an identical second pass every turn.
+    const { inDegree, outDegree } = graph?.inDegree ? graph : buildLoreMentionGraph(live);
     const breadthById = new Map(live.map((entry) => [entryId(entry), measureKeyBreadth(entry)]));
 
     const mentionRange = range([...inDegree.values()]);
@@ -144,7 +147,9 @@ export function scoreLoreGenerality(entries = [], { mentionWeight = 0.7, breadth
  * — ranking by index would split ties arbitrarily and make the hierarchy
  * unstable across reindexes.
  */
-export function assignLoreTiers(scored = [], { tiers = 3 } = {}) {
+export const DEFAULT_LORE_TIERS = 3;
+
+export function assignLoreTiers(scored = [], { tiers = DEFAULT_LORE_TIERS } = {}) {
     const bands = Math.max(1, Math.floor(tiers));
     return scored.map((item) => Object.freeze({
         ...item,

@@ -1,4 +1,4 @@
-import { buildLoreMentionGraph } from './lore-hierarchy.js';
+import { assignLoreTiers, buildLoreMentionGraph, DEFAULT_LORE_TIERS, scoreLoreGenerality } from './lore-hierarchy.js';
 import { gateLoreTraversal } from './lore-traversal.js';
 const DEFAULT_LIMITS = Object.freeze({ sourceChars: 1600, totalChars: 8000 });
 const DEFAULT_BUDGET = Object.freeze({ maxEntries: 12, maxTokens: 1800 });
@@ -295,6 +295,13 @@ export function scoreLivingLoreCandidatesByTraversal({
     const graphId = (entry) => `${entry.book || ''}::${entry.uid || ''}`;
     const byGraphId = new Map(live.map((entry) => [graphId(entry), entry]));
     const graph = buildLoreMentionGraph(live);
+    // The hierarchy, from the same graph traversal walks: an entry many others
+    // refer to is the broader idea, and tier 0 is the broadest band. Reusing
+    // the graph keeps this to one O(n squared) key-matching pass per turn.
+    const tierByGraphId = {};
+    for (const item of assignLoreTiers(scoreLoreGenerality(live, { graph }))) {
+        tierByGraphId[item.id] = item.tier;
+    }
 
     const scoreByGraphId = {};
     const rankedSemantic = new Map(semanticMatches.map((item, index) => [entryKey(item), {
@@ -339,6 +346,7 @@ export function scoreLivingLoreCandidatesByTraversal({
         seeds,
         graph,
         similarity: scoreByGraphId,
+        tiers: tierByGraphId,
         known: new Set(byGraphId.keys()),
         // With no working vector there is nothing to gate WITH, and scoring
         // every proposal zero would refuse them all — turning a slow local
@@ -383,6 +391,16 @@ export function scoreLivingLoreCandidatesByTraversal({
                 depth: item.depth, from: item.via?.from || null, key: item.via?.key || null,
             });
         }
+        // The hierarchy orders entries sitting at the same distance: general
+        // before specific. Bounded well under the 100-point depth band on
+        // purpose -- a broad entry must never outrank a closer one -- but above
+        // similarity and continuity, because which layer of the world an entry
+        // describes is a stronger reason to include it than how closely its
+        // wording happens to track this turn.
+        if (Number.isFinite(item.tier) && item.tier < DEFAULT_LORE_TIERS) {
+            const points = (DEFAULT_LORE_TIERS - 1 - item.tier) * 12;
+            if (points > 0) add(candidate, points, 'general', { tier: item.tier });
+        }
         if (Number.isFinite(item.similarity) && item.similarity > 0) {
             // `similarity`, not `score`: describeWorldSenseReasons reads that
             // key to render the percentage, and the old scorer set it too.
@@ -407,6 +425,7 @@ export function scoreLivingLoreCandidatesByTraversal({
             decision: item.reason,
             depth: item.depth,
             similarity: item.similarity,
+            ...(Number.isFinite(item.tier) && item.tier < DEFAULT_LORE_TIERS ? { tier: item.tier } : {}),
             ...(item.bar === undefined ? {} : { bar: item.bar }),
             reasons: item.via ? [{ channel: 'mention', from: item.via.from, key: item.via.key }] : [],
         }));

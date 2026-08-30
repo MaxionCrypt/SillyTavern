@@ -1,5 +1,6 @@
 import {
     buildWorldSenseRefusals,
+    describeLoreTier,
     describeWorldSenseReasons,
     describeWorldSenseRefusal,
     filterWorldSenseWorkspaceEntries,
@@ -85,4 +86,25 @@ test('a mention reason names the entry that vouched for it, not its uid', () => 
     const [text] = describeWorldSenseReasons(row.reasons);
     expect(text).toContain('via Halloway Residence');
     expect(text).not.toContain('via 7');
+});
+
+test('a general entry says which layer of the hierarchy it came from', () => {
+    const [text] = describeWorldSenseReasons([{ channel: 'general', tier: 0 }]);
+    expect(text).toBe('broad in the hierarchy');
+    expect(describeWorldSenseReasons([{ channel: 'general', tier: 1 }])[0]).toBe('mid-level in the hierarchy');
+});
+
+test('the most specific band is silent rather than labelled', () => {
+    // Tier 2 scores nothing, so calling it out would imply a reason it did not have.
+    expect(describeLoreTier(2)).toBe('');
+    expect(describeLoreTier(null)).toBe('');
+});
+
+test('a missing tier is not silently coerced into the broadest band', () => {
+    // Number(null), Number('') and Number([]) are all 0, which would label an
+    // entry that has no place in the hierarchy as the broadest thing in it.
+    for (const empty of [null, undefined, '', [], {}, NaN, '0']) {
+        expect(describeLoreTier(empty)).toBe('');
+    }
+    expect(describeLoreTier(0)).toBe('broad');
 });

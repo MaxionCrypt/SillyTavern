@@ -65,6 +65,16 @@ export function nameReasonSources(reasons = [], entriesByKey = new Map()) {
     });
 }
 
+/** Tier 0 is the broadest band. Only the bands that carry weight are named;
+ * the most specific band scores nothing and so says nothing. */
+export function describeLoreTier(tier) {
+    // Strictly a number, never Number(tier): Number(null), Number('') and
+    // Number([]) are all 0, which would label an entry that has no tier at all
+    // as the broadest thing in the book.
+    if (typeof tier !== 'number' || !Number.isInteger(tier)) return '';
+    return ({ 0: 'broad', 1: 'mid-level' })[tier] || '';
+}
+
 export function describeWorldSenseReasons(reasons = []) {
     return reasons.map((reason) => {
         const label = String(reason.channel || 'evidence').replaceAll('.', ' ');
@@ -74,6 +84,10 @@ export function describeWorldSenseReasons(reasons = []) {
         if (reason.channel === 'mention') {
             const via = reason.fromName || String(reason.from || '').split('::').pop();
             return `mention · depth ${Number(reason.depth) || 1}${via ? ` · via ${via}` : ''}${reason.key ? ` ("${reason.key}")` : ''}`;
+        }
+        if (reason.channel === 'general') {
+            const band = describeLoreTier(reason.tier);
+            return band ? band + ' in the hierarchy' : label;
         }
         if (reason.channel === 'scene') return 'named by the scene';
         return label;
@@ -169,6 +183,7 @@ export function buildWorldSenseRefusals({ entries = [], receipt = null } = {}) {
                 decision: item.decision,
                 label: describeWorldSenseRefusal(item.decision),
                 depth: Number.isFinite(Number(item.depth)) ? Number(item.depth) : null,
+                tier: Number.isFinite(Number(item.tier)) ? Number(item.tier) : null,
                 similarity: Number.isFinite(Number(item.similarity)) ? Number(item.similarity) : null,
                 bar: Number.isFinite(Number(item.bar)) ? Number(item.bar) : null,
                 via: vouchedBy,
