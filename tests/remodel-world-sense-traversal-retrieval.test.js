@@ -189,3 +189,25 @@ test('a refusal carries the tier so the workspace can show which layer it was', 
     });
     expect(result.rejected.find((item) => item.key === 'Book.4').tier).toBe(0);
 });
+
+test('a seed is ranked by its scene match, not by the hierarchy', () => {
+    // The scene names the Harbour Authority directly, so it is a seed AND the
+    // broadest entry in the book. It must still earn no hierarchy points.
+    const seededPacket = buildWorldSenseQueryPacket({ action: 'Piper reports to the Harbour Authority.' });
+    const result = scoreLivingLoreCandidatesByTraversal({
+        packet: seededPacket, entries: TIERED, semanticMatches: semantic({ 4: 0.9 }),
+    });
+    const authority = result.candidates.find((c) => c.key === 'Book.4');
+    expect(authority.reasons.map((r) => r.channel)).toContain('action.primary');
+    expect(authority.reasons.map((r) => r.channel)).not.toContain('general');
+});
+
+test('the same entry does earn hierarchy points when the walk reaches it', () => {
+    // Identical book, but the scene names Piper instead, so the Harbour
+    // Authority arrives one mention out rather than as a seed.
+    const result = scoreLivingLoreCandidatesByTraversal({
+        packet: TIERED_PACKET, entries: TIERED, semanticMatches: semantic({ 4: 0.9 }),
+    });
+    const authority = result.candidates.find((c) => c.key === 'Book.4');
+    expect(authority.reasons.map((r) => r.channel)).toContain('general');
+});

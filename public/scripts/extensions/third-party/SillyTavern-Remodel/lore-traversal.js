@@ -17,12 +17,15 @@
 // stronger evidence than any similarity score, and second-guessing that with a
 // weaker signal is how relevant lore goes missing.
 //
-// Tiers order what survives. The vector says who is eligible; the hierarchy
-// says who goes first, so the broad frame is in place before specific detail
-// fills whatever budget is left. Ordering only, deliberately: a tier never
-// moves the bar, because being a general entry is not evidence of being
-// relevant to THIS scene, and letting generality buy admission would readmit
-// exactly the flooding the gate exists to stop.
+// Tiers order the walk. The vector says which mentions are eligible; the
+// hierarchy says which of them goes first, so the broad frame is in place
+// before specific detail fills whatever budget is left. Two limits are
+// deliberate. A tier never moves the bar, because being a general entry is not
+// evidence of being relevant to THIS scene, and letting generality buy
+// admission would readmit exactly the flooding the gate exists to stop. And
+// the hierarchy governs only the walk outward: seeds are what the scene itself
+// named, and they are ranked by how they matched it, never reordered by how
+// often the rest of the book happens to refer to them.
 
 export const DEFAULT_TRAVERSAL_GATE = 0.35;
 export const DEFAULT_DEPTH_PENALTY = 0.1;
@@ -93,19 +96,18 @@ export function gateLoreTraversal({
         return true;
     };
 
-    // Depth 0: the scene named these itself. Admitted unconditionally -- but
-    // they compete for the same budget, so the general ones go in first.
-    const orderedSeeds = unique(seeds)
-        .map((id) => ({ id, tier: tierOf(id), similarity: score(id) }))
-        .sort(byTierThenSimilarity);
-    for (const seed of orderedSeeds) {
-        if (seen.has(seed.id)) continue;
-        seen.add(seed.id);
-        if (!exists(seed.id)) {
-            rejected.push({ id: seed.id, depth: 0, via: null, similarity: 0, tier: seed.tier, reason: 'unknown-entry' });
+    // Depth 0: the scene named these itself. Admitted unconditionally and in
+    // the order given -- the hierarchy governs the walk outward, never the
+    // entries the scene named directly. Those are ranked by how they matched
+    // the scene, which the caller has already decided.
+    for (const id of unique(seeds)) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        if (!exists(id)) {
+            rejected.push({ id, depth: 0, via: null, similarity: 0, tier: tierOf(id), reason: 'unknown-entry' });
             continue;
         }
-        admit(seed.id, 0, null, seed.similarity);
+        admit(id, 0, null, score(id));
     }
 
     // Then outward, one depth at a time, so a closer connection always gets

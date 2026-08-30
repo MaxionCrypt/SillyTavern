@@ -391,13 +391,17 @@ export function scoreLivingLoreCandidatesByTraversal({
                 depth: item.depth, from: item.via?.from || null, key: item.via?.key || null,
             });
         }
-        // The hierarchy orders entries sitting at the same distance: general
-        // before specific. Bounded well under the 100-point depth band on
-        // purpose -- a broad entry must never outrank a closer one -- but above
-        // similarity and continuity, because which layer of the world an entry
-        // describes is a stronger reason to include it than how closely its
-        // wording happens to track this turn.
-        if (Number.isFinite(item.tier) && item.tier < DEFAULT_LORE_TIERS) {
+        // The hierarchy orders the walk: among entries reached at the same
+        // distance, general before specific. Bounded well under the 100-point
+        // depth band on purpose -- a broad entry must never outrank a closer
+        // one -- but above similarity, because which layer of the world an
+        // entry describes is a stronger reason to include it than how closely
+        // its wording happens to track this turn.
+        //
+        // Depth 0 is excluded. A seed is an entry the scene named itself, and
+        // it is ranked by how it matched the scene; how often the rest of the
+        // book refers to it says nothing about that.
+        if (item.depth > 0 && Number.isFinite(item.tier) && item.tier < DEFAULT_LORE_TIERS) {
             const points = (DEFAULT_LORE_TIERS - 1 - item.tier) * 12;
             if (points > 0) add(candidate, points, 'general', { tier: item.tier });
         }
