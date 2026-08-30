@@ -374,7 +374,9 @@ export function scoreLivingLoreCandidatesByTraversal({
             });
         }
         if (Number.isFinite(item.similarity) && item.similarity > 0) {
-            add(candidate, Math.round(item.similarity * 20), 'semantic', { score: item.similarity });
+            // `similarity`, not `score`: describeWorldSenseReasons reads that
+            // key to render the percentage, and the old scorer set it too.
+            add(candidate, Math.round(item.similarity * 20), 'semantic', { similarity: item.similarity });
         }
         // A small nudge for entries this scene has already been leaning on.
         // Recency orders entries at the same distance; it never admits one, so

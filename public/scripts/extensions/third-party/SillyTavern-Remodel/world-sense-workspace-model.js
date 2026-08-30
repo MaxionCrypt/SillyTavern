@@ -54,6 +54,13 @@ export function describeWorldSenseReasons(reasons = []) {
     return reasons.map((reason) => {
         const label = String(reason.channel || 'evidence').replaceAll('.', ' ');
         if (reason.channel === 'semantic' && Number.isFinite(Number(reason.similarity))) return `${label} ${Math.round(Number(reason.similarity) * 100)}%`;
+        // "mention" alone says nothing useful. How far from the scene, and
+        // which entry vouched for it, is the whole reason it is here.
+        if (reason.channel === 'mention') {
+            const via = String(reason.from || '').split('::').pop();
+            return `mention · depth ${Number(reason.depth) || 1}${via ? ` · via ${via}` : ''}${reason.key ? ` ("${reason.key}")` : ''}`;
+        }
+        if (reason.channel === 'scene') return 'named by the scene';
         return label;
     });
 }
