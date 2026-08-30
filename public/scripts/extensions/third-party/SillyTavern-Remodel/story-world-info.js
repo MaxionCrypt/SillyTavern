@@ -7,6 +7,7 @@ import { extension_settings } from '../../../extensions.js';
 import { power_user } from '../../../power-user.js';
 import { getTagKeyForEntity } from '../../../tags.js';
 import { getCharaFilename } from '../../../utils.js';
+import { worldInfoRecursionAllowed, worldInfoScanCorpus } from './world-sense-scan-authority.js';
 import {
     DEFAULT_DEPTH,
     loadWorldInfo,
@@ -108,7 +109,7 @@ export async function resolveStoryWorldInfo({
     const forcedKeys = new Set((Array.isArray(forcedEntries) ? forcedEntries : [])
         .map((entry) => `${String(entry?.book ?? entry?.world ?? '').trim()}.${String(entry?.uid ?? '').trim()}`)
         .filter((key) => key !== '.'));
-    const corpus = buildScanCorpus(doc, beat);
+    const corpus = worldInfoScanCorpus(buildScanCorpus(doc, beat));
     const globalScanData = buildGlobalScanData({ doc, character, macroOptions });
     const trigger = mode === 'regenerate' ? 'regenerate' : mode === 'continue' ? 'continue' : 'normal';
     const seedBase = `${doc?.id || 'story'}:${state.generationIndex}`;
@@ -174,7 +175,7 @@ export async function resolveStoryWorldInfo({
             added += 1;
         }
 
-        if (added > 0 && world_info_recursive) {
+        if (added > 0 && worldInfoRecursionAllowed(world_info_recursive)) {
             recursion = true;
             continue;
         }

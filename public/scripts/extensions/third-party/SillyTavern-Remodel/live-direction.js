@@ -38,6 +38,7 @@ import {
     settleDirectionProgress,
 } from './direction-progress.js';
 import { activateWorldSenseSelection } from './world-sense-activation.js';
+import { worldInfoScanCorpus } from './world-sense-scan-authority.js';
 import { previewWorldSense, resolveWorldSense, scheduleWorldSensePrefetch } from './world-sense-runtime.js';
 import { applyNarratorRetryPolicy } from './narrator-retry-policy.js';
 import { describeNarratorOutput } from './narrator-output-contract.js';
@@ -1293,7 +1294,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     journalWorldSenseActivation(activation, directionInFlight?.id || worldSense?.receipt?.id || null);
     let lore = {};
     try {
-        const scan = [action, ...history.slice(-12).reverse().map((message) => message.content)];
+        const scan = worldInfoScanCorpus([action, ...history.slice(-12).reverse().map((message) => message.content)]);
         lore = await context.getWorldInfoPrompt(scan, context.maxContext, true);
     } catch (error) {
         lore = { warning: String(error?.message || error) };
