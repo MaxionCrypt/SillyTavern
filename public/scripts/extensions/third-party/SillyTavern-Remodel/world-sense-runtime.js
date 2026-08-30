@@ -16,9 +16,11 @@ import {
 } from './world-sense-retrieval.js';
 import { buildTimelineContinuityDocuments, scoreTimelineContinuityCandidates } from './world-sense-continuity.js';
 import {
+    getWorldSenseContext,
     getWorldSenseContinuity,
     getWorldSenseIndexState,
     getWorldSenseProfile,
+    saveWorldSenseContext,
     saveWorldSenseReceipt,
 } from './world-sense-store.js';
 
@@ -85,6 +87,83 @@ export async function resolveWorldSense(scene, options = {}) {
 
 /** Preview shares the exact resolver and composer cache, but cannot create a
  * receipt, advance continuity, or consume the prefetched result Send may use. */
+/**
+ * Retrieve on request and replace the Scene's working set.
+ *
+ * This is the only thing that runs a retrieval during a scene. The Loom asks
+ * for it by naming keywords when it judges the working set no longer fits what
+ * is happening; every other turn reads what this last left behind.
+ */
+export async function retrieveWorldSenseByKeywords(scene, keywords = []) {
+    const terms = (Array.isArray(keywords) ? keywords : [keywords])
+        .map((word) => String(word ?? '').trim())
+        .filter(Boolean);
+    if (!terms.length) return null;
+    const prepared = prepareQuery(scene, { searchTerms: terms, keywordsOnly: true });
+    if (!prepared) return null;
+    const result = await executeRetrieval(scene, prepared, { phase: 'keyword-request' });
+    const receipt = saveReceipt(scene, result, { reusedPrefetch: false });
+    saveWorldSenseContext(scene.id, {
+        entries: (result.selected || []).map((item) => ({ book: item.book, uid: item.uid })),
+        keywords: terms,
+        receiptId: receipt?.id || '',
+    });
+    return { ...result, receipt };
+}
+
+/**
+ * What the Scene is working from, without retrieving anything.
+ *
+ * An empty working set is seeded once from the scene itself, because a Scene
+ * that has never retrieved would otherwise give the Narrator nothing at all
+ * until the Loom happened to ask.
+ */
+export async function resolveWorldSenseFromContext(scene, options = {}) {
+    const stored = getWorldSenseContext(scene?.id);
+    if (!stored.entries.length) {
+        const seeded = await resolveWorldSense(scene, options);
+        saveWorldSenseContext(scene?.id, {
+            entries: (seeded?.selected || []).map((item) => ({ book: item.book, uid: item.uid })),
+            keywords: [],
+            receiptId: seeded?.receipt?.id || '',
+        });
+        return seeded;
+    }
+    return buildContextSelection(scene, stored);
+}
+
+/** Assemble the same shape a retrieval returns, from references alone. */
+async function buildContextSelection(scene, stored) {
+    const lore = await loadTimelineLore(scene.timelineId);
+    const wanted = new Set(stored.entries.map((entry) => `${entry.book}.${entry.uid}`));
+    const entries = (lore.entries || []).filter((entry) => wanted.has(`${entry.book}.${entry.uid}`));
+    const metadata = listLivingLoreMetadata({ timelineId: scene.timelineId, book: lore.book || '' });
+    // Entries deleted since the retrieval simply are not here. The working set
+    // is references, so it degrades to what still exists rather than resurrecting
+    // lore the author removed.
+    const selected = entries.map((entry) => ({ book: entry.book, uid: entry.uid, name: entry.name }));
+    return {
+        phase: 'context',
+        sceneId: String(scene.id),
+        timelineId: String(scene.timelineId),
+        book: lore.book,
+        bookHash: lore.hash,
+        selected,
+        rejected: [],
+        continuity: getWorldSenseContinuity(scene.id),
+        loomPacket: buildLivingLorePacket({
+            timelineId: scene.timelineId, book: lore.book, bookHash: lore.hash,
+            entries: lore.entries, selected, metadata,
+        }),
+        propagation: { goalIds: [], variableIds: [] },
+        degraded: false,
+        error: '',
+        fromContext: true,
+        keywords: stored.keywords,
+        receipt: stored.receiptId ? { id: stored.receiptId } : null,
+    };
+}
+
 export async function previewWorldSense(scene, options = {}) {
     return resolveWorldSenseForPhase(scene, options, { persist: false, consumePrefetch: false });
 }
@@ -123,6 +202,20 @@ async function resolveWorldSenseForPhase(scene, options, { persist, consumePrefe
 
 function prepareQuery(scene, options) {
     if (!scene?.id || !scene?.timelineId) return null;
+    // A keyword request is the Loom saying what it wants, so the scene must not
+    // be folded in around it. Mixing goals, history and premise back in would
+    // answer a question it did not ask and make the request unreadable in a
+    // receipt.
+    if (options.keywordsOnly) {
+        const overrides = getWorldSenseTurnOverrides(scene.id);
+        return {
+            sceneId: String(scene.id),
+            goals: [],
+            pins: [...(Array.isArray(options.pins) ? options.pins : []), ...overrides.pins],
+            excludes: overrides.excludes,
+            packet: buildWorldSenseQueryPacket({ searchTerms: options.searchTerms || [] }),
+        };
+    }
     const timeline = getTimelineStore().timelines[String(scene.timelineId)] || {};
     // Goals are Timeline Web records. Scene links influence presentation, but
     // cannot be the retrieval boundary: a Goal established in Story must be

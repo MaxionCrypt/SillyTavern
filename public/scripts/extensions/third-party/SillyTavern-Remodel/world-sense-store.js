@@ -117,6 +117,53 @@ export function listWorldSenseProposalRejections({ timelineId = '' } = {}) {
     return (timelineId ? records.filter((item) => item.timelineId === String(timelineId)) : records).map((item) => structuredClone(item));
 }
 
+/**
+ * The lore a Scene is currently working from.
+ *
+ * Retrieval used to run on every turn, rebuilding the working set from
+ * whatever the scene happened to contain. This holds the last retrieval
+ * instead, so the Narrator reads a stable set and the Loom decides when it is
+ * worth replacing — which is the only way "ask for context when you have
+ * reason to" can mean anything.
+ *
+ * Entry references only. The lorebook is the lore; storing content here would
+ * be a second copy to keep in step with edits.
+ */
+export function getWorldSenseContext(sceneId) {
+    const stored = getWorldSenseStore().contextByScene[String(sceneId)];
+    if (!isObject(stored)) return { entries: [], keywords: [], updatedAt: '', receiptId: '' };
+    return structuredClone({
+        entries: Array.isArray(stored.entries) ? stored.entries : [],
+        keywords: Array.isArray(stored.keywords) ? stored.keywords : [],
+        updatedAt: String(stored.updatedAt || ''),
+        receiptId: String(stored.receiptId || ''),
+    });
+}
+
+/** Replaces the whole set. A retrieval answers "what is this scene about now",
+ * so merging it with an older answer would describe no moment in particular. */
+export function saveWorldSenseContext(sceneId, { entries = [], keywords = [], receiptId = '' } = {}) {
+    const id = String(sceneId || '').trim();
+    if (!id) return null;
+    const store = getWorldSenseStore();
+    store.contextByScene[id] = {
+        entries: (Array.isArray(entries) ? entries : [])
+            .map((entry) => ({ book: String(entry?.book || ''), uid: String(entry?.uid || '') }))
+            .filter((entry) => entry.book && entry.uid),
+        keywords: (Array.isArray(keywords) ? keywords : []).map((word) => String(word || '').trim()).filter(Boolean),
+        receiptId: String(receiptId || ''),
+        updatedAt: now(),
+    };
+    getContext().saveSettingsDebounced();
+    return structuredClone(store.contextByScene[id]);
+}
+
+export function clearWorldSenseContext(sceneId) {
+    const store = getWorldSenseStore();
+    delete store.contextByScene[String(sceneId)];
+    getContext().saveSettingsDebounced();
+}
+
 export function getWorldSenseContinuity(sceneId) {
     return structuredClone(getWorldSenseStore().continuityByScene[String(sceneId)] || []);
 }
@@ -130,6 +177,7 @@ function emptyStore() {
         receipts: [],
         proposalRejections: [],
         continuityByScene: {},
+        contextByScene: {},
         receiptCompactionVersion: RECEIPT_COMPACTION_VERSION,
     };
 }
@@ -170,6 +218,7 @@ function normalizeStore(store) {
     store.receipts = Array.isArray(store.receipts) ? store.receipts.filter(isObject).slice(-RECEIPT_LIMIT).map(compactReceipt) : [];
     store.proposalRejections = Array.isArray(store.proposalRejections) ? store.proposalRejections.filter(isObject).slice(-PROPOSAL_REJECTION_LIMIT) : [];
     store.continuityByScene = isObject(store.continuityByScene) ? store.continuityByScene : {};
+    store.contextByScene = isObject(store.contextByScene) ? store.contextByScene : {};
     if (needsCompactionSave) {
         store.receiptCompactionVersion = RECEIPT_COMPACTION_VERSION;
         getContext().saveSettingsDebounced();

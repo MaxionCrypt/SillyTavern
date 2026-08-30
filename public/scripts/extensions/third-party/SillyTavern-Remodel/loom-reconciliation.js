@@ -320,6 +320,17 @@ export function readLoomProse(raw, { final = false } = {}) {
  * @param {string} raw
  * @returns {{ prose: string, swaps: {find: string, replace: string}[], requests: object[], flow: {continueAfter: boolean, hardPauseAfter: boolean}|null, loreProposals: object[], loreProposalRejections: object[] }}
  */
+/**
+ * Keywords the Loom asked to retrieve on. Bounded: a request naming half the
+ * book is not a request, it is pulling everything in wearing a different name.
+ */
+export function readLoreKeywords(value) {
+    return [...new Set((Array.isArray(value) ? value : [])
+        .map((word) => String(word ?? '').trim())
+        .filter(Boolean)
+        .map((word) => word.slice(0, 120)))].slice(0, 8);
+}
+
 export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
     const text = String(raw ?? '');
     const prose = readLoomProse(text, { final: true });
@@ -328,6 +339,7 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
     let requests = [];
     let flow = null;
     let loreProposals = [];
+    let loreKeywords = [];
     let loreProposalRejections = [];
     let lorePromotionDecisions = [];
     let lorePromotionDecisionRejections = [];
@@ -339,6 +351,7 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
             // packet is no longer needed to validate them: the Loom does not
             // name an entry, so there is nothing to check it against.
             const proposals = readLoomInformation(parsed?.loreProposals);
+            loreKeywords = readLoreKeywords(parsed?.loreKeywords);
             loreProposals = proposals.accepted;
             loreProposalRejections = proposals.rejected;
             if (livingLorePacket?.promotion?.candidates?.length) {
@@ -360,7 +373,7 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
         } catch { swaps = []; requests = []; flow = null; loreProposals = []; loreProposalRejections = []; lorePromotionDecisions = []; lorePromotionDecisionRejections = []; }
     }
     return {
-        prose, swaps, requests, flow, loreProposals, loreProposalRejections,
+        prose, swaps, requests, flow, loreProposals, loreProposalRejections, loreKeywords,
         ...(livingLorePacket?.promotion?.candidates?.length ? { lorePromotionDecisions, lorePromotionDecisionRejections } : {}),
     };
 }

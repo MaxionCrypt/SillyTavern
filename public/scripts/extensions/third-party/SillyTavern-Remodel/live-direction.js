@@ -22,7 +22,6 @@ import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources,
 import { formatLivingLorePacket } from './living-lore-proposals.js';
 import { saveWorldSensePromotionDecisionReceipt, saveWorldSenseProposalRejections } from './world-sense-store.js';
 import {
-    listLivingLoreProposals,
 } from './living-lore-mutations.js';
 import { describeBudgetWarning, describeGenerationBudget, describeIncompleteProse } from './generation-budget.js';
 import { createLoomTurnEnvelope } from './loom-turn.js';
@@ -40,7 +39,7 @@ import { applyLoomLoreReports } from './living-lore-intake-runtime.js';
 import { withdrawLivingLoreWrites } from './living-lore-withdrawal.js';
 import { listLivingLoreWrites } from './living-lore-store.js';
 import { listEvents } from './archivist-store.js';
-import { previewWorldSense, resolveWorldSense, scheduleWorldSensePrefetch } from './world-sense-runtime.js';
+import { resolveWorldSenseFromContext, retrieveWorldSenseByKeywords, scheduleWorldSensePrefetch } from './world-sense-runtime.js';
 import { applyNarratorRetryPolicy } from './narrator-retry-policy.js';
 import { describeNarratorOutput } from './narrator-output-contract.js';
 import { limitBoundedChatHistory } from './prompt-history-limit.js';
@@ -633,11 +632,13 @@ export function prefetchLiveDirectionLore(scene, action) {
     scheduleWorldSensePrefetch(scene, buildLiveDirectionLoreOptions(action));
 }
 
-/** Resolve the same lore packet for Prompt Preview without saving a receipt,
- * changing continuity, or consuming the composer prefetch Send may reuse. */
+/** The lore Prompt Preview would send, which is the Scene's working set — the
+ * same one Send reads. Preview cannot retrieve: retrieving is what the Loom
+ * asks for, and showing a preview that quietly replaced the working set would
+ * change the next turn just by looking at it. */
 export async function previewLiveDirectionLore(scene, action) {
     if (!isDirectedLiveScene(scene)) return null;
-    return previewWorldSense(scene, buildLiveDirectionLoreOptions(action));
+    return resolveWorldSenseFromContext(scene, buildLiveDirectionLoreOptions(action));
 }
 
 function buildLiveDirectionLoreOptions(action) {
@@ -1281,7 +1282,10 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     const cutOff = effectiveChat[effectiveChat.length - 1];
     const cutOffRecord = recentChat[recentChat.length - 1] === cutOff ? readInterruptionRecord(cutOff) : null;
     const performingCast = cast.filter((member) => !member.disabled);
-    const worldSensePromise = (preview ? previewWorldSense : resolveWorldSense)(scene, {
+    // Retrieval no longer runs per turn: the Scene works from what the last
+    // one left behind, and only the Loom asking replaces it. Preview reads the
+    // same set, so what it shows is what Send will use.
+    const worldSensePromise = resolveWorldSenseFromContext(scene, {
         action,
         history,
         cast: performingCast,
@@ -2398,7 +2402,23 @@ export async function runLoomReconciliation({
     // did not advance — name the real cause here instead.
     await checkGenerationBudget({ text: raw, reasoning: '', label: 'The Loom pass', directionId: null });
     journalLoomReply(raw, 'loom-pass', scene?.id || null);
-    const { prose, swaps, requests, flow, loreProposals, loreProposalRejections, lorePromotionDecisions = [], lorePromotionDecisionRejections = [] } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
+    const { prose, swaps, requests, flow, loreProposals, loreProposalRejections, loreKeywords = [], lorePromotionDecisions = [], lorePromotionDecisionRejections = [] } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
+    // A retrieval request replaces the working set for the turns that follow.
+    // It cannot affect this one: the Narrator was given its lore before the
+    // Loom answered.
+    if (loreKeywords.length && scene?.id) {
+        try {
+            const retrieved = await retrieveWorldSenseByKeywords(scene, loreKeywords);
+            const count = retrieved?.selected?.length || 0;
+            journal('world-sense.keyword-request', {
+                keywords: loreKeywords,
+                selected: (retrieved?.selected || []).map((item) => item.name).filter(Boolean),
+                degraded: Boolean(retrieved?.degraded),
+            }, { severity: 'info', summary: `Loom replaced the working lore with ${count} entr${count === 1 ? 'y' : 'ies'} for ${loreKeywords.join(', ')}` });
+        } catch (error) {
+            journal('world-sense.keyword-request.failed', { keywords: loreKeywords, error: String(error?.message || error) }, { severity: 'warn' });
+        }
+    }
     if (snapshot?.livingLore?.promotion?.candidates?.length) {
         saveWorldSensePromotionDecisionReceipt(snapshot?.worldSense?.id, {
             decisions: lorePromotionDecisions,

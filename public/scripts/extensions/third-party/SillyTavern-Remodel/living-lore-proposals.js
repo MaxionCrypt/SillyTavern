@@ -91,6 +91,9 @@ export function formatLivingLorePacket(packet) {
         'One report is one piece of information. Split unrelated facts into separate entries in the array rather than combining them.',
         'Evidence may be one string or an array of 1-6 independently checkable strings. Prefer archive:<record-id> for supplied Archive or promotion evidence. Never combine separate quotations into one string with "and" or semicolons.',
         'Use "loreProposals":[] when accepted fiction established nothing durable.',
+        'The lore above is what this Scene is working from, and it stays until you replace it. When the scene has moved on far enough that it no longer fits, add a top-level "loreKeywords" array naming what to look up instead: {"loreKeywords":["Queens Lake University","Marissa"]}.',
+        'Use the exact key an entry answers to. Partial names do not match: "Queens" will not find "Queens Lake University".',
+        'Replacing costs a retrieval and discards what is there, so ask only when you have reason to. Leave "loreKeywords" out when the current lore still serves.',
         formatWorldSensePromotionPacket(packet.promotion),
     ].filter(Boolean).join('\n');
 }
