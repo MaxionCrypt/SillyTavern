@@ -78,12 +78,14 @@ test('a chain is still walkable when the caller asks for the depth', () => {
     expect(result.receipt.deepest).toBe(3);
 });
 
-test('naming runs both ways, so the walk can start from either end', () => {
-    // Nothing names piper; piper names warden. Entering at warden must still
-    // reach piper, because a reference says the two belong together.
+test('being named by something does not reach it', () => {
+    // piper names warden; warden names nothing back. Entering at warden must
+    // not drag piper in, or asking about a subject would return every entry
+    // that ever mentioned it.
     const result = gateLoreTraversal({ seeds: ['warden'], graph, known, similarity: {} });
-    expect(idsAt(result, 1)).toContain('piper');
-    expect(result.admitted.find((item) => item.id === 'piper').via.relation).toBe('named-by');
+    expect(result.admitted.map((item) => item.id)).not.toContain('piper');
+    // What warden itself names is still reached.
+    expect(idsAt(result, 1)).toContain('charter');
 });
 
 test('two things named by the same entry become neighbours', () => {

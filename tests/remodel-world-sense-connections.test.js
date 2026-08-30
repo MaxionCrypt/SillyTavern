@@ -17,8 +17,11 @@ test('a connection reports the key that actually caused it', () => {
     expect(link).toMatchObject({ relation: 'names', via: 'Alpha' });
 });
 
-test('being named is shown from the other side too', () => {
-    expect(of('Alpha').neighbours.find((item) => item.name === 'Hub')).toMatchObject({ relation: 'named-by' });
+test('an inbound reference is not shown as a connection', () => {
+    // Hub names Alpha. The walk does not follow that backwards, so listing it
+    // here would describe reachability the system does not have.
+    expect(of('Alpha').neighbours.some((item) => item.name === 'Hub')).toBe(false);
+    expect(of('Hub').neighbours.some((item) => item.name === 'Alpha')).toBe(true);
 });
 
 test('two entries named together are shown as co-mentioned', () => {

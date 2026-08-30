@@ -8,15 +8,18 @@
 // Three kinds of connection, matching what traversal walks:
 //
 //  - names        this entry's content names the other
-//  - named by     the other's content names this entry
 //  - co-mentioned neither names the other; a third entry named them together
+//
+// Being named BY another entry is deliberately not a connection here: the walk
+// does not follow it, so showing it would describe reachability the system does
+// not have.
 //
 // Pure. No store, no model, no network.
 
 import { assignLoreTiers, buildLoreMentionGraph, scoreLoreGenerality } from './lore-hierarchy.js';
 import { buildMesh } from './lore-traversal.js';
 
-export const CONNECTION_RELATIONS = Object.freeze(['names', 'named-by', 'co-mentioned']);
+export const CONNECTION_RELATIONS = Object.freeze(['names', 'co-mentioned']);
 
 const RELATION_LABELS = Object.freeze({
     'names': 'names',

@@ -14,21 +14,24 @@
 // own, because "these words are not very close in meaning" is not a reason to
 // withhold something the world explicitly linked to what is in play.
 //
-// The graph is a MESH, not a one-way walk:
+// Two ways an entry is reachable, and one that was tried and rejected:
 //
-//  - Naming runs both ways. If Halloway Residence names Teo, then Teo is
-//    reachable from Halloway AND Halloway is reachable from Teo. A reference
-//    is a statement that two things belong together, and which one happened to
-//    be written down inside the other is an accident of authoring.
-//  - Things named together are connected to each other. An entry saying "the
-//    Other Skin is kept in Halloway Residence 4B" links those two, even though
-//    neither one names the other. This is how new lore joins the mesh: write
-//    one entry mentioning two existing things and they become neighbours.
+//  - It is NAMED by something already in play. An entry's content matching
+//    another's key is the whole basis of retrieval, as it is for vanilla
+//    recursion.
+//  - It was named ALONGSIDE something in play. An entry saying "the Other Skin
+//    is kept in Halloway Residence 4B" links those two even though neither
+//    names the other. This is how new lore joins the mesh: write one entry
+//    mentioning two existing subjects and they become neighbours, without
+//    editing either.
 //
-// It therefore starts from anywhere. Any seed is a valid entrance and the
-// neighbourhood around it comes into reach, which is why this behaves as hubs
-// rather than chains: one hop already reaches everything a subject is involved
-// with, in either direction.
+// Being named BY something in play does not reach it. Links ran both ways at
+// first, on the reasoning that a reference means two things belong together
+// whichever one it was written inside. In practice it inverted retrieval:
+// asking about a subject returned every entry that happened to mention it, so
+// a name dropped once in a minor entry dragged that entry back every time its
+// subject came up. Reaching what an entry talks about is the question;
+// reaching everything that talks about it is a different and much larger one.
 //
 // Seeds are what the scene named directly. They are admitted unconditionally
 // and ranked by how they matched the scene, never reordered by the hierarchy.
@@ -43,7 +46,7 @@ export const TRAVERSAL_REJECTIONS = Object.freeze([
     'depth-exhausted', 'entry-budget', 'token-budget', 'unknown-entry',
 ]);
 
-export const TRAVERSAL_RELATIONS = Object.freeze(['names', 'named-by', 'co-mentioned']);
+export const TRAVERSAL_RELATIONS = Object.freeze(['names', 'co-mentioned']);
 
 /**
  * @param {object} options
@@ -214,7 +217,6 @@ export function buildMesh(graph = { edges: [] }) {
     const namedBy = new Map();
     for (const edge of graph?.edges || []) {
         link(edge.from, edge.to, edge.key, 'names');
-        link(edge.to, edge.from, edge.key, 'named-by');
         if (!namedBy.has(edge.from)) namedBy.set(edge.from, []);
         namedBy.get(edge.from).push(edge);
     }
