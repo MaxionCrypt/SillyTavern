@@ -1,6 +1,8 @@
 import {
     buildWorldSenseRefusals,
+    describeWorldSenseReasons,
     describeWorldSenseRefusal,
+    filterWorldSenseWorkspaceEntries,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-workspace-model.js';
 
 const entries = [
@@ -68,4 +70,19 @@ test('a refusal for an entry that has since vanished still names it', () => {
 test('no receipt produces no rows rather than throwing', () => {
     expect(buildWorldSenseRefusals({ entries, receipt: null })).toEqual([]);
     expect(buildWorldSenseRefusals({})).toEqual([]);
+});
+
+test('a mention reason names the entry that vouched for it, not its uid', () => {
+    const entries = [
+        { book: 'Book', uid: '7', name: 'Halloway Residence', keys: ['Halloway Residence'], secondaryKeys: [], content: '' },
+        { book: 'Book', uid: '9', name: 'Room 4B', keys: ['Room 4B'], secondaryKeys: [], content: '' },
+    ];
+    const receipt = {
+        selected: [{ book: 'Book', uid: '9', score: 900, reasons: [{ channel: 'mention', depth: 1, from: 'Book::7', key: 'Halloway Residence' }] }],
+        rejected: [],
+    };
+    const [row] = filterWorldSenseWorkspaceEntries({ entries, receipt }).filter((item) => item.key === 'Book.9');
+    const [text] = describeWorldSenseReasons(row.reasons);
+    expect(text).toContain('via Halloway Residence');
+    expect(text).not.toContain('via 7');
 });

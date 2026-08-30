@@ -5,6 +5,7 @@
 export function filterWorldSenseWorkspaceEntries({
     entries = [], metadata = [], receipt = null, semanticMatches = [], query = '', type = 'all', status = 'all',
 } = {}) {
+    const entriesByKey = new Map(entries.map((item) => [entryKey(item), item]));
     const metadataByKey = new Map(metadata.map((item) => [entryKey(item), item]));
     const selectedByKey = new Map((receipt?.selected || []).map((item) => [entryKey(item), item]));
     const rejectedByKey = new Map((receipt?.rejected || []).map((item) => [entryKey(item), item]));
@@ -30,7 +31,7 @@ export function filterWorldSenseWorkspaceEntries({
             selected: selectedByKey.has(key),
             score: Number(receiptItem?.score || 0),
             decision: receiptItem?.decision || '',
-            reasons: receiptItem?.reasons || [],
+            reasons: nameReasonSources(receiptItem?.reasons || [], entriesByKey),
             semanticScore: Number.isFinite(Number(semantic?.score)) ? Number(semantic.score) : null,
         };
     }).filter((entry) => {
@@ -50,6 +51,20 @@ export function filterWorldSenseWorkspaceEntries({
     });
 }
 
+/**
+ * A mention reason carries `from` as a graph id (book::uid). Readers need the
+ * name of whatever vouched for the entry, so resolve it once here rather than
+ * asking every renderer to carry the entry list around.
+ */
+export function nameReasonSources(reasons = [], entriesByKey = new Map()) {
+    return (reasons || []).map((reason) => {
+        if (reason?.channel !== 'mention' || !reason.from) return reason;
+        const fromKey = String(reason.from).replace('::', '.');
+        const fromName = entriesByKey.get(fromKey)?.name || '';
+        return fromName ? { ...reason, fromName } : reason;
+    });
+}
+
 export function describeWorldSenseReasons(reasons = []) {
     return reasons.map((reason) => {
         const label = String(reason.channel || 'evidence').replaceAll('.', ' ');
@@ -57,7 +72,7 @@ export function describeWorldSenseReasons(reasons = []) {
         // "mention" alone says nothing useful. How far from the scene, and
         // which entry vouched for it, is the whole reason it is here.
         if (reason.channel === 'mention') {
-            const via = String(reason.from || '').split('::').pop();
+            const via = reason.fromName || String(reason.from || '').split('::').pop();
             return `mention · depth ${Number(reason.depth) || 1}${via ? ` · via ${via}` : ''}${reason.key ? ` ("${reason.key}")` : ''}`;
         }
         if (reason.channel === 'scene') return 'named by the scene';
@@ -79,7 +94,7 @@ export function buildWorldSenseDryRun({ entries = [], metadata = [], receipt = n
                 name: entry.name,
                 revision: Number(sidecar?.revision || 1),
                 content: entry.content,
-                reasons: describeWorldSenseReasons(selection.reasons),
+                reasons: describeWorldSenseReasons(nameReasonSources(selection.reasons, entriesByKey)),
             };
         }).filter(Boolean),
         budget: receipt?.budget || null,
