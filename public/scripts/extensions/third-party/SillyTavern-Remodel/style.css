@@ -10458,12 +10458,25 @@ body.st-remodel-active .remodel-world-sense-entry-list::-webkit-scrollbar {
 }
 
 body.st-remodel-active .remodel-world-sense {
-  --ws-line: color-mix(in srgb, var(--SmartThemeQuoteColor) 32%, transparent);
-  --ws-panel: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, #07080c 10%);
-  width: min(1440px, calc(100% - 48px));
-  margin: 0 auto;
-  padding: 34px 0 80px;
-  color: var(--SmartThemeBodyColor);
+  /* Owned, not inherited. Same values Prompt Studio uses, so the two
+     surfaces read as one application rather than two themes. */
+  --ws-gold: #d7c800;
+  --ws-gold-soft: rgba(215, 200, 0, 0.38);
+  --ws-ink: #f0ecdf;
+  --ws-muted: rgba(240, 236, 223, 0.62);
+  --ws-line: rgba(215, 200, 0, 0.24);
+  --ws-panel: rgba(12, 12, 18, 0.72);
+  --ws-raised: rgba(0, 0, 0, 0.24);
+  display: block;
+  width: 100%;
+  padding: 26px 30px 40px;
+  border: 1px solid rgba(215, 200, 0, 0.24);
+  border-radius: 14px;
+  /* An explicit ground: the workspace sits over the app background image,
+     which showed straight through the old transparent panel. */
+  background: linear-gradient(135deg, rgba(8, 8, 13, 0.94), rgba(18, 18, 27, 0.88));
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.34);
+  color: var(--ws-ink);
 }
 
 body.st-remodel-active .remodel-world-sense-loading,
@@ -10473,7 +10486,7 @@ body.st-remodel-active .remodel-world-sense-empty {
   place-content: center;
   gap: 8px;
   text-align: center;
-  color: color-mix(in srgb, var(--SmartThemeBodyColor) 68%, transparent);
+  color: var(--ws-muted);
 }
 
 body.st-remodel-active .remodel-world-sense-empty.compact {
@@ -10500,7 +10513,7 @@ body.st-remodel-active .remodel-world-sense-head p,
 body.st-remodel-active .remodel-world-sense-status span,
 body.st-remodel-active .remodel-world-sense-status small,
 body.st-remodel-active .remodel-world-sense-review header span {
-  color: color-mix(in srgb, var(--SmartThemeBodyColor) 58%, transparent);
+  color: var(--ws-muted);
   font-size: 0.72rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -10553,8 +10566,8 @@ body.st-remodel-active .remodel-world-sense button:hover,
 body.st-remodel-active .remodel-world-sense button:focus-visible,
 body.st-remodel-active .remodel-world-sense button.primary,
 body.st-remodel-active .remodel-world-sense button.is-active {
-  border-color: var(--SmartThemeQuoteColor);
-  color: var(--SmartThemeQuoteColor);
+  border-color: var(--ws-gold-soft);
+  color: var(--ws-gold);
   outline: none;
 }
 
@@ -10566,8 +10579,8 @@ body.st-remodel-active .remodel-world-sense button:disabled {
 body.st-remodel-active .remodel-world-sense-notice {
   margin: 14px 0 0;
   padding: 10px 14px;
-  border-left: 2px solid var(--SmartThemeQuoteColor);
-  background: color-mix(in srgb, var(--SmartThemeQuoteColor) 9%, transparent);
+  border-left: 2px solid var(--ws-gold);
+  background: rgba(215, 200, 0, 0.09);
 }
 
 body.st-remodel-active .remodel-world-sense-status {
@@ -10633,7 +10646,7 @@ body.st-remodel-active .remodel-world-sense-auto-safe {
   gap: 0.45rem 0.8rem;
   margin: 10px 0 0;
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 65%, transparent);
+  border: 1px solid var(--ws-line);
 }
 
 body.st-remodel-active .remodel-world-sense-auto-safe label {
@@ -10714,8 +10727,8 @@ body.st-remodel-active button.remodel-world-sense-entry {
 }
 
 body.st-remodel-active button.remodel-world-sense-entry.is-selected {
-  border-color: var(--SmartThemeQuoteColor);
-  background: color-mix(in srgb, var(--SmartThemeQuoteColor) 12%, var(--ws-panel));
+  border-color: var(--ws-gold-soft);
+  background: rgba(215, 200, 0, 0.12);
 }
 
 body.st-remodel-active .remodel-world-sense-entry-top,
@@ -10747,7 +10760,7 @@ body.st-remodel-active .remodel-world-sense-entry-top em {
 }
 
 body.st-remodel-active .remodel-world-sense-entry-reason b {
-  color: var(--SmartThemeQuoteColor);
+  color: var(--ws-gold);
 }
 
 body.st-remodel-active .remodel-world-sense-entry-flags {
@@ -10928,8 +10941,8 @@ body.st-remodel-active .remodel-world-sense-seed-locks,
 body.st-remodel-active .remodel-world-sense-cultivation,
 body.st-remodel-active .remodel-world-sense-cultivation-preview,
 body.st-remodel-active .remodel-world-sense-conflicts {
-  border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
-  background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 82%, transparent);
+  border: 1px solid var(--ws-line);
+  background: var(--ws-panel);
   border-radius: 0.55rem;
 }
 
@@ -13363,4 +13376,15 @@ body.st-remodel-active .remodel-world-sense-refusals li em {
 body.st-remodel-active .remodel-world-sense-refusals li small {
   font-size: 0.72rem;
   opacity: 0.6;
+}
+
+/* World Sense is a full surface, not an overlay. While it is open the
+   native World Info outlet is hidden rather than left showing beneath it,
+   which is what made the old and new interfaces look interleaved. */
+body.st-remodel-active .remodel-lorebooks-workspace.is-world-sense-open .remodel-lorebooks-outlet {
+  display: none !important;
+}
+
+body.st-remodel-active .remodel-world-sense-host {
+  padding: 0 !important;
 }
