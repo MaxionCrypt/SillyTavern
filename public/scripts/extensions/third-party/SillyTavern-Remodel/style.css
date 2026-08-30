@@ -10436,11 +10436,13 @@ body.st-remodel-active .remodel-lorebooks-dock button[aria-expanded="true"] {
   box-shadow:0 0 12px rgba(215,200,0,.1) !important;
 }
 
-/* World Sense is mounted only while its Lorebooks utility is open. That keeps
-   the native World Info editor authoritative and avoids adding a second hidden
-   tree to an already dense workspace. */
+/* World Sense is a full surface, not an overlay: while it is open the native
+   World Info outlet is hidden rather than left showing underneath, which is
+   what made the old and new interfaces look interleaved. The outlet is also a
+   .remodel-tavern-legacy-outlet, and that rule wins with display:flex
+   !important -- so this has to be !important too or it never applies. */
 body.st-remodel-active .remodel-lorebooks-workspace.is-world-sense-open .remodel-lorebooks-outlet {
-  display: none;
+  display: none !important;
 }
 
 body.st-remodel-active .remodel-world-sense-host:not([hidden]) {
@@ -13376,13 +13378,6 @@ body.st-remodel-active .remodel-world-sense-refusals li em {
 body.st-remodel-active .remodel-world-sense-refusals li small {
   font-size: 0.72rem;
   opacity: 0.6;
-}
-
-/* World Sense is a full surface, not an overlay. While it is open the
-   native World Info outlet is hidden rather than left showing beneath it,
-   which is what made the old and new interfaces look interleaved. */
-body.st-remodel-active .remodel-lorebooks-workspace.is-world-sense-open .remodel-lorebooks-outlet {
-  display: none !important;
 }
 
 body.st-remodel-active .remodel-world-sense-host {
