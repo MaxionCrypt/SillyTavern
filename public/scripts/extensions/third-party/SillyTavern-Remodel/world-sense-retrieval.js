@@ -1,3 +1,5 @@
+import { buildLoreMentionGraph } from './lore-hierarchy.js';
+import { gateLoreTraversal } from './lore-traversal.js';
 const DEFAULT_LIMITS = Object.freeze({ sourceChars: 1600, totalChars: 8000 });
 const DEFAULT_BUDGET = Object.freeze({ maxEntries: 12, maxTokens: 1800 });
 
@@ -260,4 +262,137 @@ function hashString(value) {
         hash = BigInt.asUintN(64, hash * 0x100000001b3n);
     }
     return hash.toString(16).padStart(16, '0');
+}
+
+/**
+ * Lore selection where mentions propose and the vector disposes.
+ *
+ * The blended scorer this replaces let similarity alone pull an entry in,
+ * which is why it needed a similarity floor and a cap on how many entries
+ * could ride on similarity alone. Here nothing enters without a textual
+ * connection: the scene names an entry, or an already-admitted entry
+ * mentions it. Similarity only decides whether a proposal earns its place,
+ * so `semanticOnlyLimit` has nothing left to restrain — no lore candidate
+ * can be semantic-only any more.
+ *
+ * Budgeting is deliberately NOT done here. Lore and continuity share one
+ * budget, so selectWorldSenseCandidates stays the single place that spends
+ * it; traversal runs unbounded and hands over everything it would allow.
+ */
+export function scoreLivingLoreCandidatesByTraversal({
+    packet, entries = [], semanticMatches = [], metadata = [], goals = [], variables = [], pins = [],
+    gate, depthPenalty, maxDepth,
+} = {}) {
+    const metadataByKey = new Map(metadata.map((item) => [entryKey(item), item]));
+    const live = entries.filter((entry) => {
+        const sidecar = metadataByKey.get(entryKey(entry));
+        return entryKey(entry) && !entry.native?.disable && !sidecar?.worldSense?.excluded;
+    });
+    if (!live.length) return { candidates: [], rejected: [], receipt: null };
+
+    // Graph ids are the mention graph's own; the receipt keys stay entryKey.
+    const graphId = (entry) => `${entry.book || ''}::${entry.uid || ''}`;
+    const byGraphId = new Map(live.map((entry) => [graphId(entry), entry]));
+    const graph = buildLoreMentionGraph(live);
+
+    const scoreByGraphId = {};
+    const rankedSemantic = new Map(semanticMatches.map((item, index) => [entryKey(item), {
+        score: Number(item?.score), rank: Number.isFinite(Number(item?.rank)) ? Number(item.rank) : index,
+    }]));
+    for (const entry of live) {
+        const match = rankedSemantic.get(entryKey(entry));
+        if (match && Number.isFinite(match.score)) scoreByGraphId[graphId(entry)] = match.score;
+    }
+
+    // Seeds: what the scene itself named, plus anything the owner forced.
+    const sources = packet?.sources || [];
+    const seeds = [];
+    const seedEvidence = new Map();
+    const pinKeys = new Set(pins.map(entryKey).filter(Boolean));
+    for (const entry of live) {
+        const sidecar = metadataByKey.get(entryKey(entry));
+        const forced = Boolean(entry.native?.constant || pinKeys.has(entryKey(entry)) || sidecar?.worldSense?.pinned);
+        // Recorded per source and per key rank, keeping the receipt vocabulary
+        // the old scorer established (`action.primary`, `history.secondary`,
+        // …). "Which source named this" is what makes a receipt readable, and
+        // the Debug console and UI already speak that language.
+        const hits = [];
+        for (const item of sources) {
+            const haystack = normalize(item.text);
+            const primary = (entry.keys || []).filter((key) => phraseMatch(haystack, key));
+            const secondary = (entry.secondaryKeys || []).filter((key) => phraseMatch(haystack, key));
+            if (primary.length) hits.push({ channel: `${item.kind}.primary`, keys: primary });
+            // Core only counts a secondary key on a selective entry when a
+            // primary matched too; mirror that rather than inventing evidence.
+            if (secondary.length && (primary.length || !entry.native?.selective)) {
+                hits.push({ channel: `${item.kind}.secondary`, keys: secondary });
+            }
+        }
+        if (hits.length || forced) {
+            seeds.push(graphId(entry));
+            seedEvidence.set(graphId(entry), { hits, forced });
+        }
+    }
+
+    const walked = gateLoreTraversal({
+        seeds,
+        graph,
+        similarity: scoreByGraphId,
+        known: new Set(byGraphId.keys()),
+        ...(Number.isFinite(Number(gate)) ? { gate: Number(gate) } : {}),
+        ...(Number.isFinite(Number(depthPenalty)) ? { depthPenalty: Number(depthPenalty) } : {}),
+        ...(Number.isFinite(Number(maxDepth)) ? { maxDepth: Number(maxDepth) } : {}),
+        maxEntries: Infinity,
+        maxTokens: Infinity,
+        tokensFor: (id) => estimateEntryTokens(byGraphId.get(id) || {}),
+    });
+
+    const candidates = walked.admitted.map((item) => {
+        const entry = byGraphId.get(item.id);
+        const evidence = seedEvidence.get(item.id);
+        const candidate = {
+            kind: 'lore', key: entryKey(entry), entry, score: 0, reasons: [], forced: false,
+            tokenCost: estimateEntryTokens(entry),
+        };
+        if (entry.native?.constant) add(candidate, 120, 'native.constant');
+        if (evidence?.forced && !entry.native?.constant) add(candidate, 140, 'pin');
+        candidate.forced = candidate.reasons.some((reason) => reason.channel === 'native.constant' || reason.channel === 'pin');
+        // Distance from the scene is the PRIMARY ordering and dominates every
+        // other signal, so a closer connection can never be outranked by a
+        // more distant one that merely scored well. Channel points below only
+        // order entries sitting at the same distance.
+        if (item.depth === 0) {
+            add(candidate, 1000, 'scene');
+            for (const hit of evidence?.hits || []) {
+                const primary = hit.channel.endsWith('.primary');
+                add(candidate, primary ? 58 + Math.min(18, (hit.keys.length - 1) * 6) : 18 + Math.min(8, (hit.keys.length - 1) * 4), hit.channel, { keys: hit.keys });
+            }
+        } else {
+            add(candidate, Math.max(100, 1000 - item.depth * 100), 'mention', {
+                depth: item.depth, from: item.via?.from || null, key: item.via?.key || null,
+            });
+        }
+        if (Number.isFinite(item.similarity) && item.similarity > 0) {
+            add(candidate, Math.round(item.similarity * 20), 'semantic', { score: item.similarity });
+        }
+        return candidate;
+    });
+
+    // Traversal refusals are surfaced, not dropped: an entry the walk
+    // declined never becomes a candidate, so it would otherwise vanish from
+    // the receipt entirely and look as though it was never considered.
+    const rejected = walked.rejected
+        .filter((item) => byGraphId.has(item.id))
+        .map((item) => ({
+            kind: 'lore',
+            key: entryKey(byGraphId.get(item.id)),
+            name: byGraphId.get(item.id)?.name || '',
+            decision: item.reason,
+            depth: item.depth,
+            similarity: item.similarity,
+            ...(item.bar === undefined ? {} : { bar: item.bar }),
+            reasons: item.via ? [{ channel: 'mention', from: item.via.from, key: item.via.key }] : [],
+        }));
+
+    return { candidates, rejected, receipt: walked.receipt };
 }

@@ -11,7 +11,7 @@ import { loadTimelineLore } from './world-sense-lore.js';
 import {
     buildWorldSenseQueryPacket,
     canReuseWorldSensePrefetch,
-    scoreLivingLoreCandidates,
+    scoreLivingLoreCandidatesByTraversal,
     selectWorldSenseCandidates,
 } from './world-sense-retrieval.js';
 import { buildTimelineContinuityDocuments, scoreTimelineContinuityCandidates } from './world-sense-continuity.js';
@@ -186,7 +186,15 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         const timeoutMs = phase === 'prefetch' ? 20000 : Math.max(250, profile.warmQueryTargetMs * 2);
         try {
             semantic = await withTimeout(
-                queryWorldSense(scene.timelineId, prepared.packet.text, { topK: Math.min(50, profile.maxEntries * 3), threshold: profile.semanticThreshold }),
+                // No threshold here, and a top-K wide enough to cover the book:
+                // the traversal gate is the only thing that should refuse a
+                // proposal now. Pre-filtering would return nothing for a
+                // low-scoring entry, which is indistinguishable from "never
+                // scored" — so a refusal receipt could not say which happened.
+                queryWorldSense(scene.timelineId, prepared.packet.text, {
+                    topK: Math.min(200, Math.max(50, lore.entries.length)),
+                    threshold: 0,
+                }),
                 timeoutMs,
                 'Local semantic retrieval exceeded the turn budget.',
             );
@@ -198,7 +206,11 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
     }
     const metadata = listLivingLoreMetadata({ timelineId: scene.timelineId, book: lore.book || '' });
     const variables = listVariableValues({ timelineId: scene.timelineId });
-    const loreCandidates = scoreLivingLoreCandidates({
+    // Mentions propose, the vector disposes. Nothing enters on similarity
+    // alone any more, so the similarity floor and the semantic-only cap have
+    // nothing left to restrain — a lore candidate always carries a seed or a
+    // mention as well.
+    const traversal = scoreLivingLoreCandidatesByTraversal({
         packet: prepared.packet,
         entries: lore.entries.filter((entry) => !prepared.excludes.some((excluded) => loreKey(excluded) === loreKey(entry))),
         semanticMatches: semantic.matches || [],
@@ -206,9 +218,9 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         goals: prepared.goals,
         variables,
         pins: prepared.pins,
-        continuity: getWorldSenseContinuity(scene.id),
-        semanticThreshold: profile.semanticThreshold,
+        gate: profile.semanticThreshold,
     });
+    const loreCandidates = traversal.candidates;
     const continuitySource = buildTimelineContinuityDocuments(scene.timelineId);
     const continuityCandidates = scoreTimelineContinuityCandidates({
         timelineId: scene.timelineId,
@@ -266,6 +278,11 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
         continuity: selectedContinuity,
         propagation,
         ...ranking,
+        // Entries the walk declined never reach the budgeter, so without this
+        // they would be absent from the receipt entirely rather than shown as
+        // considered and refused.
+        rejected: [...ranking.rejected, ...traversal.rejected],
+        traversal: traversal.receipt,
     };
 }
 
