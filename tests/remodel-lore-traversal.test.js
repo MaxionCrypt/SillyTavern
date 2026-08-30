@@ -201,3 +201,57 @@ test('it composes with a graph built from real entries', () => {
     });
     expect(result.admitted.map((item) => item.id)).toEqual(['B::1', 'B::2']);
 });
+
+// The two native recursion flags are how an author stops the mesh, and they
+// have to hold on links the mesh DERIVES, not only on the edge as authored.
+const flagged = (uid, name, content, native = {}) => ({ book: 'B', uid: String(uid), name, keys: [name], secondaryKeys: [], content, native });
+const walkFrom = (entries, seedUid) => gateLoreTraversal({
+    seeds: [`B::${seedUid}`],
+    graph: buildLoreMentionGraph(entries),
+    known: new Set(entries.map((entry) => `B::${entry.uid}`)),
+    similarity: {},
+}).admitted.map((item) => item.id);
+
+test('"Non-recursable" stops an entry being reached, even through a reversed link', () => {
+    // B names A, so the authored edge is B->A. Reversing it would let the walk
+    // arrive at B from A, which is exactly what the flag forbids.
+    const entries = [flagged(1, 'A', 'A is quiet.'), flagged(2, 'B', 'B talks about A.', { excludeRecursion: true })];
+    expect(walkFrom(entries, 1)).toEqual(['B::1']);
+});
+
+test('a non-recursable entry can still be named by the scene and still lead onward', () => {
+    // The flag is about recursion, not existence. Seeding it is not recursion.
+    const entries = [flagged(1, 'A', 'A is quiet.'), flagged(2, 'B', 'B talks about A.', { excludeRecursion: true })];
+    expect(walkFrom(entries, 2)).toEqual(['B::2', 'B::1']);
+});
+
+test('"Prevent further recursion" makes an entry a dead end in the mesh', () => {
+    // D names C, so the authored edge is D->C. Reversed, C would trigger D.
+    const entries = [flagged(3, 'C', 'C is quiet.', { preventRecursion: true }), flagged(4, 'D', 'D talks about C.')];
+    expect(walkFrom(entries, 3)).toEqual(['B::3']);
+});
+
+test('a dead end does not escape through a co-mention link either', () => {
+    // X names P and Q, making them siblings. P must still lead nowhere.
+    const entries = [
+        flagged(5, 'X', 'X mentions P and Q.'),
+        flagged(6, 'P', 'P is quiet.', { preventRecursion: true }),
+        flagged(7, 'Q', 'Q is quiet.'),
+    ];
+    expect(walkFrom(entries, 6)).toEqual(['B::6']);
+    // Without the flag the sibling link is real, so the test above means something.
+    const open = [flagged(5, 'X', 'X mentions P and Q.'), flagged(6, 'P', 'P is quiet.'), flagged(7, 'Q', 'Q is quiet.')];
+    expect(walkFrom(open, 6)).toEqual(expect.arrayContaining(['B::7']));
+});
+
+test('an always-on hub can be told to stop pulling its neighbourhood in', () => {
+    // The live-book shape: one constant entry naming three others.
+    const hub = (native) => [
+        flagged(10, 'Hub', 'Hub mentions One and Two and Three.', { constant: true, ...native }),
+        flagged(11, 'One', 'One is quiet.'),
+        flagged(12, 'Two', 'Two is quiet.'),
+        flagged(13, 'Three', 'Three is quiet.'),
+    ];
+    expect(walkFrom(hub({}), 10)).toHaveLength(4);
+    expect(walkFrom(hub({ preventRecursion: true }), 10)).toEqual(['B::10']);
+});

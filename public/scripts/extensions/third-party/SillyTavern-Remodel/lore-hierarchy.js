@@ -92,7 +92,15 @@ export function buildLoreMentionGraph(entries = []) {
         }
     }
 
-    return { edges, inDegree, outDegree };
+    // Carried so the mesh can enforce them on every link it derives. Applying
+    // them only while building edges is not enough: a reversed or co-mention
+    // link is a new traversal the original edge never authorised.
+    const flags = new Map(live.map((entry) => [entryId(entry), {
+        preventRecursion: Boolean(entry.native?.preventRecursion),
+        excludeRecursion: Boolean(entry.native?.excludeRecursion),
+    }]));
+
+    return { edges, inDegree, outDegree, flags };
 }
 
 /**

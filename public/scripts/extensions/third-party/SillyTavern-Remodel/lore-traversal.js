@@ -184,8 +184,24 @@ export function gateLoreTraversal({
  */
 export function buildMesh(graph = { edges: [] }) {
     const neighbours = new Map();
+    // The two native recursion flags, honoured on every link rather than only
+    // on the edge it was derived from.
+    //
+    //  - "Prevent further recursion" means the entry must not trigger anything,
+    //    so nothing may lead OUT of it. In a mesh that makes it a dead end: it
+    //    can be reached, and the walk stops there.
+    //  - "Non-recursable" means recursion must never activate the entry, so
+    //    nothing may lead INTO it. It can still be a seed, because the scene
+    //    naming it directly is not recursion.
+    //
+    // This is how an author stops a hub dragging its neighbourhood in behind
+    // it -- including an always-on constant entry.
+    const flags = graph?.flags instanceof Map ? graph.flags : new Map();
+    const canLeave = (id) => !flags.get(id)?.preventRecursion;
+    const canEnter = (id) => !flags.get(id)?.excludeRecursion;
     const link = (from, to, key, relation) => {
         if (!from || !to || from === to) return;
+        if (!canLeave(from) || !canEnter(to)) return;
         if (!neighbours.has(from)) neighbours.set(from, []);
         const list = neighbours.get(from);
         // Keep the first relation found for a pair. Direct naming is discovered
