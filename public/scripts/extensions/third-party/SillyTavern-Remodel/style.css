@@ -10582,7 +10582,8 @@ body.st-remodel-active .remodel-world-sense-settings,
 body.st-remodel-active .remodel-world-sense-browser,
 body.st-remodel-active .remodel-world-sense-inspector,
 body.st-remodel-active .remodel-world-sense-review,
-body.st-remodel-active .remodel-world-sense-dryrun {
+body.st-remodel-active .remodel-world-sense-dryrun,
+body.st-remodel-active .remodel-world-sense-refusals {
   border: 1px solid var(--ws-line);
   border-radius: 12px;
   background: var(--ws-panel);
@@ -13302,4 +13303,64 @@ body.st-remodel-active .remodel-archive .remodel-notebook-empty {
    that loader as infrastructure, not as a request to show its editor. */
 body.remodel-programmatic-group-open #rm_group_chats_block {
   display:none !important;
+}
+
+/* Considered-and-refused list. Shares the dry run's panel chrome above; only
+   the row layout is its own. */
+body.st-remodel-active .remodel-world-sense-refusals {
+  margin-top: 12px;
+}
+
+body.st-remodel-active .remodel-world-sense-refusals > summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+
+body.st-remodel-active .remodel-world-sense-refusals > p {
+  margin: 0;
+  padding: 0 14px 10px;
+  font-size: 0.74rem;
+  opacity: 0.66;
+}
+
+body.st-remodel-active .remodel-world-sense-refusals ul {
+  margin: 0;
+  padding: 0 14px 14px;
+  list-style: none;
+  display: grid;
+  gap: 7px;
+}
+
+body.st-remodel-active .remodel-world-sense-refusals li {
+  display: grid;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px solid var(--ws-line);
+  border-radius: 9px;
+  background: color-mix(in srgb, #000 12%, transparent);
+}
+
+body.st-remodel-active .remodel-world-sense-refusals li > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+body.st-remodel-active .remodel-world-sense-refusals li em {
+  flex: none;
+  font-style: normal;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+body.st-remodel-active .remodel-world-sense-refusals li small {
+  font-size: 0.72rem;
+  opacity: 0.6;
 }

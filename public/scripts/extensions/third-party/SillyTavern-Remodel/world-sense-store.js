@@ -192,9 +192,16 @@ function compactCandidate(candidate) {
         score: candidate.score,
         decision: candidate.decision,
         included: candidate.included,
+        // Traversal facts. Without these a refusal survives as "scored too low"
+        // with nothing to judge it by — a near miss and a hopeless one read the
+        // same, which is the difference the receipt exists to record.
+        depth: candidate.depth,
+        similarity: candidate.similarity,
+        bar: candidate.bar,
         rankingReasons: Array.isArray(candidate.rankingReasons) ? candidate.rankingReasons.slice(0, 8) : undefined,
         reasons: Array.isArray(candidate.reasons) ? candidate.reasons.slice(0, 8).map((reason) => isObject(reason) ? {
             channel: reason.channel, points: reason.points, similarity: reason.similarity, rank: reason.rank,
+            depth: reason.depth, from: reason.from, key: reason.key,
         } : reason) : undefined,
     };
 }

@@ -32,6 +32,7 @@ import {
 } from './world-sense-store.js';
 import {
     buildWorldSenseDryRun,
+    buildWorldSenseRefusals,
     describeWorldSenseReasons,
     filterWorldSenseWorkspaceEntries,
     proposalDiffRows,
@@ -83,12 +84,13 @@ async function refresh(root, state) {
     const profile = getWorldSenseProfile();
     const index = getWorldSenseIndexState(timelineId);
     const dryRun = buildWorldSenseDryRun({ entries: lore.entries, metadata, receipt });
-    root.innerHTML = render({ timelineId, timeline, lore, metadata, entries, selected, conflicts, profile, index, proposals, history, receipt, proposalRejections, dryRun, turnOverrides, sceneId, state });
+    const refusals = buildWorldSenseRefusals({ entries: lore.entries, receipt });
+    root.innerHTML = render({ timelineId, timeline, lore, metadata, entries, selected, conflicts, profile, index, proposals, history, receipt, proposalRejections, dryRun, refusals, turnOverrides, sceneId, state });
     root.setAttribute('aria-busy', String(Boolean(state.busy)));
 }
 
 function render(view) {
-    const { timeline, lore, metadata, entries, selected, conflicts, profile, index, proposals, history, receipt, proposalRejections, dryRun, turnOverrides, sceneId, state } = view;
+    const { timeline, lore, metadata, entries, selected, conflicts, profile, index, proposals, history, receipt, proposalRejections, dryRun, refusals, turnOverrides, sceneId, state } = view;
     if (!timeline) return '<div class="remodel-world-sense-empty"><h3>No active Timeline</h3><p>Select a Timeline before configuring World Sense.</p></div>';
     const indexed = Object.keys(index?.hashes || {}).length;
     return `
@@ -150,7 +152,29 @@ function render(view) {
             <p>This is the bounded Living Lore packet selected for the latest Preview/Narrator/Loom pass.</p>
             ${dryRun.entries.map((entry) => `<article><header><strong>${escapeHtml(entry.name)}</strong><span>rev ${entry.revision}</span></header><small>${escapeHtml(entry.reasons.join(' · ') || 'forced selection')}</small><pre>${escapeHtml(entry.content)}</pre></article>`).join('') || '<p class="remodel-world-sense-muted">No retrieval receipt exists for this Timeline yet.</p>'}
         </details>
+        <details class="remodel-world-sense-refusals">
+            <summary><span>Considered and refused</span><strong>${refusals.length} entr${refusals.length === 1 ? 'y' : 'ies'}</strong></summary>
+            <p>What the last retrieval reached and turned away, nearest miss first. An entry only appears here if something connected it to the scene.</p>
+            ${refusals.length ? `<ul>${refusals.map(renderRefusal).join('')}</ul>` : '<p class="remodel-world-sense-muted">Nothing was refused. Either everything connected to the scene earned its place, or no retrieval has run yet.</p>'}
+        </details>
     `;
+}
+
+/** One refused entry: what it was, why it lost, and what vouched for it. The
+ * near-miss numbers are the point — "scored too low" is only actionable when
+ * you can see it missed by two hundredths rather than by a mile. */
+function renderRefusal(row) {
+    const facts = [];
+    if (row.via) facts.push(`via ${escapeHtml(row.via)}${row.viaKey ? ` (“${escapeHtml(row.viaKey)}”)` : ''}`);
+    if (Number.isFinite(row.depth) && row.depth > 0) facts.push(`depth ${row.depth}`);
+    if (Number.isFinite(row.similarity)) {
+        const scored = `scored ${Math.round(row.similarity * 100)}%`;
+        facts.push(Number.isFinite(row.bar) ? `${scored} against ${Math.round(row.bar * 100)}%` : scored);
+    }
+    return `<li>
+        <div><strong>${escapeHtml(row.name)}</strong><em>${escapeHtml(row.label)}</em></div>
+        ${facts.length ? `<small>${facts.join(' · ')}</small>` : ''}
+    </li>`;
 }
 
 function renderProposalRejectionRecord(record) {

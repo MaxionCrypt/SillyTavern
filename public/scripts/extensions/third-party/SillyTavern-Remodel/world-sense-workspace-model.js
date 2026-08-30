@@ -111,3 +111,58 @@ function entryKey(value) {
 function normalize(value) {
     return String(value || '').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
 }
+
+/** Plain-language account of why an entry did not make it. The refusal
+ * reason is the useful half of a retrieval receipt: what got in is easy to
+ * guess, what was considered and turned away is not. */
+const REFUSAL_LABELS = Object.freeze({
+    'below-gate': 'scored too low',
+    'depth-exhausted': 'too far from the scene',
+    'entry-budget': 'no room left',
+    'token-budget': 'no tokens left',
+    'unknown-entry': 'entry no longer exists',
+    'no-evidence': 'nothing connected it',
+    'semantic-only-limit': 'similarity alone',
+    'continuity-limit': 'continuity quota',
+    'continuity-hard-limit': 'continuity quota',
+});
+
+export function describeWorldSenseRefusal(decision) {
+    return REFUSAL_LABELS[String(decision || '')] || String(decision || 'refused').replaceAll('-', ' ');
+}
+
+/**
+ * Everything the last retrieval considered and turned away, ordered by how
+ * close it came. A near miss is worth reading; something cut off three
+ * mentions away usually is not, so the ones that nearly made it come first.
+ */
+export function buildWorldSenseRefusals({ entries = [], receipt = null } = {}) {
+    const entriesByKey = new Map(entries.map((entry) => [entryKey(entry), entry]));
+    const rows = (receipt?.rejected || [])
+        .filter((item) => item.kind !== 'continuity')
+        .map((item) => {
+            const key = item.key || entryKey(item);
+            const entry = entriesByKey.get(key);
+            const via = (item.reasons || []).find((reason) => reason.channel === 'mention');
+            // `from` is a graph id (book::uid). Show the entry's NAME — the uid
+            // alone tells the reader nothing about what vouched for this.
+            const fromKey = via?.from ? String(via.from).replace('::', '.') : '';
+            const vouchedBy = fromKey ? (entriesByKey.get(fromKey)?.name || '') : '';
+            return {
+                key,
+                name: item.name || entry?.name || key || 'Unknown entry',
+                decision: item.decision,
+                label: describeWorldSenseRefusal(item.decision),
+                depth: Number.isFinite(Number(item.depth)) ? Number(item.depth) : null,
+                similarity: Number.isFinite(Number(item.similarity)) ? Number(item.similarity) : null,
+                bar: Number.isFinite(Number(item.bar)) ? Number(item.bar) : null,
+                via: vouchedBy,
+                viaKey: via?.key || '',
+            };
+        });
+    // Nearest miss first: highest similarity, then shallowest.
+    rows.sort((left, right) => (right.similarity ?? -1) - (left.similarity ?? -1)
+        || (left.depth ?? 99) - (right.depth ?? 99)
+        || String(left.name).localeCompare(String(right.name)));
+    return rows;
+}

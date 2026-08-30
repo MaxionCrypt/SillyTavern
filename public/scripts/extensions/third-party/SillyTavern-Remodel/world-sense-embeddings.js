@@ -58,7 +58,13 @@ export async function queryWorldSense(timelineId, searchText, { topK = 12, thres
     try {
         const result = await vectorRequest('/api/vector/query', {
             collectionId: state.collectionId, searchText: String(searchText || ''),
-            topK: Math.max(1, Math.min(50, Number(topK) || 12)), threshold: Number(threshold) || 0, includeScores: true,
+            // One query covers lore AND continuity documents, then splits them
+            // by kind. A tight cap therefore lets continuity crowd lore out of
+            // the results entirely — and a lore entry that was never returned
+            // is indistinguishable from one that scored badly, which the
+            // traversal gate then reads as a refusal. Local search over a few
+            // hundred vectors is cheap; starving the gate is not.
+            topK: Math.max(1, Math.min(500, Number(topK) || 12)), threshold: Number(threshold) || 0, includeScores: true,
         }, state.modelId);
         const returned = Array.isArray(result?.metadata) ? result.metadata : [];
         const unknownHashes = returned.filter((item) => !state.hashes[String(item?.hash)]);

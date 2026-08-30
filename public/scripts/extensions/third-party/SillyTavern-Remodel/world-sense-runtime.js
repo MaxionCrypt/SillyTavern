@@ -192,7 +192,10 @@ async function executeRetrieval(scene, prepared, { phase, skipSemantic = false }
                 // low-scoring entry, which is indistinguishable from "never
                 // scored" — so a refusal receipt could not say which happened.
                 queryWorldSense(scene.timelineId, prepared.packet.text, {
-                    topK: Math.min(200, Math.max(50, lore.entries.length)),
+                    // Sized against the whole index, not the lore count: the
+                    // collection also holds continuity documents, and asking
+                    // for too few lets them crowd every lore entry out.
+                    topK: Math.min(500, Math.max(50, Object.keys(getWorldSenseIndexState(scene.timelineId)?.hashes || {}).length)),
                     threshold: 0,
                 }),
                 timeoutMs,
