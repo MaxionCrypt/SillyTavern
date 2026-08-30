@@ -29,7 +29,7 @@ test('a mention proposes and a good score admits it', () => {
     const result = gateWith({ piper: 1, warden: 0.9, gate: 0.9 });
     expect(idsAt(result, 1)).toEqual(['gate', 'warden']);
     expect(result.admitted.find((item) => item.id === 'warden').via)
-        .toEqual({ from: 'piper', key: 'Warden', relation: 'names', through: null });
+        .toEqual({ from: 'piper', key: 'Warden', relation: 'names' });
 });
 
 test('a poor score no longer refuses a connected entry', () => {
@@ -88,23 +88,30 @@ test('being named by something does not reach it', () => {
     expect(idsAt(result, 1)).toContain('charter');
 });
 
-test('two things named by the same entry become neighbours', () => {
-    // piper names both warden and gate. Neither names the other, but they were
-    // put in the same entry, so they are connected through it.
+test('sharing a parent is not a connection', () => {
+    // piper names both warden and gate. Neither names the other, so entering at
+    // warden must not reach gate: the parent is what connects them, and it is
+    // not in play.
     const result = gateLoreTraversal({ seeds: ['warden'], graph, known, maxDepth: 1, similarity: {} });
-    expect(idsAt(result, 1)).toContain('gate');
-    expect(result.admitted.find((item) => item.id === 'gate').via.relation).toBe('co-mentioned');
+    expect(result.admitted.map((item) => item.id)).not.toContain('gate');
 });
 
-test('a new entry joins two existing subjects without either being edited', () => {
-    // The note is new and nothing refers to it. It names two entries that had
-    // no connection, and that alone makes them reachable from each other.
+test('the parent still brings both when it is the one in play', () => {
+    // The same relationship, reached the way it is actually written: piper's
+    // content names them, so piper reaching both is ordinary recursion.
+    const result = gateLoreTraversal({ seeds: ['piper'], graph, known, maxDepth: 1, similarity: {} });
+    expect(idsAt(result, 1)).toEqual(['gate', 'warden']);
+});
+
+test('a new entry naming two subjects reaches both, but does not join them to each other', () => {
     const withNote = { edges: [...graph.edges, { from: 'note', to: 'gate', key: 'gate' }, { from: 'note', to: 'founding', key: 'Founding' }] };
-    const result = gateLoreTraversal({
-        seeds: ['gate'], graph: withNote, known: new Set([...known, 'note']), maxDepth: 1, similarity: {},
-    });
-    expect(result.admitted.map((item) => item.id)).toContain('founding');
-    expect(result.admitted.find((item) => item.id === 'founding').via.relation).toBe('co-mentioned');
+    const seen = new Set([...known, 'note']);
+    // The note is what names them, so the note reaches both.
+    const fromNote = gateLoreTraversal({ seeds: ['note'], graph: withNote, known: seen, maxDepth: 1, similarity: {} });
+    expect(fromNote.admitted.map((item) => item.id)).toEqual(expect.arrayContaining(['gate', 'founding']));
+    // Neither of them names the other, so neither reaches the other.
+    const fromGate = gateLoreTraversal({ seeds: ['gate'], graph: withNote, known: seen, maxDepth: 1, similarity: {} });
+    expect(fromGate.admitted.map((item) => item.id)).not.toContain('founding');
 });
 
 test('depth is bounded, and what was cut off says so', () => {
@@ -231,19 +238,6 @@ test('"Prevent further recursion" makes an entry a dead end in the mesh', () => 
     // D names C, so the authored edge is D->C. Reversed, C would trigger D.
     const entries = [flagged(3, 'C', 'C is quiet.', { preventRecursion: true }), flagged(4, 'D', 'D talks about C.')];
     expect(walkFrom(entries, 3)).toEqual(['B::3']);
-});
-
-test('a dead end does not escape through a co-mention link either', () => {
-    // X names P and Q, making them siblings. P must still lead nowhere.
-    const entries = [
-        flagged(5, 'X', 'X mentions P and Q.'),
-        flagged(6, 'P', 'P is quiet.', { preventRecursion: true }),
-        flagged(7, 'Q', 'Q is quiet.'),
-    ];
-    expect(walkFrom(entries, 6)).toEqual(['B::6']);
-    // Without the flag the sibling link is real, so the test above means something.
-    const open = [flagged(5, 'X', 'X mentions P and Q.'), flagged(6, 'P', 'P is quiet.'), flagged(7, 'Q', 'Q is quiet.')];
-    expect(walkFrom(open, 6)).toEqual(expect.arrayContaining(['B::7']));
 });
 
 test('an always-on hub can be told to stop pulling its neighbourhood in', () => {

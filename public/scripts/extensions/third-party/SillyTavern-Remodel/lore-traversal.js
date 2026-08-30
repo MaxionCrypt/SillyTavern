@@ -14,24 +14,25 @@
 // own, because "these words are not very close in meaning" is not a reason to
 // withhold something the world explicitly linked to what is in play.
 //
-// Two ways an entry is reachable, and one that was tried and rejected:
+// One way in: an entry is reached when something already in play NAMES it.
+// Its content matches that entry's key, which is what vanilla recursion
+// follows and what the mention graph was built to describe.
 //
-//  - It is NAMED by something already in play. An entry's content matching
-//    another's key is the whole basis of retrieval, as it is for vanilla
-//    recursion.
-//  - It was named ALONGSIDE something in play. An entry saying "the Other Skin
-//    is kept in Halloway Residence 4B" links those two even though neither
-//    names the other. This is how new lore joins the mesh: write one entry
-//    mentioning two existing subjects and they become neighbours, without
-//    editing either.
+// Two other routes were tried and retired, in this order:
 //
-// Being named BY something in play does not reach it. Links ran both ways at
-// first, on the reasoning that a reference means two things belong together
-// whichever one it was written inside. In practice it inverted retrieval:
-// asking about a subject returned every entry that happened to mention it, so
-// a name dropped once in a minor entry dragged that entry back every time its
-// subject came up. Reaching what an entry talks about is the question;
-// reaching everything that talks about it is a different and much larger one.
+//  - REVERSE. Following a naming backwards inverted retrieval: asking about a
+//    subject returned every entry that had ever mentioned it, so a name dropped
+//    once in a minor entry dragged that entry back whenever its subject came
+//    up.
+//  - CO-MENTION. Two entries named by the same third were linked to each
+//    other directly. That is a shortcut across a shared parent, and the parent
+//    already does the work: when it is in play it names both, and both arrive
+//    by ordinary recursion. What the shortcut added was reaching one from the
+//    other while the parent was absent -- a connection nothing had written.
+//
+// So an entry with no outgoing mentions reaches nothing, and that is a true
+// answer rather than a gap: if its content names nothing, there is nothing to
+// follow, and the fix is in the entry.
 //
 // Seeds are what the scene named directly. They are admitted unconditionally
 // and ranked by how they matched the scene, never reordered by the hierarchy.
@@ -46,7 +47,7 @@ export const TRAVERSAL_REJECTIONS = Object.freeze([
     'depth-exhausted', 'entry-budget', 'token-budget', 'unknown-entry',
 ]);
 
-export const TRAVERSAL_RELATIONS = Object.freeze(['names', 'co-mentioned']);
+export const TRAVERSAL_RELATIONS = Object.freeze(['names']);
 
 /**
  * @param {object} options
@@ -124,7 +125,7 @@ export function gateLoreTraversal({
         for (const source of frontier) {
             for (const link of neighbours.get(source) || []) {
                 if (seen.has(link.to)) continue;
-                proposals.push({ id: link.to, via: { from: source, key: link.key, relation: link.relation, through: link.through || null } });
+                proposals.push({ id: link.to, via: { from: source, key: link.key, relation: link.relation } });
             }
         }
 
@@ -178,12 +179,8 @@ export function gateLoreTraversal({
 }
 
 /**
- * Undirected adjacency plus co-mention links.
- *
- * Every edge contributes both directions, and every pair of entries named by
- * the same entry becomes adjacent through it. Co-mention is what lets a newly
- * written entry join two existing subjects together without either of them
- * being edited.
+ * Adjacency in the direction the naming runs: from the entry whose content
+ * matched a key, to the entry that owns it.
  */
 export function buildMesh(graph = { edges: [] }) {
     const neighbours = new Map();
@@ -202,37 +199,18 @@ export function buildMesh(graph = { edges: [] }) {
     const flags = graph?.flags instanceof Map ? graph.flags : new Map();
     const canLeave = (id) => !flags.get(id)?.preventRecursion;
     const canEnter = (id) => !flags.get(id)?.excludeRecursion;
-    const link = (from, to, key, relation, through = null) => {
+    const link = (from, to, key, relation) => {
         if (!from || !to || from === to) return;
         if (!canLeave(from) || !canEnter(to)) return;
         if (!neighbours.has(from)) neighbours.set(from, []);
         const list = neighbours.get(from);
-        // Keep the first relation found for a pair. Direct naming is discovered
-        // before co-mention, so a real reference is never relabelled as a
-        // weaker sibling link.
+        // One link per pair: an entry naming another twice, by two different
+        // keys, is still one connection.
         if (list.some((item) => item.to === to)) return;
-        list.push({ to, key, relation, through });
+        list.push({ to, key, relation });
     };
 
-    const namedBy = new Map();
-    for (const edge of graph?.edges || []) {
-        link(edge.from, edge.to, edge.key, 'names');
-        if (!namedBy.has(edge.from)) namedBy.set(edge.from, []);
-        namedBy.get(edge.from).push(edge);
-    }
-
-    for (const [source, edges] of namedBy) {
-        for (let i = 0; i < edges.length; i += 1) {
-            for (let j = i + 1; j < edges.length; j += 1) {
-                // What connects two siblings is the ENTRY that named them both,
-                // not either one's own key. Recording the key here would answer
-                // "what is the other one called", which is never the question a
-                // reader has about a link they did not author.
-                link(edges[i].to, edges[j].to, edges[j].key, 'co-mentioned', source);
-                link(edges[j].to, edges[i].to, edges[i].key, 'co-mentioned', source);
-            }
-        }
-    }
+    for (const edge of graph?.edges || []) link(edge.from, edge.to, edge.key, 'names');
 
     return neighbours;
 }

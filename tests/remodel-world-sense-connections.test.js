@@ -24,8 +24,11 @@ test('an inbound reference is not shown as a connection', () => {
     expect(of('Hub').neighbours.some((item) => item.name === 'Alpha')).toBe(true);
 });
 
-test('two entries named together are shown as co-mentioned', () => {
-    expect(of('Alpha').neighbours.find((item) => item.name === 'Beta')).toMatchObject({ relation: 'co-mentioned' });
+test('sharing a parent is not shown as a connection', () => {
+    // Hub names Alpha and Beta. Hub is what connects them; they do not connect
+    // to each other, and the walk does not treat them as if they did.
+    expect(of('Alpha').neighbours.some((item) => item.name === 'Beta')).toBe(false);
+    expect(of('Hub').neighbours.map((item) => item.name)).toEqual(['Alpha', 'Beta']);
 });
 
 test('an entry nothing connects to is reported as isolated', () => {
@@ -40,7 +43,9 @@ test('a non-recursable entry shows no connections, matching what the walk would 
 });
 
 test('one entry can be asked about on its own', () => {
-    expect(describeEntryConnections(ENTRIES[1], ENTRIES)).toMatchObject({ name: 'Alpha', isolated: false });
+    expect(describeEntryConnections(ENTRIES[0], ENTRIES)).toMatchObject({ name: 'Hub', isolated: false });
+    // Alpha's content names nothing, so it reaches nothing.
+    expect(describeEntryConnections(ENTRIES[1], ENTRIES)).toMatchObject({ name: 'Alpha', isolated: true });
 });
 
 test('an entry outside the book answers rather than throwing', () => {
@@ -76,28 +81,8 @@ test('a probe names what vouched for an entry rather than printing its uid', asy
     expect(text).not.toContain('via 1');
 });
 
-test('a co-mention names the entry that joined the two, not either one’s own key', () => {
-    // Hub names Alpha and Beta. What connects Alpha to Beta is Hub — saying
-    // "through Beta" would only tell the reader what Beta is called.
-    const link = of('Alpha').neighbours.find((item) => item.name === 'Beta');
-    expect(link).toMatchObject({ relation: 'co-mentioned', through: 'Hub' });
-    expect(link.via).toBe('');
-});
-
 test('a direct naming still quotes the key that caused it', () => {
     const link = of('Hub').neighbours.find((item) => item.name === 'Alpha');
     expect(link).toMatchObject({ relation: 'names', via: 'Alpha' });
 });
 
-test('two entries co-mentioned by different entries each name their own mediator', () => {
-    const entries = [
-        entry(1, 'Hub', ['Hub'], 'Hub concerns Alpha and Beta.'),
-        entry(2, 'Alpha', ['Alpha'], 'Alpha is quiet.'),
-        entry(3, 'Beta', ['Beta'], 'Beta is quiet.'),
-        entry(5, 'Other', ['Other'], 'Other concerns Alpha and Delta.'),
-        entry(6, 'Delta', ['Delta'], 'Delta is quiet.'),
-    ];
-    const alpha = describeLoreConnections(entries).find((item) => item.name === 'Alpha');
-    expect(alpha.neighbours.find((item) => item.name === 'Beta').through).toBe('Hub');
-    expect(alpha.neighbours.find((item) => item.name === 'Delta').through).toBe('Other');
-});

@@ -109,36 +109,3 @@ test('a missing tier is not silently coerced into the broadest band', () => {
     expect(describeLoreTier(0)).toBe('broad');
 });
 
-test('a co-mention reason names the entry that joined the two, not the sibling’s key', () => {
-    const entries = [
-        { book: 'B', uid: '1', name: 'Hub', keys: ['Hub'], secondaryKeys: [], content: '' },
-        { book: 'B', uid: '2', name: 'Alpha', keys: ['Alpha'], secondaryKeys: [], content: '' },
-        { book: 'B', uid: '3', name: 'Beta', keys: ['Beta'], secondaryKeys: [], content: '' },
-    ];
-    const receipt = {
-        selected: [{
-            book: 'B', uid: '3', score: 900,
-            reasons: [{ channel: 'mention', depth: 1, from: 'B::2', key: 'Beta', relation: 'co-mentioned', through: 'B::1' }],
-        }],
-        rejected: [],
-    };
-    const row = filterWorldSenseWorkspaceEntries({ entries, receipt }).find((item) => item.key === 'B.3');
-    const [text] = describeWorldSenseReasons(row.reasons);
-    expect(text).toContain('co-mentioned');
-    expect(text).toContain('by Hub');
-    // Quoting the sibling's own key is what made this unreadable.
-    expect(text).not.toContain('"Beta"');
-});
-
-test('a reverse link says it was named by, rather than reading as its own mention', () => {
-    const entries = [
-        { book: 'B', uid: '1', name: 'Kappa Rho', keys: ['Kappa Rho'], secondaryKeys: [], content: '' },
-        { book: 'B', uid: '2', name: 'Teo', keys: ['Teo'], secondaryKeys: [], content: '' },
-    ];
-    const receipt = {
-        selected: [{ book: 'B', uid: '1', score: 900, reasons: [{ channel: 'mention', depth: 1, from: 'B::2', key: 'Teo', relation: 'named-by' }] }],
-        rejected: [],
-    };
-    const row = filterWorldSenseWorkspaceEntries({ entries, receipt }).find((item) => item.key === 'B.1');
-    expect(describeWorldSenseReasons(row.reasons)[0]).toContain('named by');
-});

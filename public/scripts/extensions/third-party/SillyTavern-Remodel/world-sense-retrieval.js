@@ -383,8 +383,6 @@ export function scoreLivingLoreCandidatesByTraversal({
         } else {
             add(candidate, Math.max(100, 1000 - item.depth * 100), 'mention', {
                 depth: item.depth, from: item.via?.from || null, key: item.via?.key || null,
-                relation: item.via?.relation || 'names',
-                through: item.via?.through || null,
             });
         }
         // The hierarchy orders the walk: among entries reached at the same
@@ -427,7 +425,7 @@ export function scoreLivingLoreCandidatesByTraversal({
             similarity: item.similarity,
             ...(Number.isFinite(item.tier) && item.tier < DEFAULT_LORE_TIERS ? { tier: item.tier } : {}),
             ...(item.bar === undefined ? {} : { bar: item.bar }),
-            reasons: item.via ? [{ channel: 'mention', from: item.via.from, key: item.via.key, relation: item.via.relation }] : [],
+            reasons: item.via ? [{ channel: 'mention', from: item.via.from, key: item.via.key }] : [],
         }));
 
     return { candidates, rejected, receipt: walked.receipt };

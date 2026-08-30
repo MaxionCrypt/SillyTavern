@@ -7,25 +7,19 @@
 //
 // Three kinds of connection, matching what traversal walks:
 //
-//  - names        this entry's content names the other
-//  - co-mentioned neither names the other; a third entry named them together
-//
-// Being named BY another entry is deliberately not a connection here: the walk
-// does not follow it, so showing it would describe reachability the system does
-// not have.
+// A connection is this entry's content naming another's key, in that direction
+// only. Being named BY another entry is not shown, and neither is sharing a
+// parent with one: the walk follows neither, so listing them would describe
+// reachability the system does not have.
 //
 // Pure. No store, no model, no network.
 
 import { assignLoreTiers, buildLoreMentionGraph, scoreLoreGenerality } from './lore-hierarchy.js';
 import { buildMesh } from './lore-traversal.js';
 
-export const CONNECTION_RELATIONS = Object.freeze(['names', 'co-mentioned']);
+export const CONNECTION_RELATIONS = Object.freeze(['names']);
 
-const RELATION_LABELS = Object.freeze({
-    'names': 'names',
-    'named-by': 'named by',
-    'co-mentioned': 'co-mentioned with',
-});
+const RELATION_LABELS = Object.freeze({ 'names': 'names' });
 
 export function describeConnectionRelation(relation) {
     return RELATION_LABELS[String(relation || '')] || String(relation || '');
@@ -55,11 +49,9 @@ export function describeLoreConnections(entries = []) {
                 key: entryKey(byId.get(link.to)),
                 name: byId.get(link.to).name || '',
                 relation: link.relation,
-                // The evidence for this link, and it differs by kind. A direct
-                // naming is caused by a key; a co-mention is caused by whichever
-                // entry named both, so that entry is what a reader needs.
-                via: link.relation === 'co-mentioned' ? '' : String(link.key || ''),
-                through: link.through && byId.has(link.through) ? byId.get(link.through).name || '' : '',
+                // The key whose match created this link: the evidence for the
+                // connection, and the word to edit if it is wrong.
+                via: String(link.key || ''),
                 tier: tierById.has(link.to) ? tierById.get(link.to) : null,
             }))
             .sort((left, right) => order(left.relation) - order(right.relation)
