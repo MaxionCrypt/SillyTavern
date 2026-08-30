@@ -199,7 +199,7 @@ export function buildMesh(graph = { edges: [] }) {
     const flags = graph?.flags instanceof Map ? graph.flags : new Map();
     const canLeave = (id) => !flags.get(id)?.preventRecursion;
     const canEnter = (id) => !flags.get(id)?.excludeRecursion;
-    const link = (from, to, key, relation) => {
+    const link = (from, to, key, relation, through = null) => {
         if (!from || !to || from === to) return;
         if (!canLeave(from) || !canEnter(to)) return;
         if (!neighbours.has(from)) neighbours.set(from, []);
@@ -208,7 +208,7 @@ export function buildMesh(graph = { edges: [] }) {
         // before co-mention, so a real reference is never relabelled as a
         // weaker sibling link.
         if (list.some((item) => item.to === to)) return;
-        list.push({ to, key, relation });
+        list.push({ to, key, relation, through });
     };
 
     const namedBy = new Map();
@@ -222,13 +222,14 @@ export function buildMesh(graph = { edges: [] }) {
     for (const [source, edges] of namedBy) {
         for (let i = 0; i < edges.length; i += 1) {
             for (let j = i + 1; j < edges.length; j += 1) {
-                // The key recorded is the one that reached the sibling, so a
-                // receipt can say which mention put them in the same sentence.
-                link(edges[i].to, edges[j].to, edges[j].key, 'co-mentioned');
-                link(edges[j].to, edges[i].to, edges[i].key, 'co-mentioned');
+                // What connects two siblings is the ENTRY that named them both,
+                // not either one's own key. Recording the key here would answer
+                // "what is the other one called", which is never the question a
+                // reader has about a link they did not author.
+                link(edges[i].to, edges[j].to, edges[j].key, 'co-mentioned', source);
+                link(edges[j].to, edges[i].to, edges[i].key, 'co-mentioned', source);
             }
         }
-        void source;
     }
 
     return neighbours;

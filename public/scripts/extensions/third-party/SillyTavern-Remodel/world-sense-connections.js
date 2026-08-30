@@ -52,9 +52,11 @@ export function describeLoreConnections(entries = []) {
                 key: entryKey(byId.get(link.to)),
                 name: byId.get(link.to).name || '',
                 relation: link.relation,
-                // The key whose match created this link — the actual evidence
-                // for the connection, not a label someone chose.
-                via: String(link.key || ''),
+                // The evidence for this link, and it differs by kind. A direct
+                // naming is caused by a key; a co-mention is caused by whichever
+                // entry named both, so that entry is what a reader needs.
+                via: link.relation === 'co-mentioned' ? '' : String(link.key || ''),
+                through: link.through && byId.has(link.through) ? byId.get(link.through).name || '' : '',
                 tier: tierById.has(link.to) ? tierById.get(link.to) : null,
             }))
             .sort((left, right) => order(left.relation) - order(right.relation)

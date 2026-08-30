@@ -141,9 +141,22 @@ function renderConnections(entry, allEntries) {
         <ul>${connections.neighbours.map((link) => `<li>
             <em>${escapeHtml(describeConnectionRelation(link.relation))}</em>
             <b>${escapeHtml(link.name)}</b>
-            ${link.via ? `<small>through “${escapeHtml(link.via)}”</small>` : ''}
+            ${connectionEvidence(link)}
         </li>`).join('')}</ul>
     </div>`;
+}
+
+/**
+ * Why a connection exists, which is a different answer per kind. A direct
+ * naming is caused by a key, so quote the key. A co-mention is caused by a
+ * third entry naming both, so name that entry — quoting either sibling's own
+ * key there would just tell the reader what they are called.
+ */
+function connectionEvidence(link) {
+    if (link.relation === 'co-mentioned') {
+        return link.through ? `<small>by ${escapeHtml(link.through)}</small>` : '';
+    }
+    return link.via ? `<small>through “${escapeHtml(link.via)}”</small>` : '';
 }
 
 /** What a bare keyword request would bring out, with nothing else in the query. */

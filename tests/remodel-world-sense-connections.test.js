@@ -72,3 +72,29 @@ test('a probe names what vouched for an entry rather than printing its uid', asy
     expect(text).toContain('via Hub');
     expect(text).not.toContain('via 1');
 });
+
+test('a co-mention names the entry that joined the two, not either one’s own key', () => {
+    // Hub names Alpha and Beta. What connects Alpha to Beta is Hub — saying
+    // "through Beta" would only tell the reader what Beta is called.
+    const link = of('Alpha').neighbours.find((item) => item.name === 'Beta');
+    expect(link).toMatchObject({ relation: 'co-mentioned', through: 'Hub' });
+    expect(link.via).toBe('');
+});
+
+test('a direct naming still quotes the key that caused it', () => {
+    const link = of('Hub').neighbours.find((item) => item.name === 'Alpha');
+    expect(link).toMatchObject({ relation: 'names', via: 'Alpha' });
+});
+
+test('two entries co-mentioned by different entries each name their own mediator', () => {
+    const entries = [
+        entry(1, 'Hub', ['Hub'], 'Hub concerns Alpha and Beta.'),
+        entry(2, 'Alpha', ['Alpha'], 'Alpha is quiet.'),
+        entry(3, 'Beta', ['Beta'], 'Beta is quiet.'),
+        entry(5, 'Other', ['Other'], 'Other concerns Alpha and Delta.'),
+        entry(6, 'Delta', ['Delta'], 'Delta is quiet.'),
+    ];
+    const alpha = describeLoreConnections(entries).find((item) => item.name === 'Alpha');
+    expect(alpha.neighbours.find((item) => item.name === 'Beta').through).toBe('Hub');
+    expect(alpha.neighbours.find((item) => item.name === 'Delta').through).toBe('Other');
+});
