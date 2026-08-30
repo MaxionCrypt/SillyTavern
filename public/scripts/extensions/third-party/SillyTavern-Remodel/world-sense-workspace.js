@@ -2,6 +2,9 @@ import { listLivingLoreMetadata, upsertLivingLoreMetadata } from './living-lore-
 import { getTimelineStore } from './timeline-state.js';
 import { getWorldSenseTurnOverrides, setWorldSenseTurnOverride } from './world-sense-runtime.js';
 import { loadTimelineLore } from './world-sense-lore.js';
+import { describeConnectionRelation, describeEntryConnections } from './world-sense-connections.js';
+import { probeWorldSenseKeywords } from './world-sense-retrieval.js';
+import { queryWorldSense } from './world-sense-embeddings.js';
 import {
     getWorldSenseIndexState,
     getWorldSenseProfile,
@@ -13,6 +16,8 @@ import {
     buildWorldSenseRefusals,
     describeLoreTier,
     describeWorldSenseReasons,
+    describeWorldSenseRefusal,
+    nameReasonSources,
     filterWorldSenseWorkspaceEntries,
 } from './world-sense-workspace-model.js';
 
@@ -99,9 +104,10 @@ function render(view) {
                 </div>
             </section>
             <section class="remodel-world-sense-inspector" aria-label="Living Lore inspector">
-                ${selected ? renderInspector(selected, { turnOverrides, sceneId }) : '<div class="remodel-world-sense-empty"><h3>Select an entry</h3><p>Inspect retrieval evidence, protection and links here.</p></div>'}
+                ${selected ? renderInspector(selected, { turnOverrides, sceneId, allEntries: lore.entries }) : '<div class="remodel-world-sense-empty"><h3>Select an entry</h3><p>Inspect retrieval evidence, protection and links here.</p></div>'}
             </section>
         </div>
+        ${renderProbe(state, lore.entries)}
         <details class="remodel-world-sense-dryrun">
             <summary><span>Prompt dry run</span><strong>${dryRun.entries.length} entr${dryRun.entries.length === 1 ? 'y' : 'ies'} · ${dryRun.budget?.usedTokens || 0}/${dryRun.budget?.maxTokens || profile.maxTokens} tokens</strong></summary>
             <p>This is the bounded Living Lore packet selected for the latest Preview/Narrator/Loom pass.</p>
@@ -118,6 +124,60 @@ function render(view) {
 /** One refused entry: what it was, why it lost, and what vouched for it. The
  * near-miss numbers are the point — "scored too low" is only actionable when
  * you can see it missed by two hundredths rather than by a mile. */
+/**
+ * What this entry is connected to and why. The mesh is derived, so the key that
+ * caused each link is shown: a connection you cannot trace back to a word in an
+ * entry is one you cannot fix by editing one.
+ */
+function renderConnections(entry, allEntries) {
+    const connections = describeEntryConnections(entry, allEntries || []);
+    if (connections.isolated) {
+        return `<div class="remodel-world-sense-connections"><span>Connections</span>
+            <p class="remodel-world-sense-muted">Nothing names this entry and it names nothing. Retrieval can only reach it when the scene says one of its keys.</p>
+        </div>`;
+    }
+    return `<div class="remodel-world-sense-connections">
+        <span>Connections</span><strong>${connections.neighbours.length}</strong>
+        <ul>${connections.neighbours.map((link) => `<li>
+            <em>${escapeHtml(describeConnectionRelation(link.relation))}</em>
+            <b>${escapeHtml(link.name)}</b>
+            ${link.via ? `<small>through “${escapeHtml(link.via)}”</small>` : ''}
+        </li>`).join('')}</ul>
+    </div>`;
+}
+
+/** What a bare keyword request would bring out, with nothing else in the query. */
+function renderProbe(state, allEntries) {
+    const result = state.probe;
+    return `<details class="remodel-world-sense-probe" ${result ? 'open' : ''}>
+        <summary><span>What would this bring out?</span><strong>${result ? `${result.candidates.length} entr${result.candidates.length === 1 ? 'y' : 'ies'}` : 'Ask the mesh'}</strong></summary>
+        <p>Keywords exactly as the Loom would send them, and nothing else in the query — no goals, no history, no scene.</p>
+        <form data-ws-probe-form class="remodel-world-sense-probe-form">
+            <label><span class="sr-only">Keywords</span><input value="${escapeAttribute(state.probeTerms || '')}" data-ws-probe placeholder="Queens Lake University, Marissa"></label>
+            <button type="submit" ${state.busy === 'probe' ? 'disabled' : ''}>${state.busy === 'probe' ? 'Asking…' : 'Ask'}</button>
+        </form>
+        ${result ? renderProbeResult(result, allEntries) : ''}
+    </details>`;
+}
+
+function renderProbeResult(result, allEntries) {
+    // Reasons carry their source as a graph id. Resolve it here as the entry
+    // list does, or the probe reports "via 0" and tells the reader nothing.
+    const entriesByKey = new Map((allEntries || []).map((entry) => [`${entry.book}.${entry.uid}`, entry]));
+    if (!result.candidates.length && !result.rejected.length) {
+        return '<p class="remodel-world-sense-muted">Nothing in the book connects to those words.</p>';
+    }
+    return `<ul class="remodel-world-sense-probe-result">
+        ${result.candidates.map((candidate) => `<li>
+            <div><b>${escapeHtml(candidate.entry?.name || candidate.key)}</b><em>${candidate.score} pts</em></div>
+            <small>${escapeHtml(describeWorldSenseReasons(nameReasonSources(candidate.reasons, entriesByKey)).join(' · '))}</small>
+        </li>`).join('')}
+        ${result.rejected.filter((item) => item.kind !== 'continuity').map((item) => `<li class="is-refused">
+            <div><b>${escapeHtml(item.name || item.key)}</b><em>${escapeHtml(describeWorldSenseRefusal(item.decision))}</em></div>
+        </li>`).join('')}
+    </ul>`;
+}
+
 function renderRefusal(row) {
     const facts = [];
     if (row.via) facts.push(`via ${escapeHtml(row.via)}${row.viaKey ? ` (“${escapeHtml(row.viaKey)}”)` : ''}`);
@@ -144,7 +204,7 @@ function renderEntry(entry, selectedKey) {
     </button>`;
 }
 
-function renderInspector(entry, { turnOverrides, sceneId }) {
+function renderInspector(entry, { turnOverrides, sceneId, allEntries }) {
     const reasons = describeWorldSenseReasons(entry.reasons);
     const nextPinned = turnOverrides.pins.some((item) => `${item.book}.${item.uid}` === entry.key);
     const nextExcluded = turnOverrides.excludes.some((item) => `${item.book}.${item.uid}` === entry.key);
@@ -154,7 +214,7 @@ function renderInspector(entry, { turnOverrides, sceneId }) {
         <div class="remodel-world-sense-meta-row"><label>Origin<input value="${escapeAttribute(entry.origin)}" disabled></label></div>
         <fieldset><legend>Next turn</legend><button type="button" data-ws-turn="${nextPinned ? 'clear' : 'pin'}" data-scene="${escapeAttribute(sceneId)}" data-book="${escapeAttribute(entry.book)}" data-uid="${escapeAttribute(entry.uid)}" class="${nextPinned ? 'is-active' : ''}" ${sceneId ? '' : 'disabled'}><i class="fa-solid fa-thumbtack"></i> ${nextPinned ? 'Pinned for next turn' : 'Pin for next turn'}</button><button type="button" data-ws-turn="${nextExcluded ? 'clear' : 'exclude'}" data-scene="${escapeAttribute(sceneId)}" data-book="${escapeAttribute(entry.book)}" data-uid="${escapeAttribute(entry.uid)}" class="${nextExcluded ? 'is-active' : ''}" ${sceneId ? '' : 'disabled'}><i class="fa-solid fa-eye-slash"></i> ${nextExcluded ? 'Excluded next turn' : 'Exclude next turn'}</button></fieldset>
         <fieldset><legend>Persistent handling</legend><label><input type="checkbox" name="pinned" ${entry.pinned ? 'checked' : ''}> Always pin</label><label><input type="checkbox" name="excluded" ${entry.excluded ? 'checked' : ''}> Always exclude</label></fieldset>
-        <div class="remodel-world-sense-links"><span>Related entries</span>${entry.links.length ? entry.links.map((link) => `<span>${escapeHtml(link.relation)} → ${escapeHtml(link.target.book)} · ${escapeHtml(link.target.uid)}</span>`).join('') : '<em>No typed links yet</em>'}</div>
+        ${renderConnections(entry, allEntries)}
         <button type="submit">Save</button>
     </form>`;
 }
@@ -183,6 +243,39 @@ function bind(root, state) {
         if (filter) { state[filter] = event.target.value; await refresh(root, state); }
     });
     root.addEventListener('submit', async (event) => {
+        if (event.target.matches('[data-ws-probe-form]')) {
+            event.preventDefault();
+            const terms = event.target.querySelector('[data-ws-probe]')?.value || '';
+            state.probeTerms = terms;
+            state.busy = 'probe';
+            await refresh(root, state);
+            try {
+                const timelineId = getTimelineStore().activeTimelineId;
+                const lore = await loadTimelineLore(timelineId);
+                const metadata = listLivingLoreMetadata({ timelineId, book: lore.book || '' });
+                // Score the keywords the same way a turn would, so the answer
+                // is the retrieval that would really happen and not a
+                // keyword-only approximation of it.
+                let matches = [];
+                let semanticAvailable = true;
+                try {
+                    const query = await queryWorldSense(timelineId, terms, { topK: 500, threshold: 0 });
+                    matches = query?.matches || [];
+                    semanticAvailable = Boolean(query?.ok);
+                } catch { semanticAvailable = false; }
+                state.probe = probeWorldSenseKeywords({
+                    keywords: terms, entries: lore.entries, metadata,
+                    semanticMatches: matches, semanticAvailable,
+                });
+                state.message = '';
+            } catch (error) {
+                state.probe = null;
+                state.message = String(error?.message || error);
+            }
+            state.busy = '';
+            await refresh(root, state);
+            return;
+        }
         if (event.target.matches('[data-ws-search-form]')) {
             event.preventDefault();
             state.query = event.target.querySelector('[data-ws-search]')?.value.trim() || '';

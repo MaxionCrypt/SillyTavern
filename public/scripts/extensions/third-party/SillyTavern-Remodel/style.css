@@ -13383,3 +13383,106 @@ body.st-remodel-active .remodel-world-sense-refusals li small {
 body.st-remodel-active .remodel-world-sense-host {
   padding: 0 !important;
 }
+
+/* The keyword probe and the connection list. Both answer questions about the
+   mesh, so they share the panel treatment the refusal list already uses. */
+body.st-remodel-active .remodel-world-sense-probe {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--ws-line);
+  border-radius: 12px;
+  background: var(--ws-raised);
+}
+
+body.st-remodel-active .remodel-world-sense-probe > summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  cursor: pointer;
+  color: var(--ws-ink);
+}
+
+body.st-remodel-active .remodel-world-sense-probe > summary strong { color: var(--ws-gold); }
+
+body.st-remodel-active .remodel-world-sense-probe > p {
+  margin: 10px 0 14px;
+  color: var(--ws-muted);
+  font-size: 0.86em;
+}
+
+body.st-remodel-active .remodel-world-sense-probe-form {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+body.st-remodel-active .remodel-world-sense-probe-form label { flex: 1 1 auto; min-width: 0; }
+body.st-remodel-active .remodel-world-sense-probe-form input { width: 100%; }
+
+body.st-remodel-active .remodel-world-sense-probe-result {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+body.st-remodel-active .remodel-world-sense-probe-result li {
+  padding: 10px 12px;
+  border: 1px solid var(--ws-line);
+  border-radius: 10px;
+}
+
+body.st-remodel-active .remodel-world-sense-probe-result li > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+body.st-remodel-active .remodel-world-sense-probe-result li em { color: var(--ws-gold); font-style: normal; }
+body.st-remodel-active .remodel-world-sense-probe-result li small { color: var(--ws-muted); }
+/* A refused row is stated, not hidden: knowing what was turned away is the
+   point of asking. */
+body.st-remodel-active .remodel-world-sense-probe-result li.is-refused { opacity: 0.62; }
+body.st-remodel-active .remodel-world-sense-probe-result li.is-refused em { color: var(--ws-muted); }
+
+body.st-remodel-active .remodel-world-sense-connections {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--ws-line);
+  border-radius: 10px;
+}
+
+body.st-remodel-active .remodel-world-sense-connections > span {
+  color: var(--ws-muted);
+  text-transform: uppercase;
+  font-size: 0.72em;
+  letter-spacing: 0.08em;
+}
+
+body.st-remodel-active .remodel-world-sense-connections > strong { color: var(--ws-gold); margin-left: 8px; }
+
+body.st-remodel-active .remodel-world-sense-connections ul {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+body.st-remodel-active .remodel-world-sense-connections li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+body.st-remodel-active .remodel-world-sense-connections li em {
+  color: var(--ws-muted);
+  font-style: normal;
+  font-size: 0.8em;
+  min-width: 9em;
+}
+
+body.st-remodel-active .remodel-world-sense-connections li small { color: var(--ws-muted); font-size: 0.8em; }

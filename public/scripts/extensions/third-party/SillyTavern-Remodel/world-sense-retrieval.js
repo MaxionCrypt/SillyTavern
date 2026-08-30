@@ -431,3 +431,29 @@ export function scoreLivingLoreCandidatesByTraversal({
 
     return { candidates, rejected, receipt: walked.receipt };
 }
+
+/**
+ * What a bare keyword request would bring out.
+ *
+ * The same traversal a turn runs, driven only by the keywords given — no
+ * goals, no history, no premise, no constants beyond what the book itself
+ * marks. That is the point: it answers "if the Loom asked for exactly this,
+ * what would it get", which the receipt of a real turn cannot show because a
+ * real turn's packet carries the whole scene with it.
+ *
+ * @param {string[]|string} keywords
+ */
+export function probeWorldSenseKeywords({
+    keywords = [], entries = [], metadata = [], semanticMatches = [], semanticAvailable = true, maxDepth,
+} = {}) {
+    const terms = (Array.isArray(keywords) ? keywords : String(keywords).split(/[,\n]/))
+        .map((term) => String(term ?? '').trim())
+        .filter(Boolean);
+    if (!terms.length) return { packet: null, candidates: [], rejected: [], receipt: null, terms: [] };
+
+    const packet = buildWorldSenseQueryPacket({ searchTerms: terms });
+    const scored = scoreLivingLoreCandidatesByTraversal({
+        packet, entries, metadata, semanticMatches, semanticAvailable, maxDepth,
+    });
+    return { ...scored, packet, terms };
+}
