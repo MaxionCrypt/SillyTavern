@@ -6,7 +6,7 @@ import { createBackgroundArchiveRuntime, setBackgroundArchiveRuntimeForTests } f
 import { listEvents, listSceneFacts } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { listArchiveSceneDescriptors } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archive-scene-list.js';
 import { listLivingLoreProposals, queueLivingLoreProposals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-mutations.js';
-import { upsertLivingLoreMetadata } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
+import { listLivingLoreWrites, upsertLivingLoreMetadata } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
 import { getTimelineGoals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js';
 import { listVariableValues } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
 import {
@@ -132,7 +132,7 @@ test('accepted Story prose applies enabled retrospective requests once', async (
     expect(listEvents(scene.timelineId, scene.id)).toHaveLength(1);
 });
 
-test('accepted Story evidence can queue a typed Living Lore proposal alongside the Timeline Web', async () => {
+test('accepted Story evidence files Living Lore alongside the Timeline Web', async () => {
     __setExtensionSettings({ remodel: {
         timelineV1: {
             version: 1,
@@ -144,22 +144,21 @@ test('accepted Story evidence can queue a typed Living Lore proposal alongside t
         },
         worldSenseV1: { version: 4, profile: { mode: 'suggest', maxEntries: 12, maxTokens: 1800 }, indexes: {}, receipts: [], continuityByScene: {} },
     } });
-    __setContextOverrides({
-        loadWorldInfo: async () => ({ entries: {
+    let storyBook = { entries: {
             7: { uid: 7, comment: 'Mara', key: ['Mara', 'observatory'], keysecondary: [], content: 'Identity\nMara is the observatory keeper.', disable: false },
-        } }),
+    } };
+    __setContextOverrides({
+        loadWorldInfo: async () => structuredClone(storyBook),
+        saveWorldInfo: async (_name, data) => { storyBook = structuredClone(data); },
     });
     const { doc, capture } = makeCapture();
+    // The Loom reports what is now true. It names no entry, operation or
+    // revision: placement is worked out from the report.
     const proposal = {
-        id: 'story-lore-1',
-        operation: 'fact.append',
-        target: { book: 'Living Story', uid: '7', revision: 1 },
-        entryType: 'entity',
-        section: 'Established',
-        value: 'Mara locked the observatory door.',
+        content: 'Mara locked the observatory door.',
+        name: 'The observatory door',
+        keys: ['observatory door'],
         evidence: 'Mara locked the observatory door.',
-        confidence: 0.96,
-        reason: 'The accepted Story passage establishes a durable action.',
     };
     setStoryLoomArchiveTestAdapter(async ({ prompt }) => {
         const text = prompt.map((message) => message.content).join('\n');
@@ -170,10 +169,14 @@ test('accepted Story evidence can queue a typed Living Lore proposal alongside t
     });
 
     const applied = await processStoryArchiveCapture({ scene, docId: doc.id, captureId: capture.id });
-    expect(applied).toMatchObject({ status: 'applied', loreProposalIds: ['story-lore-1'] });
+    expect(applied).toMatchObject({ status: 'applied' });
     expect(applied.worldSenseReceiptId).toBeTruthy();
-    expect(listLivingLoreProposals({ timelineId: scene.timelineId })).toEqual([
-        expect.objectContaining({ id: 'story-lore-1', status: 'suggested', source: expect.objectContaining({ mode: 'story', captureId: capture.id }) }),
+    // The information reached the lorebook itself, not a queue beside it.
+    expect(Object.values(storyBook.entries).map((entry) => entry.content).join(' '))
+        .toContain('Mara locked the observatory door.');
+    // ...and the ledger knows where it went, so a superseded capture can undo it.
+    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toEqual([
+        expect.objectContaining({ directionId: `story-archive:${capture.id}` }),
     ]);
 });
 
@@ -202,7 +205,7 @@ test('an ordered elided Story quotation remains valid proposal evidence', async 
     expect(result).toMatchObject({ ok: true, queued: [expect.objectContaining({ id: 'elided-story-evidence', evidence: expect.objectContaining({ source: 'accepted-prose-elided' }) })], rejected: [] });
 });
 
-test('regenerating Story evidence invalidates its unapplied Living Lore suggestions', async () => {
+test('regenerating Story evidence takes its filed Living Lore back out', async () => {
     __setExtensionSettings({ remodel: {
         timelineV1: {
             version: 1,
@@ -214,10 +217,12 @@ test('regenerating Story evidence invalidates its unapplied Living Lore suggesti
         },
         worldSenseV1: { version: 4, profile: { mode: 'suggest', maxEntries: 12, maxTokens: 1800 }, indexes: {}, receipts: [], continuityByScene: {} },
     } });
-    __setContextOverrides({
-        loadWorldInfo: async () => ({ entries: {
+    let regenBook = { entries: {
             7: { uid: 7, comment: 'Mara', key: ['Mara', 'observatory'], keysecondary: [], content: 'Identity\nMara is the observatory keeper.', disable: false },
-        } }),
+    } };
+    __setContextOverrides({
+        loadWorldInfo: async () => structuredClone(regenBook),
+        saveWorldInfo: async (_name, data) => { regenBook = structuredClone(data); },
     });
     const doc = createStoryDoc({ title: 'Regenerated lore evidence' });
     updateStoryDoc(doc.id, { body: 'Mara locked the observatory door.' });
@@ -225,23 +230,23 @@ test('regenerating Story evidence invalidates its unapplied Living Lore suggesti
         text: 'Mara locked the observatory door.', start: 0, end: 33, generationId: 'story-generation-lore', beatId: 'beat-lore',
     });
     setStoryLoomArchiveTestAdapter(async () => fence([], [{
-        id: 'superseded-story-lore',
-        operation: 'fact.append',
-        target: { book: 'Living Story', uid: '7', revision: 1 },
-        entryType: 'entity',
-        section: 'Established',
-        value: 'Mara locked the observatory door.',
+        content: 'Mara locked the observatory door.',
+        name: 'The observatory door',
+        keys: ['observatory door'],
         evidence: 'Mara locked the observatory door.',
-        confidence: 0.96,
-        reason: 'The accepted Story passage establishes it.',
     }]));
 
     await processStoryArchiveCapture({ scene, docId: doc.id, captureId: capture.id });
-    expect(listLivingLoreProposals({ timelineId: scene.timelineId })[0]?.status).toBe('suggested');
+    // Filed straight into the lorebook, so superseding must remove it again
+    // rather than discard an unapplied suggestion.
+    expect(Object.values(regenBook.entries).map((entry) => entry.content).join(' '))
+        .toContain('Mara locked the observatory door.');
+    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toHaveLength(1);
+
     await supersedeStoryBeatArchive({ scene, docId: doc.id, beatId: 'beat-lore' });
-    expect(listLivingLoreProposals({ timelineId: scene.timelineId })[0]).toMatchObject({
-        status: 'invalidated', invalidationReason: 'story-generation-superseded',
-    });
+    expect(Object.values(regenBook.entries).map((entry) => entry.content).join(' '))
+        .not.toContain('Mara locked the observatory door.');
+    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toHaveLength(0);
 });
 
 test('accepted Story consequences create linked Timeline Web records without a retrospective roll', async () => {

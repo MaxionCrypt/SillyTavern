@@ -196,3 +196,62 @@ function clamp01(value) {
 function round(value) {
     return Math.round(value * 1000) / 1000;
 }
+
+/** One report should be one piece of information. Past this it is a document,
+ * not a fact, and placing it by similarity stops meaning anything. */
+export const MAX_INFORMATION_CHARS = 2000;
+
+export const INTAKE_REJECTIONS = Object.freeze([
+    'not-an-object', 'missing-content', 'content-too-long', 'invalid-keys', 'missing-evidence',
+]);
+
+/**
+ * Read what the Loom reported.
+ *
+ * The Loom no longer names an operation, a target entry or a revision — it does
+ * not decide where anything goes, so it cannot be asked to be right about that.
+ * It reports what is now true, optionally suggests a name and keys for it, and
+ * cites what it is drawing from. Placement is computed from the report.
+ *
+ * A suggested name and keys are kept because they are only used if the
+ * information turns out to be its own subject; when it is appended they are
+ * discarded, which is the header being dropped.
+ */
+export function readLoomInformation(records = []) {
+    const accepted = [];
+    const rejected = [];
+    const list = Array.isArray(records) ? records : [];
+
+    for (let index = 0; index < list.length; index += 1) {
+        const record = list[index];
+        if (!record || typeof record !== 'object' || Array.isArray(record)) {
+            rejected.push({ index, code: 'not-an-object' });
+            continue;
+        }
+        const content = String(record.content ?? '').trim();
+        if (!content) { rejected.push({ index, code: 'missing-content' }); continue; }
+        if (content.length > MAX_INFORMATION_CHARS) { rejected.push({ index, code: 'content-too-long' }); continue; }
+        if (record.keys !== undefined && !Array.isArray(record.keys)) {
+            rejected.push({ index, code: 'invalid-keys' });
+            continue;
+        }
+        const evidence = toEvidence(record.evidence);
+        if (!evidence.length) { rejected.push({ index, code: 'missing-evidence' }); continue; }
+
+        accepted.push(Object.freeze({
+            content,
+            name: String(record.name ?? '').trim().slice(0, 120),
+            keys: (record.keys || []).map((key) => String(key ?? '').trim()).filter(Boolean).slice(0, 12),
+            evidence,
+        }));
+    }
+    return { accepted, rejected };
+}
+
+/** One string or up to six. Evidence is kept from the previous contract on
+ * purpose: dropping placement from the Loom's job is not a reason to stop
+ * asking it what it is drawing from. */
+function toEvidence(value) {
+    const list = Array.isArray(value) ? value : [value];
+    return list.map((item) => String(item ?? '').trim()).filter(Boolean).slice(0, 6);
+}

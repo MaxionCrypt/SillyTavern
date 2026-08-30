@@ -9,8 +9,8 @@ import {
 } from './prompt-studio.js';
 import { describeLoomReply, parseLoomReply } from './loom-reconciliation.js';
 import { formatLivingLorePacket } from './living-lore-proposals.js';
-import { promotionEvidence } from './world-sense-promotion.js';
-import { invalidateLivingLoreProposals, queueLivingLoreProposals } from './living-lore-mutations.js';
+import { withdrawLivingLoreWrites } from './living-lore-withdrawal.js';
+import { applyLoomLoreReports } from './living-lore-intake-runtime.js';
 import { streamChatPrompt } from './story-stream.js';
 import {
     createStoryArchiveCapture,
@@ -211,7 +211,8 @@ export function captureStoryArchiveCatchUp({ scene, docId, previewToken, onState
             for (const captureId of change.supersedesCaptureIds) {
                 supersedeBackgroundArchive(`story-archive:${captureId}`, `story-archive:${partCaptures[0].id}`);
             }
-            invalidateStoryCaptureLore(scene.timelineId, change.supersedesCaptureIds, 'story-source-edited');
+            invalidateStoryCaptureLore(scene.timelineId, change.supersedesCaptureIds, 'story-source-edited')
+                .catch(() => { /* withdrawal failure is reported through the ledger, not by failing the capture */ });
         }
     }
     const queuedIds = new Set(captures.map((capture) => capture.id));
@@ -243,7 +244,7 @@ export async function supersedeStoryBeatArchive({ scene, docId, beatId, onStateC
     if (!scene?.id || !docId || !beatId) return [];
     const captures = supersedeStoryArchiveCapturesForBeat(docId, beatId);
     for (const capture of captures) supersedeBackgroundArchive(`story-archive:${capture.id}`);
-    invalidateStoryCaptureLore(scene.timelineId, captures.map((capture) => capture.id), 'story-generation-superseded');
+    await invalidateStoryCaptureLore(scene.timelineId, captures.map((capture) => capture.id), 'story-generation-superseded');
     for (const capture of captures) {
         if (!capture.transactionId) continue;
         const transaction = listMechanicsTransactions({ timelineId: scene.timelineId, sceneId: scene.id })
@@ -460,24 +461,17 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
 async function queueStoryCaptureLore({ scene, docId, capture, packet }) {
     const proposals = Array.isArray(capture?.loreProposals) ? capture.loreProposals : [];
     if (!packet?.book || !proposals.length) return { ok: true, queued: [], rejected: [] };
-    const result = await queueLivingLoreProposals({
+    // Same intake as roleplay: the Loom reports, Living Lore places. A Story
+    // capture already carries when it was recorded, which is what placement
+    // scores the temporal signal against.
+    const result = await applyLoomLoreReports({
         timelineId: scene.timelineId,
-        packet,
-        proposals,
+        book: packet.book,
+        records: proposals,
+        recordedAt: capture.recordedAt || capture.at || capture.createdAt || new Date().toISOString(),
         acceptedProse: formatStoryCaptureEvidence(capture),
         archiveFacts: capture.archiveFacts || [],
-        promotionFacts: promotionEvidence(packet.promotion),
-        source: {
-            mode: 'story',
-            directionId: `story-archive:${capture.id}`,
-            sceneId: String(scene.id),
-            docId: String(docId),
-            captureId: capture.id,
-            bodyRevision: capture.bodyRevision,
-            sourceSpan: { start: capture.start, end: capture.end },
-            contentHash: capture.contentHash,
-            origin: capture.origin,
-        },
+        source: { directionId: `story-archive:${capture.id}`, sceneId: String(scene.id) },
     });
     if (result.rejected?.length) {
         saveWorldSenseProposalRejections({
@@ -490,20 +484,21 @@ async function queueStoryCaptureLore({ scene, docId, capture, packet }) {
     }
     recordDebugEvent('story-archive', 'capture.lore-proposals', {
         ...captureReceipt(scene, docId, capture),
-        proposed: proposals.length,
-        queued: result.queued?.length || 0,
+        reported: proposals.length,
+        appended: result.appended || 0,
+        created: result.created || 0,
         rejected: result.rejected?.length || 0,
     }, {
         correlationId: `story-archive:${capture.id}`,
         severity: result.rejected?.length ? 'warn' : 'info',
-        summary: `Story evidence queued ${result.queued?.length || 0}/${proposals.length} Living Lore proposal(s)`,
+        summary: `Story evidence filed ${result.applied?.length || 0}/${proposals.length} Living Lore report(s): ${result.appended || 0} appended, ${result.created || 0} created`,
     });
     return { ok: result.ok, queued: result.queued || [], rejected: result.rejected || [] };
 }
 
-function invalidateStoryCaptureLore(timelineId, captureIds, reason) {
+async function invalidateStoryCaptureLore(timelineId, captureIds, reason) {
     const ids = (captureIds || []).map((id) => `story-archive:${String(id || '')}`).filter((id) => !id.endsWith(':'));
-    if (ids.length) invalidateLivingLoreProposals({ timelineId, directionIds: ids, reason });
+    if (ids.length) await withdrawLivingLoreWrites({ timelineId, directionIds: ids, reason });
 }
 
 function createManualCatchUpCapture(docId, preview, change) {

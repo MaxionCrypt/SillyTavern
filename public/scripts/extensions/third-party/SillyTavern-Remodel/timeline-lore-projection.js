@@ -1,12 +1,11 @@
 import { getContext } from '../../../st-context.js';
 import { registerArchiveConsequenceSubscriber, setArchiveConsequenceSubscriberEnabled } from './archive-consequences.js';
 import { recordApiTranscript, recordDebugEvent } from './debug-console.js';
-import { queueLivingLoreProposals } from './living-lore-mutations.js';
+import { applyLoomLoreReports } from './living-lore-intake-runtime.js';
 import { formatLivingLorePacket } from './living-lore-proposals.js';
 import { buildLoomRecipeSources, describeLoomReply, parseLoomReply } from './loom-reconciliation.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe, getPromptStudioRecipe, getStoryArchivePromptStudioRecipe, recordSentPromptTranscript } from './prompt-studio.js';
 import { streamChatPrompt } from './story-stream.js';
-import { promotionEvidence } from './world-sense-promotion.js';
 import { resolveWorldSense } from './world-sense-runtime.js';
 import { getWorldSenseProfile, saveWorldSensePromotionDecisionReceipt, saveWorldSenseProposalRejections } from './world-sense-store.js';
 
@@ -28,7 +27,7 @@ Use only the proposal operations, targets, revisions, evidence, and promotion ca
 export function createTimelineLoreProjector({
     resolve = resolveWorldSense,
     transport = productionTransport,
-    queue = queueLivingLoreProposals,
+    queue = applyLoomLoreReports,
     schedule = (task) => setTimeout(task, 0),
     profile = getWorldSenseProfile,
 } = {}) {
@@ -102,20 +101,20 @@ export function createTimelineLoreProjector({
                 decisions: parsed.lorePromotionDecisions || [], rejections: parsed.lorePromotionDecisionRejections || [],
             });
         }
+        // Same intake as roleplay and Story: the Loom reports, Living Lore
+        // places. There is no automation override any more because there is no
+        // review mode to override -- information is filed or it is not.
         const queued = await queue({
             timelineId: event.timelineId,
-            packet,
-            proposals: parsed.loreProposals || [],
+            book: packet.book,
+            records: parsed.loreProposals || [],
+            recordedAt: event.recordedAt || event.at || new Date().toISOString(),
             acceptedProse: event.evidence?.acceptedProse || '',
             archiveFacts: event.evidence?.archiveFacts || [],
-            promotionFacts: promotionEvidence(packet.promotion),
-            automationModeOverride: 'suggest',
             source: {
-                authority: 'accepted-fiction', stage: 'archive-settlement',
-                directionId: event.eventId, sceneId: event.sceneId,
-                messageId: event.provenance?.messageId, archiveJobId: event.jobId,
-                archiveTransactionId: event.baseArchive?.transactionId || null,
-                worldSenseReceiptId: worldSense?.receipt?.id || null,
+                directionId: event.eventId,
+                sceneId: event.sceneId,
+                messageId: event.provenance?.messageId,
             },
         });
         const rejections = [...(parsed.loreProposalRejections || []), ...(queued.rejected || [])];
@@ -126,12 +125,12 @@ export function createTimelineLoreProjector({
         return projectionResult(event, {
             status: 'succeeded', worldSenseReceiptId: worldSense?.receipt?.id || null,
             degraded: Boolean(worldSense?.degraded), error: worldSense?.error || '',
-            proposed: parsed.loreProposals?.length || 0,
-            queued: queued.queued?.map((record) => record.id) || [],
+            reported: parsed.loreProposals?.length || 0,
+            appended: queued.appended || 0,
+            created: queued.created || 0,
+            filed: (queued.applied || []).map((item) => `${item.decision}:${item.name}`),
             rejected: rejections.map((item) => ({ index: item.index, code: item.code })),
             promotionDecisions: parsed.lorePromotionDecisions?.length || 0,
-            typedLinks: (parsed.loreProposals || []).filter((proposal) => proposal.operation === 'entry.link').length,
-            automation: 'review-only',
         });
     }
 

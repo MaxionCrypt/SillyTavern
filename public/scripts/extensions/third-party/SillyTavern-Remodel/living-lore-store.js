@@ -98,9 +98,58 @@ function emptyStore() {
     return { version: STORE_VERSION, timelines: {} };
 }
 
+/**
+ * Remember that intake wrote something, so it can be undone if the turn that
+ * produced it is superseded. Writing lore directly means there is no unapplied
+ * proposal to throw away — the only way back is to know what went in.
+ */
+export function recordLivingLoreWrite(timelineId, record = {}) {
+    const bucket = getTimelineLivingLoreState(timelineId);
+    if (!bucket) return null;
+    const id = String(record.id || '').trim() || `write-${now()}-${Object.keys(bucket.writes || {}).length}`;
+    bucket.writes = isObject(bucket.writes) ? bucket.writes : {};
+    bucket.writes[id] = {
+        id,
+        book: String(record.book || ''),
+        uid: String(record.uid || ''),
+        decision: String(record.decision || ''),
+        content: String(record.content || ''),
+        directionId: String(record.directionId || ''),
+        // Scoped to a Scene so withdrawing a superseded turn cannot reach into
+        // another Scene's lore in the same Timeline.
+        sceneId: String(record.sceneId || ''),
+        messageId: record.messageId == null ? '' : String(record.messageId),
+        status: 'written',
+        at: now(),
+    };
+    bucket.updatedAt = now();
+    saveLivingLoreStore();
+    return clone(bucket.writes[id]);
+}
+
+export function listLivingLoreWrites({ timelineId = '', status = '' } = {}) {
+    const bucket = getTimelineLivingLoreState(timelineId, { create: false });
+    if (!bucket) return [];
+    return Object.values(bucket.writes || {})
+        .filter((record) => !status || record.status === status)
+        .map(clone)
+        .sort((left, right) => String(left.at).localeCompare(String(right.at)));
+}
+
+export function markLivingLoreWriteWithdrawn(timelineId, id, reason = 'superseded') {
+    const bucket = getTimelineLivingLoreState(timelineId, { create: false });
+    if (!bucket?.writes?.[id]) return null;
+    bucket.writes[id].status = 'withdrawn';
+    bucket.writes[id].withdrawnAt = now();
+    bucket.writes[id].reason = String(reason || '');
+    bucket.updatedAt = now();
+    saveLivingLoreStore();
+    return clone(bucket.writes[id]);
+}
+
 function timelineBucket(timelineId) {
     const timestamp = now();
-    return { timelineId, book: '', entries: {}, proposals: {}, history: [], createdAt: timestamp, updatedAt: timestamp };
+    return { timelineId, book: '', entries: {}, proposals: {}, writes: {}, history: [], createdAt: timestamp, updatedAt: timestamp };
 }
 
 function normalizeStore(store) {
@@ -121,6 +170,10 @@ function normalizeStore(store) {
             book: String(bucket.book ?? '').trim(),
             entries: normalized,
             proposals: normalizeRecords(bucket.proposals),
+            // What intake has written into native lore, so a superseded turn
+            // can take its lore back out again. Normalised here or it would be
+            // dropped on every load.
+            writes: normalizeRecords(bucket.writes),
             history: (Array.isArray(bucket.history) ? bucket.history : []).filter(isObject).map(clone).slice(-500),
             createdAt: String(bucket.createdAt ?? '').trim() || fallbackTime,
             updatedAt: String(bucket.updatedAt ?? '').trim() || fallbackTime,

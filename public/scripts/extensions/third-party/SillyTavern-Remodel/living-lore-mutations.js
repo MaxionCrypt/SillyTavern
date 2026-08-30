@@ -530,7 +530,10 @@ function isProtected(metadata, operation) {
     return (PROTECTED_BY_OPERATION[operation] || []).some((field) => protectedFields.has(field));
 }
 
-function evidenceSource(evidence, acceptedProse, archiveFacts, promotionFacts = [], explicitInstructions = [], source = {}) {
+/** Shared with Living Lore intake: the check that a report is drawn from
+ * fiction that was actually accepted, rather than from a draft or a tail the
+ * reader never saw. */
+export function evidenceSource(evidence, acceptedProse, archiveFacts, promotionFacts = [], explicitInstructions = [], source = {}) {
     const items = evidenceItems(evidence);
     if (!items.length) return '';
     const sources = items.map((item) => singleEvidenceSource(item, acceptedProse, archiveFacts, promotionFacts, explicitInstructions, source));

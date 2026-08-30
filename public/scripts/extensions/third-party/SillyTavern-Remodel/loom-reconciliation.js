@@ -1,4 +1,4 @@
-import { parseLivingLoreProposals } from './living-lore-proposals.js';
+import { readLoomInformation } from './living-lore-intake.js';
 import { parsePromotionDecisions } from './world-sense-promotion.js';
 
 export const LOOM_POLICY_V12 = `You are the Loom: the final continuity editor, mechanical referee, and live voice of the scene. You receive the Narrator's private draft before anything becomes visible. Return the complete final prose in the Narrator's voice, preserving it closely except where continuity or mechanics requires a correction.
@@ -335,7 +335,10 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
         try {
             const parsed = envelope.value;
             if (Array.isArray(parsed?.requests)) requests = parsed.requests;
-            const proposals = parseLivingLoreProposals(parsed?.loreProposals, livingLorePacket);
+            // Information reports, not typed operations against a target. The
+            // packet is no longer needed to validate them: the Loom does not
+            // name an entry, so there is nothing to check it against.
+            const proposals = readLoomInformation(parsed?.loreProposals);
             loreProposals = proposals.accepted;
             loreProposalRejections = proposals.rejected;
             if (livingLorePacket?.promotion?.candidates?.length) {

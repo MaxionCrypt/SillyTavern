@@ -52,28 +52,30 @@ test('Archive settlement queues lore work without putting retrieval on the Archi
     expect(settled).toMatchObject({ status: 'succeeded', result: { status: 'succeeded', worldSenseReceiptId: 'ws-1' } });
 });
 
-test('accepted Archive evidence produces a detached review-only Living Lore proposal', async () => {
-    const proposal = {
-        id: 'l1', operation: 'fact.append', target: { book: 'North Book', uid: '7', revision: 2 },
-        entryType: 'entity', section: 'Established', value: 'Mara permanently commands the North Gate watch.',
-        evidence: 'Mara took permanent command of the North Gate watch.', confidence: 0.96,
-        reason: 'The accepted fiction establishes a durable command role.',
+test('accepted Archive evidence is filed as Living Lore, not queued for review', async () => {
+    // The Loom reports what is now true and names no destination.
+    const report = {
+        content: 'Mara permanently commands the North Gate watch.',
+        name: 'North Gate watch',
+        keys: ['North Gate watch'],
+        evidence: 'Mara took permanent command of the North Gate watch.',
     };
-    const queue = jest.fn(async ({ proposals }) => ({ ok: true, queued: proposals.map((item) => ({ id: item.id })), rejected: [] }));
+    const queue = jest.fn(async () => ({ ok: true, applied: [{ decision: 'append', name: 'Mara' }], rejected: [], appended: 1, created: 0 }));
     const transport = jest.fn(async ({ routeSnapshot }) => {
         expect(routeSnapshot.profileId).toBe('loom-profile-1');
-        return fence([proposal]);
+        return fence([report]);
     });
     const result = await createTimelineLoreProjector({
         resolve: async () => ({ loomPacket: packet(), receipt: { id: 'ws-2' }, degraded: false }),
         transport, queue, profile: () => ({ mode: 'auto-safe' }),
     }).project(event());
-    expect(result).toMatchObject({ status: 'succeeded', proposed: 1, queued: ['l1'], automation: 'review-only' });
+    expect(result).toMatchObject({ status: 'succeeded', reported: 1, appended: 1, created: 0 });
+    // Intake is handed the book the Loom actually saw, and the turn that
+    // produced the report, so a superseded settlement can take it back out.
     expect(queue).toHaveBeenCalledWith(expect.objectContaining({
-        acceptedProse: 'Mara took permanent command of the North Gate watch.',
-        archiveFacts: ['Mara took permanent command of the North Gate watch.'],
-        automationModeOverride: 'suggest',
-        source: expect.objectContaining({ authority: 'accepted-fiction', archiveTransactionId: 'archive-tx-1' }),
+        book: 'North Book',
+        records: [expect.objectContaining({ content: 'Mara permanently commands the North Gate watch.' })],
+        source: expect.objectContaining({ directionId: 'archive-settlement:archive:lore-1' }),
     }));
 });
 
@@ -92,24 +94,28 @@ test('Story Archive settlements use the same detached lore projection boundary',
     expect(resolve).toHaveBeenCalledTimes(1);
 });
 
-test('typed lore links use the same review queue rather than a separate mutation path', async () => {
+test('a report that names two subjects is still one report through one path', async () => {
     const lorePacket = packet();
     lorePacket.entries.push({
         target: { book: 'North Book', uid: '9', revision: 1 }, name: 'North Gate', entryType: 'location',
         protectedFields: [], keys: ['North Gate'], secondaryKeys: [], content: 'A fortified gate.', selectedBecause: ['direct'],
     });
-    const link = {
-        id: 'link-1', operation: 'entry.link', target: { book: 'North Book', uid: '7', revision: 2 },
-        entryType: 'entity', section: 'Links',
-        value: { target: { book: 'North Book', uid: '9', revision: 1 }, relation: 'commands watch at' },
-        evidence: 'Mara took permanent command of the North Gate watch.', confidence: 0.94, reason: 'Durable relationship.',
+    // Relating two entries is no longer a typed operation the Loom requests.
+    // It reports the fact; naming both subjects is what puts the information in
+    // their part of the mesh, and placement follows from that.
+    const report = {
+        content: 'Mara commands the watch at the North Gate.',
+        name: 'The North Gate watch',
+        keys: ['North Gate watch'],
+        evidence: 'Mara took permanent command of the North Gate watch.',
     };
-    const queue = jest.fn(async ({ proposals }) => ({ ok: true, queued: proposals.map((item) => ({ id: item.id })), rejected: [] }));
+    const queue = jest.fn(async () => ({ ok: true, applied: [{ decision: 'create', name: 'The North Gate watch' }], rejected: [], appended: 0, created: 1 }));
     const result = await createTimelineLoreProjector({
         resolve: async () => ({ loomPacket: lorePacket, receipt: { id: 'ws-3' } }),
-        transport: async () => fence([link]), queue, profile: () => ({ mode: 'suggest' }),
+        transport: async () => fence([report]), queue, profile: () => ({ mode: 'suggest' }),
     }).project(event());
-    expect(result).toMatchObject({ status: 'succeeded', typedLinks: 1, queued: ['link-1'] });
+    expect(result).toMatchObject({ status: 'succeeded', reported: 1, created: 1 });
+    expect(queue).toHaveBeenCalledWith(expect.objectContaining({ book: 'North Book' }));
 });
 
 test('World Sense failure degrades only the downstream projection', async () => {

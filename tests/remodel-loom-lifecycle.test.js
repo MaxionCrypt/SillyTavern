@@ -22,7 +22,8 @@ import {
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { directedTurnController } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/legacy-directed-turn-adapter.js';
 import { listEvents, recordEvent } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
-import { invalidateLivingLoreProposals, listLivingLoreProposals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-mutations.js';
+import { listLivingLoreWrites } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
+import { withdrawLivingLoreWrites } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-withdrawal.js';
 import { updateWorldSenseProfile } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-store.js';
 import { upsertLivingLoreMetadata } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
 import { buildLivingLorePacket } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-proposals.js';
@@ -58,11 +59,12 @@ function livingLorePacket() {
 }
 
 function loreProposal(id, value, evidence = 'Wren steps between them.') {
-    return {
-        id, operation: 'current.set', target: { book: LORE_BOOK, uid: '42', revision: 1 },
-        entryType: 'entity', section: 'Current', value, evidence,
-        confidence: 0.9, reason: 'Accepted fiction changed Wren’s current state.',
-    };
+    return { content: value, name: id, keys: [id], evidence };
+}
+
+/** Everything currently written in the lorebook, as one string. */
+function loreText() {
+    return Object.values(nativeLore.entries).map((entry) => String(entry.content || '')).join(' ');
 }
 
 async function speak() {
@@ -278,7 +280,7 @@ test('a turn records an inspectable Archive projection receipt', async () => {
     ]));
 });
 
-test('a completed turn queues its evidence-backed lore suggestion exactly once and persists its identity', async () => {
+test('a completed turn files its evidence-backed lore exactly once', async () => {
     const proposal = loreProposal('wren-moved', 'Wren stands between the fighters.');
     setLiveDirectionTestAdapters({
         generatePerformer: speak,
@@ -288,19 +290,20 @@ test('a completed turn queues its evidence-backed lore suggestion exactly once a
 
     await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
-    const suggestions = listLivingLoreProposals({ timelineId: scene.timelineId });
-    expect(suggestions).toHaveLength(1);
-    expect(suggestions[0]).toMatchObject({ status: 'suggested', proposal });
-    expect(__getChat().at(-1).extra.remodelDirection.loreProposalIds).toEqual([suggestions[0].id]);
-    expect(__getChat().at(-1).swipe_info[0].extra.remodelDirection.directionId).toBe(suggestions[0].source.directionId);
+    const writes = listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ content: proposal.content });
+    expect(loreText()).toContain('Wren stands between the fighters.');
+    expect(__getChat().at(-1).swipe_info[0].extra.remodelDirection.directionId).toBe(writes[0].directionId);
 
-    invalidateLivingLoreProposals({ timelineId: scene.timelineId, directionIds: [suggestions[0].source.directionId], reason: 'simulate-crash-gap' });
+    // Recovering the same turn must not file it a second time: the lorebook is
+    // the ledger, so the information is already there.
     await __emit('CHAT_LOADED');
-    expect(await until(() => listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' }).length === 1)).toBe(true);
-    expect(listLivingLoreProposals({ timelineId: scene.timelineId })).toHaveLength(1);
+    expect(await until(() => listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' }).length === 1)).toBe(true);
+    expect(loreText().split('Wren stands between the fighters.')).toHaveLength(2);
 });
 
-test('Retry invalidates the superseded suggestion and queues the retake once', async () => {
+test('Retry takes the superseded lore back out and files the retake once', async () => {
     let take = 0;
     setLiveDirectionTestAdapters({
         generatePerformer: speak,
@@ -317,9 +320,12 @@ test('Retry invalidates the superseded suggestion and queues the retake once', a
     await regenerateLastDirectedResponse(scene, { deliveryMode: 'legacy' });
     expect(await until(() => take === 2 && getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
-    expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'invalidated' })).toHaveLength(1);
-    expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })).toEqual([
-        expect.objectContaining({ proposal: expect.objectContaining({ id: 'take-2' }) }),
+    // The discarded take is gone from the lore, not merely superseded beside it.
+    expect(loreText()).not.toContain('First take.');
+    expect(loreText()).toContain('Second take.');
+    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'withdrawn' })).toHaveLength(1);
+    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toEqual([
+        expect.objectContaining({ content: 'Second take.' }),
     ]);
 });
 
@@ -387,11 +393,11 @@ test('editing the latest user message rewinds its response and reruns without du
     expect(chat.filter((message) => message.is_user)).toHaveLength(1);
     expect(chat[1]).toMatchObject({ is_user: false, mes: RESPONSE });
     expect(editedEvents).toEqual([['edited', 0], ['updated', 0]]);
-    expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'invalidated' })).toEqual([
-        expect.objectContaining({ proposal: expect.objectContaining({ id: 'edit-take-1' }) }),
-    ]);
-    expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })).toEqual([
-        expect.objectContaining({ proposal: expect.objectContaining({ id: 'edit-take-2' }) }),
+    // The rewound take's lore is removed; only the rerun's remains.
+    expect(loreText()).not.toContain('Old action state.');
+    expect(loreText()).toContain('Edited action state.');
+    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toEqual([
+        expect.objectContaining({ content: 'Edited action state.' }),
     ]);
     expect(listEvents(scene.timelineId, scene.id).map((event) => event.summary)).toEqual(['The edited action happened.']);
     stopEdited();
@@ -411,7 +417,7 @@ test('only the newest user-authored message is eligible for edit-and-rerun', () 
     expect(isLatestUserMessage(3, chat)).toBe(false);
 });
 
-test('switching native swipes invalidates the superseded proposal set and restores only the selected set', async () => {
+test('switching native swipes withdraws the superseded lore and files only the selected set', async () => {
     const first = loreProposal('swipe-one', 'First swipe state.');
     setLiveDirectionTestAdapters({
         generatePerformer: speak,
@@ -431,20 +437,16 @@ test('switching native swipes invalidates the superseded proposal set and restor
     message.extra.remodelDirection = secondSaved;
     await __emit('MESSAGE_SWIPED', __getChat().length - 1);
 
-    expect(await until(() => listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })
-        .some((record) => record.proposal.id === 'swipe-two'))).toBe(true);
-    expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'invalidated' })).toEqual([
-        expect.objectContaining({ proposal: expect.objectContaining({ id: 'swipe-one' }) }),
-    ]);
+    // The swiped-away take is taken out of the lore, not left beside it.
+    expect(await until(() => loreText().includes('Second swipe state.') && !loreText().includes('First swipe state.'))).toBe(true);
 
     message.extra.remodelDirection = firstSaved;
     await __emit('MESSAGE_SWIPED', __getChat().length - 1);
-    expect(await until(() => listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })
-        .some((record) => record.proposal.id === 'swipe-one'))).toBe(true);
-    expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })).toHaveLength(1);
+    expect(await until(() => loreText().includes('First swipe state.') && !loreText().includes('Second swipe state.'))).toBe(true);
+    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toHaveLength(1);
 });
 
-test('reload recovery queues only proposals evidenced by the prefix saved before a crash', async () => {
+test('reload recovery files only lore evidenced by the prefix saved before a crash', async () => {
     const directionId = 'direction-crash-prefix';
     const accepted = 'Wren reaches the gate.';
     const envelope = {
@@ -475,9 +477,9 @@ test('reload recovery queues only proposals evidenced by the prefix saved before
     });
 
     await __emit('CHAT_LOADED');
-    expect(await until(() => listLivingLoreProposals({ timelineId: scene.timelineId }).length === 1)).toBe(true);
-    expect(listLivingLoreProposals({ timelineId: scene.timelineId })).toEqual([
-        expect.objectContaining({ proposal: expect.objectContaining({ id: 'crash-accepted' }) }),
+    expect(await until(() => listLivingLoreWrites({ timelineId: scene.timelineId }).length === 1)).toBe(true);
+    expect(listLivingLoreWrites({ timelineId: scene.timelineId })).toEqual([
+        expect.objectContaining({ content: 'Wren is at the gate.' }),
     ]);
     expect(__getChat()[0].mes).toBe(accepted);
 });
@@ -740,8 +742,10 @@ test('an intervention stores only the visible Loom prefix and never the private 
     expect(archivePrompt).toContain('Selected Living Lore');
     expect(archivePrompt).not.toContain('presses it');
     expect(archivePrompt).not.toContain(RESPONSE);
-    expect(listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })).toEqual([
-        expect.objectContaining({ proposal: expect.objectContaining({ id: 'accepted-prefix' }) }),
+    // Only the accepted prefix is admissible: the tail's evidence never
+    // appeared in fiction the reader saw.
+    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toEqual([
+        expect.objectContaining({ content: 'Wren sees the guard reach for the alarm.' }),
     ]);
 });
 

@@ -82,16 +82,15 @@ export function formatLivingLorePacket(packet) {
     const lorePacket = { ...packet };
     delete lorePacket.promotion;
     return [
-        'Selected Living Lore (the only lorebook entries available for change proposals):',
+        'Selected Living Lore (what the world already records about this scene):',
         JSON.stringify(lorePacket, null, 2),
-        'Do not rewrite lore directly. If accepted fiction warrants a durable change, add a top-level "loreProposals" array to the state fence.',
-        'Each proposal uses only: entry.create, fact.append, current.set, thread.add, alias.add, entry.link, or entry.retire.',
-        'For an existing entry, copy target.book, target.uid, and target.revision exactly from this packet. A stale or unselected target is rejected.',
-        'Sections are fixed: fact.append=Established, current.set=Current, thread.add=Open threads, alias.add=Aliases, entry.link=Links, entry.retire=Retirement. entry.create may use Established, Current, or Open threads and targets only the book.',
-        'entry.link value is {"target":{"book":"...","uid":"...","revision":1},"relation":"..."}; both entries must be selected. Other non-retirement operations use a string value.',
-        'Shape: {"operation":"current.set","target":{"book":"Timeline Book","uid":"42","revision":7},"entryType":"entity","section":"Current","value":"...","evidence":["one exact accepted excerpt","archive:record-id"],"confidence":0.91,"reason":"one sentence"}',
+        'Do not rewrite lore directly. When accepted fiction establishes something durable, add a top-level "loreProposals" array to the state fence reporting it.',
+        'You do not choose where information is filed. Do not name an entry, a uid, a revision, an operation or a section: where it belongs is worked out from what it says. Report what is now true.',
+        'Shape: {"content":"what is now durably true, in prose","name":"a name for it if it turns out to be its own subject","keys":["what it would be called","an alias"],"evidence":["one exact accepted excerpt","archive:record-id"]}',
+        'name and keys are suggestions used only if the information proves to be a new subject; if it belongs inside something that already exists, they are discarded and only content is kept.',
+        'One report is one piece of information. Split unrelated facts into separate entries in the array rather than combining them.',
         'Evidence may be one string or an array of 1-6 independently checkable strings. Prefer archive:<record-id> for supplied Archive or promotion evidence. Never combine separate quotations into one string with "and" or semicolons.',
-        'Use "loreProposals":[] when no durable lore change is warranted.',
+        'Use "loreProposals":[] when accepted fiction established nothing durable.',
         formatWorldSensePromotionPacket(packet.promotion),
     ].filter(Boolean).join('\n');
 }

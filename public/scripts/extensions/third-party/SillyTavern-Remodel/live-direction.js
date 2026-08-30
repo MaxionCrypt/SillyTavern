@@ -20,12 +20,9 @@ import { streamChatPrompt } from './story-stream.js';
 import { buildEmptyResponseNudge, buildNarratorArchivistSections, buildGoalObjectives } from './narrator-prompt.js';
 import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
 import { formatLivingLorePacket } from './living-lore-proposals.js';
-import { promotionEvidence } from './world-sense-promotion.js';
 import { saveWorldSensePromotionDecisionReceipt, saveWorldSenseProposalRejections } from './world-sense-store.js';
 import {
-    invalidateLivingLoreProposals,
     listLivingLoreProposals,
-    queueLivingLoreProposals,
 } from './living-lore-mutations.js';
 import { describeBudgetWarning, describeGenerationBudget, describeIncompleteProse } from './generation-budget.js';
 import { createLoomTurnEnvelope } from './loom-turn.js';
@@ -39,6 +36,10 @@ import {
 } from './direction-progress.js';
 import { activateWorldSenseSelection } from './world-sense-activation.js';
 import { worldInfoScanCorpus } from './world-sense-scan-authority.js';
+import { applyLoomLoreReports } from './living-lore-intake-runtime.js';
+import { withdrawLivingLoreWrites } from './living-lore-withdrawal.js';
+import { listLivingLoreWrites } from './living-lore-store.js';
+import { listEvents } from './archivist-store.js';
 import { previewWorldSense, resolveWorldSense, scheduleWorldSensePrefetch } from './world-sense-runtime.js';
 import { applyNarratorRetryPolicy } from './narrator-retry-policy.js';
 import { describeNarratorOutput } from './narrator-output-contract.js';
@@ -852,7 +853,7 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     // Join it before invalidating, otherwise it can land after the invalidation
     // and resurrect lore based on fiction Retry is about to remove.
     await waitForArchiveCatchup(scene.id);
-    invalidateLivingLoreProposals({
+    await withdrawLivingLoreWrites({
         timelineId: scene.timelineId,
         directionIds: [saved.directionId],
         reason: 'retry-superseded-generation',
@@ -922,7 +923,7 @@ export async function rerunDirectedRoleplayFromUserMessage({
         .filter((saved) => saved && (!saved.sceneId || saved.sceneId === scene.id));
     const directionIds = [...new Set(savedDirections.map((saved) => saved.directionId).filter(Boolean))];
     if (directionIds.length) {
-        invalidateLivingLoreProposals({
+        await withdrawLivingLoreWrites({
             timelineId: scene.timelineId,
             directionIds,
             reason: 'edited-user-message-superseded-generation',
@@ -2963,24 +2964,20 @@ function applyPendingRequests(run) {
 async function queueAcceptedLoreProposals(run, { proposals = null, phase = 'complete', reactivate = false } = {}) {
     const packet = run?.envelope?.livingLore;
     const candidates = Array.isArray(proposals) ? proposals : run?.envelope?.loreProposals;
-    if (!packet?.book || !Array.isArray(candidates) || !candidates.length || !acceptedProse(run)) return { ok: true, queued: [], rejected: [] };
+    if (!packet?.book || !Array.isArray(candidates) || !candidates.length || !acceptedProse(run)) return { ok: true, applied: [], rejected: [] };
     try {
-        const result = await queueLivingLoreProposals({
+        // The Archive records the turn before lore settles, so its newest
+        // record is when this information was recorded. Placement scores
+        // against that rather than against wall clock at write time.
+        const result = await applyLoomLoreReports({
             timelineId: run.timelineId,
-            packet,
-            proposals: candidates,
+            book: packet.book,
+            records: candidates,
+            recordedAt: latestArchiveRecordTime(run.timelineId, run.sceneId),
             acceptedProse: acceptedProse(run),
             archiveFacts: run.committedArchiveFacts || [],
-            promotionFacts: promotionEvidence(packet.promotion),
-            source: {
-                directionId: run.directionId,
-                messageId: run.messageId,
-                sceneId: run.sceneId,
-                phase,
-                reactivate,
-            },
+            source: { directionId: run.directionId, sceneId: run.sceneId, messageId: run.messageId },
         });
-        run.loreProposalIds = mergeStrings(run.loreProposalIds, result.queued.map((record) => record.id));
         if (result.rejected.length) {
             saveWorldSenseProposalRejections({
                 timelineId: run.timelineId,
@@ -2991,34 +2988,45 @@ async function queueAcceptedLoreProposals(run, { proposals = null, phase = 'comp
             });
             run.checkpointDiagnostics = [
                 ...(run.checkpointDiagnostics || []),
-                ...result.rejected.map((item) => `Living Lore proposal rejected: ${item.code}.`),
+                ...result.rejected.map((item) => `Living Lore report refused: ${item.code}.`),
             ];
         }
-        journal('lore.proposals.lifecycle', {
+        journal('lore.intake.lifecycle', {
             directionId: run.directionId,
             messageId: run.messageId,
             phase,
-            proposed: candidates.length,
-            queued: result.queued.length,
-            autoApplied: result.autoSafe?.applied || [],
-            autoReview: result.autoSafe?.review || [],
+            reactivate,
+            reported: candidates.length,
+            appended: result.appended,
+            created: result.created,
+            placements: result.applied.map((item) => ({ decision: item.decision, name: item.name, score: item.score })),
             rejected: result.rejected.map((item) => ({ index: item.index, code: item.code })),
-            proposalIds: run.loreProposalIds,
         }, {
             correlationId: run.directionId,
             severity: result.rejected.length ? 'warn' : 'info',
-            summary: `Living Lore bound ${result.queued.length}/${candidates.length} proposal(s) to accepted fiction${result.autoSafe?.applied?.length ? ` and auto-applied ${result.autoSafe.applied.length}` : ''}`,
+            summary: `Living Lore filed ${result.applied.length}/${candidates.length} report(s): ${result.appended} appended, ${result.created} created`,
         });
         return result;
     } catch (error) {
-        journal('lore.proposals.lifecycle.failed', {
+        journal('lore.intake.lifecycle.failed', {
             directionId: run.directionId,
             messageId: run.messageId,
             phase,
             error: String(error?.message || error),
         }, { correlationId: run.directionId, severity: 'warn' });
-        return { ok: false, queued: [], rejected: [{ code: 'queue-failed' }] };
+        return { ok: false, applied: [], rejected: [{ code: 'intake-failed' }] };
     }
+}
+
+/** When the Archive last recorded something for this scene. Falls back to now
+ * only when the scene has no stamped records, which is the first turn or lore
+ * settled before archive events carried a time. */
+function latestArchiveRecordTime(timelineId, sceneId) {
+    try {
+        const stamped = (listEvents(timelineId, sceneId) || []).map((event) => event?.at).filter(Boolean);
+        if (stamped.length) return stamped[stamped.length - 1];
+    } catch { /* an unreadable Archive is not a reason to refuse the write */ }
+    return new Date().toISOString();
 }
 
 /**
@@ -3429,12 +3437,14 @@ async function reconcileCurrentChatLoreProposals() {
         }
     }
 
-    const superseded = listLivingLoreProposals({ timelineId: scene.timelineId, status: 'suggested' })
-        .filter((record) => record.source?.sceneId === scene.id)
-        .map((record) => String(record.source?.directionId || ''))
-        .filter((directionId) => directionId && !currentDirections.has(directionId));
+    // From what intake actually wrote, not from the retired proposal store,
+    // which is always empty and made this a silent no-op.
+    const superseded = [...new Set(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })
+        .filter((record) => String(record.sceneId) === String(scene.id))
+        .map((record) => String(record.directionId || ''))
+        .filter((directionId) => directionId && !currentDirections.has(directionId)))];
     if (superseded.length) {
-        invalidateLivingLoreProposals({
+        await withdrawLivingLoreWrites({
             timelineId: scene.timelineId,
             directionIds: superseded,
             reason: 'message-deleted-or-swipe-superseded',

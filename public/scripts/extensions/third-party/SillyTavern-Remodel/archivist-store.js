@@ -100,6 +100,11 @@ export function recordEvent(timelineId, sceneId, summary, { msgId = null, turnIn
         msgId: msgId == null ? null : Number(msgId),
         turnIndex: turnIndex == null ? null : Number(turnIndex),
         seq: scene.eventSeq++,
+        // When the Archive recorded this. Living Lore intake scores new
+        // information against how close in time an entry first appeared, and
+        // the Archive record is what 'when' means for a scene -- sequence
+        // numbers cannot be compared against an entry's creation date.
+        at: new Date().toISOString(),
     };
     scene.events.push(event);
     if (scene.events.length > MAX_EVENTS) scene.events.splice(0, scene.events.length - MAX_EVENTS);

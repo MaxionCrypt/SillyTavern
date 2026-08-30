@@ -89,7 +89,7 @@ test('Archive operations remain available when optional Goals and Variables mech
     expect(sentPrompt).not.toContain('Mechanical automation is unavailable this turn');
 });
 
-test('the Loom receives selected revisioned lore and returns detached typed proposals only', async () => {
+test('the Loom receives selected lore and reports information rather than operations', async () => {
     const livingLore = buildLivingLorePacket({
         timelineId: scene.timelineId,
         book: 'Timeline Book',
@@ -98,10 +98,13 @@ test('the Loom receives selected revisioned lore and returns detached typed prop
         selected: [{ book: 'Timeline Book', uid: '42', reasons: [{ channel: 'action.primary' }] }],
         metadata: [{ book: 'Timeline Book', uid: '42', revision: 7, entryType: 'entity' }],
     });
+    // No operation, no target, no revision: the Loom says what is now true and
+    // Living Lore works out where it belongs.
     const proposal = {
-        operation: 'current.set', target: { book: 'Timeline Book', uid: '42', revision: 7 },
-        entryType: 'entity', section: 'Current', value: 'Marissa is in the archive.',
-        evidence: 'Marissa crossed into the archive.', confidence: 0.9, reason: 'Her current location changed.',
+        content: 'Marissa is in the archive.',
+        name: 'The archive',
+        keys: ['archive'],
+        evidence: 'Marissa crossed into the archive.',
     };
     let sentPrompt = '';
     setLiveDirectionTestAdapters({
@@ -116,8 +119,12 @@ test('the Loom receives selected revisioned lore and returns detached typed prop
     expect(sentPrompt).toContain('Selected Living Lore');
     expect(sentPrompt).toContain('"revision": 7');
     expect(sentPrompt).toContain('loreProposals');
-    expect(result.loreProposals).toEqual([proposal]);
+    // The instruction tells it not to choose a destination.
+    expect(sentPrompt).toContain('You do not choose where information is filed');
+    // Evidence is normalised to a list on the way in.
+    const parsed = { ...proposal, evidence: [proposal.evidence] };
+    expect(result.loreProposals).toEqual([parsed]);
     expect(result.loreProposalRejections).toEqual([]);
     const diagnostic = __getDebugEvents().find((entry) => entry.type === 'lore.proposals.parsed');
-    expect(diagnostic.detail.proposals).toEqual([proposal]);
+    expect(diagnostic.detail.proposals).toEqual([parsed]);
 });
