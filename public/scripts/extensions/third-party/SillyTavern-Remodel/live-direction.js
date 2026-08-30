@@ -16,6 +16,7 @@ import { compilePromptRecipe, getCurrentPromptStudioRecipe, recordLoomPromptTran
 import { repairDirectedNarratorRoles } from './narrator-history.js';
 import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
+import { splitReasoning } from './reasoning-strip.js';
 import { streamChatPrompt } from './story-stream.js';
 import { buildEmptyResponseNudge, buildNarratorArchivistSections, buildGoalObjectives } from './narrator-prompt.js';
 import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
@@ -1918,8 +1919,21 @@ function reflectCanonicalDeliveryEvent(run, event) {
  * lands; the alternative risks desyncing the reveal against the user's prose.
  */
 function acceptedProse(run) {
-    if (run?.deliveryMode === 'canonical') return String(run.acceptedVisibleText || '');
-    return stripEchoedScaffolding(sanitizeDirectionText(run?.acceptedVisibleText), run?.performer?.label || '');
+    const visible = run?.deliveryMode === 'canonical'
+        ? String(run.acceptedVisibleText || '')
+        : stripEchoedScaffolding(sanitizeDirectionText(run?.acceptedVisibleText), run?.performer?.label || '');
+    // Paced delivery accumulates the raw provider stream, so a reasoning block
+    // arrives as ordinary text and would be replayed to every later turn by
+    // Remodel's own history builder — whatever the native add_to_prompts
+    // setting says. Canonical delivery reads a message core has already
+    // parsed, so this finds nothing there and changes nothing.
+    const split = splitReasoning(visible);
+    if (!split.found) return visible;
+    if (run) {
+        run.reasoning = split.reasoning;
+        run.reasoningBlocks = split.blocks;
+    }
+    return split.prose;
 }
 
 function acceptNativeBuffer(text) {
@@ -3531,6 +3545,10 @@ function serializeRun(run, state) {
         timelineId: run.timelineId,
         state,
         acceptedText: acceptedProse(run),
+        // Out of the prose and out of later context, but not out of existence:
+        // without a trace there is no way to tell later whether the model
+        // reasoned or rationalised.
+        reasoning: String(run?.reasoning || ''),
         revealOffset: run.rawOffset,
         performerRef: run.performer.ref,
         ...stored,
