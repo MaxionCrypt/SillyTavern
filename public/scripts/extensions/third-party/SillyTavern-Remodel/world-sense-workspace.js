@@ -1,4 +1,4 @@
-import { ensureWorldSenseIndex, queryWorldSense } from './world-sense-embeddings.js';
+import { queryWorldSense } from './world-sense-embeddings.js';
 import { LIVING_LORE_ENTRY_TYPES, LIVING_LORE_PROTECTED_FIELDS } from './living-lore-model.js';
 import {
     applyAutoSafeLivingLoreProposals,
@@ -15,7 +15,6 @@ import {
     cultivationSearchText,
     draftCultivationProposal,
     inspectCultivationConflicts,
-    seedProtectionSummary,
 } from './living-lore-cultivation.js';
 import { AUTO_SAFE_OPERATIONS } from './living-lore-auto-safe.js';
 import { listLivingLoreMetadata, upsertLivingLoreMetadata } from './living-lore-store.js';
@@ -49,7 +48,7 @@ export async function mountWorldSenseWorkspace(root) {
     if (!(root instanceof HTMLElement)) return;
     let state = states.get(root);
     if (!state) {
-        state = { query: '', type: 'all', status: 'all', selectedKey: '', semanticMatches: [], busy: '', message: '', cultivationDraft: null, conflictKey: '', bound: false };
+        state = { query: '', status: 'all', selectedKey: '', semanticMatches: [], busy: '', message: '', cultivationDraft: null, conflictKey: '', bound: false };
         states.set(root, state);
     }
     if (!state.bound) bind(root, state);
@@ -73,7 +72,6 @@ async function refresh(root, state) {
         receipt,
         semanticMatches: state.semanticMatches,
         query: state.query,
-        type: state.type,
         status: state.status,
     });
     if (!entries.some((entry) => entry.key === state.selectedKey)) state.selectedKey = entries[0]?.key || '';
@@ -90,7 +88,7 @@ async function refresh(root, state) {
 }
 
 function render(view) {
-    const { timeline, lore, metadata, entries, selected, conflicts, profile, index, proposals, history, receipt, proposalRejections, dryRun, refusals, turnOverrides, sceneId, state } = view;
+    const { timeline, lore, entries, selected, conflicts, profile, index, proposals, history, receipt, proposalRejections, dryRun, refusals, turnOverrides, sceneId, state } = view;
     if (!timeline) return '<div class="remodel-world-sense-empty"><h3>No active Timeline</h3><p>Select a Timeline before configuring World Sense.</p></div>';
     const indexed = Object.keys(index?.hashes || {}).length;
     return `
@@ -104,9 +102,8 @@ function render(view) {
         ${state.message ? `<div class="remodel-world-sense-notice" role="status">${escapeHtml(state.message)}</div>` : ''}
         <section class="remodel-world-sense-status" aria-label="World Sense status">
             <div><span>Local model</span><strong>${escapeHtml(profile.modelId)}</strong><small>Hugging Face embeddings</small></div>
-            <div><span>Index</span><strong class="is-${escapeAttribute(index?.status || 'idle')}">${escapeHtml(index?.status || 'idle')}</strong><small>${indexed}/${lore.entries.length} entries · ${escapeHtml(relativeTime(index?.indexedAt))}</small></div>
-            <div><span>Last retrieval</span><strong>${receipt ? `${receipt.selected?.length || 0} selected` : 'No receipt'}</strong><small>${receipt ? `${receipt.elapsedMs || 0} ms · ${receipt.degraded ? 'keyword fallback' : 'hybrid'}` : 'Run a scene or search below'}</small></div>
-            <button type="button" data-ws-action="reindex" ${state.busy ? 'disabled' : ''}><i class="fa-solid fa-arrows-rotate"></i><span>${state.busy === 'index' ? 'Indexing…' : 'Reindex'}</span></button>
+            <div><span>Index</span><strong class="is-${escapeAttribute(index?.status || 'idle')}">${escapeHtml(index?.status || 'idle')}</strong><small>${indexed} document${indexed === 1 ? '' : 's'} · ${lore.entries.length} lore · ${escapeHtml(relativeTime(index?.indexedAt))}</small></div>
+            <div><span>Last retrieval</span><strong>${receipt ? `${receipt.selected?.length || 0} selected` : 'No receipt'}</strong><small>${receipt ? `${receipt.elapsedMs || 0} ms · ${receipt.degraded ? 'mentions only' : 'mentions + vector'}` : 'Run a scene or search below'}</small></div>
         </section>
         <details class="remodel-world-sense-settings">
             <summary>Model and retrieval limits</summary>
@@ -114,7 +111,7 @@ function render(view) {
                 <label>Model<input type="text" value="${escapeAttribute(profile.modelId)}" data-ws-profile="modelId"></label>
                 <label>Entry budget<input type="number" min="1" max="50" value="${profile.maxEntries}" data-ws-profile="maxEntries"></label>
                 <label>Token budget<input type="number" min="100" max="12000" value="${profile.maxTokens}" data-ws-profile="maxTokens"></label>
-                <label>Semantic floor<input type="number" min="0" max="1" step="0.05" value="${profile.semanticThreshold}" data-ws-profile="semanticThreshold"></label>
+                <label>Similarity gate<input type="number" min="0" max="1" step="0.05" value="${profile.semanticThreshold}" data-ws-profile="semanticThreshold"></label>
                 <label>Auto-safe confidence<input type="number" min="0.5" max="1" step="0.01" value="${profile.autoSafeConfidence}" data-ws-profile="autoSafeConfidence"></label>
             </div>
             <fieldset class="remodel-world-sense-auto-safe"><legend>Auto-safe allowlist</legend>${AUTO_SAFE_OPERATIONS.map((operation) => `<label><input type="checkbox" value="${operation}" data-ws-auto-safe-op ${profile.autoSafeOperations.includes(operation) ? 'checked' : ''}> ${operation}</label>`).join('')}<small>Identity, premise, creation, retirement, deletion, low-confidence, conflicting, and sensitive changes always remain in review.</small></fieldset>
@@ -122,11 +119,10 @@ function render(view) {
         <div class="remodel-world-sense-grid">
             <section class="remodel-world-sense-browser" aria-label="Living Lore browser">
                 <form data-ws-search-form class="remodel-world-sense-search">
-                    <label><span class="sr-only">Search Living Lore</span><i class="fa-solid fa-magnifying-glass"></i><input value="${escapeAttribute(state.query)}" data-ws-search placeholder="Who controls shipping near the old harbor?"></label>
-                    <button type="submit" ${state.busy ? 'disabled' : ''}>${state.busy === 'search' ? 'Searching…' : 'Semantic search'}</button>
+                    <label><span class="sr-only">Search Living Lore</span><i class="fa-solid fa-magnifying-glass"></i><input value="${escapeAttribute(state.query)}" data-ws-search placeholder="Filter by name, key or text"></label>
+                    <button type="submit">Filter</button>
                 </form>
                 <div class="remodel-world-sense-filters">
-                    <label>Type<select data-ws-filter="type"><option value="all">All types</option>${LIVING_LORE_ENTRY_TYPES.map((type) => `<option value="${type}" ${state.type === type ? 'selected' : ''}>${title(type)}</option>`).join('')}</select></label>
                     <label>Status<select data-ws-filter="status">${['all', 'selected', 'pinned', 'excluded'].map((status) => `<option value="${status}" ${state.status === status ? 'selected' : ''}>${title(status)}</option>`).join('')}</select></label>
                     <span>${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}</span>
                 </div>
@@ -211,7 +207,7 @@ function renderPromotionCandidate(candidate, receipt) {
 function renderEntry(entry, selectedKey) {
     const reasons = describeWorldSenseReasons(entry.reasons);
     return `<button type="button" role="option" aria-selected="${entry.key === selectedKey}" class="remodel-world-sense-entry ${entry.key === selectedKey ? 'is-selected' : ''}" data-ws-entry="${escapeAttribute(entry.key)}">
-        <span class="remodel-world-sense-entry-top"><strong>${escapeHtml(entry.name)}</strong><em>${escapeHtml(entry.entryType)}</em></span>
+        <span class="remodel-world-sense-entry-top"><strong>${escapeHtml(entry.name)}</strong></span>
         <span class="remodel-world-sense-entry-keys">${escapeHtml([...entry.keys, ...entry.secondaryKeys].slice(0, 5).join(' · ') || 'No keys')}</span>
         <span class="remodel-world-sense-entry-reason">${entry.selected ? `<b>${entry.score} pts</b> ${escapeHtml(reasons.join(' · '))}` : entry.semanticScore != null ? `<b>${Math.round(entry.semanticScore * 100)}%</b> semantic match` : escapeHtml(entry.decision || 'Not selected last turn')}</span>
         <span class="remodel-world-sense-entry-flags">${entry.pinned ? '<i class="fa-solid fa-thumbtack" title="Pinned"></i>' : ''}${entry.excluded ? '<i class="fa-solid fa-eye-slash" title="Excluded"></i>' : ''}${entry.protectedFields.length ? `<i class="fa-solid fa-lock" title="${entry.protectedFields.length} protected fields"></i>` : ''}<span>rev ${entry.revision}</span></span>
@@ -222,15 +218,13 @@ function renderInspector(entry, { turnOverrides, sceneId, allEntries, conflicts,
     const reasons = describeWorldSenseReasons(entry.reasons);
     const nextPinned = turnOverrides.pins.some((item) => `${item.book}.${item.uid}` === entry.key);
     const nextExcluded = turnOverrides.excludes.some((item) => `${item.book}.${item.uid}` === entry.key);
-    const protection = seedProtectionSummary(entry.metadata);
     return `<form data-ws-metadata-form data-book="${escapeAttribute(entry.book)}" data-uid="${escapeAttribute(entry.uid)}">
         <header><div><span>${escapeHtml(entry.book)} · ${escapeHtml(entry.uid)}</span><h3>${escapeHtml(entry.name)}</h3></div><span class="remodel-world-sense-revision">rev ${entry.revision}</span></header>
         <p class="remodel-world-sense-evidence">${reasons.length ? `<b>Why it matched:</b> ${escapeHtml(reasons.join(' · '))}` : 'This entry was not part of the latest retrieval.'}</p>
-        <div class="remodel-world-sense-meta-row"><label>Entry type<select name="entryType">${LIVING_LORE_ENTRY_TYPES.map((type) => `<option value="${type}" ${entry.entryType === type ? 'selected' : ''}>${title(type)}</option>`).join('')}</select></label><label>Origin<input value="${escapeAttribute(entry.origin)}" disabled></label></div>
+        <div class="remodel-world-sense-meta-row"><label>Origin<input value="${escapeAttribute(entry.origin)}" disabled></label></div>
         <fieldset><legend>Next turn</legend><button type="button" data-ws-turn="${nextPinned ? 'clear' : 'pin'}" data-scene="${escapeAttribute(sceneId)}" data-book="${escapeAttribute(entry.book)}" data-uid="${escapeAttribute(entry.uid)}" class="${nextPinned ? 'is-active' : ''}" ${sceneId ? '' : 'disabled'}><i class="fa-solid fa-thumbtack"></i> ${nextPinned ? 'Pinned for next turn' : 'Pin for next turn'}</button><button type="button" data-ws-turn="${nextExcluded ? 'clear' : 'exclude'}" data-scene="${escapeAttribute(sceneId)}" data-book="${escapeAttribute(entry.book)}" data-uid="${escapeAttribute(entry.uid)}" class="${nextExcluded ? 'is-active' : ''}" ${sceneId ? '' : 'disabled'}><i class="fa-solid fa-eye-slash"></i> ${nextExcluded ? 'Excluded next turn' : 'Exclude next turn'}</button></fieldset>
         <fieldset><legend>Persistent handling</legend><label><input type="checkbox" name="pinned" ${entry.pinned ? 'checked' : ''}> Always pin</label><label><input type="checkbox" name="excluded" ${entry.excluded ? 'checked' : ''}> Always exclude</label></fieldset>
         <fieldset class="remodel-world-sense-protection"><legend>Protected fields</legend>${LIVING_LORE_PROTECTED_FIELDS.map((field) => `<label><input type="checkbox" name="protectedFields" value="${field}" ${entry.protectedFields.includes(field) ? 'checked' : ''}> ${humanField(field)}</label>`).join('')}</fieldset>
-        ${entry.entryType === 'seed' ? `<div class="remodel-world-sense-seed-locks"><span>Seed contract</span><b>${protection.premiseProtected ? 'Premise locked' : 'Premise editable with review'}</b><b>${protection.hooksProtected ? 'Open hooks locked' : 'Open hooks may grow'}</b><small>Identity + Established protect the premise. Open threads control expandable hooks.</small></div>` : ''}
         <div class="remodel-world-sense-links"><span>Related entries</span>${entry.links.length ? entry.links.map((link) => `<span>${escapeHtml(link.relation)} → ${escapeHtml(link.target.book)} · ${escapeHtml(link.target.uid)}</span>`).join('') : '<em>No typed links yet</em>'}</div>
         <button type="submit">Save metadata and protection</button>
     </form>${renderCultivation(entry, { allEntries, conflicts, draft })}`;
@@ -284,8 +278,6 @@ function bind(root, state) {
         const cultivate = event.target.closest?.('[data-ws-cultivate]')?.dataset.wsCultivate;
         if (cultivate) { await handleCultivationShortcut(root, state, cultivate); return; }
         if (event.target.closest?.('[data-ws-cultivation-queue]')) { await queueCultivationDraft(root, state); return; }
-        const action = event.target.closest?.('[data-ws-action]')?.dataset.wsAction;
-        if (action === 'reindex') await act(root, state, 'index', async () => ensureWorldSenseIndex(getTimelineStore().activeTimelineId, { force: true }), 'Index rebuilt.');
         const proposal = event.target.closest?.('[data-ws-proposal]');
         if (proposal) await handleProposal(root, state, proposal.dataset.wsProposal, proposal.dataset.id);
         const reviewAction = event.target.closest?.('[data-ws-review-action]')?.dataset.wsReviewAction;
@@ -321,13 +313,7 @@ function bind(root, state) {
         if (event.target.matches('[data-ws-search-form]')) {
             event.preventDefault();
             state.query = event.target.querySelector('[data-ws-search]')?.value.trim() || '';
-            if (!state.query) { state.semanticMatches = []; await refresh(root, state); return; }
-            await act(root, state, 'search', async () => {
-                const result = await queryWorldSense(getTimelineStore().activeTimelineId, state.query, { topK: 30, threshold: 0 });
-                state.semanticMatches = result.matches || [];
-                if (!result.ok) throw new Error(result.error || 'Semantic search unavailable.');
-                return result;
-            }, 'Semantic search completed.');
+            await refresh(root, state);
             return;
         }
         if (event.target.matches('[data-ws-metadata-form]')) {
@@ -335,7 +321,6 @@ function bind(root, state) {
             const form = event.target;
             const fields = [...form.querySelectorAll('[name="protectedFields"]:checked')].map((input) => input.value);
             upsertLivingLoreMetadata(getTimelineStore().activeTimelineId, { book: form.dataset.book, uid: form.dataset.uid }, {
-                entryType: form.elements.entryType.value,
                 protectedFields: fields,
                 worldSense: { pinned: form.elements.pinned.checked, excluded: form.elements.excluded.checked },
             });
