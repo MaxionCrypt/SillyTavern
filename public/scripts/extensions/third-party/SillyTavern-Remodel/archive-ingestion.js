@@ -10,6 +10,31 @@ export const ARCHIVE_CAPABILITY_NAMES = Object.freeze([
     'secret.set', 'secret.clear',
 ]);
 
+/**
+ * What the Story Archive TEST ADAPTER may request: the narrative record, plus
+ * Goal and Variable lifecycle. goal.reach is deliberately absent — the
+ * manuscript has already decided every outcome, so there is nothing left in
+ * doubt to roll.
+ *
+ * This is NOT the production boundary. Production Story runs through the
+ * background worker, whose ingestion accepts ARCHIVE_CAPABILITY_NAMES plus the
+ * narrower TIMELINE_LIFECYCLE_CAPABILITIES (goal.create / goal.edit /
+ * goal.relate / variable.create) and rejects everything else as
+ * outside-archive-boundary. Read that set before documenting what Story can
+ * do; this one once misled the Debug Console guide.
+ *
+ * Declared here beside the set it extends rather than in story-loom-archive.js,
+ * so a reader of the list does not have to import that module's whole graph.
+ */
+export const STORY_ARCHIVE_CAPABILITIES = Object.freeze([
+    ...ARCHIVE_CAPABILITY_NAMES,
+    'goal.create', 'goal.edit', 'goal.delete', 'goal.relate',
+    'goal.lore.attach', 'goal.lore.detach',
+    'variable.create', 'variable.set', 'variable.adjust', 'variable.transition', 'variable.subvalue.set',
+    'variable.lore.attach', 'variable.lore.detach',
+    'modifier.add', 'modifier.remove',
+]);
+
 const ARCHIVE_CAPABILITY_SET = new Set(ARCHIVE_CAPABILITY_NAMES);
 const FORBIDDEN_OUTPUT_KEYS = Object.freeze([
     'prose', 'committedProse', 'swaps', 'flow', 'loreProposals',

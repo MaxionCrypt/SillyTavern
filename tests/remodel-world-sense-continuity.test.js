@@ -76,6 +76,27 @@ test('only earlier eligible scenes are automatic sources and settings remain tim
     expect(getSceneContinuitySettings('another-timeline', 'scene-2')).toMatchObject({ readPrevious: true, shareForward: true });
 });
 
+test('the immediately previous eligible Scene is recalled even before the new action overlaps it', () => {
+    recordEvent(TIMELINE, 'scene-1', 'Mara escaped the observatory through a hidden service door.');
+
+    const candidates = scoreTimelineContinuityCandidates({
+        timelineId: TIMELINE,
+        sceneId: 'scene-2',
+        packet: buildWorldSenseQueryPacket({ action: 'A trumpet sounds in the distant market.' }),
+        records: buildTimelineContinuityDocuments(TIMELINE).records,
+        semanticMatches: [],
+    });
+    const ranked = selectWorldSenseCandidates(candidates, { budget: { maxEntries: 1, maxTokens: 120 } });
+
+    expect(ranked.selected).toEqual([expect.objectContaining({
+        kind: 'continuity', sceneId: 'scene-1', forced: true,
+        text: 'Mara escaped the observatory through a hidden service door.',
+    })]);
+    expect(ranked.selected[0].reasons).toEqual(expect.arrayContaining([
+        expect.objectContaining({ channel: 'continuity.previous-scene-baseline' }),
+    ]));
+});
+
 test('explicit recalls survive automatic look-back being disabled and enter the shared budget as forced provenance', () => {
     const event = recordEvent(TIMELINE, 'scene-1', 'Mara hid the obsidian key beneath the cellar floor.');
     setSceneContinuitySettings(TIMELINE, 'scene-3', { readPrevious: false });
@@ -211,4 +232,47 @@ test('continuity documents cannot cross Timeline boundaries even when scene text
     const source = buildTimelineContinuityDocuments(TIMELINE);
     expect(source.records.map((record) => record.sceneId)).toEqual(['main-source']);
     expect(JSON.stringify(source)).not.toContain('forbidden second world');
+});
+
+// --- Function words are not overlap -------------------------------------------
+//
+// The stop list once started at four letters, so "the" counted as a shared
+// keyword and nearly every earlier record scored against every passage. The
+// four recall slots then went to the most recent records containing "the".
+
+test('a record that shares only function words with the passage is not recalled', () => {
+    recordEvent(TIMELINE, 'scene-1', 'Mara locked the observatory door for the night.');
+    recordEvent(TIMELINE, 'scene-1', 'The dean cancelled the alumni gala.');
+
+    const candidates = scoreTimelineContinuityCandidates({
+        timelineId: TIMELINE,
+        sceneId: 'scene-3',
+        packet: buildWorldSenseQueryPacket({ action: 'Mara locked the observatory door.' }),
+        records: buildTimelineContinuityDocuments(TIMELINE).records,
+        semanticMatches: [],
+    });
+
+    expect(candidates.map((candidate) => candidate.record.text)).toEqual(['Mara locked the observatory door for the night.']);
+    const keyword = candidates[0].reasons.find((reason) => reason.channel === 'continuity.keyword');
+    expect(keyword.terms).toEqual(expect.arrayContaining(['mara', 'locked', 'observatory', 'door']));
+    expect(keyword.terms).not.toContain('the');
+    expect(keyword.terms).not.toContain('for');
+});
+
+test('three-letter content words still score; three-letter function words never do', () => {
+    recordEvent(TIMELINE, 'scene-1', 'The key was under the oil lamp.');
+    recordEvent(TIMELINE, 'scene-1', 'They were out for the day and had fun.');
+
+    const candidates = scoreTimelineContinuityCandidates({
+        timelineId: TIMELINE,
+        sceneId: 'scene-3',
+        packet: buildWorldSenseQueryPacket({ action: 'She looked for the key and the oil, but they were out.' }),
+        records: buildTimelineContinuityDocuments(TIMELINE).records,
+        semanticMatches: [],
+    });
+
+    // "key" and "oil" are content; "for", "the", "and", "but", "they", "were",
+    // "out" are not, so the second record shares nothing that counts.
+    expect(candidates.map((candidate) => candidate.record.text)).toEqual(['The key was under the oil lamp.']);
+    expect(candidates[0].reasons.find((reason) => reason.channel === 'continuity.keyword').terms.sort()).toEqual(['key', 'oil']);
 });

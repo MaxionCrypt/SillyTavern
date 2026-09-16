@@ -1,4 +1,5 @@
 import { getContext } from '../../../st-context.js';
+import { extractReasoningFromData } from '../../../reasoning.js';
 import { extractProse, hasPromptContent } from './story-prose-extract.js';
 import { canStreamStory, streamChatPrompt } from './story-stream.js';
 
@@ -84,9 +85,17 @@ export async function generateProse({ prompt, responseLength = null, instructOve
 
     const extracted = extractProse(raw, context.extractMessageFromData);
     if (extracted.text) {
-        return { text: extracted.text, raw, source: extracted.source };
+        return { text: extracted.text, raw, source: extracted.source, reasoning: extractRawReasoning(raw) };
     }
     throw new StoryGenerationError('no-prose', describeEmptyResponse(extracted, raw), extracted.shape);
+}
+
+function extractRawReasoning(raw) {
+    try {
+        return String(extractReasoningFromData(raw, { mainApi: 'openai', ignoreShowThoughts: true }) || '').trim();
+    } catch {
+        return '';
+    }
 }
 
 function describeRequestFailure(message) {

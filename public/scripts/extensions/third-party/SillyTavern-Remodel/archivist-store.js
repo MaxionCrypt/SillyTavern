@@ -112,6 +112,32 @@ export function recordEvent(timelineId, sceneId, summary, { msgId = null, turnIn
     return clone(event);
 }
 
+/**
+ * An owner correction changes an event's wording without pretending the event
+ * happened again. Keep its stable ID, ordering, source message, and original
+ * timestamp intact so Archive provenance and World Sense references remain
+ * meaningful.
+ */
+export function updateEvent(timelineId, sceneId, eventId, summary) {
+    const scene = sceneBucket(getArchivistStore(), timelineId, sceneId);
+    const event = scene.events.find((item) => String(item.id) === String(eventId));
+    if (!event) return null;
+    const before = clone(event);
+    event.summary = String(summary ?? '');
+    saveArchivistStore();
+    return { before, after: clone(event) };
+}
+
+/** Remove one owner-selected Archive event without touching adjacent events. */
+export function deleteEvent(timelineId, sceneId, eventId) {
+    const scene = sceneBucket(getArchivistStore(), timelineId, sceneId);
+    const index = scene.events.findIndex((item) => String(item.id) === String(eventId));
+    if (index < 0) return null;
+    const [removed] = scene.events.splice(index, 1);
+    saveArchivistStore();
+    return clone(removed);
+}
+
 export function listEvents(timelineId, sceneId) {
     const scene = sceneBucket(getArchivistStore(), timelineId, sceneId);
     return scene.events.slice().sort((a, b) => a.seq - b.seq).map(clone);

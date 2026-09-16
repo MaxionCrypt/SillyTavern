@@ -1,6 +1,7 @@
 import { beforeEach, expect, test } from '@jest/globals';
 import {
     createStoryArchiveCapture,
+    createStoryArchiveCaptures,
     createStoryDoc,
     getStoryDoc,
     listStoryArchiveCaptures,
@@ -51,6 +52,22 @@ test('regenerating one beat supersedes its prior capture without touching anothe
     expect(listStoryArchiveCaptures(doc.id).find((item) => item.id === oldBeat.id)?.status).toBe('superseded');
     expect(listStoryArchiveCaptures(doc.id).find((item) => item.id === otherBeat.id)?.status).toBe('pending');
     expect(replacement.status).toBe('pending');
+});
+
+test('one accepted Story turn becomes bounded Archive captures without superseding its own blocks', () => {
+    const doc = createStoryDoc({ title: 'Bounded automatic Archive' });
+    const prose = Array.from({ length: 1_105 }, (_unused, index) => `word${index + 1}`).join(' ');
+    updateStoryDoc(doc.id, { body: prose });
+
+    const captures = createStoryArchiveCaptures(doc.id, {
+        origin: 'story-narrator', text: prose, start: 0, end: prose.length,
+        generationId: 'automatic-turn-1', beatId: 'beat-1',
+    });
+
+    expect(captures).toHaveLength(2);
+    expect(captures.map((capture) => capture.text.match(/\S+/g).length)).toEqual([1000, 105]);
+    expect(captures.every((capture) => capture.status === 'pending')).toBe(true);
+    expect(captures.every((capture) => capture.generationId === 'automatic-turn-1')).toBe(true);
 });
 
 test('a pre-provenance StoryDoc migrates without losing prose and becomes catch-up eligible', () => {

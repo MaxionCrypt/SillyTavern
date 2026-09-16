@@ -9,6 +9,7 @@ import {
     setLiveDirectionTestAdapters,
     requestNextDirection,
     getLiveDirectionRun,
+    getLiveDirectionUiState,
     handleLiveDirectionDraft,
     stopLiveDirection,
     clearLiveDirectionFailure,
@@ -180,7 +181,10 @@ test('experimental delivery reveals the Narrator before its request settles and 
     ]);
     expect(capturedGenerationTypes).toEqual(['normal', 'normal']);
     expect(deliveredTurnBoundaries).toHaveLength(2);
-    expect(deliveredTurnBoundaries.every((message) => message.role === 'user' && /Continue the scene autonomously/.test(message.content))).toBe(true);
+    expect(deliveredTurnBoundaries).toEqual([
+        { role: 'system', content: 'Native prompt fixture.' },
+        { role: 'system', content: 'Native prompt fixture.' },
+    ]);
     expect(loomReconciliation).not.toHaveBeenCalled();
 });
 
@@ -228,7 +232,7 @@ test('experimental Send interrupts a held stream and starts a normal user turn',
     ]);
     expect(__getChat()[0].extra.remodelDirection.state).toBe('interrupted');
     expect(capturedGenerationTypes).toEqual(['normal', 'normal']);
-    expect(deliveredTurnBoundaries[0]).toEqual(expect.objectContaining({ role: 'user', content: expect.stringMatching(/Continue the scene autonomously/) }));
+    expect(deliveredTurnBoundaries[0]).toEqual({ role: 'system', content: 'Native prompt fixture.' });
     expect(deliveredTurnBoundaries[1]).toEqual({ role: 'system', content: 'Native prompt fixture.' });
 });
 
@@ -264,6 +268,10 @@ test('experimental Stop cuts off in place and preserves the visible prefix', asy
 test('a Loom turn commits the Narrator draft and waits for the user', async () => {
     await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
+    expect(getLiveDirectionUiState(scene)).toMatchObject({
+        state: 'Waiting for you',
+        canStop: false,
+    });
     // The Narrator's held draft became the committed message.
     expect(__getChat().at(-1).mes).toBe(RESPONSE);
 });
@@ -484,7 +492,7 @@ test('reload recovery files only lore evidenced by the prefix saved before a cra
     expect(__getChat()[0].mes).toBe(accepted);
 });
 
-test('Narrator Archive grounding resolves through the recipe macro and is cleared after assembly', async () => {
+test('Narrator recall excludes the current scene and request-scoped sources clear after assembly', async () => {
     const promptContent = [];
     recordEvent(scene.timelineId, scene.id, 'Wren entered the courtyard.');
     initLiveDirection({
@@ -497,11 +505,12 @@ test('Narrator Archive grounding resolves through the recipe macro and is cleare
     await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
-    const grounding = promptContent.filter(([key]) => key === 'narratorGrounding');
-    const resolvedGrounding = typeof grounding[0]?.[1] === 'function' ? grounding[0][1]({}) : grounding[0]?.[1];
-    expect(resolvedGrounding).toContain('Wren entered the courtyard.');
-    expect(resolvedGrounding).not.toMatch(/Continue the scene forward/i);
-    expect(grounding.at(-1)?.[1]).toBe('');
+    const recall = promptContent.filter(([key]) => key === 'narratorRecall');
+    const resolvedRecall = typeof recall[0]?.[1] === 'function' ? recall[0][1]({ scenes: 3 }) : recall[0]?.[1];
+    expect(resolvedRecall).not.toContain('Wren entered the courtyard.');
+    expect(resolvedRecall).not.toMatch(/Continue the scene forward/i);
+    expect(recall.at(-1)?.[1]).toBe('');
+
 });
 
 test('a completed turn waits for the user and Continue advances the next one', async () => {
@@ -750,7 +759,7 @@ test('an intervention stores only the visible Loom prefix and never the private 
 });
 
 
-test('Narrator grounding does not duplicate the recipe-owned Story Goals source', async () => {
+test('Narrator recall does not duplicate the recipe-owned Story Goals source', async () => {
     const { createTimelineGoal, linkGoalToScene } = await import('../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js');
     const goal = createTimelineGoal(scene.timelineId, {
         title: 'Marissa means to be home by six',
@@ -760,9 +769,13 @@ test('Narrator grounding does not duplicate the recipe-owned Story Goals source'
     linkGoalToScene(scene.id, goal.id);
 
     const promptContent = [];
+    const order = [];
+    scene.generationProfileIds = { narrator: 'narrator-route', loom: 'loom-route' };
     initLiveDirection({
+        activateConnectionProfile: async () => { order.push('profile-activated'); },
         setNativePromptContent: (...args) => {
             promptContent.push(args);
+            order.push(args[0]);
             return true;
         },
     });
@@ -770,7 +783,8 @@ test('Narrator grounding does not duplicate the recipe-owned Story Goals source'
     await requestNextDirection(scene, { deliveryMode: 'legacy' });
     expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
 
-    const grounding = promptContent.filter(([key]) => key === 'narratorGrounding');
-    expect(grounding[0]?.[1]).not.toContain('Marissa means to be home by six');
-    expect(grounding[0]?.[1]).not.toContain('## Objectives');
+    const recall = promptContent.filter(([key]) => key === 'narratorRecall');
+    expect(recall[0]?.[1]).not.toContain('Marissa means to be home by six');
+    expect(recall[0]?.[1]).not.toContain('## Objectives');
+    expect(order.indexOf('profile-activated')).toBeLessThan(order.indexOf('narratorRecall'));
 });

@@ -1,7 +1,7 @@
 import { __setExtensionSettings } from './util/st-context-stub.js';
 import {
     setSceneFact, clearSceneFact, listSceneFacts,
-    recordEvent, listEvents,
+    recordEvent, updateEvent, deleteEvent, listEvents,
     setCharStateFacet, clearCharStateFacet, listCharStates,
     setBeat, getBeat,
     setSecret, clearSecret, listSecrets,
@@ -27,6 +27,26 @@ test('events append in seq order', () => {
     const events = listEvents(T, S);
     expect(events.map((e) => e.summary)).toEqual(['Marcus drew his knife', 'Rain began to fall']);
     expect(events.map((e) => e.seq)).toEqual([0, 1]);
+});
+
+test('an owner can correct an event without replacing its provenance', () => {
+    const original = recordEvent(T, S, 'Marcus drew a sword', { msgId: 12, turnIndex: 4 });
+    const corrected = updateEvent(T, S, original.id, 'Marcus drew a knife');
+
+    expect(corrected).toMatchObject({
+        before: { id: original.id, summary: 'Marcus drew a sword', msgId: 12, turnIndex: 4, seq: original.seq, at: original.at },
+        after: { id: original.id, summary: 'Marcus drew a knife', msgId: 12, turnIndex: 4, seq: original.seq, at: original.at },
+    });
+    expect(listEvents(T, S)).toEqual([expect.objectContaining({ id: original.id, summary: 'Marcus drew a knife' })]);
+});
+
+test('an owner can remove exactly one Archive event', () => {
+    const first = recordEvent(T, S, 'Marcus drew his knife');
+    const second = recordEvent(T, S, 'Rain began to fall');
+
+    expect(deleteEvent(T, S, first.id)).toMatchObject({ id: first.id, summary: 'Marcus drew his knife' });
+    expect(listEvents(T, S)).toEqual([expect.objectContaining({ id: second.id, summary: 'Rain began to fall' })]);
+    expect(deleteEvent(T, S, 'missing')).toBeNull();
 });
 
 test('char state facets overwrite; clearing the last facet drops the record', () => {

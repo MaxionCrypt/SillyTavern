@@ -60,12 +60,22 @@ export function scheduleWorldSensePrefetch(scene, options = {}) {
     const sceneId = String(scene?.id || '');
     clearTimeout(prefetchTimers.get(sceneId));
     prefetchTimers.delete(sceneId);
-    if (!sceneId || !String(options.action || '').trim()) return;
+    if (!sceneId || !String(options.action || '').trim()) return false;
+
+    // Prefetch exists only to hide the first retrieval behind composer idle
+    // time. Once a Scene has a working set, ordinary turns must read those
+    // references; only an explicit Loom keyword request may replace them.
+    if (getWorldSenseContext(sceneId).entries.length) {
+        prefetches.delete(sceneId);
+        return false;
+    }
+
     const timer = setTimeout(() => {
         prefetchTimers.delete(sceneId);
         prefetchWorldSense(scene, options).catch(() => {});
     }, PREFETCH_DELAY_MS);
     prefetchTimers.set(sceneId, timer);
+    return true;
 }
 
 export async function prefetchWorldSense(scene, options = {}) {
@@ -129,11 +139,11 @@ export async function resolveWorldSenseFromContext(scene, options = {}) {
         });
         return seeded;
     }
-    return buildContextSelection(scene, stored);
+    return buildContextSelection(scene, stored, options);
 }
 
 /** Assemble the same shape a retrieval returns, from references alone. */
-async function buildContextSelection(scene, stored) {
+async function buildContextSelection(scene, stored, options = {}) {
     const lore = await loadTimelineLore(scene.timelineId);
     const wanted = new Set(stored.entries.map((entry) => `${entry.book}.${entry.uid}`));
     const entries = (lore.entries || []).filter((entry) => wanted.has(`${entry.book}.${entry.uid}`));
@@ -142,15 +152,36 @@ async function buildContextSelection(scene, stored) {
     // is references, so it degrades to what still exists rather than resurrecting
     // lore the author removed.
     const selected = entries.map((entry) => ({ book: entry.book, uid: entry.uid, name: entry.name }));
+    // The persisted context contains only Living Lore working-set references.
+    // It must never be mistaken for Timeline Archive continuity: those records
+    // need their text and provenance for {{narrator.recall}} to render. Rebuild
+    // this small deterministic projection locally, rather than performing a
+    // new embedding query each time Prompt Preview opens.
+    const prepared = prepareQuery(scene, options);
+    const profile = getWorldSenseProfile();
+    const continuitySource = buildTimelineContinuityDocuments(scene.timelineId);
+    const continuityCandidates = scoreTimelineContinuityCandidates({
+        timelineId: scene.timelineId,
+        sceneId: scene.id,
+        packet: prepared?.packet,
+        records: continuitySource.records,
+        semanticMatches: [],
+        semanticThreshold: profile.semanticThreshold,
+    });
+    const continuity = selectWorldSenseCandidates(continuityCandidates, {
+        budget: { maxEntries: profile.maxEntries, maxTokens: profile.maxTokens },
+        continuityLimit: 4,
+    }).selected.filter((item) => item.kind === 'continuity');
     return {
         phase: 'context',
         sceneId: String(scene.id),
         timelineId: String(scene.timelineId),
         book: lore.book,
         bookHash: lore.hash,
+        archiveHash: continuitySource.hash,
         selected,
         rejected: [],
-        continuity: getWorldSenseContinuity(scene.id),
+        continuity,
         loomPacket: buildLivingLorePacket({
             timelineId: scene.timelineId, book: lore.book, bookHash: lore.hash,
             entries: lore.entries, selected, metadata,

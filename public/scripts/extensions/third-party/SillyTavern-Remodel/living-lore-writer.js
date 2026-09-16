@@ -82,7 +82,7 @@ export async function applyLivingLoreIntake({ timelineId = '', book = '', placem
     // Writing directly means there is no unapplied proposal to discard when the
     // turn that produced this is superseded. Remembering exactly what went in,
     // and where, is the only way it can come back out.
-    recordLivingLoreWrite(timelineId, {
+    const write = recordLivingLoreWrite(timelineId, {
         book, uid: applied.uid, decision: applied.decision, content,
         directionId: source?.directionId, sceneId: source?.sceneId, messageId: source?.messageId,
     });
@@ -94,6 +94,9 @@ export async function applyLivingLoreIntake({ timelineId = '', book = '', placem
         name: applied.name,
         chars: applied.chars,
         reason: '',
+        // The ledger's own id for this write: the handle a caller keeps so it
+        // can later say which filed piece of lore a turn was responsible for.
+        writeId: write?.id || null,
     });
 }
 

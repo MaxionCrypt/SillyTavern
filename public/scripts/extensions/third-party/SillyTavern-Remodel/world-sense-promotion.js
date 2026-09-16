@@ -52,6 +52,8 @@ export function promotionEvidence(packet) {
     })).filter((item) => item.summary);
 }
 
+export const PROMOTION_DECISIONS = Object.freeze(['proposed', 'deferred', 'rejected']);
+
 export function parsePromotionDecisions(value, packet) {
     const allowed = new Set((packet?.candidates || []).map((candidate) => candidate.id));
     const accepted = [];
@@ -65,7 +67,7 @@ export function parsePromotionDecisions(value, packet) {
         if (!item || typeof item !== 'object' || Array.isArray(item)) code = 'not-an-object';
         else if (!allowed.has(candidateId)) code = 'unknown-candidate';
         else if (seen.has(candidateId)) code = 'duplicate-candidate';
-        else if (!['proposed', 'deferred', 'rejected'].includes(decision)) code = 'invalid-decision';
+        else if (!PROMOTION_DECISIONS.includes(decision)) code = 'invalid-decision';
         else if (!reason) code = 'missing-reason';
         if (code) rejected.push({ index, code, value: clone(item) });
         else {

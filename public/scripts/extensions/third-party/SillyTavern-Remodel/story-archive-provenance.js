@@ -1,7 +1,12 @@
 const DIFF_DELETE = -1;
 const DIFF_INSERT = 1;
 const DIFF_EQUAL = 0;
-export const STORY_ARCHIVE_PASSAGE_MAX_CHARS = 6000;
+// A Story Loom pass needs enough manuscript to establish a meaningful beat,
+// but not enough that its evidence crowds out the Archive, World Sense, and
+// recipe instructions. This is deliberately a word boundary rather than a
+// character approximation: punctuation-heavy and dialogue-heavy prose should
+// receive the same practical budget as ordinary prose.
+export const STORY_ARCHIVE_PASSAGE_MAX_WORDS = 1000;
 
 /** Keep capture boundaries attached to the prose they originally covered. */
 export function rebaseStoryArchiveProvenance(captures, previousBody, nextBody) {
@@ -110,16 +115,22 @@ export function buildStoryArchiveCatchUpPreview(doc) {
     };
 }
 
-/** Split one exact addition into model-sized passages without changing order. */
-export function splitStoryArchiveAddition(change, maximum = STORY_ARCHIVE_PASSAGE_MAX_CHARS) {
+/** Number of manuscript words in an exact source span. */
+export function countStoryArchiveWords(value) {
+    return String(value || '').match(/\S+/g)?.length || 0;
+}
+
+/** Split one exact addition into Loom-sized passages without changing order. */
+export function splitStoryArchiveAddition(change, maximum = STORY_ARCHIVE_PASSAGE_MAX_WORDS) {
     const text = String(change?.afterText || '');
-    const limit = Math.max(1000, Math.floor(Number(maximum) || STORY_ARCHIVE_PASSAGE_MAX_CHARS));
-    if (change?.type !== 'addition' || text.length <= limit) return [{ ...change }];
+    const limit = Math.max(100, Math.floor(Number(maximum) || STORY_ARCHIVE_PASSAGE_MAX_WORDS));
+    if (change?.type !== 'addition' || countStoryArchiveWords(text) <= limit) return [{ ...change }];
     const chunks = [];
     let cursor = 0;
     while (cursor < text.length) {
-        let end = Math.min(text.length, cursor + limit);
-        if (end < text.length) end = findPassageBoundary(text, cursor, end, limit);
+        const hardEnd = wordLimitEnd(text, cursor, limit);
+        let end = hardEnd;
+        if (end < text.length) end = findPassageBoundary(text, cursor, end);
         const source = text.slice(cursor, end);
         const leading = source.match(/^\s*/)?.[0].length || 0;
         const trailing = source.match(/\s*$/)?.[0].length || 0;
@@ -142,14 +153,26 @@ export function splitStoryArchiveAddition(change, maximum = STORY_ARCHIVE_PASSAG
     return chunks.map((chunk) => ({ ...chunk, totalParts }));
 }
 
-function findPassageBoundary(text, start, idealEnd, limit) {
-    const floor = start + Math.floor(limit * 0.55);
+function wordLimitEnd(text, start, limit) {
+    const words = /\S+/g;
+    words.lastIndex = start;
+    let count = 0;
+    let match = null;
+    while ((match = words.exec(text))) {
+        count += 1;
+        if (count >= limit) return match.index + match[0].length;
+    }
+    return text.length;
+}
+
+function findPassageBoundary(text, start, idealEnd) {
+    const floor = start + Math.floor((idealEnd - start) * 0.55);
     const paragraph = text.lastIndexOf('\n\n', idealEnd);
-    if (paragraph >= floor) return paragraph + 2;
+    if (paragraph >= floor) return Math.min(idealEnd, paragraph + 2);
     const sentence = Math.max(text.lastIndexOf('. ', idealEnd), text.lastIndexOf('! ', idealEnd), text.lastIndexOf('? ', idealEnd));
-    if (sentence >= floor) return sentence + 2;
+    if (sentence >= floor) return Math.min(idealEnd, sentence + 2);
     const whitespace = Math.max(text.lastIndexOf(' ', idealEnd), text.lastIndexOf('\n', idealEnd));
-    return whitespace >= floor ? whitespace + 1 : idealEnd;
+    return whitespace >= floor ? Math.min(idealEnd, whitespace + 1) : idealEnd;
 }
 
 function appendAddition(changes, body, start, end) {

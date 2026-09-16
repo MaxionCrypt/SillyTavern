@@ -7,7 +7,7 @@ import {
     updateStoryDoc,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-doc.js';
 import { __setExtensionSettings } from './util/st-context-stub.js';
-import { splitStoryArchiveAddition, STORY_ARCHIVE_PASSAGE_MAX_CHARS } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-archive-provenance.js';
+import { countStoryArchiveWords, splitStoryArchiveAddition, STORY_ARCHIVE_PASSAGE_MAX_WORDS } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-archive-provenance.js';
 
 beforeEach(() => __setExtensionSettings({ remodel: {} }));
 
@@ -79,7 +79,7 @@ test('large legacy additions split on exact bounded source spans', () => {
     const change = { id: 'legacy', type: 'addition', start: 120, end: 120 + text.length, afterText: text };
     const parts = splitStoryArchiveAddition(change);
     expect(parts.length).toBeGreaterThan(1);
-    expect(parts.every((part) => part.afterText.length <= STORY_ARCHIVE_PASSAGE_MAX_CHARS)).toBe(true);
+    expect(parts.every((part) => countStoryArchiveWords(part.afterText) <= STORY_ARCHIVE_PASSAGE_MAX_WORDS)).toBe(true);
     expect(parts.every((part) => text.slice(part.start - change.start, part.end - change.start) === part.afterText)).toBe(true);
     expect(parts.map((part) => part.part)).toEqual(parts.map((_part, index) => index + 1));
     expect(new Set(parts.map((part) => part.totalParts))).toEqual(new Set([parts.length]));
@@ -96,9 +96,9 @@ test('large-manuscript catch-up preview and capture splitting remain bounded', (
 
     expect(preview.changes).toHaveLength(1);
     expect(parts.length).toBeGreaterThan(20);
-    expect(parts.every((part) => part.afterText.length <= STORY_ARCHIVE_PASSAGE_MAX_CHARS)).toBe(true);
+    expect(parts.every((part) => countStoryArchiveWords(part.afterText) <= STORY_ARCHIVE_PASSAGE_MAX_WORDS)).toBe(true);
     expect(parts.map((part) => part.afterText).join('\n\n').replace(/\s+/g, ' ').trim()).toBe(body.replace(/\s+/g, ' ').trim());
     // A roughly 280 KB legacy manuscript remains interactive even under Jest's
-    // instrumented VM. Individual API captures are still capped at 6 KB.
+    // instrumented VM. Individual Loom captures are capped at 1,000 words.
     expect(elapsedMs).toBeLessThan(2500);
 });

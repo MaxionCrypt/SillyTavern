@@ -1,5 +1,10 @@
 import { getContext } from '../../../st-context.js';
-import { buildStoryArchiveCatchUpPreview, hashStoryArchiveText, rebaseStoryArchiveProvenance } from './story-archive-provenance.js';
+import {
+    buildStoryArchiveCatchUpPreview,
+    hashStoryArchiveText,
+    rebaseStoryArchiveProvenance,
+    splitStoryArchiveAddition,
+} from './story-archive-provenance.js';
 
 // StoryDoc: the data model for the redesigned Story mode — a real, standalone
 // document, NOT a hidden chat. A story Scene in the timeline binds to a
@@ -180,7 +185,12 @@ export function createStoryArchiveCapture(docId, input = {}) {
 
     if (beatId) {
         for (const capture of doc.archiveCaptures) {
-            if (capture.beatId === beatId && capture.status !== 'superseded') {
+            // One accepted Narrator turn can legitimately become several
+            // bounded Archive captures. They share its generation id and must
+            // remain active together; a later generation for the same beat
+            // replaces the whole earlier set.
+            const belongsToThisGeneration = generationId && capture.generationId === generationId;
+            if (capture.beatId === beatId && capture.status !== 'superseded' && !belongsToThisGeneration) {
                 capture.status = 'superseded';
                 capture.supersededAt = now();
                 capture.updatedAt = capture.supersededAt;
@@ -228,6 +238,44 @@ export function createStoryArchiveCapture(docId, input = {}) {
     doc.updatedAt = timestamp;
     saveStoryDocStore();
     return capture;
+}
+
+/**
+ * Create the Archive evidence records for one accepted manuscript change.
+ * Additions are divided at natural boundaries into contiguous, bounded
+ * blocks; edits and deletions remain one atomic before/after record.
+ */
+export function createStoryArchiveCaptures(docId, input = {}) {
+    const changeType = ['addition', 'edit', 'deletion'].includes(input.changeType) ? input.changeType : 'addition';
+    if (changeType !== 'addition') {
+        const capture = createStoryArchiveCapture(docId, input);
+        return capture ? [capture] : [];
+    }
+    const text = String(input.text ?? input.afterText ?? '').trim();
+    if (!text) return [];
+    const start = Math.max(0, Number(input.start) || 0);
+    const parts = splitStoryArchiveAddition({
+        id: String(input.stableKey || input.generationId || `story-capture:${start}`),
+        type: 'addition',
+        start,
+        end: Math.max(start, Number(input.end) || start + text.length),
+        afterText: text,
+    });
+    if (parts.length <= 1) {
+        const capture = createStoryArchiveCapture(docId, input);
+        return capture ? [capture] : [];
+    }
+    const origin = input.origin === 'user' ? 'user' : 'story-narrator';
+    const baseStableKey = String(input.stableKey || (input.generationId
+        ? `${origin}:${input.generationId}:${input.beatId == null ? '' : input.beatId}`
+        : `${origin}:multipart:${start}:${text.length}`));
+    return parts.map((part) => createStoryArchiveCapture(docId, {
+        ...input,
+        text: part.afterText,
+        start: part.start,
+        end: part.end,
+        stableKey: `${baseStableKey}:part:${part.part}-of-${part.totalParts}`,
+    })).filter(Boolean);
 }
 
 export function previewStoryArchiveCatchUp(docId) {

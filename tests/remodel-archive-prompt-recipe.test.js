@@ -16,10 +16,13 @@ const input = {
 
 const joined = (compiled) => compiled.messages.map((message) => message.content).join('\n---\n');
 
-test('the policy and contract are always present', () => {
-    const compiled = compileArchivePrompt({ ...input, recipe: recipe('{{loom.archive}}') });
-    expect(joined(compiled)).toContain("You are the Loom's background Archive clerk");
-    expect(joined(compiled)).toContain('Output NOTHING except one state fence');
+test('the recipe owns its policy and output contract', () => {
+    const compiled = compileArchivePrompt({ ...input, recipe: recipe('My Archive policy.', '{{loom.archive}}', 'My Archive contract.') });
+    const text = joined(compiled);
+    expect(text).toContain('My Archive policy.');
+    expect(text).toContain('My Archive contract.');
+    expect(text).not.toContain("You are the Loom's background Archive clerk");
+    expect(text).not.toContain('Output NOTHING except one state fence');
 });
 
 test('a source the recipe does not place is not appended behind the owner', () => {
@@ -38,12 +41,14 @@ test('a placed source appears where the recipe puts it', () => {
     expect(text).toContain('She crossed the room.');
 });
 
-test('removing every source leaves only the policy and contract', () => {
+test('removing every source leaves only the recipe authored by the owner', () => {
     const compiled = compileArchivePrompt({ ...input, recipe: recipe('Just my own words.') });
     const text = joined(compiled);
     expect(text).toContain('Just my own words.');
     expect(text).not.toContain('Current Loom Archive:');
     expect(text).not.toContain('I cross the room.');
+    expect(text).not.toContain("You are the Loom's background Archive clerk");
+    expect(text).not.toContain('Output NOTHING except one state fence');
 });
 
 test('an unplaced lifecycle board still rides on the mechanics board', () => {

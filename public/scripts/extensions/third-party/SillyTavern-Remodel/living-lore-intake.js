@@ -200,6 +200,9 @@ function round(value) {
 /** One report should be one piece of information. Past this it is a document,
  * not a fact, and placing it by similarity stops meaning anything. */
 export const MAX_INFORMATION_CHARS = 2000;
+export const MAX_INFORMATION_NAME_CHARS = 120;
+export const MAX_INFORMATION_KEYS = 12;
+export const MAX_INFORMATION_EVIDENCE = 6;
 
 export const INTAKE_REJECTIONS = Object.freeze([
     'not-an-object', 'missing-content', 'content-too-long', 'invalid-keys', 'missing-evidence',
@@ -240,8 +243,8 @@ export function readLoomInformation(records = []) {
 
         accepted.push(Object.freeze({
             content,
-            name: String(record.name ?? '').trim().slice(0, 120),
-            keys: (record.keys || []).map((key) => String(key ?? '').trim()).filter(Boolean).slice(0, 12),
+            name: String(record.name ?? '').trim().slice(0, MAX_INFORMATION_NAME_CHARS),
+            keys: (record.keys || []).map((key) => String(key ?? '').trim()).filter(Boolean).slice(0, MAX_INFORMATION_KEYS),
             evidence,
         }));
     }
@@ -253,5 +256,5 @@ export function readLoomInformation(records = []) {
  * asking it what it is drawing from. */
 function toEvidence(value) {
     const list = Array.isArray(value) ? value : [value];
-    return list.map((item) => String(item ?? '').trim()).filter(Boolean).slice(0, 6);
+    return list.map((item) => String(item ?? '').trim()).filter(Boolean).slice(0, MAX_INFORMATION_EVIDENCE);
 }

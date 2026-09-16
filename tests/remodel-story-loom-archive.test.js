@@ -3,7 +3,7 @@ import { createArchiveJobRepository, createMemoryArchiveJobPersistence } from '.
 import { createArchiveIngestion } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archive-ingestion.js';
 import { legacyArchiveIngestionAdapter } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/legacy-archive-ingestion-adapter.js';
 import { createBackgroundArchiveRuntime, setBackgroundArchiveRuntimeForTests } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/background-archive-runtime.js';
-import { listEvents, listSceneFacts } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
+import { listEvents, listSceneFacts, recordEvent } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { listArchiveSceneDescriptors } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archive-scene-list.js';
 import { listLivingLoreProposals, queueLivingLoreProposals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-mutations.js';
 import { listLivingLoreWrites, upsertLivingLoreMetadata } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
@@ -14,18 +14,21 @@ import {
     captureStoryArchiveCatchUp,
     describeStoryArchiveCaptureState,
     queueStoryArchiveCapture,
+    queueStoryArchiveCaptures,
     processStoryArchiveCapture,
     setStoryLoomArchiveTestAdapter,
     supersedeStoryBeatArchive,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-loom-archive.js';
 import {
     createStoryArchiveCapture,
+    createStoryArchiveCaptures,
     createStoryDoc,
     getStoryArchiveCapture,
     listStoryArchiveCaptures,
     previewStoryArchiveCatchUp,
     updateStoryDoc,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-doc.js';
+import { countStoryArchiveWords, STORY_ARCHIVE_PASSAGE_MAX_WORDS } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-archive-provenance.js';
 import { __setContextOverrides, __setExtensionSettings } from './util/st-context-stub.js';
 import { __clearDebugEvents, __getDebugEvents } from './util/debug-console-stub.js';
 
@@ -98,17 +101,52 @@ test('Story and Roleplay Scenes appear in the same Timeline Archive list', () =>
         .toEqual([['rp', 'roleplay'], ['story', 'story']]);
 });
 
-test('the Story Loom prompt makes accepted prose immutable and advertises the safe Timeline Web operations', () => {
+test('the Story Loom prompt contains only the selected recipe and its placed sources', () => {
     const prompt = buildStoryArchivePrompt({
         passage: 'Mara locked the door.',
         archiveState: 'location: observatory',
-        recipe: { blocks: [], mode: 'loom', apiType: 'chat' },
+        recipe: {
+            mode: 'loom', apiType: 'chat',
+            blocks: [
+                { id: 'policy', kind: 'message', role: 'system', content: 'Accepted manuscript is immutable.', enabled: true },
+                { id: 'archive', kind: 'message', role: 'system', content: '{{loom.archive}}', enabled: true },
+                { id: 'operations', kind: 'message', role: 'system', content: '{{loom.mechanics}}', enabled: true },
+                { id: 'passage', kind: 'message', role: 'user', content: '{{story.archive_capture}}', enabled: true },
+                { id: 'contract', kind: 'message', role: 'system', content: 'Return a single state fence.', enabled: true },
+            ],
+        },
     });
     const text = prompt.map((message) => message.content).join('\n');
-    expect(text).toContain('manuscript is immutable');
+    expect(text).toContain('Accepted manuscript is immutable.');
     expect(text).toContain('event.record');
-    expect(text).not.toContain('goal.reach');
     expect(text).toContain('Mara locked the door.');
+    expect(text).toContain('Return a single state fence.');
+    expect(text).not.toContain('You are the Loom reading an accepted Story manuscript passage');
+    expect(text).not.toContain('Output NOTHING except one state fence');
+});
+
+test('an ordered Story capture batch sends one Loom prompt per block from oldest to newest', async () => {
+    const doc = createStoryDoc({ title: 'Ordered automatic capture' });
+    const prose = Array.from({ length: 1_025 }, (_unused, index) => `passage${index + 1}`).join(' ');
+    updateStoryDoc(doc.id, { body: prose });
+    const captures = createStoryArchiveCaptures(doc.id, {
+        text: prose, start: 0, end: prose.length, generationId: 'automatic-batch-1', beatId: 'beat-1',
+    });
+    const sentPassages = [];
+    setStoryLoomArchiveTestAdapter(async ({ prompt }) => {
+        sentPassages.push(prompt.map((message) => message.content).join('\n'));
+        return fence([]);
+    });
+
+    const results = await queueStoryArchiveCaptures({ scene, docId: doc.id, captureIds: captures.map((capture) => capture.id) });
+
+    expect(results.map((capture) => capture.status)).toEqual(['applied', 'applied']);
+    expect(sentPassages).toHaveLength(2);
+    expect(sentPassages[0]).toContain('passage1');
+    expect(sentPassages[0]).toContain('passage1000');
+    expect(sentPassages[0]).not.toContain('passage1001');
+    expect(sentPassages[1]).toContain('passage1001');
+    expect(sentPassages[1]).toContain('passage1025');
 });
 
 test('accepted Story prose applies enabled retrospective requests once', async () => {
@@ -417,6 +455,31 @@ test('manual catch-up refuses a preview made stale by concurrent autosave', () =
     expect(submitted).toMatchObject({ ok: false, stale: true, captures: [] });
 });
 
+test('manual Catch Up closes a short final manuscript block and starts later writing fresh', async () => {
+    const words = (prefix, count) => Array.from({ length: count }, (_value, index) => `${prefix}${index + 1}`).join(' ');
+    const firstBlock = words('first', 1175);
+    const doc = createStoryDoc({ title: 'Closed manual blocks' });
+    updateStoryDoc(doc.id, { body: firstBlock });
+    setStoryLoomArchiveTestAdapter(async () => fence([]));
+
+    const firstPreview = previewStoryArchiveCatchUp(doc.id);
+    const first = captureStoryArchiveCatchUp({ scene, docId: doc.id, previewToken: firstPreview.token });
+    expect(first.captures).toHaveLength(2);
+    expect(first.captures.map((capture) => countStoryArchiveWords(capture.text))).toEqual([1000, 175]);
+    await first.completion;
+    expect(first.captures.every((capture) => getStoryArchiveCapture(doc.id, capture.id)?.status === 'applied')).toBe(true);
+
+    const laterBlock = words('later', 25);
+    updateStoryDoc(doc.id, { body: `${firstBlock}\n\n${laterBlock}` });
+    const laterPreview = previewStoryArchiveCatchUp(doc.id);
+    expect(laterPreview.changes).toEqual([expect.objectContaining({ type: 'addition', afterText: laterBlock })]);
+
+    const later = captureStoryArchiveCatchUp({ scene, docId: doc.id, previewToken: laterPreview.token });
+    expect(later.captures).toHaveLength(1);
+    expect(countStoryArchiveWords(later.captures[0].text)).toBe(25);
+    expect(STORY_ARCHIVE_PASSAGE_MAX_WORDS).toBe(1000);
+});
+
 test('manual deletion reaches the Loom as before/deleted evidence and clears mutable Archive state', async () => {
     const doc = createStoryDoc({ title: 'Owner deletion' });
     updateStoryDoc(doc.id, { body: 'A silver key rests on the desk.' });
@@ -469,7 +532,157 @@ test('an oversized failed legacy catch-up resumes as bounded sequential passages
     const parts = captures.filter((capture) => capture.supersedesCaptureIds.includes(oversized.id));
     expect(getStoryArchiveCapture(doc.id, oversized.id)?.status).toBe('superseded');
     expect(parts.length).toBeGreaterThan(1);
-    expect(parts.every((capture) => capture.status === 'applied' && capture.text.length <= 6000)).toBe(true);
+    expect(parts.every((capture) => capture.status === 'applied' && countStoryArchiveWords(capture.text) <= STORY_ARCHIVE_PASSAGE_MAX_WORDS)).toBe(true);
     expect(calls).toBe(parts.length);
     expect(previewStoryArchiveCatchUp(doc.id).changes).toEqual([]);
+});
+
+// --- Living Lore on the PRODUCTION Story path -------------------------------
+//
+// The test adapter above filed lore all along. Production ran through the
+// background worker, whose Archive port is archive-only, and so a Story scene
+// was shown no lore packet and had every loreProposal silently dropped. These
+// pin the production path specifically: real runtime, fake transport only.
+
+function storyLoreSettings() {
+    __setExtensionSettings({ remodel: {
+        timelineV1: {
+            version: 1,
+            timelineIds: [scene.timelineId],
+            activeTimelineId: scene.timelineId,
+            timelines: { [scene.timelineId]: { id: scene.timelineId, lorebookName: 'Living Story', arcIds: ['arc'] } },
+            arcs: { arc: { id: 'arc', timelineId: scene.timelineId, sceneIds: [scene.id] } },
+            scenes: { [scene.id]: { ...scene, arcId: 'arc' } },
+        },
+        worldSenseV1: { version: 4, profile: { mode: 'suggest', maxEntries: 12, maxTokens: 1800 }, indexes: {}, receipts: [], continuityByScene: {} },
+    }, connectionManager: { profiles: [{ id: 'loom-profile', name: 'Loom', api: 'openrouter', model: 'test/archive-model' }] } });
+}
+
+test('production Story capture shows the Loom its Living Lore and files what it reports', async () => {
+    storyLoreSettings();
+    let storyBook = { entries: {
+        7: { uid: 7, comment: 'Mara', key: ['Mara', 'observatory'], keysecondary: [], content: 'Identity\nMara is the observatory keeper.', disable: false },
+    } };
+    __setContextOverrides({
+        loadWorldInfo: async () => structuredClone(storyBook),
+        saveWorldInfo: async (_name, data) => { storyBook = structuredClone(data); },
+    });
+    const prompts = [];
+    const runtime = createBackgroundArchiveRuntime({
+        repository: createArchiveJobRepository({ persistence: createMemoryArchiveJobPersistence() }),
+        transport: async ({ promptSnapshot }) => {
+            prompts.push(promptSnapshot.messages.map((message) => message.content).join('\n'));
+            return fence(
+                [{ id: 'event', capability: 'event.record', arguments: { summary: 'Mara locked the observatory door.' }, reason: 'accepted passage' }],
+                [{ content: 'Mara locked the observatory door.', name: 'The observatory door', keys: ['observatory door'], evidence: 'Mara locked the observatory door.' }],
+            );
+        },
+        ingestion: createArchiveIngestion(legacyArchiveIngestionAdapter),
+        commit: jest.fn(async () => ({ transactionId: 'bg-lore' })),
+    });
+    setBackgroundArchiveRuntimeForTests(runtime);
+    const doc = createStoryDoc({ title: 'Production lore' });
+    updateStoryDoc(doc.id, { body: 'Mara locked the observatory door.' });
+    const capture = createStoryArchiveCapture(doc.id, {
+        text: 'Mara locked the observatory door.', start: 0, end: 33, generationId: 'story-generation-bg', beatId: 'beat-bg',
+    });
+
+    const applied = await queueStoryArchiveCapture({ scene, docId: doc.id, captureId: capture.id });
+    expect(applied).toMatchObject({ status: 'applied', transactionId: 'bg-lore' });
+    // The packet reached the prompt the worker actually sent...
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('Selected Living Lore (what the world already records about this scene):');
+    expect(prompts[0]).toContain('"book": "Living Story"');
+    // ...the report reached the lorebook itself...
+    expect(Object.values(storyBook.entries).map((entry) => entry.content).join(' ')).toContain('Mara locked the observatory door.');
+    expect(applied.loreProposalIds).toHaveLength(1);
+    expect(applied.worldSenseReceiptId).toBeTruthy();
+    // ...and the ledger knows the capture that filed it, so superseding it
+    // takes the lore back out through the same path the test adapter uses.
+    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toEqual([
+        expect.objectContaining({ directionId: `story-archive:${capture.id}` }),
+    ]);
+    await supersedeStoryBeatArchive({ scene, docId: doc.id, beatId: 'beat-bg' });
+    expect(Object.values(storyBook.entries).map((entry) => entry.content).join(' ')).not.toContain('Mara locked the observatory door.');
+    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toHaveLength(0);
+});
+
+test('production Story capture with no lorebook shows no packet and files nothing', async () => {
+    __setExtensionSettings({ remodel: {}, connectionManager: { profiles: [{ id: 'loom-profile', name: 'Loom', api: 'openrouter', model: 'test/archive-model' }] } });
+    const prompts = [];
+    const runtime = createBackgroundArchiveRuntime({
+        repository: createArchiveJobRepository({ persistence: createMemoryArchiveJobPersistence() }),
+        transport: async ({ promptSnapshot }) => {
+            prompts.push(promptSnapshot.messages.map((message) => message.content).join('\n'));
+            return fence([], [{ content: 'Nowhere to file this.', evidence: ['x'] }]);
+        },
+        ingestion: createArchiveIngestion(legacyArchiveIngestionAdapter),
+        commit: jest.fn(async () => ({ transactionId: null })),
+    });
+    setBackgroundArchiveRuntimeForTests(runtime);
+    const { doc, capture } = makeCapture();
+    const applied = await queueStoryArchiveCapture({ scene, docId: doc.id, captureId: capture.id });
+    expect(applied.status).toBe('applied');
+    expect(prompts[0]).not.toContain('Selected Living Lore (what the world already records about this scene):');
+    expect(prompts[0]).not.toContain('=== WORLD SENSE RECALL ===');
+    expect(applied.loreProposalIds).toEqual([]);
+    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toEqual([]);
+});
+
+// --- Recall on the PRODUCTION Story path --------------------------------------
+//
+// Without this, every Story pass started with amnesia about every other Scene
+// and recorded known things as new. Recall is deterministic — keyword overlap
+// between the passage and earlier Scenes' Archive — so this needs no vector
+// backend: seed an earlier Scene's event, and the later Scene's pass sees it.
+
+test('production Story capture shows the Loom what earlier Scenes already settled', async () => {
+    __setExtensionSettings({ remodel: {
+        timelineV1: {
+            version: 1,
+            timelineIds: [scene.timelineId],
+            activeTimelineId: scene.timelineId,
+            timelines: { [scene.timelineId]: { id: scene.timelineId, lorebookName: 'Living Story', arcIds: ['arc'] } },
+            arcs: { arc: { id: 'arc', timelineId: scene.timelineId, title: 'Arrival', sceneIds: ['earlier-scene', scene.id] } },
+            scenes: {
+                'earlier-scene': { id: 'earlier-scene', timelineId: scene.timelineId, arcId: 'arc', title: 'The Cellar', mode: 'story' },
+                [scene.id]: { ...scene, arcId: 'arc', title: 'The Observatory' },
+            },
+        },
+        worldSenseV1: { version: 4, profile: { mode: 'suggest', maxEntries: 12, maxTokens: 1800 }, indexes: {}, receipts: [], continuityByScene: {} },
+    }, connectionManager: { profiles: [{ id: 'loom-profile', name: 'Loom', api: 'openrouter', model: 'test/archive-model' }] } });
+    __setContextOverrides({ loadWorldInfo: async () => ({ entries: {} }) });
+    // Settled in an EARLIER Scene, and sharing words with the passage below.
+    recordEvent(scene.timelineId, 'earlier-scene', 'Mara locked the observatory door for the night.');
+    // Settled in THIS Scene: belongs in its own Archive, never in recall.
+    recordEvent(scene.timelineId, scene.id, 'Mara counted the lantern oil.');
+
+    const prompts = [];
+    const runtime = createBackgroundArchiveRuntime({
+        repository: createArchiveJobRepository({ persistence: createMemoryArchiveJobPersistence() }),
+        transport: async ({ promptSnapshot }) => {
+            prompts.push(promptSnapshot.messages.map((message) => message.content).join('\n'));
+            return fence([]);
+        },
+        ingestion: createArchiveIngestion(legacyArchiveIngestionAdapter),
+        commit: jest.fn(async () => ({ transactionId: null })),
+    });
+    setBackgroundArchiveRuntimeForTests(runtime);
+    const doc = createStoryDoc({ title: 'Recall' });
+    updateStoryDoc(doc.id, { body: 'Mara locked the observatory door.' });
+    const capture = createStoryArchiveCapture(doc.id, { text: 'Mara locked the observatory door.', start: 0, end: 33, generationId: 'story-generation-recall' });
+
+    const applied = await queueStoryArchiveCapture({ scene, docId: doc.id, captureId: capture.id });
+    expect(applied.status).toBe('applied');
+    expect(prompts).toHaveLength(1);
+    const text = prompts[0];
+    expect(text).toContain('=== WORLD SENSE RECALL ===');
+    expect(text).toContain('[Arrival / The Cellar / event] Mara locked the observatory door for the night.');
+    // Recall is earlier Scenes only. The current Scene's own event is in its
+    // Archive above and must not be echoed back as something to remember.
+    const recall = text.slice(text.indexOf('=== WORLD SENSE RECALL ==='), text.indexOf('[ARCHIVE OPERATIONS'));
+    expect(recall).not.toContain('lantern oil');
+    expect(text.slice(0, text.indexOf('=== WORLD SENSE RECALL ==='))).toContain('Mara counted the lantern oil.');
+    // And it sits inside the Archive source, after the Scene's own Archive.
+    expect(text.indexOf('=== WORLD SENSE RECALL ===')).toBeGreaterThan(text.indexOf('Current Loom Archive:'));
 });

@@ -95,6 +95,7 @@ export async function applyLoomLoreReports({
             continue;
         }
         applied.push({
+            writeId: write.writeId || null,
             decision: write.decision,
             book: write.target.book,
             uid: write.target.uid,

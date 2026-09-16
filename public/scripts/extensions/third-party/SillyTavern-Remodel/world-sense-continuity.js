@@ -4,11 +4,41 @@ import {
 } from './archivist-store.js';
 import { getTimelineStore } from './timeline-state.js';
 
+// Words that never count as overlap between a passage and an earlier record.
+//
+// The list used to start at four letters and skip the most common words in
+// the language, so "the" scored. Recall ranks by shared words, and nearly every
+// record contains "the": the four recall slots went to whichever earlier
+// records happened to be most recent, and a genuinely relevant older fact could
+// be crowded out by three that merely shared an article. Function words only —
+// articles, conjunctions, prepositions, pronouns, auxiliaries, and the
+// contractions the tokenizer keeps whole. Three-letter nouns and verbs (key,
+// gate, oil, door, run) are content and stay scorable.
 const STOP_WORDS = new Set([
-    'about', 'after', 'again', 'also', 'been', 'before', 'being', 'between', 'could', 'does', 'from', 'have',
-    'into', 'just', 'more', 'most', 'only', 'other', 'over', 'said', 'should', 'some', 'than', 'that', 'their',
-    'them', 'then', 'there', 'these', 'they', 'this', 'through', 'under', 'very', 'what', 'when', 'where',
-    'which', 'while', 'with', 'would', 'your',
+    // articles, conjunctions
+    'the', 'and', 'but', 'nor', 'yet', 'either', 'neither', 'whether', 'because', 'although', 'though', 'unless',
+    // prepositions
+    'about', 'above', 'across', 'after', 'against', 'along', 'among', 'around', 'before', 'behind', 'below',
+    'beneath', 'beside', 'between', 'beyond', 'during', 'except', 'for', 'from', 'inside', 'into', 'near', 'off',
+    'onto', 'out', 'over', 'past', 'per', 'since', 'than', 'through', 'toward', 'towards', 'under', 'until',
+    'upon', 'via', 'with', 'within', 'without',
+    // pronouns and determiners
+    'you', 'your', 'yours', 'she', 'her', 'hers', 'him', 'his', 'its', 'our', 'ours', 'they', 'them', 'their',
+    'theirs', 'who', 'whom', 'whose', 'which', 'what', 'that', 'this', 'these', 'those', 'all', 'any', 'both',
+    'each', 'few', 'many', 'much', 'none', 'other', 'others', 'same', 'some', 'such', 'own', 'myself', 'yourself',
+    'herself', 'himself', 'itself', 'ourselves', 'yourselves', 'themselves', 'someone', 'anyone', 'everyone',
+    'something', 'anything', 'everything', 'nothing',
+    // auxiliaries and their contractions
+    'are', 'was', 'were', 'been', 'being', 'has', 'had', 'have', 'having', 'does', 'did', 'done', 'doing',
+    'will', 'shall', 'would', 'should', 'could', 'might', 'must', 'can', 'cannot',
+    'isn\'t', 'aren\'t', 'wasn\'t', 'weren\'t', 'hasn\'t', 'haven\'t', 'hadn\'t', 'doesn\'t', 'don\'t', 'didn\'t',
+    'won\'t', 'wouldn\'t', 'shouldn\'t', 'couldn\'t', 'can\'t', 'mustn\'t', 'i\'m', 'i\'ve', 'i\'d', 'i\'ll', 'you\'re',
+    'you\'ve', 'you\'d', 'you\'ll', 'she\'s', 'she\'d', 'she\'ll', 'he\'s', 'he\'d', 'he\'ll', 'it\'s', 'we\'re', 'we\'ve',
+    'we\'d', 'we\'ll', 'they\'re', 'they\'ve', 'they\'d', 'they\'ll', 'that\'s', 'there\'s', 'here\'s', 'what\'s', 'who\'s',
+    // adverbs and filler that carry no subject
+    'not', 'too', 'now', 'here', 'there', 'then', 'when', 'where', 'why', 'how', 'also', 'again', 'just', 'only',
+    'very', 'more', 'most', 'less', 'least', 'ever', 'never', 'always', 'often', 'still', 'even', 'once', 'yes',
+    'said', 'while', 'well', 'quite', 'rather', 'really', 'almost', 'already', 'perhaps', 'maybe',
 ]);
 
 /**
@@ -76,6 +106,16 @@ export function scoreTimelineContinuityCandidates({
         };
         if (pinned) add(candidate, 140, 'continuity.pin');
         candidate.forced = pinned;
+
+        // A new Scene must not begin amnesiac simply because its first action
+        // happens to share no keyword with the previous Scene. When both
+        // continuity switches permit it, carry the direct predecessor's
+        // accepted Archive as a bounded baseline; semantic ranking still
+        // governs every older Scene and any extra recall from this one.
+        if (record.orderIndex === targetOrder - 1) {
+            add(candidate, 120, 'continuity.previous-scene-baseline');
+            candidate.forced = true;
+        }
 
         const semantic = semanticByKey.get(record.key);
         if (semantic) {

@@ -2,13 +2,15 @@ import { jest } from '@jest/globals';
 import { benchmarkWorldSense, ensureWorldSenseIndex, queryWorldSense } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-embeddings.js';
 import { invalidateTimelineLoreCache } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-lore.js';
 import { recordEvent } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
-import { getWorldSenseTurnOverrides, prefetchWorldSense, previewWorldSense, resolveWorldSense, setWorldSenseTurnOverride } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-runtime.js';
+import { getWorldSenseTurnOverrides, prefetchWorldSense, previewWorldSense, resolveWorldSense, resolveWorldSenseFromContext, scheduleWorldSensePrefetch, setWorldSenseTurnOverride } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-runtime.js';
 import {
     DEFAULT_WORLD_SENSE_MODEL,
     getWorldSenseContinuity,
     getWorldSenseIndexState,
     getWorldSenseProfile,
     listWorldSenseReceipts,
+    clearWorldSenseContext,
+    saveWorldSenseContext,
     saveWorldSenseReceipt,
     updateWorldSenseProfile,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-store.js';
@@ -247,6 +249,50 @@ test('Send reuses an exact completed composer prefetch', async () => {
 
     expect(turn.reusedPrefetch).toBe(true);
     expect(turn.receipt.reusedPrefetch).toBe(true);
+});
+
+test('composer prefetch seeds an empty Scene but stops after it has a working set', () => {
+    jest.useFakeTimers();
+    try {
+        const scene = { id: 'scene-prefetch-boundary', timelineId: TIMELINE, mode: 'roleplay' };
+        const options = { action: 'Approach the harbor.' };
+
+        saveWorldSenseContext(scene.id, { entries: [{ book: 'Living Book', uid: '1' }] });
+        expect(scheduleWorldSensePrefetch(scene, options)).toBe(false);
+        expect(jest.getTimerCount()).toBe(0);
+
+        clearWorldSenseContext(scene.id);
+        expect(scheduleWorldSensePrefetch(scene, options)).toBe(true);
+        expect(jest.getTimerCount()).toBe(1);
+    } finally {
+        jest.clearAllTimers();
+        jest.useRealTimers();
+    }
+});
+
+test('a saved Living Lore working set rebuilds prior-scene recall with full Archive provenance', async () => {
+    __setExtensionSettings({ remodel: { timelineV1: {
+        version: 1, timelineIds: [TIMELINE], activeTimelineId: TIMELINE,
+        timelines: { [TIMELINE]: { id: TIMELINE, lorebookName: 'Living Book', arcIds: ['arc-recall'] } },
+        arcs: { 'arc-recall': { id: 'arc-recall', timelineId: TIMELINE, title: 'Opening', sceneIds: ['scene-earlier', 'scene-current'] } },
+        scenes: {
+            'scene-earlier': { id: 'scene-earlier', timelineId: TIMELINE, arcId: 'arc-recall', title: 'First Scene', mode: 'roleplay' },
+            'scene-current': { id: 'scene-current', timelineId: TIMELINE, arcId: 'arc-recall', title: 'Second Scene', mode: 'roleplay' },
+        },
+    } } });
+    recordEvent(TIMELINE, 'scene-earlier', 'Mara escaped through the observatory service door.');
+    saveWorldSenseContext('scene-current', { entries: [{ book: 'Living Book', uid: '1' }] });
+
+    const result = await resolveWorldSenseFromContext(
+        { id: 'scene-current', timelineId: TIMELINE, mode: 'roleplay' },
+        { action: 'A trumpet sounds in the distant market.' },
+    );
+
+    expect(result.fromContext).toBe(true);
+    expect(result.continuity).toEqual([expect.objectContaining({
+        kind: 'continuity', sceneId: 'scene-earlier', sceneTitle: 'First Scene', arcTitle: 'Opening',
+        text: 'Mara escaped through the observatory service door.',
+    })]);
 });
 
 test('one-turn pins and exclusions affect Preview but are consumed only by Send', async () => {
