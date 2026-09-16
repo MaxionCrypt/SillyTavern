@@ -213,7 +213,7 @@ export function createScene(arcId, mode = 'roleplay', title = 'New Scene') {
         storyDocId: null,
         // Optional per-Scene Prompt Studio overrides. Null means inherit the
         // account-wide default for this Scene mode and API boundary.
-        promptRecipeIds: { chat: null, text: null, loom: null },
+        promptRecipeIds: { chat: null, text: null, loom: null, continue: null },
         // Connection Manager routes for the two model-facing jobs in a
         // roleplay turn. The Narrator still runs through native generation;
         // the Loom is a separate, profile-scoped hidden request. Null means
@@ -443,6 +443,7 @@ function normalizePromptRecipeIds(value) {
         chat: value?.chat ? String(value.chat) : null,
         text: value?.text ? String(value.text) : null,
         loom: value?.loom ? String(value.loom) : null,
+        continue: value?.continue ? String(value.continue) : null,
     };
 }
 

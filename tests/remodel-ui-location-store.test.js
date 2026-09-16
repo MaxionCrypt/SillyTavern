@@ -22,6 +22,7 @@ test('stable workspace location survives a reload-shaped round trip', () => {
         currentWindow: { kind: 'tavern', tab: 'debug' },
         activeTavernTab: 'debug',
         focusedTimelineId: 'timeline-1',
+        sceneId: 'scene-4',
         codexOpen: false,
         archive: { open: true, sceneId: 'scene-4', view: 'narrator' },
         scroll: { key: 'archive:scene-4', top: 913 },
@@ -30,6 +31,7 @@ test('stable workspace location survives a reload-shaped round trip', () => {
     expect(loadUiLocation(storage)).toEqual(expect.objectContaining({
         currentWindow: { kind: 'tavern', tab: 'debug' },
         focusedTimelineId: 'timeline-1',
+        sceneId: 'scene-4',
         archive: { open: true, sceneId: 'scene-4', view: 'narrator' },
         scroll: { key: 'archive:scene-4', top: 913 },
     }));
@@ -66,4 +68,3 @@ test('clear removes only the Remodel location record', () => {
     clearUiLocation(storage);
     expect(loadUiLocation(storage).currentWindow).toEqual({ kind: 'native' });
 });
-

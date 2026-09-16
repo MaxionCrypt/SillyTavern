@@ -405,6 +405,18 @@ body.st-remodel-active.remodel-roleplay-generating #right-nav-panel:has(#rm_grou
   pointer-events: none !important;
 }
 
+/* Opening a linked group or narrator card makes core briefly select its own
+   right-menu editor. A Roleplay Scene has its own cast controls, so this
+   transient editor must never cover the viewport or intercept the first click.
+   timeline-spine closes it as soon as core settles the load. */
+body.st-remodel-active.remodel-roleplay-workspace-active #right-nav-panel:has(#rm_ch_create_block[style*="block"]),
+body.st-remodel-active.remodel-roleplay-workspace-active #right-nav-panel:has(#rm_group_chats_block[style*="flex"]) {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
 body.st-remodel-active #right-nav-panel > #right-nav-panelheader,
 body.st-remodel-active #right-nav-panel > #CharListButtonAndHotSwaps {
   display: none !important;
@@ -3400,6 +3412,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
   font: 11px/1.35 var(--remodel-manuscript-font, Georgia) !important;
 }
 #remodel-rp-connection-picker .remodel-rp-generation-route-grid { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 14px !important; }
+#remodel-rp-connection-picker .remodel-rp-reasoning-route { grid-column: 1 / -1 !important; }
 #remodel-rp-connection-picker .remodel-rp-generation-route-label {
   color: rgba(238, 235, 245, 0.72) !important;
   font: 600 10px/1.2 var(--remodel-serif, Georgia) !important;
@@ -6514,14 +6527,6 @@ body.remodel-storydoc-active .remodel-storydoc-add-beat-marker:is(:hover,:focus-
   color:rgba(215,200,0,.6) !important;
   font-size:8px !important;
 }
-body.remodel-storydoc-active .remodel-storydoc-prompt-choice {
-  display:flex !important;
-  justify-content:flex-start !important;
-  margin-top:5px !important;
-}
-body.remodel-storydoc-active .remodel-storydoc-prompt-choice .remodel-scene-prompt-choice {
-  background:rgba(7,7,12,.32) !important;
-}
 body.remodel-roleplay-workspace-active .remodel-rp-action-row .remodel-scene-prompt-choice {
   max-width:235px !important;
   min-height:30px !important;
@@ -6810,6 +6815,110 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   #remodel-story-archive-catchup .remodel-story-archive-catchup-foot > div { justify-content:flex-end !important; }
 }
 
+/* Story Scene wiring: who writes, who records. Deliberately the same modal
+   family as the Archive catch-up above — same scrim, header, summary strip and
+   footer — so the two Story dialogs read as one surface rather than two. */
+#remodel-story-scene-connections .remodel-story-scene-connections {
+  width:min(880px,94vw) !important; max-height:88vh !important; display:flex !important; flex-direction:column !important;
+  overflow:hidden !important; color:#eee9dc !important; background:rgba(10,10,15,.985) !important;
+  border:1px solid rgba(212,190,33,.46) !important; box-shadow:0 28px 90px rgba(0,0,0,.68) !important;
+  transform:translateY(10px) !important; transition:transform .2s ease !important;
+}
+#remodel-story-scene-connections.remodel-rp-picker-in .remodel-story-scene-connections { transform:translateY(0) !important; }
+#remodel-story-scene-connections .remodel-rp-picker-kicker {
+  margin-bottom:6px !important; color:rgba(215,200,0,.62) !important;
+  font:9px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.18em !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-summary {
+  display:flex !important; align-items:center !important; gap:9px !important; padding:13px 22px !important;
+  border-bottom:1px solid rgba(212,190,33,.14) !important; background:rgba(212,190,33,.035) !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-summary > span {
+  display:flex !important; align-items:baseline !important; gap:7px !important; min-width:0 !important; max-width:46ch !important;
+  padding:6px 9px !important; border:1px solid rgba(212,190,33,.2) !important; color:rgba(238,233,220,.82) !important;
+  overflow:hidden !important; text-overflow:ellipsis !important; white-space:nowrap !important;
+  font:10px/1.2 system-ui,sans-serif !important; letter-spacing:.04em !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-summary b {
+  flex:0 0 auto !important; color:#d7c800 !important; font-weight:400 !important;
+  text-transform:uppercase !important; letter-spacing:.08em !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-summary > span.is-unset {
+  border-color:rgba(205,94,94,.4) !important; color:rgba(232,126,126,.8) !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-summary > span.is-unset b { color:rgba(232,126,126,.9) !important; }
+#remodel-story-scene-connections .remodel-story-scene-connections-summary small {
+  margin-left:auto !important; white-space:nowrap !important; color:rgba(238,233,220,.42) !important;
+  font:10px/1.2 system-ui,sans-serif !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-list {
+  display:grid !important; grid-template-columns:repeat(auto-fit,minmax(310px,1fr)) !important; gap:12px !important;
+  padding:18px 22px !important; overflow:auto !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-role {
+  display:flex !important; flex-direction:column !important; min-width:0 !important;
+  border:1px solid rgba(212,190,33,.18) !important; border-left:3px solid rgba(212,190,33,.7) !important;
+  background:rgba(255,255,255,.018) !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-role > header {
+  display:flex !important; align-items:center !important; gap:10px !important; padding:11px 13px !important;
+  border-bottom:1px solid rgba(212,190,33,.12) !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-role > header > i {
+  display:grid !important; place-items:center !important; flex:0 0 auto !important; width:26px !important; height:26px !important;
+  border:1px solid rgba(212,190,33,.35) !important; color:#d7c800 !important; font-size:11px !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-role > header strong {
+  display:block !important; color:#eee9dc !important; letter-spacing:.04em !important;
+  font:13px/1.2 var(--remodel-serif,Georgia) !important; font-weight:400 !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-role > header small {
+  display:block !important; margin-top:3px !important; color:rgba(238,233,220,.45) !important;
+  font:10px/1.3 system-ui,sans-serif !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-role-body {
+  display:grid !important; gap:13px !important; padding:14px 13px !important; align-content:start !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-field {
+  display:grid !important; gap:6px !important; min-width:0 !important; color:rgba(238,233,220,.5) !important;
+  font:9px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.12em !important;
+}
+#remodel-story-scene-connections select {
+  width:100% !important; box-sizing:border-box !important; padding:9px 10px !important; border-radius:0 !important;
+  border:1px solid rgba(212,190,33,.24) !important; background:rgba(0,0,0,.34) !important; color:#eee9dc !important;
+  outline:none !important; text-transform:none !important; letter-spacing:0 !important;
+  font:12px/1.3 system-ui,sans-serif !important;
+}
+#remodel-story-scene-connections select:focus { border-color:rgba(212,190,33,.55) !important; }
+#remodel-story-scene-connections .remodel-scene-prompt-choice {
+  width:100% !important; max-width:none !important; border-radius:0 !important;
+  background:rgba(0,0,0,.34) !important; box-shadow:none !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-note {
+  margin:0 !important; color:rgba(238,233,220,.42) !important; text-transform:none !important; letter-spacing:0 !important;
+  font:11px/1.5 var(--remodel-manuscript-font,Georgia) !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-foot {
+  display:flex !important; align-items:center !important; justify-content:space-between !important; gap:16px !important;
+  padding:14px 22px !important; border-top:1px solid rgba(212,190,33,.17) !important; background:rgba(0,0,0,.2) !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-foot p {
+  margin:0 !important; color:rgba(238,233,220,.52) !important; font:11px/1.35 system-ui,sans-serif !important;
+}
+#remodel-story-scene-connections .remodel-story-scene-connections-foot > div { display:flex !important; gap:9px !important; }
+#remodel-story-scene-connections .remodel-story-scene-connections-foot button {
+  padding:9px 13px !important; border:1px solid rgba(212,190,33,.3) !important; background:#d7c800 !important;
+  color:#0b0b0d !important; cursor:pointer !important;
+  font:10px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.07em !important;
+}
+
+@media (max-width:700px) {
+  #remodel-story-scene-connections .remodel-story-scene-connections-summary { flex-wrap:wrap !important; }
+  #remodel-story-scene-connections .remodel-story-scene-connections-summary small { width:100% !important; margin-left:0 !important; }
+  #remodel-story-scene-connections .remodel-story-scene-connections-foot { align-items:stretch !important; flex-direction:column !important; }
+  #remodel-story-scene-connections .remodel-story-scene-connections-foot > div { justify-content:flex-end !important; }
+}
+
 /* =====================================================================
    PROMPT STUDIO
    A native Tavern workspace: fixed library/editor split, no legacy drawer.
@@ -6903,6 +7012,157 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   background:rgba(215,200,0,.05);
   font:10px/1.4 var(--remodel-mono,'Cascadia Mono',monospace);
 }
+/* Instruction template picker.
+   A card menu rather than a dropdown: thirty operations in a <select> is a list
+   you scroll blind, because option text is all a native dropdown can render.
+   Same scrim, header and close control as the Story dialogs, so the app keeps
+   one modal idiom instead of growing a second. */
+.remodel-prompt-template-open {
+  display:inline-flex;
+  align-items:center;
+  gap:9px;
+  padding:9px 14px;
+  border-radius:8px;
+  font-size:12px;
+  letter-spacing:.02em;
+}
+.remodel-prompt-template-open small {
+  padding:1px 7px;
+  border:1px solid var(--prompt-gold-soft,rgba(215,200,0,.38));
+  border-radius:999px;
+  color:rgba(240,236,223,.55);
+  font-size:10px;
+}
+#remodel-prompt-template-picker .remodel-prompt-template-picker {
+  display:flex;
+  flex-direction:column;
+  width:min(1080px,94vw);
+  max-height:88vh;
+  overflow:hidden;
+  border:1px solid rgba(215,200,0,.46);
+  background:rgba(10,10,15,.985);
+  box-shadow:0 28px 90px rgba(0,0,0,.68);
+  color:var(--prompt-ink,#f0ecdf);
+  transform:translateY(10px);
+  transition:transform .2s ease;
+}
+#remodel-prompt-template-picker.remodel-rp-picker-in .remodel-prompt-template-picker { transform:translateY(0); }
+#remodel-prompt-template-picker .remodel-rp-picker-kicker {
+  margin-bottom:6px;
+  color:rgba(215,200,0,.62);
+  font-size:9px;
+  letter-spacing:.18em;
+  text-transform:uppercase;
+}
+#remodel-prompt-template-picker .remodel-prompt-template-search {
+  flex:0 0 auto;
+  margin:0;
+  padding:12px 22px;
+  border:none;
+  border-bottom:1px solid rgba(215,200,0,.14);
+  background:rgba(215,200,0,.035);
+  color:var(--prompt-ink,#f0ecdf);
+  font-family:inherit;
+  font-size:13px;
+  outline:none;
+}
+#remodel-prompt-template-picker .remodel-prompt-template-search::placeholder { color:rgba(240,236,223,.34); }
+#remodel-prompt-template-picker .remodel-prompt-template-body {
+  flex:1 1 auto;
+  padding:6px 22px 20px;
+  overflow-y:auto;
+}
+#remodel-prompt-template-picker .remodel-prompt-template-group { margin-top:18px; }
+#remodel-prompt-template-picker .remodel-prompt-template-group h4 {
+  display:flex;
+  align-items:center;
+  gap:9px;
+  margin:0 0 9px;
+  padding-bottom:5px;
+  border-bottom:1px solid rgba(215,200,0,.16);
+  color:var(--prompt-gold,#d7c800);
+  font:10px/1.2 system-ui,sans-serif;
+  font-weight:400;
+  letter-spacing:.14em;
+  text-transform:uppercase;
+}
+#remodel-prompt-template-picker .remodel-prompt-template-group h4 small {
+  color:rgba(240,236,223,.34);
+  letter-spacing:0;
+}
+#remodel-prompt-template-picker .remodel-prompt-template-grid {
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+  gap:10px;
+}
+/* The whole card is the click target, so nothing inside needs its own hit area
+   and the cursor never changes meaning halfway across it. */
+#remodel-prompt-template-picker .remodel-prompt-template-card {
+  display:grid;
+  gap:6px;
+  min-width:0;
+  padding:12px 13px;
+  border:1px solid rgba(215,200,0,.18);
+  border-left:3px solid rgba(215,200,0,.5);
+  border-radius:4px;
+  background:rgba(255,255,255,.018);
+  color:inherit;
+  cursor:pointer;
+  text-align:left;
+  transition:border-color .12s ease,background .12s ease,transform .12s ease;
+}
+#remodel-prompt-template-picker .remodel-prompt-template-card:hover,
+#remodel-prompt-template-picker .remodel-prompt-template-card:focus-visible {
+  border-color:rgba(241,223,24,.5);
+  border-left-color:#f1df18;
+  background:rgba(215,200,0,.08);
+  outline:none;
+  transform:translateY(-1px);
+}
+#remodel-prompt-template-picker .remodel-prompt-template-card strong {
+  color:#f4efe1;
+  font:12.5px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-weight:400;
+  overflow-wrap:anywhere;
+}
+#remodel-prompt-template-picker .remodel-prompt-template-card span {
+  color:rgba(240,236,223,.62);
+  font-size:11.5px;
+  line-height:1.5;
+}
+/* The line the model ends up writing. Clamped rather than wrapped: it is here
+   to identify the template at a glance, and the whole thing lands in the
+   message the moment you click. */
+#remodel-prompt-template-picker .remodel-prompt-template-card code {
+  display:block;
+  padding:6px 8px;
+  border-radius:3px;
+  background:rgba(7,6,12,.72);
+  color:rgba(215,200,0,.82);
+  font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+  max-height:3em;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+#remodel-prompt-template-picker .remodel-prompt-template-card em {
+  color:rgba(240,236,223,.32);
+  font-size:9px;
+  font-style:normal;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+}
+#remodel-prompt-template-picker .remodel-prompt-template-empty {
+  padding:40px 0;
+  color:rgba(240,236,223,.42);
+  font-size:12px;
+  text-align:center;
+}
+
+@media (max-width:700px) {
+  #remodel-prompt-template-picker .remodel-prompt-template-grid { grid-template-columns:1fr; }
+}
+
 .remodel-prompt-macro-reference { margin:0 18px 18px; border:1px solid rgba(215,200,0,.14); border-radius:5px; background:rgba(8,8,12,.38); }
 .remodel-prompt-macro-reference > summary { display:flex; align-items:center; gap:7px; padding:9px 11px; cursor:pointer; color:#c9c2ae; font:600 11px/1.3 var(--remodel-sans,system-ui); }
 .remodel-prompt-macro-reference > summary i { width:14px; color:var(--prompt-gold); text-align:center; line-height:1; }
@@ -7225,12 +7485,22 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   display:block;
   width:100%;
   min-height:88px;
+  /* Core's global `textarea { max-height: 90dvh }` used to win here because
+     this rule set no cap of its own. With field-sizing the box grew with its
+     content right up to 90% of the viewport and then stopped — and with
+     overflow hidden and resize off, everything past that line was simply
+     invisible, no scrollbar, no hint. A message is as tall as what it says;
+     the editor column scrolls, the message does not. */
+  max-height:none!important;
+  box-sizing:border-box;
   padding:12px 13px!important;
   border:1px solid rgba(255,255,255,.08)!important;
   background:rgba(0,0,0,.22)!important;
   color:#e8e3d7!important;
   font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace!important;
-  resize:vertical;
+  field-sizing:content;
+  resize:none;
+  overflow-y:hidden;
 }
 .remodel-prompt-block-main > textarea:disabled {
   opacity:.48;
@@ -12157,6 +12427,220 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     line-height: 1.5;
 }
 
+/* Prompt metadata guide.
+   Deliberately uncaged: no max-height, no inner scrollbar, no measure cap. It
+   is a reference you read and paste from, and a reference squeezed into a
+   viewport-fraction box with its own scrollbar is worse than no reference. The
+   strip is closed by default; open, it takes the height and the full width it
+   needs and the workspace scrolls as one page. */
+.remodel-debug-guide {
+    padding-bottom: 20px;
+}
+
+.remodel-debug-guide-section {
+    margin-top: 18px;
+}
+
+.remodel-debug-guide-section > h4 {
+    margin: 0 0 8px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid rgba(201, 190, 0, .18);
+    color: #e9df53;
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+}
+
+.remodel-debug-guide-section > h4 em {
+    margin-left: 10px;
+    color: #6f6b64;
+    font-style: normal;
+    letter-spacing: .06em;
+    text-transform: none;
+}
+
+.remodel-debug-guide h5 {
+    margin: 0 0 6px;
+    color: #c8c4b9;
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+}
+
+.remodel-debug-guide h5 small {
+    margin-left: 8px;
+    color: #6f6b64;
+    font-size: 10px;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.remodel-debug-guide h5 em {
+    margin-left: 8px;
+    color: #8f8b83;
+    font-size: 11px;
+    font-style: normal;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.remodel-debug-guide code {
+    padding: 1px 5px;
+    border: 1px solid rgba(201, 190, 0, .2);
+    border-radius: 4px;
+    background: rgba(201, 190, 0, .07);
+    color: #e6da6a;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px;
+    white-space: nowrap;
+}
+
+/* The paste targets. These wrap rather than scroll: a snippet you have to drag
+   sideways to read is a snippet you cannot check before you paste it. */
+.remodel-debug-guide-snippet {
+    display: block;
+    padding: 7px 9px;
+    color: #ddd8ca;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    -webkit-user-select: all;
+    user-select: all;
+}
+
+.remodel-debug-guide-code {
+    margin: 0;
+    padding: 12px 14px;
+    border: 1px solid rgba(201, 190, 0, .16);
+    border-left: 3px solid rgba(201, 190, 0, .5);
+    border-radius: 4px;
+    background: rgba(7, 6, 12, .72);
+    color: #ddd8ca;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    -webkit-user-select: all;
+    user-select: all;
+}
+
+.remodel-debug-guide-table {
+    width: 100%;
+    margin: 0;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.remodel-debug-guide-table th {
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(201, 190, 0, .2);
+    color: #b8ad3f;
+    font-size: 9px;
+    font-weight: 400;
+    letter-spacing: .1em;
+    text-align: left;
+    text-transform: uppercase;
+}
+
+.remodel-debug-guide-table td {
+    padding: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, .05);
+    color: #a7a299;
+    font-size: 11.5px;
+    line-height: 1.55;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+
+/* Column widths per table shape, keyed off the header count the renderer
+   stamps on. Doing it with :nth-child alone would make the 3-column and
+   4-column tables fight over the same rules. The syntax column takes the most
+   room in both, because it is the reason to be here. */
+.remodel-debug-guide-table.is-cols-3 :is(th, td):nth-child(1) { width: 20%; }
+.remodel-debug-guide-table.is-cols-3 :is(th, td):nth-child(2) { width: 33%; }
+.remodel-debug-guide-table.is-cols-3 :is(th, td):nth-child(3) { width: 47%; }
+
+.remodel-debug-guide-table.is-cols-4 :is(th, td):nth-child(1) { width: 18%; }
+.remodel-debug-guide-table.is-cols-4 :is(th, td):nth-child(2) { width: 7%; }
+.remodel-debug-guide-table.is-cols-4 :is(th, td):nth-child(3) { width: 32%; }
+.remodel-debug-guide-table.is-cols-4 :is(th, td):nth-child(4) { width: 43%; }
+
+.remodel-debug-guide-table td > code:first-child {
+    display: inline-block;
+    margin-bottom: 5px;
+    white-space: normal;
+    overflow-wrap: normal;
+    word-break: keep-all;
+}
+
+.remodel-debug-guide-what {
+    display: block;
+    color: #8f8b83;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.remodel-debug-guide-type {
+    display: block;
+    margin-bottom: 1px;
+    color: #b8ad3f;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10px;
+}
+
+.remodel-debug-guide-args {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 7px 10px;
+    margin: 0;
+}
+
+.remodel-debug-guide-args dt {
+    color: #8f8b83;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px;
+    line-height: 1.4;
+}
+
+/* Required arguments are the ones whose absence throws and rolls the whole
+   batch back, so they are the ones that need to be legible at a glance. */
+.remodel-debug-guide-args dt.is-required {
+    color: #e6da6a;
+}
+
+.remodel-debug-guide-args dt.is-required::after {
+    content: ' *';
+    color: #c9541f;
+}
+
+.remodel-debug-guide-args dd {
+    margin: 0;
+    color: #8f8b83;
+    font-size: 10.5px;
+    line-height: 1.45;
+}
+
+.remodel-debug-guide-surface {
+    margin-bottom: 12px;
+}
+
+.remodel-debug-guide-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin: 0;
+}
+
+.remodel-debug-guide-note {
+    margin: 8px 0 0;
+    color: #8f8b83;
+    font-size: 11px;
+    line-height: 1.55;
+}
+
 .remodel-debug-filters {
     display: grid;
     grid-template-columns: 170px 140px 140px minmax(220px, 1fr) auto;
@@ -13280,9 +13764,23 @@ body.st-remodel-active .remodel-archive-item-actions button {
 body.st-remodel-active .remodel-archive-item-actions button:hover { color: var(--route-gold, #d7c800) !important; background: rgba(255, 255, 255, .05) !important; }
 body.st-remodel-active .remodel-archive-item-actions button.danger:hover { color: #ef9898 !important; }
 
-body.st-remodel-active .remodel-archive-item.is-editing { grid-template-columns: minmax(80px, .3fr) minmax(0, 1fr) !important; }
-body.st-remodel-active .remodel-archive-edit { display: flex !important; gap: 6px !important; min-width: 0 !important; }
-body.st-remodel-active .remodel-archive-edit input { flex: 1 1 auto !important; min-width: 0 !important; }
+body.st-remodel-active .remodel-archive-item.is-editing { grid-template-columns: minmax(0, 1fr) !important; }
+body.st-remodel-active .remodel-archive-item.is-editing.has-key { grid-template-columns: minmax(86px, .36fr) minmax(0, 1fr) !important; }
+body.st-remodel-active .remodel-archive-edit { display: grid !important; grid-template-columns: minmax(0, 1fr) auto auto !important; align-items: start !important; gap: 6px !important; min-width: 0 !important; }
+body.st-remodel-active .remodel-archive-editable-text {
+    display: block !important;
+    min-width: 0 !important;
+    min-height: 2.7em !important;
+    padding: 6px 8px !important;
+    color: rgba(245, 240, 225, .92) !important;
+    background: rgba(255, 255, 255, .035) !important;
+    border: 1px solid rgba(215, 200, 0, .28) !important;
+    border-radius: 5px !important;
+    outline: none !important;
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere !important;
+}
+body.st-remodel-active .remodel-archive-editable-text:focus { border-color: rgba(235, 221, 69, .72) !important; background: rgba(215, 200, 0, .07) !important; }
 body.st-remodel-active .remodel-archive-edit button { min-height: 30px !important; padding: 0 9px !important; }
 
 body.st-remodel-active .remodel-archive-empty-line,

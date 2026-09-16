@@ -8,6 +8,7 @@ function defaultLocation() {
         currentWindow: { kind: 'native' },
         activeTavernTab: 'timeline',
         focusedTimelineId: null,
+        sceneId: null,
         codexOpen: false,
         archive: { open: false, sceneId: null, view: 'loom' },
         scroll: { key: '', top: 0 },
@@ -35,6 +36,10 @@ export function normalizeUiLocation(value) {
         currentWindow: windowKind === 'tavern' ? { kind: 'tavern', tab } : { kind: 'native' },
         activeTavernTab: tab,
         focusedTimelineId: normalizeId(value.focusedTimelineId),
+        // A native window is only a Remodel Scene when this exact id was
+        // saved. This avoids reopening a Timeline Scene over an ordinary
+        // SillyTavern chat after a reload.
+        sceneId: normalizeId(value.sceneId),
         codexOpen: Boolean(value.codexOpen),
         archive: {
             open: Boolean(value.archive?.open),
@@ -71,4 +76,3 @@ export function saveUiLocation(value, storage = defaultStorage()) {
 export function clearUiLocation(storage = defaultStorage()) {
     try { storage?.removeItem(STORAGE_KEY); } catch { /* navigation persistence is best effort */ }
 }
-

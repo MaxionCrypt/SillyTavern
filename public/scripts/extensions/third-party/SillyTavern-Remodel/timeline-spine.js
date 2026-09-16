@@ -14,7 +14,7 @@ import { openGroupById } from '../../../group-chats.js';
 // run it holds the assembled prompt broken down BY SOURCE (one collection per
 // prompt identifier), which is the only place that attribution exists — the
 // generateData.prompt array core hands back has already been flattened.
-import { promptManager } from '../../../openai.js';
+import { oai_settings, promptManager } from '../../../openai.js';
 import { setUserAvatar } from '../../../personas.js';
 import { MacroRegistry, MacroCategory, MacroValueType } from '../../../macros/engine/MacroRegistry.js';
 import {
@@ -38,7 +38,7 @@ import {
     updateTimeline,
 } from './timeline-state.js';
 import {
-    createStoryArchiveCapture,
+    createStoryArchiveCaptures,
     createStoryDoc,
     getStoryDoc,
     previewStoryArchiveCatchUp,
@@ -47,11 +47,12 @@ import {
 import {
     captureStoryArchiveCatchUp,
     describeStoryArchiveCaptureState,
-    queueStoryArchiveCapture,
+    queueStoryArchiveCaptures,
     resumeStoryArchiveCaptures,
     supersedeStoryBeatArchive,
 } from './story-loom-archive.js';
 import { generateProse } from './story-generate.js';
+import { splitStoryArchiveAddition, STORY_ARCHIVE_PASSAGE_MAX_WORDS } from './story-archive-provenance.js';
 import { listArchiveSceneDescriptors } from './archive-scene-list.js';
 import {
     advanceStoryWorldInfoState,
@@ -72,17 +73,19 @@ import {
     formatPromptStudioPreview,
     getCurrentPromptStudioRecipe,
     setRemodelNativePromptContent,
+    withPromptStudioRuntimeRecipe,
     getDefaultPromptStudioRecipe,
     getPromptApiType,
     getPromptStudioRecipe,
     getPromptStudioRecipes,
     getStoryArchivePromptStudioRecipe,
     initPromptStudio,
+    recordSentPromptTranscript,
     renderPromptStudioWorkspace,
     syncPromptStudioForCurrentMode,
 } from './prompt-studio.js';
 import { positionPopover } from './popover-position.js';
-import { limitBoundedChatHistory } from './prompt-history-limit.js';
+import { getLatestPlayerAction, limitBoundedChatHistory, removeLatestPlayerAction, removeLegacyNarratorConstraints, removeNativeNewChatBootstrap, restoreTaggedNextAction, tagNextAction } from './prompt-history-limit.js';
 import {
     decorateStoryGoalStream,
     formatStoryGoalsPrompt,
@@ -92,12 +95,14 @@ import {
     isStoryPipelineRunning,
     renderStoryGoalsForRoleplay,
 } from './story-goals.js';
-import { getSceneGoals, updateSceneGoalState } from './story-goals-store.js';
+import { deleteStoryGoal, getSceneGoals, updateSceneGoalState } from './story-goals-store.js';
 import { clearMechanicsReceiptInjection } from './mechanics-runtime.js';
 import { mountWorldSenseWorkspace, renderWorldSenseWorkspaceShell } from './world-sense-workspace.js';
-import { listVariablesForLoreRef, listVariableValues } from './variables-store.js';
+import { deleteVariableValue, listVariablesForLoreRef, listVariableValues } from './variables-store.js';
 import {
     listEvents as archiveListEvents,
+    updateEvent as archiveUpdateEvent,
+    deleteEvent as archiveDeleteEvent,
     listSceneFacts as archiveListSceneFacts,
     listCharStates as archiveListCharStates,
     listSecrets as archiveListSecrets,
@@ -105,6 +110,7 @@ import {
     clearSceneFact as archiveClearSceneFact,
     setSecret as archiveSetSecret,
     clearSecret as archiveClearSecret,
+    setCharStateFacet as archiveSetCharStateFacet,
     clearCharStateFacet as archiveClearCharStateFacet,
     getSceneContinuitySettings as archiveGetContinuitySettings,
     setSceneContinuitySettings as archiveSetContinuitySettings,
@@ -140,15 +146,18 @@ import {
 import { directedTurnController } from './legacy-directed-turn-adapter.js';
 import { activateWorldSenseSelection } from './world-sense-activation.js';
 import { sanitizeDirectionText } from './live-direction-markers.js';
-import { buildNarratorArchivistSections } from './narrator-prompt.js';
+import { buildNarratorArchivistSections, buildNarratorRecallSections } from './narrator-prompt.js';
+import { buildSceneArchiveProjection } from './archive-projection.js';
 import { resolveRoleplayMessageIds } from './roleplay-message-list.js';
 import { resolveDirectionChromeMode } from './turn-chrome.js';
 import { isLinkedGroupChatLoaded } from './scene-open-state.js';
+import { getNarratorReasoningMode, setNarratorReasoningMode } from './narrator-reasoning-policy.js';
 import {
     handleDebugConsoleChange,
     handleDebugConsoleClick,
     handleDebugConsoleInput,
     initDebugConsole,
+    recordApiTranscript,
     recordDebugEvent,
     renderDebugConsoleWorkspace,
 } from './debug-console.js';
@@ -233,10 +242,15 @@ const loomArchive = {
 
 let restoredUiScroll = null;
 let uiLocationPersistTimer = null;
+let uiLocationPagehideBound = false;
+let roleplayRightMenuGuardObserver = null;
+let roleplayRightMenuDismissQueued = false;
+let roleplayRightMenuDismissTimer = null;
 
 function stableUiLocation(scrollTop = null) {
     const state = getSessionState();
     const prior = loadUiLocation();
+    const activeScene = getActiveScene();
     const scroll = scrollTop === null
         ? prior.scroll
         : { key: uiLocationScrollKey(), top: scrollTop };
@@ -244,6 +258,7 @@ function stableUiLocation(scrollTop = null) {
         currentWindow: state.currentWindow,
         activeTavernTab: state.activeTavernTab,
         focusedTimelineId: state.focusedTimelineId,
+        sceneId: activeScene?.id || null,
         codexOpen: state.codexOpen,
         archive: { open: loomArchive.open, sceneId: loomArchive.sceneId, view: loomArchive.view },
         scroll,
@@ -265,6 +280,12 @@ function scheduleUiLocationPersistence(scrollTop) {
     uiLocationPersistTimer = setTimeout(() => persistStableUiLocation(scrollTop), 120);
 }
 
+function bindUiLocationPagehidePersistence() {
+    if (uiLocationPagehideBound) return;
+    window.addEventListener('pagehide', () => persistStableUiLocation());
+    uiLocationPagehideBound = true;
+}
+
 function hydrateStableUiLocation() {
     const saved = loadUiLocation();
     setActiveTavernTab(saved.activeTavernTab);
@@ -276,6 +297,23 @@ function hydrateStableUiLocation() {
     loomArchive.view = saved.archive.view;
     restoredUiScroll = saved.scroll;
     return saved;
+}
+
+/** Restore a saved Scene only when Remodel itself owned the native window.
+ * Tavern tabs restore independently; reopening a Scene beneath one would be
+ * surprising and would make core's chat-loading side effects race the tab. */
+async function restoreSavedNativeScene(location) {
+    const sceneId = String(location?.sceneId || '').trim();
+    if (location?.currentWindow?.kind !== 'native' || !sceneId) return;
+    if (getActiveScene()?.id === sceneId) return;
+    if (!getScene(sceneId)?.linkedChat && getScene(sceneId)?.mode !== 'story') return;
+    try {
+        await openScene(sceneId);
+    } catch (error) {
+        // Reload recovery must fail open to the native chat if a user deleted
+        // its linked group, card, or chat file while the page was closed.
+        console.warn('Remodel UI could not restore the saved Scene', error);
+    }
 }
 
 function resetLoomArchiveView() {
@@ -350,6 +388,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     }
 
     const restoredLocation = hydrateStableUiLocation();
+    bindUiLocationPagehidePersistence();
     initDebugConsole();
     const drawer = ensureTimelineDrawer();
     drawer.querySelector('.remodel-tavern-body')?.addEventListener('scroll', (event) => {
@@ -359,6 +398,7 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
     bindTimelineEvents(drawer);
     bindSillyTavernEvents();
     bindStoryLockInterceptor();
+    bindRoleplayNativeRightMenuGuard();
     observeTavernPanelState();
     bindExternalSidebarWindowSwitch();
     bindVariablesSurfaces();
@@ -404,7 +444,9 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
         onStateChange: refreshLiveDirectionChrome,
         onSettled: () => { setRoleplayGenerating(false); renderRoleplayScene(); },
         setNativePromptContent: (sourceKey, content) => setRemodelNativePromptContent(sourceKey, content),
-        activateConnectionProfile,
+        getNarratorNote: readRoleplayNarratorNote,
+        withPromptStudioRecipe: (recipeId, work) => withPromptStudioRuntimeRecipe(recipeId, work),
+        activateConnectionProfile: activateRoleplayNarratorProfile,
         onRecovered: () => { document.getElementById('remodel-direction-failure')?.remove(); },
         onFailure: showLiveDirectionFailure,
     });
@@ -417,6 +459,8 @@ export function initTimelineSpine({ onDrawerReady } = {}) {
 
     if (restoredLocation.currentWindow.kind === 'tavern') {
         void transitionToWindow(restoredLocation.currentWindow);
+    } else {
+        void restoreSavedNativeScene(restoredLocation);
     }
 
     // Belt-and-suspenders: Remodel's own init isn't guaranteed to run before
@@ -1175,8 +1219,9 @@ async function finishStoryGuidedCreation() {
     const { sceneId, chosenCharacterId } = consumeWizardFlow();
     hideGuidedPrompt();
 
-    await getContext().selectCharacterById(chosenCharacterId, { switchMenu: false });
-    await createNewChatForScene(sceneId);
+    const context = getContext();
+    if (!await selectCharacterForNewScene(context, chosenCharacterId)) return;
+    await createNewChatForScene(sceneId, { expectedCharacterId: chosenCharacterId });
     await enterSceneViewport(getScene(sceneId));
 }
 
@@ -2427,8 +2472,14 @@ function registerAllInsertedTextSlotMacros() {
 // promptPreviewInFlight now lives in session-state.js's panels domain — see
 // getPanelsState()/setPromptPreviewInFlight() imported above.
 
-async function runPromptPreviewDryRun(generationType, { composerText: composerTextOverride, narratorGrounding, worldSense } = {}) {
+async function runPromptPreviewDryRun(generationType, { composerText: composerTextOverride, narratorGrounding, narratorRecall, narratorNote, worldSense, stripNativeNewChatBootstrap = false } = {}) {
     const context = getContext();
+    // A Connection Profile can replace the native Prompt Manager stack. The
+    // selected Prompt Studio recipe is authoritative for Roleplay, so rebuild
+    // that stack immediately before a dry run as well as before generation.
+    // This also removes generated native prompts whose source blocks the owner
+    // has deleted since the profile was last activated.
+    applyPromptStudioRuntimeRecipe();
     const previousCharacterId = context.characterId;
     const previousCharacterName = context.name2;
     const groupPreviewSpeaker = getGroupPreviewSpeaker(context);
@@ -2456,6 +2507,15 @@ async function runPromptPreviewDryRun(generationType, { composerText: composerTe
     const groundingRouted = narratorGrounding === undefined
         ? null
         : setRemodelNativePromptContent('narratorGrounding', narratorGrounding);
+    const narratorRecallRouted = narratorRecall === undefined
+        ? null
+        : setRemodelNativePromptContent('narratorRecall', narratorRecall);
+    const previousNarratorNote = narratorNote === undefined
+        ? null
+        : String(oai_settings.prompts?.find((prompt) => prompt?.identifier === 'remodel_narrator_note')?.content || '');
+    const narratorNoteRouted = narratorNote === undefined
+        ? null
+        : setRemodelNativePromptContent('narratorNote', narratorNote);
 
     if (composerText && generationType === 'normal') {
         splicedMessage = {
@@ -2468,12 +2528,24 @@ async function runPromptPreviewDryRun(generationType, { composerText: composerTe
         };
         context.chat.push(splicedMessage);
     }
+    const nextAction = composerText || getLatestPlayerAction(context.chat);
+    const nextActionRouted = stripNativeNewChatBootstrap && nextAction
+        ? setRemodelNativePromptContent('nextAction', tagNextAction(nextAction))
+        : false;
 
     let capturedPrompt = null;
     const captureListener = (generateData) => {
         capturedPrompt = generateData;
     };
-    const historyLimitListener = (eventData) => limitBoundedChatHistory(eventData?.chat);
+    const historyLimitListener = (eventData) => {
+        if (stripNativeNewChatBootstrap) {
+            removeNativeNewChatBootstrap(eventData?.chat);
+            removeLegacyNarratorConstraints(eventData?.chat);
+            if (nextActionRouted) removeLatestPlayerAction(eventData?.chat, nextAction);
+            if (nextActionRouted) restoreTaggedNextAction(eventData?.chat);
+        }
+        limitBoundedChatHistory(eventData?.chat);
+    };
 
     context.eventSource.once(context.eventTypes.GENERATE_AFTER_DATA, captureListener);
     context.eventSource.once(context.eventTypes.CHAT_COMPLETION_PROMPT_READY, historyLimitListener);
@@ -2556,10 +2628,25 @@ async function runPromptPreviewDryRun(generationType, { composerText: composerTe
         }
 
         if (narratorGrounding !== undefined) setRemodelNativePromptContent('narratorGrounding', '');
+        if (narratorRecall !== undefined) setRemodelNativePromptContent('narratorRecall', '');
+        // Unlike request-scoped Archive grounding, this value is also live
+        // scene state. A Preview must put it back exactly as it found it so
+        // the next actual Narrator turn still receives the saved note.
+        if (narratorNote !== undefined) setRemodelNativePromptContent('narratorNote', previousNarratorNote);
+        if (nextActionRouted) setRemodelNativePromptContent('nextAction', '');
     }
 
     if (groundingRouted === false) {
         toastrErrors.push('Narrator Grounding is disabled or absent from this recipe, so the Loom Archive will not be sent.');
+    }
+    if (narratorRecallRouted === false) {
+        toastrErrors.push('Earlier Scene Recall is disabled or absent from this recipe, so eligible prior-scene Archive records will not be sent.');
+    }
+    if (narratorNoteRouted === false) {
+        toastrErrors.push('Narrator Note is disabled or absent from this recipe, so this scene note will not be sent.');
+    }
+    if (stripNativeNewChatBootstrap && nextAction && !nextActionRouted) {
+        toastrErrors.push('Next Action is disabled or absent from this recipe, so the newest action remains in Chat History.');
     }
 
     return { generateData: capturedPrompt, warnings: toastrErrors };
@@ -3266,15 +3353,15 @@ async function handleAction(element) {
             // Read straight off the DOM rather than tracked state — the panel
             // re-renders on every keystroke, which would steal the caret.
             const draft = element.closest('.remodel-archive-item')?.querySelector('[data-remodel-archive-draft]');
-            if (timelineId && sceneId && recordId && draft instanceof HTMLInputElement) {
-                applyArchiveEdit(timelineId, sceneId, recordId, draft.value);
+            if (timelineId && sceneId && recordId && draft instanceof HTMLElement) {
+                applyArchiveEdit(timelineId, sceneId, recordId, draft.innerText);
             }
             loomArchive.editingId = '';
             break;
         }
         case 'archive-delete': {
             const { timelineId, sceneId, recordId } = element.dataset;
-            if (timelineId && sceneId && recordId && confirm('Remove this from the Loom\'s memory? This cannot be undone.')) {
+            if (timelineId && sceneId && recordId && confirm(describeArchiveDeleteConfirmation(recordId))) {
                 applyArchiveDelete(timelineId, sceneId, recordId);
                 if (loomArchive.editingId === recordId) loomArchive.editingId = '';
             }
@@ -3360,6 +3447,13 @@ async function handleAction(element) {
 
     persistStableUiLocation();
     queueRender();
+}
+
+function describeArchiveDeleteConfirmation(recordId) {
+    const type = String(recordId || '').split(':', 1)[0];
+    if (type === 'goal') return 'Remove this Goal from the Timeline? Its Scene links and Goal relations will also be removed. This cannot be undone.';
+    if (type === 'variable') return 'Remove this Variable from the Timeline? This cannot be undone.';
+    return 'Remove this from the Loom\'s memory? This cannot be undone.';
 }
 
 async function handleCharacterAction(element) {
@@ -3625,9 +3719,18 @@ function renderTimelinePanel() {
     if (loomArchive.editingId) {
         const draft = body.querySelector('[data-remodel-archive-draft]');
 
-        if (draft instanceof HTMLInputElement) {
+        if (draft instanceof HTMLElement) {
             draft.focus();
-            draft.setSelectionRange(draft.value.length, draft.value.length);
+            // Keep the prose itself in place. Unlike an input, this preserves
+            // the paragraph's width and wrapping while the owner edits it.
+            const selection = window.getSelection?.();
+            if (selection) {
+                const range = document.createRange();
+                range.selectNodeContents(draft);
+                range.collapse(false);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            }
         }
     }
 }
@@ -4225,9 +4328,9 @@ function renderArchiveSection(title, icon, items, emptyText, { tone = '' } = {})
  * A keyed item: an optional key/label on the left, its value text on the
  * right, and an optional trailing badge (odds / a number). When `recordId` is
  * given and the item is editable/deletable, it also carries the Loom-only edit
- * (inline text field) and delete controls that correct the Loom's memory. The
- * whole item collapses to an inline editor while `loomArchive.editingId`
- * matches its `recordId`.
+ * (inline editable prose) and delete controls that correct the Loom's memory.
+ * The prose remains at its natural width and wrapping while
+ * `loomArchive.editingId` matches its `recordId`.
  */
 function renderArchiveItem(key, text, {
     badge = '', recordId = '', editable = false, deletable = false, editValue = '', timelineId = '', sceneId = '', extraAction = '',
@@ -4239,7 +4342,7 @@ function renderArchiveItem(key, text, {
         return `<li class="remodel-archive-item${key ? ' has-key' : ''} is-editing">
             ${key ? `<span class="remodel-archive-key">${escapeHtml(key)}</span>` : ''}
             <span class="remodel-archive-edit">
-                <input type="text" data-remodel-archive-draft value="${escapeAttribute(editValue)}">
+                <span class="remodel-archive-item-text remodel-archive-editable-text" data-remodel-archive-draft contenteditable="plaintext-only" role="textbox" aria-multiline="true">${escapeHtml(editValue)}</span>
                 <button type="button" data-remodel-timeline-action="archive-edit-save" ${attrs}>Save</button>
                 <button type="button" data-remodel-timeline-action="archive-edit-cancel">Cancel</button>
             </span>
@@ -4262,25 +4365,48 @@ function renderArchiveItem(key, text, {
     </li>`;
 }
 
-/** Apply an inline edit from the Archive: the recordId is `<type>:<key>`. Only
- * the Loom's own key/value records (facts, secrets) are editable. */
+/** Apply an owner correction from the Archive. Events retain their provenance;
+ * character facets are deliberately edited one at a time so one correction
+ * cannot erase another part of that character's state. */
 function applyArchiveEdit(timelineId, sceneId, recordId, value) {
     const separator = recordId.indexOf(':');
     const type = recordId.slice(0, separator);
     const key = recordId.slice(separator + 1);
     if (type === 'fact') archiveSetSceneFact(timelineId, sceneId, key, value);
     else if (type === 'secret') archiveSetSecret(timelineId, sceneId, key, value);
+    else if (type === 'event') archiveUpdateEvent(timelineId, sceneId, key, value);
+    else if (type === 'char') {
+        const [encodedCharId, encodedFacet] = key.split(':', 2);
+        if (!encodedCharId || !encodedFacet) return;
+        try {
+            archiveSetCharStateFacet(timelineId, sceneId, decodeURIComponent(encodedCharId), decodeURIComponent(encodedFacet), value);
+        } catch {
+            // A malformed DOM id must never create a differently named state.
+        }
+    }
 }
 
-/** Delete a record from the Loom's memory. Facts and secrets clear directly; a
- * character record is removed by clearing every facet it holds. */
+/** Delete a record from the Loom's memory. Character facets may be removed
+ * individually; retain the whole-character fallback for saved pre-editor DOM. */
 function applyArchiveDelete(timelineId, sceneId, recordId) {
     const separator = recordId.indexOf(':');
     const type = recordId.slice(0, separator);
     const key = recordId.slice(separator + 1);
-    if (type === 'fact') archiveClearSceneFact(timelineId, sceneId, key);
+    if (type === 'event') archiveDeleteEvent(timelineId, sceneId, key);
+    else if (type === 'fact') archiveClearSceneFact(timelineId, sceneId, key);
     else if (type === 'secret') archiveClearSecret(timelineId, sceneId, key);
+    else if (type === 'goal') deleteStoryGoal(key, { sceneId, actor: 'user', reason: 'Removed from Loom Archive' });
+    else if (type === 'variable') deleteVariableValue(key, { timelineId, sceneId, actor: 'user', reason: 'Removed from Loom Archive' });
     else if (type === 'char') {
+        const [encodedCharId, encodedFacet] = key.split(':', 2);
+        if (encodedCharId && encodedFacet) {
+            try {
+                archiveClearCharStateFacet(timelineId, sceneId, decodeURIComponent(encodedCharId), decodeURIComponent(encodedFacet));
+            } catch {
+                // Ignore a malformed stale DOM id.
+            }
+            return;
+        }
         const record = archiveListCharStates(timelineId, sceneId).find((char) => char.charId === key);
         for (const facet of Object.keys(record?.facets || {})) archiveClearCharStateFacet(timelineId, sceneId, key, facet);
     }
@@ -4367,27 +4493,31 @@ function renderLoomArchive(timeline, store) {
     const editable = !isNarrator;
     const scope = { timelineId: timeline.id, sceneId: activeSceneId };
 
-    // What happened — newest first, so the latest beat is at the top. Events
-    // are an append-only record, so they are never edited or deleted here.
+    // What happened — newest first. An owner may correct wording, but the
+    // event's ID, sequence, source message, and original timestamp are kept.
     const eventItems = events.slice().reverse()
-        .map((event) => renderArchiveItem('', escapeHtml(event.summary || ''), { extraAction: recallAction('event', event.id) }));
+        .map((event) => renderArchiveItem('', escapeHtml(event.summary || ''), {
+            recordId: `event:${event.id}`, editable, deletable: editable, editValue: String(event.summary || ''), extraAction: recallAction('event', event.id), ...scope,
+        }));
     const factItems = facts.map((fact) => renderArchiveItem(fact.key, escapeHtml(String(fact.value)), {
         recordId: `fact:${fact.key}`, editable, deletable: editable, editValue: String(fact.value), extraAction: recallAction('fact', fact.key), ...scope,
     }));
-    const charItems = chars.map((char) => renderArchiveItem(
-        char.charId,
-        escapeHtml(Object.entries(char.facets || {}).map(([facet, value]) => `${facet}: ${value}`).join(' · ')),
-        { recordId: `char:${char.charId}`, deletable: editable, extraAction: recallAction('character', char.charId), ...scope },
-    ));
+    const charItems = chars.flatMap((char) => Object.entries(char.facets || {}).map(([facet, value]) => {
+        const recordId = `char:${encodeURIComponent(char.charId)}:${encodeURIComponent(facet)}`;
+        return renderArchiveItem(`${char.charId} · ${facet}`, escapeHtml(String(value)), {
+            recordId, editable, deletable: editable, editValue: String(value), extraAction: recallAction('character', char.charId), ...scope,
+        });
+    }));
     const goalItems = goals.map((goal) => renderArchiveItem(
         '',
         `<strong>${escapeHtml(goal.title || 'Untitled goal')}</strong>${goal.description ? ` — ${escapeHtml(goal.description)}` : ''}`,
         // The odds are the Loom's alone; the Narrator sees an objective, not a bet.
-        { badge: isNarrator ? '' : `${Number(goal.successRate)}%` },
+        { badge: isNarrator ? '' : `${Number(goal.successRate)}%`, recordId: `goal:${goal.id}`, deletable: editable, ...scope },
     ));
     const variableItems = variables.map((variable) => renderArchiveItem(
         variable.name,
         escapeHtml(String(variable.value)),
+        { recordId: `variable:${variable.id}`, deletable: editable, ...scope },
     ));
     const secretItems = secrets.map((secret) => renderArchiveItem(secret.key, escapeHtml(String(secret.value)), {
         recordId: `secret:${secret.key}`, editable, deletable: editable, editValue: String(secret.value), ...scope,
@@ -5012,6 +5142,7 @@ async function enterSceneViewport(scene = getActiveScene()) {
     // still has to change. Make Scene selection authoritative even on that
     // no-op chat path, and leave the previous Scene mounted only as dormant DOM.
     syncStoryWorkspaceClass(scene);
+    queueRoleplayNativeRightMenuDismissal();
 
     // Story and Roleplay scenes both just drop into plain native chat for now
     // — the dedicated Story Viewport (manuscript/adopted-chat screen) was
@@ -5019,6 +5150,10 @@ async function enterSceneViewport(scene = getActiveScene()) {
     await transitionToWindow({ kind: 'native' });
 
     if (scene?.mode === 'roleplay') {
+        // A profile or a page refresh may have restored SillyTavern's copied
+        // native stack. The scene-selected Prompt Studio recipe is the source
+        // of truth whenever Roleplay becomes visible.
+        applyPromptStudioRuntimeRecipe();
         queueRoleplaySceneRender();
     }
 }
@@ -5131,6 +5266,21 @@ async function openScene(sceneId) {
 }
 
 /**
+ * A Connection Profile is the route and sampling configuration for a Roleplay
+ * Narrator. Its saved SillyTavern preset may replace the native Prompt Manager
+ * while it activates, so immediately restore the selected Scene recipe before
+ * any request-scoped Archive or Goals content is written into that structure.
+ *
+ * Prompt wording and placement are therefore owned by Prompt Studio, not by a
+ * model profile's copied prompt stack.
+ */
+async function activateRoleplayNarratorProfile(profileId) {
+    const activation = await activateConnectionProfile(profileId);
+    applyPromptStudioRuntimeRecipe();
+    return activation;
+}
+
+/**
  * Creates the native chat for a new Roleplay Scene and binds its one narrator.
  * The Loom is part of the editor pipeline, not a character card or cast seat.
  */
@@ -5147,7 +5297,9 @@ async function beginRoleplaySceneWithNarrator(sceneId, { narratorAvatar, narrato
     }
     if (narratorProfileId) {
         try {
-            await activateConnectionProfile(narratorProfileId);
+            // Profile activation may replace the native prompt stack. Restore
+            // the selected Roleplay recipe immediately afterwards.
+            await activateRoleplayNarratorProfile(narratorProfileId);
         } catch (error) {
             // Do NOT abandon the Scene here. Creating and entering a Scene does
             // not need a live API — only a turn does, and generateDirectedPerformer
@@ -5159,8 +5311,8 @@ async function beginRoleplaySceneWithNarrator(sceneId, { narratorAvatar, narrato
             showRoleplayToast('Scene created, but the Narrator connection profile could not be activated. Check API Connections before starting a turn.');
         }
     }
-    await context.selectCharacterById(narratorIndex, { switchMenu: false });
-    await createNewChatForScene(sceneId);
+    if (!await selectCharacterForNewScene(context, narratorIndex)) return;
+    await createNewChatForScene(sceneId, { expectedCharacterId: narratorIndex });
     if (!getScene(sceneId)?.linkedChat) {
         return;
     }
@@ -5197,6 +5349,27 @@ async function clearFreshRoleplayGreetingMessages() {
     context.chat.splice(0, context.chat.length);
     document.getElementById('chat')?.replaceChildren();
     await context.saveChat();
+}
+
+// Core intentionally makes selectCharacterById() a no-op while a prior chat
+// is saving. A Scene must never continue from that no-op: doNewChat() branches
+// on the currently selected group and would otherwise create a group chat for
+// the previous workspace. Retry the switch briefly, then leave the Scene
+// unbound with an actionable message instead of crossing chat types.
+async function selectCharacterForNewScene(context, characterId, timeoutMs = 3000) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+        // eslint-disable-next-line no-await-in-loop
+        await context.selectCharacterById(characterId, { switchMenu: false });
+        const current = getContext();
+        if (String(current.characterId) === String(characterId) && !current.groupId) {
+            return true;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => setTimeout(resolve, 75));
+    }
+    showRoleplayToast('The previous chat is still saving. Wait a moment, then open this Scene again.');
+    return false;
 }
 
 async function ensureActiveCharacterContext() {
@@ -5248,10 +5421,19 @@ function bindCurrentChatToScene(sceneId, { silent = false } = {}) {
     return true;
 }
 
-async function createNewChatForScene(sceneId) {
+async function createNewChatForScene(sceneId, { expectedCharacterId = null } = {}) {
     const scene = getScene(sceneId);
 
     if (!scene) {
+        return false;
+    }
+
+    const context = getContext();
+    const isExpectedCharacter = expectedCharacterId !== null
+        && String(context.characterId) === String(expectedCharacterId)
+        && !context.groupId;
+    if (!isExpectedCharacter) {
+        showRoleplayToast('The narrator is not ready yet. Wait a moment, then open this Scene again.');
         return false;
     }
 
@@ -5647,6 +5829,17 @@ function renderRoleplayGenerationRoutes(overlay, context = getContext(), state =
         // clears references to profiles that were deleted or became invalid.
         state[stateKey] = select.value;
     }
+    const reasoning = overlay.querySelector('[data-remodel-rp-narrator-reasoning]');
+    if (reasoning instanceof HTMLSelectElement) {
+        const profileId = state.narratorProfileId;
+        reasoning.disabled = !profileId;
+        reasoning.innerHTML = [
+            '<option value="native">Provider-native reasoning</option>',
+            '<option value="tagged">Recipe-tagged private audit</option>',
+            '<option value="none">No requested reasoning</option>',
+        ].join('');
+        reasoning.value = getNarratorReasoningMode(profileId, context);
+    }
     const routesReady = Boolean(state.narratorProfileId && state.loomProfileId);
     const apply = overlay.querySelector('[data-remodel-rp-connection-apply]');
     if (apply instanceof HTMLButtonElement) apply.disabled = !routesReady;
@@ -5686,6 +5879,11 @@ function openRoleplayConnectionPicker() {
                         <span class="remodel-rp-generation-route-label"><i class="fa-solid fa-feather-pointed" aria-hidden="true"></i> Narrator</span>
                         <select data-remodel-rp-narrator-profile aria-label="Narrator connection profile"></select>
                         <span class="remodel-rp-generation-route-note">Private native draft · full character prompt</span>
+                    </label>
+                    <label class="remodel-rp-generation-route remodel-rp-reasoning-route">
+                        <span class="remodel-rp-generation-route-label"><i class="fa-solid fa-brain" aria-hidden="true"></i> Narrator reasoning</span>
+                        <select data-remodel-rp-narrator-reasoning aria-label="Narrator reasoning mode"></select>
+                        <span class="remodel-rp-generation-route-note">Saved to the selected Narrator Connection Profile. Your recipe controls the tagged audit itself.</span>
                     </label>
                     <label class="remodel-rp-generation-route">
                         <span class="remodel-rp-generation-route-label"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Loom</span>
@@ -5750,7 +5948,7 @@ function bindRoleplayConnectionPickerEvents() {
             applyButton.innerHTML = 'Connecting Narrator… <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>';
         }
         roleplayConnectionApplication = state.narratorProfileId
-            ? activateConnectionProfile(state.narratorProfileId)
+            ? activateRoleplayNarratorProfile(state.narratorProfileId)
             : Promise.resolve(null);
         try {
             await roleplayConnectionApplication;
@@ -5778,6 +5976,9 @@ function bindRoleplayConnectionPickerEvents() {
         if (!(target instanceof HTMLSelectElement)) return;
         if (target.matches('[data-remodel-rp-narrator-profile]')) {
             overlay._remodelConnections.narratorProfileId = target.value;
+        } else if (target.matches('[data-remodel-rp-narrator-reasoning]')) {
+            const profileId = overlay._remodelConnections.narratorProfileId;
+            if (profileId) setNarratorReasoningMode(profileId, target.value, getContext());
         } else if (target.matches('[data-remodel-rp-loom-profile]')) {
             overlay._remodelConnections.loomProfileId = target.value;
         }
@@ -6223,6 +6424,47 @@ function dismissProgrammaticGroupEditor() {
     }
 }
 
+// Core opens the character/group editor while loading some chats. Those
+// surfaces are useful in the native Characters workspace, but they are never
+// part of a Roleplay Scene viewport and can otherwise steal its first click.
+// Watch the native panel instead of guessing which core loading path did it.
+function bindRoleplayNativeRightMenuGuard() {
+    if (roleplayRightMenuGuardObserver) return;
+    const panel = document.getElementById('right-nav-panel');
+    if (!panel) return;
+    roleplayRightMenuGuardObserver = new MutationObserver(() => queueRoleplayNativeRightMenuDismissal());
+    roleplayRightMenuGuardObserver.observe(panel, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['class', 'style'],
+    });
+    queueRoleplayNativeRightMenuDismissal();
+}
+
+function queueRoleplayNativeRightMenuDismissal() {
+    if (!document.body.classList.contains('remodel-roleplay-workspace-active') || roleplayRightMenuDismissQueued) return;
+    roleplayRightMenuDismissQueued = true;
+    requestAnimationFrame(() => {
+        roleplayRightMenuDismissQueued = false;
+        dismissNativeRoleplayRightMenu();
+    });
+    clearTimeout(roleplayRightMenuDismissTimer);
+    roleplayRightMenuDismissTimer = setTimeout(() => {
+        roleplayRightMenuDismissTimer = null;
+        dismissNativeRoleplayRightMenu();
+    }, 0);
+}
+
+function dismissNativeRoleplayRightMenu() {
+    if (!document.body.classList.contains('remodel-roleplay-workspace-active')) return;
+    const panel = document.getElementById('right-nav-panel');
+    const groupEditor = document.getElementById('rm_group_chats_block');
+    const characterEditor = document.getElementById('rm_ch_create_block');
+    if (!panel || (![groupEditor, characterEditor].some((item) => item && getComputedStyle(item).display !== 'none'))) return;
+    selectRightMenuWithAnimation(null);
+}
+
 // The native hamburger (#options_button) and Extensions wand
 // (#extensionsMenuButton) live in #leftSendForm, part of #form_sheld, which
 // roleplay hides wholesale (its own composer replaces it). Both menus
@@ -6512,6 +6754,21 @@ function getScenePromptChoice(scene = getActiveScene(), requestedMode = null) {
     };
 }
 
+// Continue is still a Roleplay/Chat recipe, but it is selected independently
+// because its use is deliberately bounded to a click on Continue. Leaving it
+// unset follows whatever Narrator recipe the Scene normally uses.
+function getSceneContinuePromptChoice(scene = getActiveScene()) {
+    const narrator = getScenePromptChoice(scene, 'roleplay');
+    const selected = getPromptStudioRecipe(scene?.promptRecipeIds?.continue || null);
+    const validSelection = selected?.mode === 'roleplay' && selected?.apiType === narrator.apiType;
+    return {
+        mode: 'roleplay',
+        apiType: narrator.apiType,
+        recipe: validSelection ? selected : narrator.recipe,
+        inherited: !validSelection,
+    };
+}
+
 function renderScenePromptChoice(scene = getActiveScene(), compact = false, requestedMode = null) {
     const { mode, apiType, recipe, inherited } = getScenePromptChoice(scene, requestedMode);
     const completion = apiType === 'chat' ? 'Chat' : 'Text';
@@ -6531,32 +6788,14 @@ function renderScenePromptChoice(scene = getActiveScene(), compact = false, requ
 function renderRoleplayPromptChoice(scene = getActiveScene()) {
     const narrator = getScenePromptChoice(scene, 'roleplay');
     const loom = getScenePromptChoice(scene, 'loom');
-    const inherited = narrator.inherited && loom.inherited;
+    const continueRecipe = getSceneContinuePromptChoice(scene);
+    const inherited = narrator.inherited && loom.inherited && continueRecipe.inherited;
     return `
-        <button type="button" class="remodel-scene-prompt-choice is-compact" data-remodel-scene-prompt-choice data-prompt-mode="pipeline" title="Choose the Narrator or Loom recipe for this Scene">
+        <button type="button" class="remodel-scene-prompt-choice is-compact" data-remodel-scene-prompt-choice data-prompt-mode="pipeline" title="Choose the Narrator, Continue, or Loom recipe for this Scene">
             <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
             <span class="remodel-scene-prompt-choice-copy">
-                <small>Narrator &amp; Loom · ${inherited ? 'defaults' : 'scene recipes'}</small>
-                <strong>${escapeHtml(narrator.recipe?.name || 'No Narrator recipe')} · ${escapeHtml(loom.recipe?.name || 'No Loom recipe')}</strong>
-            </span>
-            <i class="fa-solid fa-chevron-down remodel-scene-prompt-choice-caret" aria-hidden="true"></i>
-        </button>
-    `;
-}
-
-function renderStoryPromptChoice(scene = getActiveScene()) {
-    const profiles = getStoryConnectionProfiles();
-    const coauthor = profiles.find((profile) => profile.id === scene?.generationProfileIds?.story);
-    const loomConnection = profiles.find((profile) => profile.id === scene?.generationProfileIds?.loom);
-    const story = { recipe: { name: coauthor?.name || 'Connection required' } };
-    const loom = { recipe: { name: loomConnection?.name || 'Connection required' } };
-    const inherited = !(coauthor || loomConnection);
-    return `
-        <button type="button" class="remodel-scene-prompt-choice is-compact" data-remodel-scene-prompt-choice data-prompt-mode="story-connections" title="Choose the co-author and Loom connections for this Scene">
-            <i class="fa-solid fa-plug" aria-hidden="true"></i>
-            <span class="remodel-scene-prompt-choice-copy">
-                <small>Story &amp; Loom · ${inherited ? 'defaults' : 'scene recipes'}</small>
-                <strong>${escapeHtml(story.recipe?.name || 'No Story recipe')} · ${escapeHtml(loom.recipe?.name || 'No Loom recipe')}</strong>
+                <small>Narrator, Continue &amp; Loom · ${inherited ? 'defaults' : 'scene recipes'}</small>
+                <strong>${escapeHtml(narrator.recipe?.name || 'No Narrator recipe')} · ${escapeHtml(continueRecipe.recipe?.name || 'Narrator recipe')} · ${escapeHtml(loom.recipe?.name || 'No Loom recipe')}</strong>
             </span>
             <i class="fa-solid fa-chevron-down remodel-scene-prompt-choice-caret" aria-hidden="true"></i>
         </button>
@@ -6568,11 +6807,19 @@ function openRoleplayPromptJobMenu(anchor) {
     if (!scene) return;
     const narrator = getScenePromptChoice(scene, 'roleplay');
     const loom = getScenePromptChoice(scene, 'loom');
+    const continueRecipe = getSceneContinuePromptChoice(scene);
     openRoleplayMenu(anchor, [
         {
             id: 'roleplay',
             label: 'Narrator recipe',
             sublabel: narrator.recipe?.name || 'No recipe selected',
+        },
+        {
+            id: 'continue',
+            label: 'Continue recipe',
+            sublabel: continueRecipe.inherited
+                ? `Use Narrator recipe · ${continueRecipe.recipe?.name || 'No recipe selected'}`
+                : continueRecipe.recipe?.name || 'No recipe selected',
         },
         {
             id: 'loom',
@@ -6592,39 +6839,6 @@ function getStoryConnectionProfiles() {
         .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function openStoryConnectionMenu(anchor, role = null) {
-    const scene = getActiveScene();
-    if (!scene) return;
-    const profiles = getStoryConnectionProfiles();
-    if (!role) {
-        const coauthor = profiles.find((profile) => profile.id === scene.generationProfileIds?.story);
-        const loom = profiles.find((profile) => profile.id === scene.generationProfileIds?.loom);
-        openRoleplayMenu(anchor, [
-            { id: 'story', label: 'Co-author connection', sublabel: coauthor?.name || 'Connection required' },
-            { id: 'loom', label: 'Loom connection', sublabel: loom?.name || 'Connection required' },
-        ], (selectedRole) => openStoryConnectionMenu(anchor, selectedRole));
-        return;
-    }
-    openRoleplayMenu(anchor, [
-        ...profiles.map((profile) => ({
-            id: profile.id,
-            label: profile.name,
-            sublabel: [profile.api, profile.model].filter(Boolean).join(' / ') || 'Chat Completion',
-            active: scene.generationProfileIds?.[role] === profile.id,
-        })),
-    ], (profileId) => {
-        const activeScene = getActiveScene();
-        if (!activeScene) return;
-        updateScene(activeScene.id, {
-            generationProfileIds: {
-                ...(activeScene.generationProfileIds || {}),
-                [role]: profileId || null,
-            },
-        });
-        renderStoryEditor();
-    });
-}
-
 function openScenePromptRecipeMenu(anchor, requestedModeOverride = null) {
     const scene = getActiveScene();
     if (!scene) return;
@@ -6633,22 +6847,21 @@ function openScenePromptRecipeMenu(anchor, requestedModeOverride = null) {
         openRoleplayPromptJobMenu(anchor);
         return;
     }
-    if (requestedMode === 'story-pipeline') {
-        openStoryConnectionMenu(anchor);
-        return;
-    }
-    if (requestedMode === 'story-connections') {
-        openStoryConnectionMenu(anchor);
-        return;
-    }
-    const { mode, apiType, recipe: current, inherited } = getScenePromptChoice(scene, requestedMode);
+    const isContinueRecipe = requestedMode === 'continue';
+    const { mode, apiType, recipe: current, inherited } = isContinueRecipe
+        ? getSceneContinuePromptChoice(scene)
+        : getScenePromptChoice(scene, requestedMode);
     const defaultRecipe = getDefaultPromptStudioRecipe(mode, apiType);
     const recipes = getPromptStudioRecipes(mode, apiType);
     const items = [
         {
             id: '__default__',
-            label: `Use default · ${defaultRecipe?.name || 'None'}`,
-            sublabel: `Follow the account ${mode} ${apiType} default`,
+            label: isContinueRecipe
+                ? `Use Narrator recipe · ${getScenePromptChoice(scene, 'roleplay').recipe?.name || 'None'}`
+                : `Use default · ${defaultRecipe?.name || 'None'}`,
+            sublabel: isContinueRecipe
+                ? 'Follow this Scene’s Narrator selection for every Continue click'
+                : `Follow the account ${mode} ${apiType} default`,
             active: inherited,
         },
         ...recipes.map((recipe) => ({
@@ -6665,10 +6878,13 @@ function openScenePromptRecipeMenu(anchor, requestedModeOverride = null) {
         updateScene(latestScene.id, {
             promptRecipeIds: {
                 ...(latestScene.promptRecipeIds || {}),
-                [mode === 'loom' ? 'loom' : apiType]: recipeId === '__default__' ? null : recipeId,
+                [isContinueRecipe ? 'continue' : mode === 'loom' ? 'loom' : apiType]: recipeId === '__default__' ? null : recipeId,
             },
         });
         applyPromptStudioRuntimeRecipe();
+        // The Loom recipe is chosen from inside the Scene connections dialog,
+        // so the dialog — not just the surface behind it — has to repaint.
+        refreshStorySceneConnections();
         if (latestScene.mode === 'story') renderStoryEditor();
         else {
             const root = getRealRoleplayRoot();
@@ -6715,17 +6931,14 @@ function ensureStoryEditor() {
                     <span class="remodel-storydoc-add-beat-tag"><i class="fa-solid fa-feather" aria-hidden="true"></i> Add Scene Beat</span>
                     <span class="remodel-storydoc-add-beat-line" aria-hidden="true"></span>
                 </button>
-                <div class="remodel-storydoc-prompt-choice" data-remodel-storydoc-prompt-choice></div>
             </section>
             <aside class="remodel-storydoc-tools" aria-label="Story tools">
-                <button type="button" data-remodel-storydoc-tool="summary" title="Scene Summary"><i class="fa-solid fa-scroll" aria-hidden="true"></i><span>Summary</span></button>
-                <button type="button" data-remodel-storydoc-tool="prior" title="Prior Scene Text"><i class="fa-solid fa-book-open" aria-hidden="true"></i><span>Prior</span></button>
                 <button type="button" data-remodel-storydoc-tool="prompt" title="Final Prompt Preview"><i class="fa-solid fa-eye" aria-hidden="true"></i><span>Prompt</span></button>
                 <button type="button" data-remodel-storydoc-tool="guidance" title="Author guidance"><i class="fa-solid fa-compass" aria-hidden="true"></i><span>Guide</span></button>
                 <button type="button" data-remodel-storydoc-tool="state" title="Timeline State"><i class="fa-solid fa-chart-simple" aria-hidden="true"></i><span>State</span></button>
                 <button type="button" data-remodel-storydoc-tool="archive" title="Review manuscript changes for the Loom Archive"><i class="fa-solid fa-box-archive" aria-hidden="true"></i><span>Archive</span></button>
                 <button type="button" data-remodel-storydoc-author-note title="Open Author's Note"><i class="fa-solid fa-note-sticky" aria-hidden="true"></i><span>Author's Note</span></button>
-                <button type="button" data-remodel-storydoc-tool="loom" title="Choose the Loom Archive recipe and connection"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i><span>Loom</span></button>
+                <button type="button" data-remodel-storydoc-tool="loom" title="Scene connections, Loom recipe and Archive timing"><i class="fa-solid fa-plug" aria-hidden="true"></i><span>Connections</span></button>
                 <button type="button" data-remodel-storydoc-continue title="Continue story"><i class="fa-solid fa-play" aria-hidden="true"></i><span>Continue</span></button>
                 <button type="button" data-remodel-storydoc-stop title="Stop generation" disabled><i class="fa-solid fa-stop" aria-hidden="true"></i><span>Stop</span></button>
                 <span class="remodel-storydoc-indicator" data-remodel-storydoc-indicator aria-live="polite"></span>
@@ -6809,12 +7022,6 @@ function renderStoryEditor(force = false) {
     }
     const title = editor.querySelector('[data-remodel-storydoc-title]');
     if (title && document.activeElement !== title) title.value = doc.title || 'Untitled Story';
-    const promptChoice = editor.querySelector('[data-remodel-storydoc-prompt-choice]');
-    if (promptChoice) {
-        promptChoice.innerHTML = renderStoryPromptChoice(getActiveScene());
-        const label = promptChoice.querySelector('.remodel-scene-prompt-choice-copy small');
-        if (label) label.textContent = 'Co-author & Loom · connections';
-    }
     const character = (getContext().characters || [])[Number(doc.boundCharacterId)];
     const characterName = editor.querySelector('[data-remodel-storydoc-character]');
     if (characterName) characterName.textContent = character?.name || 'Unbound character';
@@ -7885,7 +8092,11 @@ async function openPromptStudioSource(recipe, sourceKey) {
     if (recipe?.mode === 'roleplay') {
         requestAnimationFrame(() => {
             const root = getRealRoleplayRoot();
-            if (sourceKey === 'currentInput') {
+            if (sourceKey === 'narratorNote') {
+                ensureRoleplayNarratorNotePanel();
+                document.getElementById('remodel-rp-narrator-note-panel')?.classList.add('remodel-rp-panel-open');
+                document.querySelector('[data-remodel-rp-narrator-note]')?.focus();
+            } else if (sourceKey === 'currentInput') {
                 root?.querySelector('[data-remodel-rp-input]')?.focus();
             } else if (sourceKey === 'chatHistory') {
                 const stream = root?.querySelector('[data-remodel-rp-stream]');
@@ -7899,9 +8110,6 @@ async function openPromptStudioSource(recipe, sourceKey) {
         if (sourceKey === 'authorGuidance') {
             const trigger = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-tool="guidance"]');
             openStoryToolPanel('guidance', trigger);
-        } else if (sourceKey === 'priorText') {
-            const trigger = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-tool="prior"]');
-            openStoryToolPanel('prior', trigger);
         } else if (sourceKey === 'manuscript') {
             getRealStoryEditor()?.querySelector('[data-remodel-storydoc-prose]')?.focus();
         }
@@ -7919,7 +8127,7 @@ async function previewPromptStudioRecipe(recipe) {
             && activeRecipe?.id === recipe.id
             && !isRealStoryDocSceneActive();
         if (isCurrentRoleplayRecipe) {
-            const { generateData, warnings } = await runPromptPreviewDryRun('normal');
+            const { generateData, warnings } = await runPromptPreviewDryRun('normal', { stripNativeNewChatBootstrap: true });
             body.textContent = formatPromptPreview(generateData);
             if (warnings?.length) {
                 warning.hidden = false;
@@ -8142,6 +8350,7 @@ function openStoryArchiveCatchUp(sceneId) {
     overlay._remodelStoryArchiveCatchUp = { sceneId: scene.id, docId: doc.id, previewToken: preview.token, busy: false };
     const count = preview.changes.length;
     const workCount = count + preview.counts.retries;
+    const blockCount = preview.changes.reduce((total, change) => total + splitStoryArchiveAddition(change).length, 0);
     overlay.innerHTML = `
         <section class="remodel-story-archive-catchup" role="dialog" aria-modal="true" aria-labelledby="remodel-story-archive-catchup-title">
             <header class="remodel-rp-picker-head">
@@ -8156,6 +8365,7 @@ function openStoryArchiveCatchUp(sceneId) {
                 <span><b>${preview.counts.additions}</b> addition${preview.counts.additions === 1 ? '' : 's'}</span>
                 <span><b>${preview.counts.edits}</b> edit${preview.counts.edits === 1 ? '' : 's'}</span>
                 <span><b>${preview.counts.deletions}</b> deletion${preview.counts.deletions === 1 ? '' : 's'}</span>
+                ${blockCount ? `<span><b>${blockCount}</b> Loom block${blockCount === 1 ? '' : 's'} · up to ${STORY_ARCHIVE_PASSAGE_MAX_WORDS.toLocaleString()} words each</span>` : ''}
                 ${preview.counts.retries ? `<span><b>${preview.counts.retries}</b> retry</span>` : ''}
                 <small>Manuscript revision ${preview.bodyRevision}</small>
             </div>
@@ -8163,7 +8373,7 @@ function openStoryArchiveCatchUp(sceneId) {
                 ${count ? preview.changes.map(renderStoryArchiveCatchUpChange).join('') : preview.counts.retries ? '<div class="remodel-story-archive-catchup-empty"><i class="fa-solid fa-rotate"></i><strong>A previous Archive pass needs another attempt.</strong><span>Large passages are divided into bounded sections before retrying.</span></div>' : '<div class="remodel-story-archive-catchup-empty"><i class="fa-solid fa-circle-check"></i><strong>The Archive is caught up.</strong><span>No uncaptured additions, edits, or deletions were found.</span></div>'}
             </div>
             <footer class="remodel-story-archive-catchup-foot">
-                <p data-remodel-story-archive-catchup-status>${count ? `${count} change${count === 1 ? '' : 's'} ready for the Story Loom.` : preview.counts.retries ? `${preview.counts.retries} failed capture ready to retry.` : 'Nothing will be sent.'}</p>
+                <p data-remodel-story-archive-catchup-status>${count ? `${count} change${count === 1 ? '' : 's'} will be sent as ${blockCount} closed Loom block${blockCount === 1 ? '' : 's'}.` : preview.counts.retries ? `${preview.counts.retries} failed capture ready to retry.` : 'Nothing will be sent.'}</p>
                 <div>
                     <button type="button" data-remodel-story-archive-catchup-close>Cancel</button>
                     <button type="button" class="is-primary" data-remodel-story-archive-catchup-apply ${workCount ? '' : 'disabled'}><i class="fa-solid fa-box-archive"></i> ${count ? 'Capture changes' : 'Retry catch-up'}</button>
@@ -8238,11 +8448,229 @@ async function submitStoryArchiveCatchUp(overlay) {
     if (activeStoryDocId === state.docId) renderStoryEditor();
 }
 
+// --- Scene connections, Loom recipe and Archive timing ---------------------
+//
+// One dialog for how a Story Scene generates. These settings used to live in
+// two places at once: a pill under the manuscript chose the two connections,
+// and a side drawer chose the Loom's recipe and Archive timing. They were
+// always one decision — which model writes with you, which model records what
+// you wrote — split across two surfaces because they arrived at different
+// times. Nothing here is new behaviour; it is the same four settings, read as
+// one.
+//
+// Built like the Archive catch-up dialog above (same scrim, header, summary
+// strip and footer) so the two Story modals are recognisably one family.
+
+const STORY_SCENE_CONNECTIONS_ID = 'remodel-story-scene-connections';
+
+// The two roles do not accept the same connections, and never did. The
+// co-author streams prose through the chat-completion path only; the Loom also
+// runs against text-completion backends. Kept as two lists rather than one,
+// because widening the co-author's list would offer a profile that cannot
+// write, and narrowing the Loom's would hide one somebody already chose.
+function getStoryLoomConnectionProfiles() {
+    const context = getContext();
+    return (context.extensionSettings?.connectionManager?.profiles || [])
+        .filter((profile) => {
+            const boundary = context.CONNECT_API_MAP?.[profile?.api]?.selected;
+            return profile?.id && profile?.name && ['openai', 'textgenerationwebui'].includes(boundary);
+        })
+        .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function renderStoryConnectionOptions(profiles, selectedId) {
+    const chosen = profiles.find((profile) => profile.id === selectedId);
+    return [
+        `<option value="" ${chosen ? '' : 'selected'}>Choose a Connection Profile…</option>`,
+        ...profiles.map((profile) => {
+            const detail = [profile.api, profile.model].filter(Boolean).join(' · ');
+            const label = `${profile.name}${detail ? ` — ${detail}` : ''}`;
+            return `<option value="${escapeAttribute(profile.id)}" ${profile.id === selectedId ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+        }),
+    ].join('');
+}
+
+function openStorySceneConnections(sceneId = getActiveScene()?.id) {
+    document.getElementById(STORY_SCENE_CONNECTIONS_ID)?.remove();
+    const scene = getScene(sceneId);
+    if (!scene || scene.mode !== 'story') return;
+
+    const overlay = document.createElement('div');
+    overlay.id = STORY_SCENE_CONNECTIONS_ID;
+    overlay.className = 'remodel-rp-picker-scrim';
+    overlay.dataset.sceneId = scene.id;
+    overlay.innerHTML = renderStorySceneConnections(scene);
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
+
+    overlay.addEventListener('click', (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target) return;
+        // The recipe button opens the shared prompt menu through the document
+        // handler; only the scrim itself and the close controls dismiss.
+        if (target === overlay || target.closest('[data-remodel-story-connections-close]')) {
+            closeStorySceneConnections();
+        }
+    });
+    overlay.addEventListener('change', (event) => handleStorySceneConnectionsChange(event));
+    overlay._remodelKeydown = (event) => {
+        if (event.key === 'Escape') closeStorySceneConnections();
+    };
+    document.addEventListener('keydown', overlay._remodelKeydown);
+}
+
+function renderStorySceneConnections(scene) {
+    const coauthorProfiles = getStoryConnectionProfiles();
+    const loomProfiles = getStoryLoomConnectionProfiles();
+    const coauthorId = scene?.generationProfileIds?.story || '';
+    const loomId = scene?.generationProfileIds?.loom || '';
+    const manual = scene?.storyArchiveMode === 'manual';
+
+    return `
+        <section class="remodel-story-scene-connections" role="dialog" aria-modal="true" aria-labelledby="remodel-story-scene-connections-title">
+            <header class="remodel-rp-picker-head">
+                <div>
+                    <div class="remodel-rp-picker-kicker">Story scene</div>
+                    <div class="remodel-rp-picker-title" id="remodel-story-scene-connections-title">Connections &amp; Loom</div>
+                    <div class="remodel-rp-picker-hint">Which model writes with you, and which one records what you wrote. Every choice here belongs to ${escapeHtml(scene.title || 'this Scene')} alone.</div>
+                </div>
+                <button type="button" class="remodel-rp-picker-x" data-remodel-story-connections-close aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+            </header>
+            <div class="remodel-story-scene-connections-summary" data-remodel-story-connections-summary>
+                ${renderStorySceneConnectionsSummary(scene)}
+            </div>
+            <div class="remodel-story-scene-connections-list">
+                <article class="remodel-story-scene-connections-role">
+                    <header>
+                        <i class="fa-solid fa-feather" aria-hidden="true"></i>
+                        <div><strong>Co-author</strong><small>Writes the manuscript with you</small></div>
+                    </header>
+                    <div class="remodel-story-scene-connections-role-body">
+                        <label class="remodel-story-scene-connections-field">Connection
+                            <select data-remodel-story-connections-profile="story" aria-label="Co-author connection">${renderStoryConnectionOptions(coauthorProfiles, coauthorId)}</select>
+                        </label>
+                        <div class="remodel-story-scene-connections-field">Prompt recipe
+                            <div data-remodel-story-connections-story-recipe>${renderScenePromptChoice(scene, false, 'story')}</div>
+                        </div>
+                        <p class="remodel-story-scene-connections-note">${coauthorProfiles.length
+        ? 'Chat Completion profiles only — Story prose is written through that path.'
+        : 'No Chat Completion profile is configured yet. Add one in the Connection Manager and it will appear here.'}</p>
+                    </div>
+                </article>
+                <article class="remodel-story-scene-connections-role">
+                    <header>
+                        <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+                        <div><strong>Loom</strong><small>Records what you accept — never rewrites it</small></div>
+                    </header>
+                    <div class="remodel-story-scene-connections-role-body">
+                        <label class="remodel-story-scene-connections-field">Connection
+                            <select data-remodel-story-connections-profile="loom" aria-label="Loom connection">${renderStoryConnectionOptions(loomProfiles, loomId)}</select>
+                        </label>
+                        <div class="remodel-story-scene-connections-field">Prompt recipe
+                            <div data-remodel-story-connections-recipe>${renderScenePromptChoice(scene, false, 'loom')}</div>
+                        </div>
+                        <label class="remodel-story-scene-connections-field">Archive timing
+                            <select data-remodel-story-connections-archive-mode aria-label="Story Archive timing">
+                                <option value="auto" ${manual ? '' : 'selected'}>Automatic — capture accepted prose as it lands</option>
+                                <option value="manual" ${manual ? 'selected' : ''}>Manual — hold changes for Archive Catch Up</option>
+                            </select>
+                        </label>
+                        <p class="remodel-story-scene-connections-note">The Loom reads accepted passages after they are written: durable continuity, Timeline Web changes and Living Lore. It uses this connection only for that work.</p>
+                    </div>
+                </article>
+            </div>
+            <footer class="remodel-story-scene-connections-foot">
+                <p data-remodel-story-connections-status>${escapeHtml(describeStorySceneConnections(scene))}</p>
+                <div><button type="button" data-remodel-story-connections-close>Done</button></div>
+            </footer>
+        </section>`;
+}
+
+function renderStorySceneConnectionsSummary(scene) {
+    const coauthor = getStoryConnectionProfiles().find((profile) => profile.id === scene?.generationProfileIds?.story);
+    const loom = getStoryLoomConnectionProfiles().find((profile) => profile.id === scene?.generationProfileIds?.loom);
+    const chip = (label, profile) => `<span class="${profile ? '' : 'is-unset'}" title="${escapeAttribute(profile?.name || 'Not chosen')}"><b>${label}</b>${escapeHtml(profile?.name || 'Not chosen')}</span>`;
+    return `
+        ${chip('Co-author', coauthor)}
+        ${chip('Loom', loom)}
+        <small>${scene?.storyArchiveMode === 'manual' ? 'Manual Archive' : 'Automatic Archive'}</small>`;
+}
+
+function describeStorySceneConnections(scene) {
+    const coauthor = getStoryConnectionProfiles().some((profile) => profile.id === scene?.generationProfileIds?.story);
+    const loom = getStoryLoomConnectionProfiles().some((profile) => profile.id === scene?.generationProfileIds?.loom);
+    if (!coauthor && !loom) return 'Neither role has a connection yet. Nothing will generate or be recorded.';
+    if (!coauthor) return 'The co-author has no connection yet, so this Scene cannot generate.';
+    if (!loom) return 'The Loom has no connection yet, so nothing written here will be recorded.';
+    return 'Saved to this Scene as you choose. Nothing else to confirm.';
+}
+
+// Repaints only the parts that read back state, so choosing one connection
+// never steals focus from the select the user is still working in.
+function refreshStorySceneConnections() {
+    const overlay = document.getElementById(STORY_SCENE_CONNECTIONS_ID);
+    if (!overlay) return;
+    const scene = getScene(overlay.dataset.sceneId);
+    if (!scene) {
+        closeStorySceneConnections();
+        return;
+    }
+    const summary = overlay.querySelector('[data-remodel-story-connections-summary]');
+    const status = overlay.querySelector('[data-remodel-story-connections-status]');
+    const recipe = overlay.querySelector('[data-remodel-story-connections-recipe]');
+    const storyRecipe = overlay.querySelector('[data-remodel-story-connections-story-recipe]');
+    if (summary) summary.innerHTML = renderStorySceneConnectionsSummary(scene);
+    if (status) status.textContent = describeStorySceneConnections(scene);
+    if (recipe) recipe.innerHTML = renderScenePromptChoice(scene, false, 'loom');
+    // Both roles repaint: picking either recipe re-enters here through the
+    // prompt menu's callback, and a stale button would show the old choice.
+    if (storyRecipe) storyRecipe.innerHTML = renderScenePromptChoice(scene, false, 'story');
+}
+
+function handleStorySceneConnectionsChange(event) {
+    const target = event.target instanceof HTMLSelectElement ? event.target : null;
+    const overlay = document.getElementById(STORY_SCENE_CONNECTIONS_ID);
+    const scene = getScene(overlay?.dataset.sceneId);
+    if (!target || !scene) return;
+
+    const role = target.dataset.remodelStoryConnectionsProfile;
+    if (role === 'story' || role === 'loom') {
+        updateScene(scene.id, {
+            generationProfileIds: {
+                ...(scene.generationProfileIds || {}),
+                [role]: target.value || null,
+            },
+        });
+        setStorySaveState(role === 'loom' ? 'Loom connection saved' : 'Co-author connection saved');
+        refreshStorySceneConnections();
+        return;
+    }
+    if (target.dataset.remodelStoryConnectionsArchiveMode !== undefined) {
+        const manual = target.value === 'manual';
+        updateScene(scene.id, { storyArchiveMode: manual ? 'manual' : 'auto' });
+        setStorySaveState(manual ? 'Manual Archive — use Catch Up' : 'Automatic Archive enabled');
+        refreshStorySceneConnections();
+    }
+}
+
+function closeStorySceneConnections() {
+    const overlay = document.getElementById(STORY_SCENE_CONNECTIONS_ID);
+    if (!overlay) return;
+    if (overlay._remodelKeydown) document.removeEventListener('keydown', overlay._remodelKeydown);
+    overlay.classList.remove('remodel-rp-picker-in');
+    setTimeout(() => overlay.remove(), 200);
+}
+
 async function openStoryToolPanel(tool, trigger = null) {
     const editor = getRealStoryEditor();
     if (tool === 'archive') {
         closeStoryToolPanel();
         openStoryArchiveCatchUp(getActiveScene()?.id);
+        return;
+    }
+    if (tool === 'loom') {
+        closeStoryToolPanel();
+        openStorySceneConnections(getActiveScene()?.id);
         return;
     }
     if (tool === 'prompt') {
@@ -8272,35 +8700,6 @@ async function openStoryToolPanel(tool, trigger = null) {
     });
     panel.classList.add('is-open');
     panel.setAttribute('aria-hidden', 'false');
-    if (tool === 'summary') {
-        const scene = getActiveScene();
-        title.textContent = 'Scene summary';
-        body.innerHTML = `<p class="remodel-storydoc-panel-copy">Keep a compact account of this scene for later prompts and timeline continuity.</p><textarea data-remodel-storydoc-summary placeholder="What happens in this scene?"></textarea><button type="button" class="remodel-storydoc-panel-action" data-remodel-storydoc-summarize><i class="fa-solid fa-wand-magic-sparkles"></i> Summarize manuscript</button><p class="remodel-storydoc-panel-foot" data-remodel-storydoc-summary-status>Saved automatically</p>`;
-        const field = body.querySelector('[data-remodel-storydoc-summary]');
-        field.value = scene?.summary || '';
-        field.addEventListener('input', () => updateScene(scene.id, { summary: field.value, summaryUpdatedAt: new Date().toISOString() }));
-        body.querySelector('[data-remodel-storydoc-summarize]').addEventListener('click', () => summarizeStoryDoc(field));
-        return;
-    }
-    if (tool === 'prior') {
-        title.textContent = 'Prior scene text';
-        const activeScene = getActiveScene();
-        const timeline = getTimelineStore().timelines[activeScene?.timelineId];
-        const scenes = (timeline?.arcIds || []).flatMap((arcId) => getTimelineStore().arcs[arcId]?.sceneIds || [])
-            .map((sceneId) => getScene(sceneId)).filter((scene) => scene && scene.id !== activeScene?.id);
-        body.innerHTML = `<p class="remodel-storydoc-panel-copy">Carry prose from an earlier scene into this document's generation context.</p><label class="remodel-storydoc-field-label">Source scene<select data-remodel-storydoc-prior-select><option value="">Choose a scene…</option>${scenes.map((scene) => `<option value="${escapeAttribute(scene.id)}">${escapeHtml(scene.title)}</option>`).join('')}</select></label><button type="button" class="remodel-storydoc-panel-action" data-remodel-storydoc-prior-load>Load into context</button><textarea data-remodel-storydoc-prior-preview readonly placeholder="Loaded prose will appear here."></textarea><button type="button" class="remodel-storydoc-text-action" data-remodel-storydoc-prior-clear>Clear prior text</button>`;
-        const select = body.querySelector('[data-remodel-storydoc-prior-select]');
-        const preview = body.querySelector('[data-remodel-storydoc-prior-preview]');
-        select.value = doc.priorSceneId || '';
-        preview.value = doc.priorText || '';
-        body.querySelector('[data-remodel-storydoc-prior-load]').addEventListener('click', () => loadStoryDocPriorText(select.value, preview));
-        body.querySelector('[data-remodel-storydoc-prior-clear]').addEventListener('click', () => {
-            updateStoryDoc(activeStoryDocId, { priorSceneId: null, priorText: '' });
-            select.value = '';
-            preview.value = '';
-        });
-        return;
-    }
     if (tool === 'type') {
         title.textContent = 'Manuscript toolbar';
         body.innerHTML = `<p class="remodel-storydoc-panel-copy">Formatting is stored as lightweight manuscript markup. Font is a local reading preference.</p><div class="remodel-storydoc-format-row">${[['bold','fa-bold'],['italic','fa-italic'],['underline','fa-underline'],['strikethrough','fa-strikethrough']].map(([format, icon]) => `<button type="button" data-remodel-storydoc-format="${format}" title="${format}"><i class="fa-solid ${icon}"></i></button>`).join('')}</div><label class="remodel-storydoc-field-label">Reading font<select data-remodel-storydoc-font>${MANUSCRIPT_FONT_OPTIONS.map((option) => `<option value="${escapeAttribute(option.value)}">${escapeHtml(option.label)}</option>`).join('')}</select></label>`;
@@ -8340,56 +8739,6 @@ async function openStoryToolPanel(tool, trigger = null) {
         });
         return;
     }
-    if (tool === 'loom') {
-        const scene = getActiveScene();
-        const profiles = (getContext().extensionSettings?.connectionManager?.profiles || [])
-            .filter((profile) => {
-                const boundary = getContext().CONNECT_API_MAP?.[profile?.api]?.selected;
-                return profile?.id && profile?.name && ['openai', 'textgenerationwebui'].includes(boundary);
-            })
-            .sort((a, b) => a.name.localeCompare(b.name));
-        const currentProfileId = scene?.generationProfileIds?.loom || '';
-        const connectionOptions = [
-            '<option value="" disabled>Choose a Connection Profile</option>',
-            ...profiles.map((profile) => {
-                const detail = [profile.api, profile.model].filter(Boolean).join(' Â· ');
-                return `<option value="${escapeAttribute(profile.id)}">${escapeHtml(profile.name)}${detail ? ` â€” ${escapeHtml(detail)}` : ''}</option>`;
-            }),
-        ].join('');
-        title.textContent = 'Loom Archive';
-        body.innerHTML = `<p class="remodel-storydoc-panel-copy">The Loom reads accepted manuscript passages after they are written. It records durable continuity, Timeline Web changes, and Living Lore proposals; it does not rewrite your prose.</p><label class="remodel-storydoc-field-label">Loom prompt recipe${renderScenePromptChoice(scene, false, 'loom')}</label><label class="remodel-storydoc-field-label">Loom connection<select data-remodel-storydoc-loom-profile aria-label="Loom connection profile">${connectionOptions}</select></label><p class="remodel-storydoc-panel-foot">Both choices belong to this Scene only. The Loom uses the selected connection only for Archive and Timeline Web work.</p>`;
-        const archiveMode = document.createElement('label');
-        archiveMode.className = 'remodel-storydoc-field-label';
-        archiveMode.innerHTML = 'Story Archive timing<select data-remodel-storydoc-archive-mode aria-label="Story Archive timing"><option value="auto">Automatic — capture generated prose</option><option value="manual">Manual — use Archive Catch Up</option></select><small>Manual mode keeps all manuscript changes pending until you choose Catch Up from the Archive tool or Timeline Archive.</small>';
-        body.append(archiveMode);
-        const archiveModeSelect = archiveMode.querySelector('[data-remodel-storydoc-archive-mode]');
-        if (archiveModeSelect instanceof HTMLSelectElement) {
-            archiveModeSelect.value = scene?.storyArchiveMode === 'manual' ? 'manual' : 'auto';
-            archiveModeSelect.addEventListener('change', () => {
-                const activeScene = getActiveScene();
-                if (!activeScene) return;
-                const manual = archiveModeSelect.value === 'manual';
-                updateScene(activeScene.id, { storyArchiveMode: manual ? 'manual' : 'auto' });
-                setStorySaveState(manual ? 'Manual Archive — use Catch Up' : 'Automatic Archive enabled');
-            });
-        }
-        const connection = body.querySelector('[data-remodel-storydoc-loom-profile]');
-        if (connection instanceof HTMLSelectElement) {
-            connection.value = profiles.some((profile) => profile.id === currentProfileId) ? currentProfileId : '';
-            connection.addEventListener('change', () => {
-                const activeScene = getActiveScene();
-                if (!activeScene) return;
-                updateScene(activeScene.id, {
-                    generationProfileIds: {
-                        ...(activeScene.generationProfileIds || {}),
-                        loom: connection.value || null,
-                    },
-                });
-                setStorySaveState('Loom connection saved');
-            });
-        }
-        return;
-    }
     title.textContent = 'Generation context';
     body.innerHTML = '<p class="remodel-storydoc-panel-copy">Assembling the exact Story context…</p>';
     const assembled = await assembleStoryContext({ doc, mode: 'continue', dryRun: true });
@@ -8405,7 +8754,6 @@ async function openStoryToolPanel(tool, trigger = null) {
     ].join('\n');
     for (const [label, value] of [
         ['Character, persona & guidance', assembled.systemPrompt],
-        ['Prior scene text', doc.priorText],
         ['Lorebook keyword scan', scanSummary],
         ['Resolved lorebook sources', bookSummary],
         ['Activated entries', activationSummary],
@@ -8435,44 +8783,6 @@ function appendStoryPreviewSection(host, label, value) {
     pre.textContent = value || 'Nothing included';
     section.append(heading, pre);
     host.appendChild(section);
-}
-
-async function summarizeStoryDoc(field) {
-    const doc = getStoryDoc(activeStoryDocId);
-    const status = field?.parentElement?.querySelector('[data-remodel-storydoc-summary-status]');
-    if (!doc || !field || !doc.body.trim()) return;
-    if (status) status.textContent = 'Summarizing…';
-    try {
-        // Same budget rule as prose: a reasoning model pays for its thinking out
-        // of this allowance, so a tight cap here produced a reply that was all
-        // reasoning and no summary. The "concisely" instruction does the
-        // shaping instead.
-        const { text: summary } = await generateProse({
-            systemPrompt: 'Summarize the supplied fiction scene concisely for continuity notes. Return only the summary.',
-            prompt: doc.body.slice(-16000),
-            responseLength: storyResponseLength(),
-            instructOverride: true,
-        });
-        field.value = summary.trim();
-        updateScene(getActiveScene().id, { summary: field.value, summaryUpdatedAt: new Date().toISOString() });
-        if (status) status.textContent = 'Summary saved';
-    } catch (error) {
-        if (status) status.textContent = `Could not summarize: ${String(error?.message || error)}`;
-    }
-}
-
-async function loadStoryDocPriorText(sceneId, preview) {
-    const scene = getScene(sceneId);
-    if (!scene || !preview) return;
-    let text = '';
-    if (scene.storyDocId) {
-        text = getStoryDoc(scene.storyDocId)?.body || '';
-    } else if (scene.linkedChat) {
-        const messages = await fetchSceneMessages(scene);
-        text = messages ? extractSceneProse(messages, { labelSpeakers: scene.mode === 'roleplay' }) : '';
-    }
-    updateStoryDoc(activeStoryDocId, { priorSceneId: scene.id, priorText: text });
-    preview.value = text;
 }
 
 function formatStoryDocSelection(format) {
@@ -8815,15 +9125,42 @@ async function generateStory({ mode = 'continue', beat = '', beatId = null } = {
             profiles: getContext().extensionSettings?.connectionManager?.profiles || [],
         });
         const coauthorProfileId = coauthorRoute.profileId;
+        const transport = coauthorProfileId ? 'chat' : getPromptApiType();
+        recordSentPromptTranscript('narrator', {
+            recipeName: `${recipe?.name || 'Story'} · Story Narrator`,
+            messages: prompt,
+            request: {
+                prompt,
+                responseLength: storyResponseLength(),
+                transport,
+                profileId: coauthorProfileId || null,
+                purpose: 'story-generation',
+            },
+            transport,
+        }, { correlationId: storyGenerationId });
         try {
-            ({ text: prose } = await generateProse({
+            const generated = await generateProse({
                 prompt,
                 responseLength: storyResponseLength(),
                 instructOverride: false,
                 signal: storyStreamAbort.signal,
                 profileId: coauthorProfileId,
                 onStream: ({ text, reasoning }) => updateStoryStreamPreview(live, text, reasoning),
-            }));
+            });
+            prose = generated.text;
+            recordApiTranscript('response', {
+                mode: 'narrator',
+                purpose: 'story-generation',
+                text: prose,
+                reasoning: String(generated.reasoning || ''),
+                raw: generated.raw == null ? '' : JSON.stringify(generated.raw),
+                source: generated.source || '',
+                streamed: generated.source === 'stream' || generated.source === 'stream-fallback',
+            }, {
+                type: 'api.response.narrator',
+                correlationId: storyGenerationId,
+                summary: 'Story Narrator response received',
+            });
         } finally {
             closeStoryStreamPreview(live);
             storyStreamAbort = null;
@@ -8832,8 +9169,8 @@ async function generateStory({ mode = 'continue', beat = '', beatId = null } = {
         const inserted = beatId ? insertStoryBeatProse(beatId, prose) : appendStoryProse(prose);
         updateStoryDoc(activeStoryDocId, { worldInfoState: advanceStoryWorldInfoState(assembled.pendingState) });
         const scene = getActiveScene();
-        const capture = inserted && scene?.mode === 'story' && scene.storyArchiveMode !== 'manual'
-            ? createStoryArchiveCapture(activeStoryDocId, {
+        const captures = inserted && scene?.mode === 'story' && scene.storyArchiveMode !== 'manual'
+            ? createStoryArchiveCaptures(activeStoryDocId, {
                 origin: 'story-narrator',
                 text: inserted.text,
                 start: inserted.start,
@@ -8841,13 +9178,13 @@ async function generateStory({ mode = 'continue', beat = '', beatId = null } = {
                 generationId: storyGenerationId,
                 beatId,
             })
-            : null;
-        if (capture && scene) {
+            : [];
+        if (captures.length && scene) {
             setStorySaveState(describeStoryArchiveCaptureState(activeStoryDocId).label);
-            void queueStoryArchiveCapture({
+            void queueStoryArchiveCaptures({
                 scene,
                 docId: activeStoryDocId,
-                captureId: capture.id,
+                captureIds: captures.map((capture) => capture.id),
                 onStateChange: (state) => {
                     if (getActiveScene()?.id === scene.id) setStorySaveState(state.label);
                     renderTimelinePanel();
@@ -9543,12 +9880,6 @@ async function openRoleplayPromptPreview() {
     try {
         const visibleComposer = getRealRoleplayRoot()?.querySelector('[data-remodel-rp-input]');
         const composerText = visibleComposer instanceof HTMLTextAreaElement ? visibleComposer.value : '';
-        const narratorGrounding = directed && activeScene
-            ? (args = {}) => buildNarratorArchivistSections(activeScene.timelineId, activeScene.id, {
-                events: args.events,
-                archiveQuery: [composerText],
-            })
-            : undefined;
         let worldSense = null;
         let worldSenseWarning = '';
         if (directed && activeScene) {
@@ -9558,7 +9889,33 @@ async function openRoleplayPromptPreview() {
                 worldSenseWarning = `World Sense preview fell back to native keywords: ${String(error?.message || error)}`;
             }
         }
-        const { generateData, warnings } = await runPromptPreviewDryRun('normal', { composerText, narratorGrounding, worldSense });
+        const archiveProjection = directed && activeScene
+            ? buildSceneArchiveProjection(activeScene.timelineId, activeScene.id, {
+                query: [composerText],
+                continuity: worldSense?.continuity || [],
+            })
+            : null;
+        const narratorGrounding = directed && activeScene
+            ? (args = {}) => buildNarratorArchivistSections(activeScene.timelineId, activeScene.id, {
+                events: args.events,
+                archiveProjection,
+                archiveQuery: [composerText],
+            })
+            : undefined;
+        const narratorRecall = directed && activeScene
+            ? (args = {}) => buildNarratorRecallSections(activeScene.timelineId, activeScene.id, {
+                scenes: args.scenes,
+                archiveProjection,
+            })
+            : undefined;
+        const { generateData, warnings } = await runPromptPreviewDryRun('normal', {
+            composerText,
+            narratorGrounding,
+            narratorRecall,
+            narratorNote: readRoleplayNarratorNote(),
+            worldSense,
+            stripNativeNewChatBootstrap: true,
+        });
         if (worldSenseWarning) warnings.push(worldSenseWarning);
         const attachedGoalIntents = activeScene ? getStoryGoalComposerIntents(activeScene.id) : [];
         if (attachedGoalIntents.length) {
@@ -10571,6 +10928,12 @@ function bindRoleplayComposerEvents() {
         const rules = el.closest('[data-remodel-rp-rules]');
         if (rules instanceof HTMLTextAreaElement) {
             writeRoleplayRulesNotes(rules.value);
+            return;
+        }
+
+        const narratorNote = el.closest('[data-remodel-rp-narrator-note]');
+        if (narratorNote instanceof HTMLTextAreaElement) {
+            writeRoleplayNarratorNote(narratorNote.value);
         }
     });
     document.addEventListener('change', (event) => {
@@ -11230,6 +11593,7 @@ function renderRoleplayScene() {
     // prompt object empty between requests; live generation and Preview resolve
     // the current Archive into it only while assembling their request.
     setRemodelNativePromptContent('narratorGrounding', '');
+    setRemodelNativePromptContent('narratorNote', readRoleplayNarratorNote());
     const stream = root.querySelector('[data-remodel-rp-stream]');
     if (!stream) {
         return;
@@ -11306,7 +11670,7 @@ function ensureRoleplayPanels() {
     ensureRoleplayPanelGroup();
     ensureRoleplayRulesPanel();
     ensureRoleplayDicePanel();
-    ensureRoleplayPriorTextPanel();
+    ensureRoleplayNarratorNotePanel();
     ensureRoleplayStatePanel();
 }
 
@@ -11461,8 +11825,8 @@ function ensureRoleplayPanelGroup() {
         <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="state" title="Timeline State" aria-label="Timeline State">
             <i class="fa-solid fa-chart-simple" aria-hidden="true"></i>
         </button>
-        <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="priortext" title="Prior Scene Text" aria-label="Prior Scene Text">
-            <i class="fa-solid fa-book-open" aria-hidden="true"></i>
+        <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-panel-toggle="narrator-note" title="Narrator Note" aria-label="Narrator Note">
+            <i class="fa-solid fa-pen-to-square" aria-hidden="true"></i>
         </button>
         <button type="button" class="remodel-rp-panel-icon" data-remodel-rp-action="add-cast" title="Cast & Group Controls" aria-label="Cast & Group Controls">
             <i class="fa-solid fa-users" aria-hidden="true"></i>
@@ -11508,6 +11872,38 @@ function ensureRoleplayRulesPanel() {
     refreshRoleplayRulesPanel();
 }
 
+function ensureRoleplayNarratorNotePanel() {
+    if (!isRealRoleplayWorkspaceActive()) {
+        return;
+    }
+    if (document.getElementById('remodel-rp-narrator-note-panel')) {
+        refreshRoleplayNarratorNotePanel();
+        return;
+    }
+    const panel = document.createElement('div');
+    panel.id = 'remodel-rp-narrator-note-panel';
+    panel.className = 'remodel-rp-panel remodel-rp-narrator-note-panel';
+    panel.innerHTML = `
+        <div class="remodel-rp-panel-head">
+            <span class="remodel-rp-panel-title"><i class="fa-solid fa-pen-to-square" aria-hidden="true"></i> Narrator Note</span>
+            <button type="button" class="remodel-rp-panel-close" data-remodel-rp-panel-close="narrator-note" title="Close" aria-label="Close">×</button>
+        </div>
+        <div class="remodel-rp-panel-body">
+            <textarea class="remodel-rp-rules-textarea" data-remodel-rp-narrator-note placeholder="A private direction for the Narrator in this scene."></textarea>
+            <p class="remodel-rp-panel-hint">Kept with this roleplay chat. Add <code>{{narrator.note}}</code> anywhere in a Roleplay recipe to send it; recipes without that macro never receive it.</p>
+        </div>
+    `;
+    getRealSheld()?.appendChild(panel);
+    refreshRoleplayNarratorNotePanel();
+}
+
+function refreshRoleplayNarratorNotePanel() {
+    const textarea = document.querySelector('[data-remodel-rp-narrator-note]');
+    if (textarea && document.activeElement !== textarea) {
+        textarea.value = readRoleplayNarratorNote();
+    }
+}
+
 function refreshRoleplayRulesPanel() {
     const panel = document.getElementById('remodel-rp-rules-panel');
     if (!panel) {
@@ -11535,6 +11931,21 @@ function writeRoleplayRulesNotes(value) {
     }
     context.chatMetadata.remodelRpRules = String(value ?? '');
     context.saveMetadataDebounced?.();
+}
+
+function readRoleplayNarratorNote() {
+    const meta = getContext().chatMetadata || {};
+    return typeof meta.remodelNarratorNote === 'string' ? meta.remodelNarratorNote : '';
+}
+
+function writeRoleplayNarratorNote(value) {
+    const context = getContext();
+    if (!context.chatMetadata) {
+        return;
+    }
+    context.chatMetadata.remodelNarratorNote = String(value ?? '');
+    context.saveMetadataDebounced?.();
+    setRemodelNativePromptContent('narratorNote', context.chatMetadata.remodelNarratorNote);
 }
 
 const ROLEPLAY_QUICK_DICE = ['d4', 'd6', 'd8', 'd10', 'd12', 'd20', 'd100'];
@@ -11735,7 +12146,7 @@ function setRoleplayDiceAdvantage(mode) {
 const ROLEPLAY_PANEL_IDS = {
     rules: 'remodel-rp-rules-panel',
     dice: 'remodel-rp-dice-panel',
-    priortext: 'remodel-rp-priortext-panel',
+    'narrator-note': 'remodel-rp-narrator-note-panel',
     state: 'remodel-rp-state-panel',
 };
 
