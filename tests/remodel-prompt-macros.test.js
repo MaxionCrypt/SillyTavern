@@ -56,11 +56,12 @@ test('Debug transcripts store every final prompt message and the complete redact
         messages: [{ role: 'system', content: 'Rules' }, { role: 'user', content: 'Continue' }],
         request: { prompt: [{ role: 'system', content: 'Rules' }, { role: 'user', content: 'Continue' }], temperature: 0.8, api_key: 'hidden' },
         transport: 'chat',
-    });
+    }, { correlationId: 'story-generation-test' });
     const entry = __getDebugEvents().at(-1);
     expect(entry.category).toBe('prompt');
     expect(entry.type).toBe('api.prompt.narrator');
     expect(entry.detail.messages.map((message) => message.content)).toEqual(['Rules', 'Continue']);
     expect(entry.detail.request.temperature).toBe(0.8);
     expect(entry.detail.request.api_key).toBe('[redacted]');
+    expect(entry.correlationId).toBe('story-generation-test');
 });

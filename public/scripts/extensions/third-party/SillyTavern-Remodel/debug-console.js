@@ -3,6 +3,7 @@ import { getMechanicsProfile, updateMechanicsProfile } from './variables-store.j
 import { benchmarkWorldSense, ensureWorldSenseIndex } from './world-sense-embeddings.js';
 import { getActiveTimeline } from './timeline-state.js';
 import { getWorldSenseIndexState, getWorldSenseProfile, getWorldSenseStore, updateWorldSenseProfile } from './world-sense-store.js';
+import { buildMetadataGuide } from './metadata-guide.js';
 
 const STORAGE_KEY = 'remodel.debugJournal.v1';
 const SETTINGS_KEY = 'remodel.debugJournal.settings.v1';
@@ -739,6 +740,7 @@ export function renderDebugConsoleWorkspace() {
                 <label><input type="checkbox" data-remodel-debug-sensitive ${settings.captureSensitive ? 'checked' : ''}> Capture additional network and event bodies</label>
                 <span>API prompt/response transcripts are always recorded here. Secrets and credentials are always redacted.</span>
             </div>
+            ${renderMetadataGuide()}
             ${renderMechanicsProfile()}
             ${renderWorldSenseBenchmark()}
             <div class="remodel-debug-filters">
@@ -754,6 +756,107 @@ export function renderDebugConsoleWorkspace() {
                 <aside class="remodel-debug-detail" data-remodel-debug-detail>${renderDetail()}</aside>
             </div>
         </section>`;
+}
+
+/**
+ * The prompt metadata guide: what a model has to put down for anything to
+ * happen, as tables you can paste from.
+ *
+ * It sits in the Debug Console for the same reason the Mechanics profile does —
+ * the person who needs to know why a state fence produced nothing is already
+ * reading this journal, and the answer is a shape, not an event. Every name,
+ * type and allowed value comes from metadata-guide.js, which reads the schema
+ * the provider is actually sent.
+ *
+ * No inner scroll and no measure cap: this is a reference, and a reference in a
+ * 60vh box with its own scrollbar is worse than no reference. The strip is
+ * closed by default, and when it is open it is as tall and as wide as it needs.
+ */
+function renderMetadataGuide() {
+    const guide = buildMetadataGuide();
+    return `
+        <details class="remodel-debug-mechanics remodel-debug-guide">
+            <summary>Prompt metadata guide — <b>state fence &amp; operations</b></summary>
+
+            ${guideSection('The fence', `<pre class="remodel-debug-guide-code">${escapeHtml(guide.fence.example)}</pre>`)}
+
+            ${guideSection('Top-level keys', guideTable(
+        ['Key', 'Type', 'What it does', 'Syntax'],
+        guide.envelope.map((item) => [
+            `<code>${escapeHtml(item.name)}</code>`,
+            `<span class="remodel-debug-guide-type">${escapeHtml(item.type)}</span>`,
+            escapeHtml(item.purpose),
+            `<code class="remodel-debug-guide-snippet">${escapeHtml(item.example)}</code>`,
+        ]),
+    ))}
+
+            ${guideSection('Where each operation is accepted', guide.surfaces.map((surface) => `
+                <div class="remodel-debug-guide-surface">
+                    <h5>${escapeHtml(surface.label)} <small>${escapeHtml(surface.recipe)}</small> <em>${escapeHtml(surface.note)}</em></h5>
+                    <p class="remodel-debug-guide-chips">${surface.accepts.map((name) => `<code>${escapeHtml(name)}</code>`).join('')}</p>
+                </div>`).join(''))}
+
+            ${guideSection('Operations', guideTable(
+        ['Capability', 'Arguments', 'Syntax'],
+        guide.capabilities.map((capability) => [
+            `<code>${escapeHtml(capability.name)}</code><span class="remodel-debug-guide-what">${escapeHtml(capability.description)}</span>`,
+            guideArguments(capability.arguments),
+            `<code class="remodel-debug-guide-snippet">${escapeHtml(capability.example)}</code>`,
+        ]),
+    ))}
+
+            ${guideSection('Living Lore report', `
+                ${guideTable(['Field', 'Arguments', 'Syntax'], [[
+        '<code>loreProposals[]</code>',
+        guideArguments(guide.lore.proposal.arguments),
+        `<code class="remodel-debug-guide-snippet">${escapeHtml(guide.lore.proposal.example)}</code>`,
+    ], [
+        '<code>loreKeywords</code>',
+        guideArguments(guide.lore.keywords.arguments),
+        `<code class="remodel-debug-guide-snippet">${escapeHtml(guide.lore.keywords.example)}</code>`,
+    ], [
+        '<code>lorePromotionDecisions[]</code>',
+        guideArguments(guide.lore.promotion.arguments),
+        `<code class="remodel-debug-guide-snippet">${escapeHtml(guide.lore.promotion.example)}</code>`,
+    ]])}
+                <p class="remodel-debug-guide-note">${escapeHtml(guide.lore.proposal.note)} ${escapeHtml(guide.lore.keywords.note)}</p>`)}
+
+            ${guideSection('Narrator tool calls <em>not a fence — provider tool calls</em>', guideTable(
+        ['Verb', 'Arguments', 'Syntax'],
+        guide.narrator.tools.map((tool) => [
+            `<code>${escapeHtml(tool.name)}</code><span class="remodel-debug-guide-what">${escapeHtml(tool.description)}</span>`,
+            guideArguments(tool.arguments),
+            `<code class="remodel-debug-guide-snippet">${escapeHtml(tool.example)}</code>`,
+        ]),
+    ))}
+        </details>`;
+}
+
+/** One argument per row: name, whether it is required, its type or its closed
+ *  list of allowed values, and what it means. */
+function guideArguments(args) {
+    if (!args.length) return '<span class="remodel-debug-guide-note">none</span>';
+    return `<dl class="remodel-debug-guide-args">${args.map((argument) => `
+        <dt class="${argument.required ? 'is-required' : ''}">${escapeHtml(argument.key)}</dt>
+        <dd>
+            <span class="remodel-debug-guide-type">${argument.values.length
+        ? argument.values.map((value) => escapeHtml(value)).join(' | ')
+        : escapeHtml(argument.type)}</span>
+            ${escapeHtml(argument.hint)}
+        </dd>`).join('')}</dl>`;
+}
+
+/** Titles are authored literals, never data, so they may carry markup. */
+function guideSection(title, body) {
+    return `<section class="remodel-debug-guide-section"><h4>${title}</h4>${body}</section>`;
+}
+
+/** Cells arrive already escaped: every one of them carries markup. */
+function guideTable(headings, rows) {
+    return `<table class="remodel-debug-guide-table is-cols-${headings.length}">
+        <thead><tr>${headings.map((heading) => `<th>${escapeHtml(heading)}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table>`;
 }
 
 /**

@@ -18,9 +18,7 @@ import {
     PROMPT_TEMPLATE_DEFINITIONS,
     captureTextTransport,
     clonePromptRecipe,
-    createBlocksFromNativeChat,
     createPromptBlock,
-    createPromptBlockFromTemplate,
     createPromptRecipe,
     deletePromptRecipe,
     getActivePromptRecipe,
@@ -31,8 +29,13 @@ import {
     isPromptRecipeActive,
     setActivePromptRecipe,
     updatePromptRecipe,
-    withRemodelSources,
 } from './prompt-studio-store.js';
+import {
+    filterTemplates,
+    getPromptInstructionTemplate,
+    getPromptInstructionTemplates,
+    templatePreview,
+} from './prompt-instruction-templates.js';
 import { recordApiTranscript } from './debug-console.js';
 import { chatHistoryBoundary } from './prompt-history-limit.js';
 
@@ -61,16 +64,20 @@ const state = {
     // editing, and the caret offset inside it.
     lastEditedBlock: null,
     nativeSignature: '',
+    pendingRecipeSave: false,
     roleplayTextPending: false,
     roleplayTextPendingTimer: null,
     dragBlockId: null,
     boundMode: null,
     boundApiType: null,
     boundRecipeId: null,
-    advancedUnlockedBlocks: new Set(),
+    // A short-lived roleplay recipe used by one controlled generation (for
+    // example the scene's Continue action). It must never be persisted: Scene
+    // selection owns the durable choice, while this only makes the selected
+    // recipe visible to native prompt assembly for that one request.
+    runtimeRecipeOverrideId: null,
 };
 
-let saveLabelTimer = null;
 let transportFeedbackTimer = null;
 
 export function initPromptStudio({
@@ -102,7 +109,12 @@ export function initPromptStudio({
     state.boundRecipeId = getCurrentPromptStudioRecipe(state.boundMode, state.boundApiType)?.id || null;
 
     bindPromptStudioEvents();
-    eventSource.on(event_types.SETTINGS_UPDATED, captureNativeSettingsIfChanged);
+    eventSource.on(event_types.SETTINGS_UPDATED, () => {
+        captureNativeSettingsIfChanged();
+        if (!state.pendingRecipeSave) return;
+        state.pendingRecipeSave = false;
+        setSaveState('Saved');
+    });
     eventSource.on(event_types.OAI_PRESET_CHANGED_AFTER, captureNativeSettingsIfChanged);
     eventSource.on(event_types.PRESET_CHANGED, captureNativeSettingsIfChanged);
     eventSource.on(event_types.MAIN_API_CHANGED, () => syncPromptStudioForCurrentMode({ apply: true }));
@@ -150,9 +162,36 @@ export function getPromptApiType(api = main_api) {
 export function getCurrentPromptStudioRecipe(mode = state.getRuntimeMode(), apiType = getPromptApiType()) {
     mode = PROMPT_MODES.includes(mode) ? mode : 'roleplay';
     apiType = PROMPT_API_TYPES.includes(apiType) ? apiType : 'text';
+    const temporary = getPromptRecipe(state.runtimeRecipeOverrideId);
+    if (temporary?.mode === mode && temporary?.apiType === apiType) return temporary;
     const override = getPromptRecipe(state.getRuntimeRecipeId(mode, apiType));
     if (override?.mode === mode && override?.apiType === apiType) return override;
     return getActivePromptRecipe(mode, apiType);
+}
+
+/**
+ * Apply a valid recipe for one bounded runtime operation, then restore the
+ * normal Scene recipe even if the provider rejects or the user stops it.
+ *
+ * This is deliberately an execution scope rather than another active recipe:
+ * choosing a Continue recipe must not change what a typed player action uses.
+ */
+export async function withPromptStudioRuntimeRecipe(recipeId, work) {
+    const recipe = getPromptRecipe(recipeId);
+    const mode = normalizeMode(state.getRuntimeMode());
+    const apiType = getPromptApiType();
+    if (!recipe || recipe.mode !== mode || recipe.apiType !== apiType || typeof work !== 'function') {
+        return typeof work === 'function' ? work() : undefined;
+    }
+    const previous = state.runtimeRecipeOverrideId;
+    state.runtimeRecipeOverrideId = recipe.id;
+    applyPromptStudioRuntimeRecipe();
+    try {
+        return await work();
+    } finally {
+        state.runtimeRecipeOverrideId = previous;
+        applyPromptStudioRuntimeRecipe();
+    }
 }
 
 /**
@@ -578,13 +617,10 @@ function renderRecipeEditor(recipe) {
                     </select>
                 </label>
                 <button type="button" data-remodel-prompt-add-message><i class="fa-solid fa-plus"></i> Add message</button>
-                <label>
-                    <span>Template</span>
-                    <select data-remodel-prompt-add-template>
-                        ${availableTemplates.map((template) => `<option value="${escapeAttribute(template.key)}">${escapeHtml(template.label)}</option>`).join('')}
-                    </select>
-                </label>
-                <button type="button" data-remodel-prompt-insert-template ${availableTemplates.length ? '' : 'disabled'}><i class="fa-solid fa-file-circle-plus"></i> Add template</button>
+                <button type="button" class="remodel-prompt-template-open" data-remodel-prompt-template-open>
+                    <i class="fa-solid fa-file-circle-plus"></i> Add instruction template
+                    <small>${availableTemplates.length}</small>
+                </button>
             </div>
             ${renderMacroReference(recipe)}
             ${recipe.apiType === 'text' ? renderTransportEditor(recipe) : ''}
@@ -595,12 +631,8 @@ function renderRecipeEditor(recipe) {
 function renderPromptBlock(recipe, block, index) {
     const source = block.kind === 'source' ? getSourceDefinition(recipe, block.sourceKey) : null;
     const macros = findRecipeMacros(recipe, block.content || '');
-    const bindingNote = sourceBindingNote(recipe, block);
     const movable = canMoveBlock(recipe, block);
-    const advancedLocked = Boolean(block.advancedWarning) && !state.advancedUnlockedBlocks.has(block.id);
-    const railTitle = movable
-        ? (block.locked ? 'Drag to reorder — this source stays linked and cannot be deleted' : 'Drag to reorder')
-        : bindingNote;
+    const railTitle = 'Drag to reorder';
     return `
         <article class="remodel-prompt-block role-${escapeAttribute(block.role)} ${block.kind === 'source' ? 'is-source' : ''} ${block.enabled ? '' : 'is-disabled'}" draggable="${movable ? 'true' : 'false'}" data-remodel-prompt-block="${escapeAttribute(block.id)}">
             <div class="remodel-prompt-block-rail">
@@ -618,12 +650,12 @@ function renderPromptBlock(recipe, block, index) {
                         <button type="button" data-remodel-prompt-block-up title="Move up" ${index === 0 || !movable ? 'disabled' : ''}><i class="fa-solid fa-chevron-up"></i></button>
                         <button type="button" data-remodel-prompt-block-down title="Move down" ${index === recipe.blocks.length - 1 || !movable ? 'disabled' : ''}><i class="fa-solid fa-chevron-down"></i></button>
                         <button type="button" data-remodel-prompt-block-copy title="Copy"><i class="fa-regular fa-copy"></i></button>
-                        <button type="button" data-remodel-prompt-block-delete title="Delete" ${block.locked ? 'disabled' : ''}><i class="fa-regular fa-trash-can"></i></button>
+                        <button type="button" data-remodel-prompt-block-delete title="Delete"><i class="fa-regular fa-trash-can"></i></button>
                     </div>
                 </div>
                 ${block.kind === 'source'
-                    ? `<div class="remodel-prompt-source-card"><strong>${escapeHtml(source?.label || block.sourceKey)}</strong><p>${escapeHtml(sourceDescription(recipe, block.sourceKey))}</p>${bindingNote ? `<span>${escapeHtml(bindingNote)}</span>` : ''}${canOpenSource(block.sourceKey) ? '<button type="button" data-remodel-prompt-source-open><i class="fa-solid fa-arrow-up-right-from-square"></i> Open source</button>' : ''}</div>`
-                    : `${block.advancedWarning ? `<div class="remodel-prompt-advanced-warning"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>${escapeHtml(block.advancedWarning)}</span>${advancedLocked ? '<button type="button" data-remodel-prompt-advanced-unlock>Unlock contract editing</button>' : '<strong>Contract editing unlocked for this session</strong>'}</div>` : ''}<textarea data-remodel-prompt-block-content placeholder="Write the ${escapeAttribute(roleLabels[block.role].toLowerCase())} message…" ${advancedLocked ? 'disabled aria-disabled="true"' : ''}>${escapeHtml(block.content)}</textarea>`}
+                    ? `<div class="remodel-prompt-source-card"><strong>${escapeHtml(source?.label || block.sourceKey)}</strong><p>${escapeHtml(sourceDescription(recipe, block.sourceKey))}</p>${canOpenSource(block.sourceKey) ? '<button type="button" data-remodel-prompt-source-open><i class="fa-solid fa-arrow-up-right-from-square"></i> Open source</button>' : ''}</div>`
+                    : `${block.advancedWarning ? `<div class="remodel-prompt-advanced-warning"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>${escapeHtml(block.advancedWarning)}</span></div>` : ''}<textarea data-remodel-prompt-block-content placeholder="Write the ${escapeAttribute(roleLabels[block.role].toLowerCase())} message…">${escapeHtml(block.content)}</textarea>`}
                 ${macros.length ? `<div class="remodel-prompt-macro-chips">${macros.map((item) => `<span title="${escapeAttribute(item.description || item.label)}">{{${escapeHtml(item.macro)}}}</span>`).join('')}</div>` : ''}
                 ${renderPromptBlockSettings(recipe, block)}
             </div>
@@ -825,7 +857,11 @@ function bindPromptStudioEvents() {
 
     document.addEventListener('click', async (event) => {
         const target = event.target instanceof Element ? event.target : null;
-        const studio = target?.closest('.remodel-prompt-studio');
+        // The template picker is a modal on <body>, not a descendant of the
+        // workspace, so a studio-only guard would swallow every click inside
+        // it — the cards would render and do nothing.
+        const studio = target?.closest('.remodel-prompt-studio')
+            || (target?.closest(`#${TEMPLATE_PICKER_ID}`) ? document.querySelector('.remodel-prompt-studio') : null);
         if (!studio) return;
 
         const macroInsert = target.closest('[data-remodel-macro-insert]');
@@ -863,16 +899,6 @@ function bindPromptStudioEvents() {
             return;
         }
         const recipe = getPromptRecipe(state.selectedRecipeId);
-        const unlock = target.closest('[data-remodel-prompt-advanced-unlock]');
-        if (unlock && recipe) {
-            const card = unlock.closest('[data-remodel-prompt-block]');
-            const block = card ? recipe.blocks.find((item) => item.id === card.dataset.remodelPromptBlock) : null;
-            if (block?.advancedWarning && window.confirm(`${block.advancedWarning}\n\nUnlock this contract for editing during this session?`)) {
-                state.advancedUnlockedBlocks.add(block.id);
-                state.requestRender();
-            }
-            return;
-        }
         if (target.closest('[data-remodel-prompt-create]')) {
             const created = createPromptRecipe({ mode: state.mode, apiType: state.apiType, transport: state.apiType === 'text' ? captureTextTransport(power_user) : null });
             state.selectedRecipeId = created.id;
@@ -916,10 +942,26 @@ function bindPromptStudioEvents() {
             patchRecipeBlocks(recipe, [...recipe.blocks, createPromptBlock({ kind: 'message', role })]);
             return;
         }
-        if (target.closest('[data-remodel-prompt-insert-template]')) {
-            const templateKey = studio.querySelector('[data-remodel-prompt-add-template]')?.value;
-            const block = createPromptBlockFromTemplate(recipe.mode, templateKey);
-            if (block) patchRecipeBlocks(recipe, [...recipe.blocks, block]);
+        if (target.closest('[data-remodel-prompt-template-open]')) {
+            openTemplatePicker(recipe);
+            return;
+        }
+        const templateCard = target.closest('[data-remodel-prompt-template-pick]');
+        if (templateCard) {
+            const template = getPromptInstructionTemplate(recipe.mode, recipe.apiType, templateCard.dataset.remodelPromptTemplatePick);
+            if (template) {
+                patchRecipeBlocks(recipe, [...recipe.blocks, createPromptBlock({
+                    kind: 'message',
+                    role: template.role,
+                    content: template.content,
+                    enabled: true,
+                })]);
+            }
+            closeTemplatePicker();
+            return;
+        }
+        if (target.closest('[data-remodel-prompt-template-close]') || target.id === TEMPLATE_PICKER_ID) {
+            closeTemplatePicker();
             return;
         }
 
@@ -943,7 +985,7 @@ function bindPromptStudioEvents() {
             const blocks = [...recipe.blocks];
             blocks.splice(index + 1, 0, copy);
             patchRecipeBlocks(recipe, blocks);
-        } else if (target.closest('[data-remodel-prompt-block-delete]') && !block.locked) {
+        } else if (target.closest('[data-remodel-prompt-block-delete]')) {
             patchRecipeBlocks(recipe, recipe.blocks.filter((item) => item.id !== block.id));
         }
     }, true);
@@ -1071,16 +1113,10 @@ function patchRecipeBlocks(recipe, blocks) {
     });
 }
 
-// Reordering and deleting are different permissions, and conflating them is
-// what made every core marker immovable. SillyTavern's own Prompt Manager
-// makes EVERY prompt draggable (markers included) and reorders by rewriting
-// oai_settings.prompt_order — which is exactly what applyRoleplayChatRecipe
-// already does with the block order. So position is free; what stays locked
-// is deleting a marker or editing its content, since those genuinely have no
-// native equivalent.
+// Native markers are recipe blocks, so their placement and presence belong to
+// the recipe owner. Deleting one changes assembly; it is never disallowed.
 function canMoveBlock(recipe, block) {
-    if (!block?.locked) return true;
-    return recipe.mode === 'roleplay' && recipe.apiType === 'chat' && Boolean(block.nativeIdentifier);
+    return Boolean(recipe && block);
 }
 
 function moveBlock(recipe, blockId, offset) {
@@ -1094,10 +1130,9 @@ function moveBlock(recipe, blockId, offset) {
 }
 
 function onRecipeChanged(recipe) {
+    state.pendingRecipeSave = true;
     setSaveState('Saving…');
     if (getCurrentPromptStudioRecipe(recipe.mode, recipe.apiType)?.id === recipe.id) applyRecipeToNative(recipe);
-    clearTimeout(saveLabelTimer);
-    saveLabelTimer = setTimeout(() => setSaveState('Saved'), 650);
 }
 
 function setSaveState(label) {
@@ -1148,7 +1183,7 @@ function applyRecipeToNative(recipe) {
  * These are the two that must not be markers. Everything else in a roleplay
  * recipe names something core already knows how to fill.
  */
-const REMODEL_RENDERED_SOURCES = new Set(['narratorGrounding', 'storyGoals']);
+const REMODEL_RENDERED_SOURCES = new Set(['narratorGrounding', 'narratorRecall', 'narratorNote', 'storyGoals', 'nextAction']);
 
 /**
  * Put fresh text into one of our own native prompts, at whatever position the
@@ -1166,9 +1201,13 @@ const REMODEL_RENDERED_SOURCES = new Set(['narratorGrounding', 'storyGoals']);
  */
 export function setRemodelNativePromptContent(sourceKey, content) {
     const recipe = getCurrentPromptStudioRecipe('roleplay', 'chat');
+    // A source macro may share an owner-authored block with surrounding prose
+    // or another macro. Mirror the same split used by native recipe assembly
+    // before looking it up; otherwise `{{character.description}}\n\n{{narrator.note}}`
+    // creates a native Note prompt but can never receive its live value.
     const block = (recipe?.blocks || [])
-        .filter((entry) => parseWholeRecipeMacro(recipe, entry.content || '')?.key === sourceKey)
-        .find((entry) => entry.enabled !== false);
+        .flatMap((entry) => expandRoleplayNativeBlock(recipe, entry))
+        .find((entry) => entry.enabled !== false && parseWholeRecipeMacro(recipe, entry.content || '')?.key === sourceKey);
     if (!block) return false;
     const identifier = getSourceDefinition({ mode: 'roleplay' }, sourceKey)?.nativeIdentifier || block.nativeIdentifier;
     if (!identifier) return false;
@@ -1179,7 +1218,8 @@ export function setRemodelNativePromptContent(sourceKey, content) {
     // preset change can rewrite these objects between generations, and a
     // marker here means the text silently reaches nothing.
     prompt.marker = false;
-    prompt.role = 'system';
+    const source = getSourceDefinition({ mode: 'roleplay' }, sourceKey);
+    prompt.role = source?.role === 'instruction' ? 'system' : (source?.role || 'system');
     const invocation = parseWholeRecipeMacro(recipe, block.content || '');
     const resolved = typeof content === 'function' ? content(invocation?.args || {}) : content;
     prompt.content = String(resolved || '');
@@ -1220,7 +1260,7 @@ export function recordNarratorPromptTranscript(blocks) {
     });
 }
 
-export function recordSentPromptTranscript(mode, { recipeName = '', messages = [], text = '', request = null, transport = '' } = {}) {
+export function recordSentPromptTranscript(mode, { recipeName = '', messages = [], text = '', request = null, transport = '' } = {}, options = {}) {
     if (!['loom', 'narrator', 'chat'].includes(mode)) return;
     const normalizedMessages = Array.isArray(messages) ? messages.map((entry, index) => ({
         label: entry?.name || `Message ${index + 1}`,
@@ -1247,6 +1287,7 @@ export function recordSentPromptTranscript(mode, { recipeName = '', messages = [
         request: entry.request,
     }, {
         type: `api.prompt.${mode}`,
+        correlationId: options.correlationId || null,
         summary: `${capitalize(mode)} prompt sent via ${entry.recipeName}`,
     });
 }
@@ -1272,8 +1313,13 @@ function applyRoleplayChatRecipe(recipe) {
     // are not part of the v14 recipe and keeping them around makes native
     // preset capture resurrect obsolete names and identifiers.
     oai_settings.prompts = oai_settings.prompts.filter((prompt) =>
-        !['remodel_loom_context', 'remodel_director_notes'].includes(prompt?.identifier)
-        && !String(prompt?.identifier || '').startsWith('remodel-chat-history-'));
+        !['remodel_loom_context', 'remodel_director_notes', 'remodel_narrator_grounding', 'remodel_narrator_time'].includes(prompt?.identifier)
+        && !String(prompt?.identifier || '').startsWith('remodel-chat-history-')
+        // A free-form recipe block is mirrored under this generated identifier.
+        // It has no independent owner outside its recipe. Leaving one behind
+        // after its block is deleted lets an obsolete instruction survive in a
+        // native preset/order and makes Preview lie about the recipe.
+        && !/^remodel-block-[\w-]+(?:-(?:text|macro)-\d+)?$/i.test(String(prompt?.identifier || '')));
     const promptMap = new Map(oai_settings.prompts.filter(Boolean).map((prompt) => [prompt.identifier, prompt]));
     const order = [];
     const appendHistoryBoundary = (identifier, content) => {
@@ -1323,7 +1369,7 @@ function applyRoleplayChatRecipe(recipe) {
             prompt.name = source.label;
             prompt.marker = false;
             prompt.system_prompt = false;
-            prompt.role = 'system';
+            prompt.role = source.role === 'instruction' ? 'system' : source.role;
             prompt.content = prompt.content || '';
         } else if (source?.nativeIdentifier) {
             prompt.name = source.label;
@@ -1331,7 +1377,11 @@ function applyRoleplayChatRecipe(recipe) {
             prompt.system_prompt = true;
             delete prompt.content;
         } else {
-            prompt.name = prompt.name || recipe.name;
+            // This prompt object may have been reused from a Connection Profile.
+            // Its old preset label is not a recipe label and must not masquerade
+            // as one in Prompt Preview (for example, "FF Adapted Narrator Core").
+            const recipeBlockIndex = (recipe.blocks || []).findIndex((entry) => entry.id === recipeBlock.id);
+            prompt.name = `${recipe.name || 'Roleplay recipe'} · Block ${recipeBlockIndex + 1}`;
             prompt.role = block.role === 'instruction' ? 'system' : block.role;
             prompt.content = block.content || '';
             prompt.marker = false;
@@ -1428,14 +1478,16 @@ function captureNativeSettingsFor(mode, apiType, recipeId = null) {
     const recipe = recipeId ? getPromptRecipe(recipeId) : getCurrentPromptStudioRecipe(mode, apiType);
     if (!recipe) return;
     if (mode === 'roleplay' && apiType === 'chat') {
-        // withRemodelSources, for the same reason createSeededStore applies it:
-        // this replaces the recipe's blocks wholesale from native settings, and
-        // a Chat Completion preset authored before Remodel has no
-        // remodel_loom_notes / remodel_story_goals in its prompt order. It
-        // used to strip both out of an already-migrated recipe on any preset
-        // change — and the Loom's notebook is now the only route its
-        // direction takes to the Narrator.
-        updatePromptRecipe(recipe.id, { blocks: withRemodelSources(createBlocksFromNativeChat(oai_settings.prompts || [], oai_settings.prompt_order || [])) });
+        // Prompt Studio is the source of truth for an active Roleplay recipe.
+        // Connection-profile activation and core preset reloads both mutate
+        // native Prompt Manager state. Importing that state here used to
+        // replace the owner's saved block order and roles with whichever
+        // preset happened to finish loading last. Reapply the saved recipe
+        // instead; importing a native preset must be an explicit action, not
+        // an invisible side effect of a connection or settings event.
+        applyRecipeToNative(recipe);
+        if (recipe.id === state.selectedRecipeId) state.requestRender();
+        return;
     }
     if (apiType === 'text') {
         updatePromptRecipe(recipe.id, { transport: captureTextTransport(power_user) });
@@ -1492,10 +1544,90 @@ function ensureSelectedRecipe(force = false) {
         || null;
 }
 
+/**
+ * The picker offers instruction templates only. It used to offer one entry per
+ * macro source, which is the same list the macro reference below already shows
+ * and inserts from — two copies of a lookup, and no answer to the question a
+ * template is for, which is how to instruct a model to emit a shape.
+ */
 function getAvailableTemplates(recipe) {
-    return getSourceDefinitions(recipe)
-        .filter((source) => !source.textOnly || recipe.apiType === 'text')
-        .filter((source) => recipe.apiType !== 'text' || recipe.mode !== 'roleplay' || source.key === 'nativeContext');
+    return getPromptInstructionTemplates(recipe?.mode, recipe?.apiType);
+}
+
+const TEMPLATE_PICKER_ID = 'remodel-prompt-template-picker';
+
+/**
+ * A card menu rather than a dropdown.
+ *
+ * Thirty entries in a `<select>` is a list you scroll blind: the option text is
+ * all a native dropdown can show, so every operation reads as its bare name and
+ * you pick by memory. A card can carry what the template is for and the first
+ * line of what it writes, which is the difference between choosing and guessing.
+ * Filtering is here for the same reason — with one template per operation, the
+ * fastest way to `goal.reach` is to type it.
+ */
+function openTemplatePicker(recipe) {
+    closeTemplatePicker();
+    const templates = getAvailableTemplates(recipe);
+    const overlay = document.createElement('div');
+    overlay.id = TEMPLATE_PICKER_ID;
+    overlay.className = 'remodel-rp-picker-scrim';
+    overlay.innerHTML = `
+        <section class="remodel-prompt-template-picker" role="dialog" aria-modal="true" aria-labelledby="${TEMPLATE_PICKER_ID}-title">
+            <header class="remodel-rp-picker-head">
+                <div>
+                    <div class="remodel-rp-picker-kicker">${escapeHtml(capitalize(recipe.mode))} recipe</div>
+                    <div class="remodel-rp-picker-title" id="${TEMPLATE_PICKER_ID}-title">Instruction templates</div>
+                    <div class="remodel-rp-picker-hint">The exact wording that teaches a model to emit a shape this code accepts. Inserted as a new message at the end of the stack, yours to edit.</div>
+                </div>
+                <button type="button" class="remodel-rp-picker-x" data-remodel-prompt-template-close aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+            </header>
+            <input type="search" class="remodel-prompt-template-search" data-remodel-prompt-template-search placeholder="Filter by name, group, or what it writes…" autocomplete="off">
+            <div class="remodel-prompt-template-body" data-remodel-prompt-template-body>${renderTemplateCards(templates)}</div>
+        </section>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
+
+    const search = overlay.querySelector('[data-remodel-prompt-template-search]');
+    search?.addEventListener('input', () => {
+        const body = overlay.querySelector('[data-remodel-prompt-template-body]');
+        if (body) body.innerHTML = renderTemplateCards(filterTemplates(templates, search.value));
+    });
+    search?.focus();
+    overlay._remodelKeydown = (event) => {
+        if (event.key === 'Escape') closeTemplatePicker();
+    };
+    document.addEventListener('keydown', overlay._remodelKeydown);
+}
+
+function renderTemplateCards(templates) {
+    if (!templates.length) return '<p class="remodel-prompt-template-empty">Nothing matches that.</p>';
+    const groups = new Map();
+    for (const template of templates) {
+        if (!groups.has(template.groupLabel)) groups.set(template.groupLabel, []);
+        groups.get(template.groupLabel).push(template);
+    }
+    return [...groups].map(([label, items]) => `
+        <section class="remodel-prompt-template-group">
+            <h4>${escapeHtml(label)}<small>${items.length}</small></h4>
+            <div class="remodel-prompt-template-grid">
+                ${items.map((template) => `
+                    <button type="button" class="remodel-prompt-template-card" data-remodel-prompt-template-pick="${escapeAttribute(template.key)}">
+                        <strong>${escapeHtml(template.label)}</strong>
+                        <span>${escapeHtml(template.summary || '')}</span>
+                        <code>${escapeHtml(templatePreview(template))}</code>
+                        <em>${escapeHtml(roleLabels[template.role] || template.role)}</em>
+                    </button>`).join('')}
+            </div>
+        </section>`).join('');
+}
+
+function closeTemplatePicker() {
+    const overlay = document.getElementById(TEMPLATE_PICKER_ID);
+    if (!overlay) return;
+    if (overlay._remodelKeydown) document.removeEventListener('keydown', overlay._remodelKeydown);
+    overlay.classList.remove('remodel-rp-picker-in');
+    setTimeout(() => overlay.remove(), 200);
 }
 
 function getSourceDefinitions(recipe) {
@@ -1565,20 +1697,11 @@ function canOpenSource(key) {
         'currentInput',
         'storyGoals',
         'authorGuidance',
-        'priorText',
+        // 'priorText' is deliberately absent: the Prior Scene Text panel is
+        // retired, so the block still resolves whatever a document already
+        // stored but there is no longer a surface to send the author to.
         'manuscript',
     ].includes(key);
-}
-
-function sourceBindingNote(recipe, block) {
-    if (block.sourceKey === 'nativeContext') {
-        return 'Required assembly point · preserves SillyTavern’s token-budgeted Text Completion context';
-    }
-    if (recipe.mode === 'roleplay' && recipe.apiType === 'chat' && block.nativeIdentifier && block.locked) {
-        return 'Core marker · reorder freely; it cannot be deleted because SillyTavern’s Chat Completion assembly resolves it by name';
-    }
-    if (block.locked) return 'Protected linked source';
-    return '';
 }
 
 function replaceObject(target, source) {

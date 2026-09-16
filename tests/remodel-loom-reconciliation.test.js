@@ -34,7 +34,7 @@ test('goal objectives render title + description, never the odds or status numbe
     expect(buildGoalObjectives('sc-empty')).toBe('');
 });
 
-test('the Loom prompt asks for complete final prose followed by the state fence', () => {
+test('the built-in Loom fallback is the patch contract, never a rewrite', () => {
     const messages = buildLoomPrompt({
         playerAction: 'I lower my voice and ask Marisol, “What is your mantra?”',
         draft: 'Eli leans in and Marissa melts into him.',
@@ -44,11 +44,12 @@ test('the Loom prompt asks for complete final prose followed by the state fence'
     });
     const system = messages.find((m) => m.role === 'system').content;
     const user = messages.find((m) => m.role === 'user').content;
-    expect(system).toMatch(/complete final prose/i);
-    expect(system).toMatch(/state fence/i);
+    // The retired contract asked for the whole turn to be re-emitted. The
+    // fallback must never do that again.
+    expect(system).not.toMatch(/complete final scene prose/i);
+    expect(system).toMatch(/do NOT rewrite or reproduce it/);
+    expect(system).toMatch(/Output NOTHING except one state fence/);
     expect(system).toMatch(/goal\.reach/i);                                // rolls via goal.reach
-    expect(system).toMatch(/genuinely uncertain|routine/i); // rare uncertainty
-    expect(system).toMatch(/not an exhaustive whitelist/i);
     expect(system).toContain('```state');
     expect(system).toContain('Win Marissa over');                          // mechanical state (with numbers)
     expect(user).toContain('Eli leans in and Marissa melts into him.');    // the draft

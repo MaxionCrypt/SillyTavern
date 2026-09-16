@@ -1,23 +1,12 @@
 import { readLoomInformation } from './living-lore-intake.js';
 import { parsePromotionDecisions } from './world-sense-promotion.js';
 
-export const LOOM_POLICY_V12 = `You are the Loom: the final continuity editor, mechanical referee, and live voice of the scene. You receive the Narrator's private draft before anything becomes visible. Return the complete final prose in the Narrator's voice, preserving it closely except where continuity or mechanics requires a correction.
-
-STEP 1 - State. Record the events, facts, character-state changes, Goals, and Variables the fiction now warrants.
-STEP 2 - Rolls. Only request goal.reach when an outcome is genuinely in doubt - a real gamble or contest whose result the characters do not already know. Code rolls the dice, never you. Routine actions do not need rolls.
-STEP 3 - Reconcile. Produce the complete version that may become accepted fiction. Preserve the draft when it is sound; revise only what continuity, an authorized roll, or the player's established action requires.`;
-
-export const LOOM_POLICY_DEFAULT_PRIOR = `You are the Loom: the final continuity editor, mechanical referee, and live voice of the scene. You receive the Narrator's private draft before anything becomes visible. Return the complete final prose in the Narrator's voice, preserving it closely except where continuity or mechanics requires a correction.
-
-STEP 1 - Archive. Keep the Archive caught up with only the fiction that this response makes canonical. Record each distinct new event with event.record. Update durable scene facts with scene.set, changed character facets with char_state.set, hidden truths with secret.set, and the unresolved forward beat with beat.set. The Current Archive lists what is already recorded: never duplicate or merely rephrase one of its entries. Do not invent state the prose does not establish.
-STEP 2 - Mechanics. Record warranted Goal and Variable changes. Only request goal.reach when an outcome is genuinely in doubt - a real gamble or contest whose result the characters do not already know. Code rolls the dice, never you. Routine actions do not need rolls.
-STEP 3 - Reconcile. Produce the complete version that may become accepted fiction. Preserve the draft when it is sound; revise only what continuity, an authorized roll, or the player's established action requires.`;
-
-export const LOOM_POLICY_DEFAULT = `You are the Loom: the final continuity editor, mechanical referee, and live voice of the scene. You receive the Narrator's private draft before anything becomes visible. Return the complete final prose in the Narrator's voice, preserving it closely except where continuity or mechanics requires a correction.
-
-STEP 1 - Archive. Keep the Archive caught up with only the fiction that this response makes canonical. Record each distinct new event with event.record. Update durable scene facts with scene.set, changed character facets with char_state.set, hidden truths with secret.set, and the unresolved open thread with beat.set. Never duplicate an existing Archive entry. A beat is provisional momentum, never a guaranteed outcome and never stronger than the latest accepted action.
-STEP 2 - Consequences. Goals describe outcomes their holders are trying to achieve, never outcomes the story must protect. Ask what materially changed because this turn happened. A Goal's description guides measurement but is not an exhaustive whitelist: if new fiction reveals that its condition is incomplete, refine the description with goal.edit rather than declaring the action irrelevant. When fiction helps or obstructs an open Goal, use goal.edit to set its Success Rate to the holder's new chance, even when no roll is needed. Close achieved, abandoned, or impossible Goals. Create a Goal only for a meaningful unresolved outcome worth tracking, never merely because a named character lacks one. Use goal.reach only for a decisive attempt whose outcome is genuinely uncertain. Code rolls the dice, never you.
-STEP 3 - Reconcile. Produce the complete version that may become accepted fiction. Preserve the draft when it is sound; revise only what continuity, an authorized roll, or the player's established action requires.`;
+// The "rewrite everything" contract is retired. The Loom no longer re-emits the
+// whole turn: it names only the spans a ruling changed. The PATCH contract
+// below is the only one seeded, built, or produced. See parseLoomReply, which
+// still reads prose if an owner-authored legacy recipe returns any — that read
+// path stays so an ancient recipe keeps working, but nothing here writes the
+// prose-first contract any more.
 
 // --- The PATCH contract -----------------------------------------------------
 //
@@ -112,11 +101,6 @@ When promotion candidates are present, always include lorePromotionDecisions and
 
 Each swap is {"find":"exact text from the draft","replace":"what it becomes"}. A find that is not present verbatim in the draft is discarded, so copy it exactly.`;
 
-export const LOOM_OUTPUT_CONTRACT_DEFAULT = `Output the complete final scene prose first, with no preface or commentary. Then output exactly one state fence:
-\`\`\`state
-{"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"}],"loreProposals":[],"lorePromotionDecisions":[],"flow":{"continue":false}}
-\`\`\``;
-
 /** True when a scene uses the Narrator draft -> Loom reconciliation pipeline. */
 export function usesLoomReconciliation(scene) {
     return scene?.liveDirection?.mode === 'loom';
@@ -147,21 +131,17 @@ export function buildLoomRecipeSources({ draft, draftReasoning = '', playerActio
 }
 
 /**
- * The Loom prompt. The Loom is the final continuity editor and mechanical
- * referee: it reads the Narrator's private draft, records the state the fiction
- * now warrants, and returns the COMPLETE final prose that may become accepted
- * fiction — preserving the draft closely except where continuity or an
- * authorized roll requires a correction. Dice are rolled by code, never by the
- * model. The older preserve-and-patch contract, in which the draft was kept
- * verbatim and the model named only find/replace spans, survives as a
- * compatibility fallback for owner-authored recipes — see parseLoomReply.
+ * The built-in Loom prompt, used only as the safety net when a scene has no
+ * compiled Loom recipe to send. It is the PATCH contract: the Narrator's draft
+ * is already canonical, and the Loom names only the spans a ruling changes plus
+ * its state fence. It never asks the model to re-type the turn.
  *
  * @param {{draft: string, draftReasoning?: string, narrativeState?: string, mechanicsSkill?: string, livingLore?: string}} input
  * @returns {{role: string, content: string}[]}
  */
 export function buildLoomPrompt({ draft, draftReasoning = '', playerAction = '', narrativeState = '', mechanicsSkill = '', livingLore = '' }) {
     const sources = buildLoomRecipeSources({ draft, draftReasoning, playerAction, narrativeState, mechanicsSkill, livingLore });
-    const system = [LOOM_POLICY_DEFAULT, sources.archiveState, sources.mechanicsBoard, sources.livingLore, LOOM_OUTPUT_CONTRACT_DEFAULT].filter(Boolean).join('\n\n');
+    const system = [LOOM_POLICY_PATCH, sources.archiveState, sources.mechanicsBoard, sources.livingLore, LOOM_OUTPUT_CONTRACT_PATCH].filter(Boolean).join('\n\n');
     const user = [sources.playerAction, sources.narratorDraft, sources.narratorReasoning].filter(Boolean).join('\n\n');
     return [
         { role: 'system', content: system },
@@ -324,11 +304,14 @@ export function readLoomProse(raw, { final = false } = {}) {
  * Keywords the Loom asked to retrieve on. Bounded: a request naming half the
  * book is not a request, it is pulling everything in wearing a different name.
  */
+export const MAX_LORE_KEYWORDS = 8;
+export const MAX_LORE_KEYWORD_CHARS = 120;
+
 export function readLoreKeywords(value) {
     return [...new Set((Array.isArray(value) ? value : [])
         .map((word) => String(word ?? '').trim())
         .filter(Boolean)
-        .map((word) => word.slice(0, 120)))].slice(0, 8);
+        .map((word) => word.slice(0, MAX_LORE_KEYWORD_CHARS)))].slice(0, MAX_LORE_KEYWORDS);
 }
 
 export function parseLoomReply(raw, { livingLorePacket = null } = {}) {

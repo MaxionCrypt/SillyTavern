@@ -8,6 +8,8 @@ import {
     isNativeApplicableMode,
     resolveLoomRecipe,
     setRemodelNativePromptContent,
+    getCurrentPromptStudioRecipe,
+    withPromptStudioRuntimeRecipe,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/prompt-studio.js';
 import { oai_settings } from './util/openai-stub.js';
 import { __setExtensionSettings } from './util/st-context-stub.js';
@@ -48,18 +50,114 @@ test('a roleplay recipe active for roleplay/chat does not leak into resolveLoomR
     expect(recipe?.mode).toBe('loom');
 });
 
-test('Narrator grounding resolves into the recipe-owned native prompt', () => {
+test('Narrator recall resolves into its recipe-owned native prompt', () => {
     initPromptStudio({ getRuntimeMode: () => 'roleplay', getRuntimeRecipeId: () => null });
     const recipe = createPromptRecipe({ name: 'Narrator', mode: 'roleplay', apiType: 'chat' });
     setActivePromptRecipe('roleplay', 'chat', recipe.id);
     applyPromptStudioRuntimeRecipe();
 
-    expect(setRemodelNativePromptContent('narratorGrounding', '## Scene\n- location: courtyard')).toBe(true);
-    expect(oai_settings.prompts.find((prompt) => prompt.identifier === 'remodel_narrator_grounding')).toMatchObject({
-        name: 'Narrator Grounding',
+    expect(setRemodelNativePromptContent('narratorRecall', '## Earlier Scene recall\n- the gate was locked')).toBe(true);
+    expect(oai_settings.prompts.find((prompt) => prompt.identifier === 'remodel_narrator_recall')).toMatchObject({
+        name: 'Earlier Scene Recall',
         marker: false,
         role: 'system',
-        content: '## Scene\n- location: courtyard',
+        content: '## Earlier Scene recall\n- the gate was locked',
     });
     expect(oai_settings.prompts.some((prompt) => ['remodel_loom_context', 'remodel_director_notes'].includes(prompt.identifier))).toBe(false);
+});
+
+test('Narrator Note resolves when its macro shares an owner-authored recipe block', () => {
+    initPromptStudio({ getRuntimeMode: () => 'roleplay', getRuntimeRecipeId: () => null });
+    const recipe = createPromptRecipe({
+        name: 'Narrator Note route',
+        mode: 'roleplay',
+        apiType: 'chat',
+        blocks: [{ kind: 'message', role: 'system', content: '{{character.description}}\n\n{{narrator.note}}' }],
+    });
+    setActivePromptRecipe('roleplay', 'chat', recipe.id);
+    applyPromptStudioRuntimeRecipe();
+
+    expect(setRemodelNativePromptContent('narratorNote', 'Let dialogue carry this exchange.')).toBe(true);
+    expect(oai_settings.prompts.find((prompt) => prompt.identifier === 'remodel_narrator_note')).toMatchObject({
+        name: 'Narrator Note',
+        role: 'system',
+        content: 'Let dialogue carry this exchange.',
+    });
+});
+
+test('Next Action is a recipe-owned user prompt', () => {
+    initPromptStudio({ getRuntimeMode: () => 'roleplay', getRuntimeRecipeId: () => null });
+    const recipe = createPromptRecipe({
+        name: 'Separate action',
+        mode: 'roleplay',
+        apiType: 'chat',
+        blocks: [{ kind: 'message', role: 'user', content: '{{next.action}}' }],
+    });
+    setActivePromptRecipe('roleplay', 'chat', recipe.id);
+    applyPromptStudioRuntimeRecipe();
+
+    expect(setRemodelNativePromptContent('nextAction', 'I pull the door open.')).toBe(true);
+    expect(oai_settings.prompts.find((prompt) => prompt.identifier === 'remodel_next_action')).toMatchObject({
+        name: 'Next Action',
+        marker: false,
+        role: 'user',
+        content: 'I pull the door open.',
+    });
+});
+
+test('applying a roleplay recipe discards deleted generated blocks and replaces profile labels', () => {
+    initPromptStudio({ getRuntimeMode: () => 'roleplay', getRuntimeRecipeId: () => null });
+    oai_settings.prompts.push({
+        identifier: 'remodel-block-stale',
+        name: 'CROWN PROMPT ROLEPLAY',
+        marker: false,
+        role: 'system',
+        content: 'This deleted instruction must not survive.',
+    });
+    oai_settings.prompts.push({
+        identifier: 'main',
+        name: 'FF Adapted Narrator Core',
+        marker: false,
+        role: 'system',
+        content: 'Old profile prompt',
+    });
+    oai_settings.prompt_order.push({
+        character_id: 100001,
+        order: [
+            { identifier: 'main', enabled: true },
+            { identifier: 'remodel-block-stale', enabled: true },
+        ],
+    });
+    const recipe = createPromptRecipe({
+        name: 'CROWN PROMPT ROLEPLAY',
+        mode: 'roleplay',
+        apiType: 'chat',
+        blocks: [{ id: 'core', kind: 'message', role: 'system', nativeIdentifier: 'main', content: 'Current recipe core' }],
+    });
+    setActivePromptRecipe('roleplay', 'chat', recipe.id);
+
+    applyPromptStudioRuntimeRecipe();
+
+    expect(oai_settings.prompts.some((prompt) => prompt.identifier === 'remodel-block-stale')).toBe(false);
+    expect(oai_settings.prompts.find((prompt) => prompt.identifier === 'main')).toMatchObject({
+        name: 'CROWN PROMPT ROLEPLAY · Block 1',
+        content: 'Current recipe core',
+    });
+    expect(oai_settings.prompt_order.find((entry) => entry.character_id === 100001)?.order).toEqual([
+        { identifier: 'main', enabled: true },
+    ]);
+});
+
+test('a bounded runtime recipe restores the normal Narrator recipe afterward', async () => {
+    initPromptStudio({ getRuntimeMode: () => 'roleplay', getRuntimeRecipeId: () => null });
+    const narrator = createPromptRecipe({ name: 'Normal Narrator', mode: 'roleplay', apiType: 'chat' });
+    const continueRecipe = createPromptRecipe({ name: 'Continue only', mode: 'roleplay', apiType: 'chat' });
+    setActivePromptRecipe('roleplay', 'chat', narrator.id);
+    applyPromptStudioRuntimeRecipe();
+
+    expect(getCurrentPromptStudioRecipe('roleplay', 'chat')?.id).toBe(narrator.id);
+    await withPromptStudioRuntimeRecipe(continueRecipe.id, async () => {
+        expect(getCurrentPromptStudioRecipe('roleplay', 'chat')?.id).toBe(continueRecipe.id);
+    });
+    expect(getCurrentPromptStudioRecipe('roleplay', 'chat')?.id).toBe(narrator.id);
 });

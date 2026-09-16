@@ -1,24 +1,31 @@
 import { getContext } from '../../../st-context.js';
-import { isSupersededLoomPatchContract, isSupersededLoomPatchPolicy, LOOM_POLICY_DEFAULT_PRIOR, LOOM_OUTPUT_CONTRACT_PATCH, LOOM_POLICY_PATCH, LOOM_OUTPUT_CONTRACT_DEFAULT, LOOM_POLICY_DEFAULT, LOOM_POLICY_V12 } from './loom-reconciliation.js';
-import { STORY_ARCHIVE_CONTRACT, STORY_ARCHIVE_LOOM_RECIPE_NAME, STORY_ARCHIVE_POLICY } from './story-loom-contract.js';
+import { isSupersededLoomPatchContract, isSupersededLoomPatchPolicy, LOOM_OUTPUT_CONTRACT_PATCH, LOOM_POLICY_PATCH } from './loom-reconciliation.js';
+import {
+    STORY_ARCHIVE_CONTRACT,
+    STORY_ARCHIVE_CONTRACT_TYPED_PROPOSALS,
+    STORY_ARCHIVE_LOOM_RECIPE_NAME,
+    STORY_ARCHIVE_POLICY,
+    STORY_ARCHIVE_POLICY_TYPED_PROPOSALS,
+} from './story-loom-contract.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 26;
+const STORE_VERSION = 31;
 
 export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
 const NARRATOR_GROUNDING_WARNING = 'This macro supplies the Narrator-visible Loom Archive. Removing or disabling it makes the Narrator rely on chat history alone.';
+const NARRATOR_RECALL_WARNING = 'This macro supplies only eligible earlier-Scene Archive recall. The current Scene stays in Chat History and is never duplicated here.';
 const CURATED_NARRATOR_RECIPE_NAME = 'Narrator · Archive-Grounded';
+const ROLEPLAY_LOOM_LIVING_LORE_POLICY = [
+    '## Living Lore — enabled',
+    'Inspect Selected Living Lore when it is present. If this turn establishes a durable, reusable world fact, relationship, location, rule, or entity detail that belongs in the Timeline lorebook, return a precise `loreProposals` entry in the state fence. Do not write lore directly and do not propose fleeting prose detail.',
+    'When World Sense supplies promotion candidates, decide each one with `lorePromotionDecisions`. Use empty arrays when no durable lore action is warranted.',
+].join('\n');
 
 export const PROMPT_MODES = ['story', 'roleplay', 'loom'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
 export const PROMPT_ROLES = ['system', 'instruction', 'user', 'assistant'];
-
-/** The seeded Continue wording. A default, not a rule: it lives in the recipe
- * block's macro argument from the moment the block exists, so editing it is
- * ordinary recipe work rather than a code change. */
-export const CONTINUE_DIRECTIVE_DEFAULT = 'Continue the scene autonomously from the accepted history. Return only the next new passage of scene prose. Do not repeat, summarize, or explain existing prose, and do not wait for player input.';
 
 export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
     story: Object.freeze([
@@ -56,20 +63,28 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
             advancedWarning: NARRATOR_GROUNDING_WARNING,
             arguments: 'events=N keeps the newest N “What happened” records; events=0 hides that section.',
         }),
+        template('narratorRecall', 'Earlier Scene Recall', 'system', 'narrator.recall', {
+            nativeIdentifier: 'remodel_narrator_recall',
+            content: '{{narrator.recall scenes=3}}',
+            description: 'Relevant Loom Archive records from eligible earlier Timeline Scenes only. The current Scene is excluded.',
+            advancedWarning: NARRATOR_RECALL_WARNING,
+            arguments: 'scenes=N limits how many preceding Timeline Scenes are eligible. Zero disables recall; omit the argument for all earlier Scenes.',
+        }),
+        template('narratorNote', 'Narrator Note', 'system', 'narrator.note', {
+            nativeIdentifier: 'remodel_narrator_note',
+            description: 'Your per-scene Narrator Note. It is empty until you write one in the roleplay rail.',
+            arguments: 'This macro has no arguments. Remove it from a recipe to keep that recipe unaware of the note.',
+        }),
         template('chatHistory', 'Chat History', 'user', 'chat.history', { nativeIdentifier: 'chatHistory', structured: true, arguments: 'messages=N keeps the newest N native chat messages.' }),
+        template('nextAction', 'Next Action', 'user', 'next.action', {
+            nativeIdentifier: 'remodel_next_action',
+            description: 'The newest player-authored action for this turn only. It is removed from Chat History and placed exactly where this macro sits.',
+            arguments: 'This macro has no arguments. Remove it to keep the newest action inside Chat History instead.',
+        }),
         // Native Chat Completion keeps the latest input inside chatHistory;
         // exposing it as an alias preserves that real marker boundary.
         template('currentInput', 'Current Input (via history)', 'user', 'chat.input', { nativeIdentifier: 'chatHistory', structured: true }),
         template('generationNudge', 'Generation Nudge', 'instruction', 'generation.nudge', { nativeIdentifier: 'quietPrompt' }),
-        // Used only on a turn with no player action — Continue. The wording
-        // lives in the macro argument so it is yours to edit; code decides only
-        // whether the turn is autonomous, never what to say about it.
-        template('continueDirective', 'Autonomous Continue', 'user', 'narrator.continue', {
-            nativeIdentifier: 'remodel_narrator_continue',
-            content: `{{narrator.continue text="${CONTINUE_DIRECTIVE_DEFAULT}"}}`,
-            description: 'Sent only when a turn begins with no player action (Continue). Empty on any turn the player typed something.',
-            arguments: 'text="…" is the instruction sent when the turn is autonomous.',
-        }),
         // Declares which mechanics verbs the Narrator is offered this turn. The
         // list is yours: an empty or removed block advertises nothing, and the
         // Narrator is then never told the verbs exist.
@@ -79,7 +94,7 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
             description: 'Offers the Narrator bounded mechanics it may request mid-turn. Code freezes inputs, rolls, and applies exactly once.',
             arguments: 'tools="a,b,c" advertises only those verbs. Remove the block to advertise none.',
         }),
-        template('nativeContext', 'Native Roleplay Context', 'system', 'roleplay.native', { textOnly: true, locked: true }),
+        template('nativeContext', 'Native Roleplay Context', 'system', 'roleplay.native', { textOnly: true }),
     ]),
     loom: Object.freeze([
         template('playerAction', 'Current Player Action', 'user', 'player.action', { description: 'The current player-authored speech or attempted action only. It is authoritative over conflicting inference in the Narrator draft.' }),
@@ -88,6 +103,7 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         template('lifecycleBoard', 'Goal & Variable Lifecycle Board', 'system', 'loom.lifecycle', { description: 'The exact open Goal and existing Variable addresses this pass may propose against. Placed on its own, it moves independently; left out of the recipe, it rides on the end of Archive Operations & Mechanics.' }),
         template('livingLore', 'Selected Living Lore', 'system', 'loom.lore', { description: 'The bounded, revisioned Timeline lore entries selected by World Sense, plus the typed proposal contract. Proposals do not write directly.' }),
         template('narratorDraft', 'Narrator Draft', 'user', 'narrator.draft', { description: 'The held Narrator prose being reconciled before it becomes visible.' }),
+        template('storyArchiveCapture', 'Story Archive Capture', 'user', 'story.archive_capture', { description: 'One accepted, bounded Story manuscript block. The Story Loom records it as canonical evidence and never rewrites it.' }),
         template('narratorReasoning', 'Narrator Reasoning', 'user', 'narrator.reasoning', { description: 'The Narrator model\'s private reasoning for this draft, when the provider supplies it.' }),
     ]),
 });
@@ -109,8 +125,11 @@ const nativeMarkerToSource = Object.freeze({
     worldInfoAfter: 'worldInfoAfter',
     dialogueExamples: 'dialogueExamples',
     chatHistory: 'chatHistory',
+    remodel_next_action: 'nextAction',
     remodel_story_goals: 'storyGoals',
     remodel_narrator_grounding: 'narratorGrounding',
+    remodel_narrator_recall: 'narratorRecall',
+    remodel_narrator_note: 'narratorNote',
     // Read-only migration aliases. New recipes always use the canonical name.
     remodel_loom_context: 'narratorGrounding',
     remodel_director_notes: 'narratorGrounding',
@@ -256,7 +275,7 @@ export function createPromptBlockFromTemplate(mode, templateKey) {
         role: definition.role,
         content: definition.content,
         enabled: true,
-        locked: Boolean(definition.locked),
+        locked: false,
         nativeIdentifier: definition.nativeIdentifier || '',
         advancedWarning: definition.advancedWarning || '',
         mode,
@@ -369,7 +388,7 @@ function createSeededStore(seed) {
             description: 'Reconciles the Narrator draft with scene state and mechanics before it becomes visible.',
             mode: 'loom',
             apiType: 'chat',
-            blocks: defaultLoomBlocks(),
+            blocks: patchLoomBlocks(),
             transport: null,
         },
         {
@@ -446,32 +465,13 @@ function patchLoomBlocks() {
     ];
 }
 
-/** The default editable recipe for the post-draft Loom request. */
-function defaultLoomBlocks() {
-    return [
-        createPromptBlock({ kind: 'message', role: 'system', content: LOOM_POLICY_DEFAULT }),
-        createPromptBlockFromTemplate('loom', 'playerAction'),
-        createPromptBlockFromTemplate('loom', 'archiveState'),
-        createPromptBlockFromTemplate('loom', 'mechanicsBoard'),
-        createPromptBlockFromTemplate('loom', 'livingLore'),
-        createPromptBlockFromTemplate('loom', 'narratorDraft'),
-        createPromptBlockFromTemplate('loom', 'narratorReasoning'),
-        createPromptBlock({
-            kind: 'message',
-            role: 'system',
-            content: LOOM_OUTPUT_CONTRACT_DEFAULT,
-            advancedWarning: 'Changing the state fence or request schema can prevent the Loom reply from being parsed or applied.',
-        }),
-    ];
-}
-
 function storyArchiveLoomBlocks() {
     return [
         createPromptBlock({ kind: 'message', role: 'system', content: STORY_ARCHIVE_POLICY }),
         createPromptBlockFromTemplate('loom', 'archiveState'),
         createPromptBlockFromTemplate('loom', 'mechanicsBoard'),
         createPromptBlockFromTemplate('loom', 'livingLore'),
-        createPromptBlockFromTemplate('loom', 'narratorDraft'),
+        createPromptBlockFromTemplate('loom', 'storyArchiveCapture'),
         createPromptBlock({
             kind: 'message',
             role: 'system',
@@ -483,7 +483,7 @@ function storyArchiveLoomBlocks() {
 
 function defaultBlocksFor(mode, apiType) {
     if (mode === 'story') return defaultStoryBlocks();
-    if (mode === 'loom') return defaultLoomBlocks();
+    if (mode === 'loom') return patchLoomBlocks();
     if (apiType === 'text') {
         return [createPromptBlockFromTemplate('roleplay', 'nativeContext')];
     }
@@ -499,7 +499,7 @@ function defaultBlocksFor(mode, apiType) {
         createPromptBlockFromTemplate('roleplay', 'worldInfoAfter'),
         createPromptBlockFromTemplate('roleplay', 'dialogueExamples'),
         createPromptBlockFromTemplate('roleplay', 'chatHistory'),
-        createPromptBlockFromTemplate('roleplay', 'continueDirective'),
+        createPromptBlockFromTemplate('roleplay', 'nextAction'),
         createPromptBlockFromTemplate('roleplay', 'mechanicsTools'),
         createPromptBlockFromTemplate('roleplay', 'generationNudge'),
     ]);
@@ -519,7 +519,7 @@ function blocksFromNativeChat(prompts, promptOrder) {
                 role: prompt.role || sourceRole('roleplay', sourceKey) || 'system',
                 content: definition?.content || `{{native.prompt id="${entry.identifier}"}}`,
                 enabled: entry.enabled !== false,
-                locked: Boolean(prompt.system_prompt),
+                locked: false,
                 nativeIdentifier: definition?.nativeIdentifier || entry.identifier,
                 advancedWarning: definition?.advancedWarning || '',
             });
@@ -575,37 +575,17 @@ function normalizeStore(store, seed) {
                 }
             }
             if (previousVersion < 3 && ensureStoryGoalsSource(recipe.blocks)) changed = true;
+            if (previousVersion < 30 && ensureNextActionSource(recipe.blocks)) changed = true;
         }
         if (previousVersion < 11) {
             recipe.blocks = recipe.blocks.map((block) => sourceBlockToMacroMessage(recipe.mode, block));
             changed = true;
         }
-        // Version 12 makes the Loom's response—not the private Narrator draft—
-        // the streamed and stored fiction. Migrate only the two recognizable
-        // seeded defaults; owner-authored contracts remain owner-authored.
-        if (previousVersion < 12 && recipe.mode === 'loom') {
-            for (const block of recipe.blocks) {
-                if (String(block.content || '').startsWith('You are the Loom: a mechanical referee and continuity keeper, not a writer.')) {
-                    block.content = LOOM_POLICY_DEFAULT;
-                    changed = true;
-                }
-                if (String(block.content || '').startsWith('Write no narration and no commentary. Output only this state fence')) {
-                    block.content = LOOM_OUTPUT_CONTRACT_DEFAULT;
-                    changed = true;
-                }
-            }
-        }
-        // Version 13 makes Archive upkeep explicit and duplicate-safe. Only
-        // replace the untouched v12 policy; an owner-edited Loom remains
-        // exactly as authored.
-        if (previousVersion < 13 && recipe.mode === 'loom') {
-            for (const block of recipe.blocks) {
-                if (block.content === LOOM_POLICY_V12) {
-                    block.content = LOOM_POLICY_DEFAULT;
-                    changed = true;
-                }
-            }
-        }
+        // Versions 12 and 13 converted the Loom between successive "rewrite the
+        // whole turn" policies. That whole contract is retired (see
+        // loom-reconciliation.js), so those steps no longer run: a store old
+        // enough to need them carries an owner-authored rewrite recipe, which
+        // parseLoomReply still reads unchanged. Nothing here reintroduces it.
         // Version 14 makes the Narrator recipe authoritative. The old Loom
         // Context block was visually editable but its content was cleared and
         // replaced by a hidden extension-prompt injection. Migrate that macro
@@ -625,7 +605,8 @@ function normalizeStore(store, seed) {
                     changed = true;
                 }
             }
-            if (ensureNarratorGroundingSource(recipe.blocks)) changed = true;
+            if (migrateNarratorRecallSource(recipe.blocks)) changed = true;
+            if (ensureNarratorRecallSource(recipe.blocks)) changed = true;
             if (ensureNarratorPolicy(recipe.blocks)) changed = true;
         }
         if (previousVersion < 2 && recipe.mode === 'story' && migrateStoryWorldInfoSources(recipe)) changed = true;
@@ -656,11 +637,6 @@ function normalizeStore(store, seed) {
             const recipe = store.recipes[id];
             if (!recipe || recipe.mode !== 'loom') continue;
             for (const block of recipe.blocks || []) {
-                if (block.content === LOOM_POLICY_DEFAULT_PRIOR) {
-                    block.content = LOOM_POLICY_DEFAULT;
-                    changed = true;
-                    continue;
-                }
                 if (isSupersededLoomPatchPolicy(block.content)) {
                     block.content = LOOM_POLICY_PATCH;
                     changed = true;
@@ -803,15 +779,87 @@ function normalizeStore(store, seed) {
         }
     }
 
-    // v26 moves the autonomous Continue instruction out of code and into the
-    // Roleplay recipe, and offers the Narrator its mechanics verbs there too,
-    // so both are owner-editable like any other block.
+    // v26 offered a seeded autonomous-Continue instruction alongside the
+    // mechanics block. The instruction has since been retired: Continue is a
+    // request boundary, not a hidden authored prompt.
     if (previousVersion < 26) {
         for (const id of store.recipeIds) {
             const recipe = store.recipes[id];
             if (recipe?.mode !== 'roleplay') continue;
-            if (ensureContinueDirectiveSource(recipe.blocks)) changed = true;
             if (ensureMechanicsToolsSource(recipe.blocks)) changed = true;
+        }
+    }
+
+    // v28 replaces duplicate current-Scene grounding with earlier-Scene
+    // recall. Living Lore remains recipe-owned and is never disabled here.
+    if (previousVersion < 28) {
+        for (const id of store.recipeIds) {
+            const recipe = store.recipes[id];
+            if (recipe?.mode === 'roleplay' && recipe.apiType === 'chat') {
+                if (migrateNarratorRecallSource(recipe.blocks)) changed = true;
+                if (ensureNarratorRecallSource(recipe.blocks)) changed = true;
+            }
+        }
+    }
+
+    // v29 removes the short-lived fictional-time macro from every Roleplay
+    // recipe, including owner-authored recipes that opted into it.
+    if (previousVersion < 29) {
+        for (const id of store.recipeIds) {
+            const recipe = store.recipes[id];
+            if (recipe?.mode === 'roleplay' && recipe.apiType === 'chat' && retireNarratorTimeSource(recipe.blocks)) changed = true;
+        }
+    }
+
+    // v31 restores the owner-requested Living Lore channel to the Crown
+    // Roleplay Loom recipe. The temporary v28 migration removed its macro and
+    // state-fence guidance, leaving the model unable to propose lore even
+    // though the runtime packet remained available.
+    if (previousVersion < 31) {
+        for (const id of store.recipeIds) {
+            const recipe = store.recipes[id];
+            if (recipe?.mode !== 'loom' || String(recipe.name || '').trim().toLowerCase() !== 'crown prompt loom - roleplay') continue;
+            if (ensureLivingLoreSource(recipe.blocks)) changed = true;
+            if (restoreRoleplayLivingLoreInstructions(recipe.blocks)) changed = true;
+        }
+    }
+
+    // The old seeded Continue sentence was visible in every empty-composer
+    // request even though it was not owner-authored. Remove only that exact
+    // retired default from saved recipes; any other blocks remain untouched.
+    for (const id of store.recipeIds) {
+        const recipe = store.recipes[id];
+        if (recipe?.mode === 'roleplay' && retireDefaultContinueDirective(recipe.blocks)) changed = true;
+    }
+
+    // Story Archive evidence is not a live Narrator draft. Give its dedicated
+    // recipe an unambiguous macro without touching Roleplay Loom recipes or
+    // owner-created recipes that intentionally keep the compatibility alias.
+    for (const id of store.recipeIds) {
+        const recipe = store.recipes[id];
+        if (recipe?.name === STORY_ARCHIVE_LOOM_RECIPE_NAME && migrateStoryArchiveCaptureSource(recipe.blocks)) changed = true;
+    }
+
+    // v27 aligns the untouched Story Archive recipe with the information
+    // intake. The earlier seeded contract asked the Loom to choose a target and
+    // operation; intake now deliberately computes placement itself and rejects
+    // those records because they have no `content` field. Exact equality keeps
+    // owner-authored recipes and edits under owner control.
+    if (previousVersion < 27) {
+        for (const id of store.recipeIds) {
+            const recipe = store.recipes[id];
+            if (recipe?.name !== STORY_ARCHIVE_LOOM_RECIPE_NAME) continue;
+            for (const block of recipe.blocks || []) {
+                if (block.content === STORY_ARCHIVE_POLICY_TYPED_PROPOSALS) {
+                    block.content = STORY_ARCHIVE_POLICY;
+                    changed = true;
+                    continue;
+                }
+                if (block.content === STORY_ARCHIVE_CONTRACT_TYPED_PROPOSALS) {
+                    block.content = STORY_ARCHIVE_CONTRACT;
+                    changed = true;
+                }
+            }
         }
     }
 
@@ -860,14 +908,30 @@ function ensureLivingLoreSource(blocks) {
     return true;
 }
 
-/** Give a Roleplay recipe the Continue block, placed after Chat History so the
- * instruction lands next to the history it is asked to continue from. */
-function ensureContinueDirectiveSource(blocks) {
-    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*narrator\.continue\b/i.test(block.content || ''))) return false;
-    const source = createPromptBlockFromTemplate('roleplay', 'continueDirective');
-    const historyIndex = blocks.findIndex((block) => /\{\{\s*chat\.(history|input)\b/i.test(block.content || ''));
-    blocks.splice(historyIndex >= 0 ? historyIndex + 1 : blocks.length, 0, source);
+function retireDefaultContinueDirective(blocks) {
+    if (!Array.isArray(blocks)) return false;
+    const retained = blocks.filter((block) => !/Continue the scene autonomously from the accepted history\.\s*Return only the next new passage of scene prose\.\s*Do not repeat, summarize, or explain existing prose, and do not wait for player input\./i.test(String(block?.content || '')));
+    if (retained.length === blocks.length) return false;
+    blocks.splice(0, blocks.length, ...retained);
     return true;
+}
+
+function migrateStoryArchiveCaptureSource(blocks) {
+    if (!Array.isArray(blocks)) return false;
+    let changed = false;
+    for (const block of blocks) {
+        if (block?.sourceKey === 'narratorDraft') {
+            block.sourceKey = 'storyArchiveCapture';
+            changed = true;
+        }
+        const content = String(block?.content || '');
+        const migrated = content.replace(/\{\{\s*narrator\.draft\b/gi, '{{story.archive_capture');
+        if (migrated !== content) {
+            block.content = migrated;
+            changed = true;
+        }
+    }
+    return changed;
 }
 
 /** Give a Roleplay recipe the Narrator Mechanics block, after Continue. */
@@ -892,20 +956,70 @@ function withStoryGoalsSource(blocks) {
     return blocks;
 }
 
-/** The dynamic Archive macro belongs immediately before native chat history. */
-function ensureNarratorGroundingSource(blocks) {
-    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*narrator\.grounding\b/i.test(block.content || ''))) return false;
-    const source = createPromptBlockFromTemplate('roleplay', 'narratorGrounding');
+/** Earlier-Scene recall belongs immediately before native chat history. */
+function ensureNarratorRecallSource(blocks) {
+    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*narrator\.recall\b/i.test(block.content || ''))) return false;
+    const source = createPromptBlockFromTemplate('roleplay', 'narratorRecall');
     const historyIndex = blocks.findIndex((block) => /{{chat\.(history|input)\b/i.test(block.content || ''));
     blocks.splice(historyIndex >= 0 ? historyIndex : blocks.length, 0, source);
+    return true;
+}
+
+/** Keep this turn's action independently placeable from the prior transcript. */
+function ensureNextActionSource(blocks) {
+    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*next\.action\b/i.test(block.content || ''))) return false;
+    const historyIndex = blocks.findIndex((block) => /\{\{\s*chat\.history\b/i.test(block.content || ''));
+    if (historyIndex < 0) return false;
+    blocks.splice(historyIndex + 1, 0, createPromptBlockFromTemplate('roleplay', 'nextAction'));
+    return true;
+}
+
+/** Remove the retired clock macro from persisted Roleplay recipes. */
+function retireNarratorTimeSource(blocks) {
+    if (!Array.isArray(blocks)) return false;
+    const kept = blocks.filter((block) => !(/\{\{\s*narrator\.time\b/i.test(block.content || '') || block.nativeIdentifier === 'remodel_narrator_time'));
+    if (kept.length === blocks.length) return false;
+    blocks.splice(0, blocks.length, ...kept);
+    return true;
+}
+
+function migrateNarratorRecallSource(blocks) {
+    let changed = false;
+    for (const block of Array.isArray(blocks) ? blocks : []) {
+        if (/\{\{\s*narrator\.grounding\b/i.test(block.content || '')) {
+            block.content = '{{narrator.recall scenes=3}}';
+            block.nativeIdentifier = 'remodel_narrator_recall';
+            block.advancedWarning = NARRATOR_RECALL_WARNING;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+function restoreRoleplayLivingLoreInstructions(blocks) {
+    let changed = false;
+    for (const block of Array.isArray(blocks) ? blocks : []) {
+        const content = String(block.content || '');
+        const before = content;
+        const restored = content.replace('{"requests":[],"loreKeywords":[],"flow":{"continue":false}}', '{"requests":[],"loreProposals":[],"loreKeywords":[],"lorePromotionDecisions":[],"flow":{"continue":false}}');
+        if (restored !== before) {
+            block.content = restored;
+            changed = true;
+        }
+    }
+    if (!Array.isArray(blocks) || blocks.some((block) => String(block.content || '') === ROLEPLAY_LOOM_LIVING_LORE_POLICY)) return changed;
+    const contractIndex = blocks.findIndex((block) => /```state|"requests"\s*:/i.test(String(block.content || '')));
+    blocks.splice(contractIndex >= 0 ? contractIndex : blocks.length, 0, createPromptBlock({
+        kind: 'message', role: 'system', content: ROLEPLAY_LOOM_LIVING_LORE_POLICY,
+    }));
     return true;
 }
 
 /** Seed one editable anti-echo/append-only policy before the Archive macro. */
 function ensureNarratorPolicy(blocks) {
     if (!Array.isArray(blocks) || blocks.some((block) => block.content === NARRATOR_POLICY_DEFAULT)) return false;
-    const groundingIndex = blocks.findIndex((block) => /\{\{\s*narrator\.grounding\b/i.test(block.content || ''));
-    blocks.splice(groundingIndex >= 0 ? groundingIndex : blocks.length, 0, createPromptBlock({
+    const recallIndex = blocks.findIndex((block) => /\{\{\s*narrator\.recall\b/i.test(block.content || ''));
+    blocks.splice(recallIndex >= 0 ? recallIndex : blocks.length, 0, createPromptBlock({
         kind: 'message',
         role: 'instruction',
         content: NARRATOR_POLICY_DEFAULT,
@@ -915,7 +1029,7 @@ function ensureNarratorPolicy(blocks) {
 }
 
 function withNarratorRecipeSources(blocks) {
-    ensureNarratorGroundingSource(blocks);
+    ensureNarratorRecallSource(blocks);
     ensureNarratorPolicy(blocks);
     return blocks;
 }
@@ -1013,7 +1127,9 @@ function normalizeBlock(value, mode) {
         content: kind === 'message' ? String(value.content || '') : '',
         sourceKey,
         enabled: value.enabled !== false,
-        locked: Boolean(value.locked || value.sourceKey === 'nativeContext'),
+        // Retained for backwards-compatible recipe shape only. It is never an
+        // editing permission: every prompt block belongs to the user.
+        locked: false,
         nativeIdentifier: String(value.nativeIdentifier || ''),
         settings: normalizeBlockSettings(value.settings, mode, sourceKey),
         advancedWarning: kind === 'message' ? String(value.advancedWarning || '') : '',
