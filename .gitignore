@@ -71,3 +71,6 @@ dev-tools/chrome-debug-profile/
 test_logs/
 remodel-debug-*.json
 /*.png
+
+# Remodel dev-tools — imported community presets, not repository fixtures
+dev-tools/*.json
