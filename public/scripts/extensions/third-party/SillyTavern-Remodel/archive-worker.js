@@ -18,6 +18,11 @@ export function createArchiveWorker({
     transport,
     ingestion,
     commit,
+    // Sees the whole reply once it has parsed, for concerns the Archive port
+    // refuses to carry. Living Lore is the one that matters: the port is
+    // archive-only by design, so lore is filed BESIDE the Archive, not through
+    // it, and this is the only way the reply reaches the thing that files it.
+    observeReply = null,
     now = () => Date.now(),
     maxAttempts = 3,
     retryDelayMs = 1_000,
@@ -93,6 +98,12 @@ export function createArchiveWorker({
     async function runOne(timelineId) {
         const next = repository.next(timelineId);
         if (!next) return null;
+        // Why this is read BEFORE the update: the update clears `error`, so by
+        // the time the transport runs there is no record of what went wrong
+        // last time. A transport that cannot tell a first attempt from a retry
+        // after a reasoning-only reply can only send the identical request
+        // again — which is exactly how three attempts burn on one bad turn.
+        const previousError = next.error || null;
         const running = repository.update(next.jobId, {
             status: ARCHIVE_JOB_STATUS.RUNNING,
             attempts: Number(next.attempts || 0) + 1,
@@ -110,6 +121,7 @@ export function createArchiveWorker({
                     promptSnapshot: running.promptSnapshot,
                     acceptedProse: running.acceptedProse,
                     statePacket: buildStatePacket(running),
+                    previousError,
                     signal: controller.signal,
                 })),
                 timeout,
@@ -122,7 +134,8 @@ export function createArchiveWorker({
                 const reasoning = typeof response === 'object' ? String(response?.reasoning || '').trim() : '';
                 throw retryableError(reasoning ? 'reasoning-only' : 'empty-response', reasoning
                     ? 'The Loom returned reasoning without an Archive response.'
-                    : 'The Loom returned no Archive response.');
+                    : 'The Loom returned no Archive response.',
+                { textChars: 0, reasoningChars: reasoning.length });
             }
             const result = await ingestion.ingest({
                 mode: running.mode,
@@ -134,7 +147,20 @@ export function createArchiveWorker({
                 candidateReply: raw,
             });
             if (result.receipt?.fenceParsed === false) {
-                throw retryableError('malformed-response', 'The Loom returned no readable Archive state fence.');
+                throw retryableError('malformed-response', 'The Loom returned no readable Archive state fence.', {
+                    textChars: raw.length,
+                    hasFence: Boolean(result.receipt?.hasFence),
+                    requestCount: Number(result.receipt?.requestCount || 0),
+                });
+            }
+            if (typeof observeReply === 'function') {
+                // After the fence is known to parse and before anything commits,
+                // so an observer sees exactly the reply the Archive acts on. It
+                // cannot fail the Archive: the prose is already canonical and a
+                // lore side effect is not a reason to lose an event.record.
+                try {
+                    await observeReply({ job: running, jobId: running.jobId, raw });
+                } catch { /* reported by the observer itself, never by the worker */ }
             }
             const beforeCommit = repository.get(running.jobId);
             if ([ARCHIVE_JOB_STATUS.CANCELLED, ARCHIVE_JOB_STATUS.SUPERSEDED].includes(beforeCommit?.status)) return beforeCommit;
@@ -252,10 +278,18 @@ function responseText(response) {
     return typeof response === 'string' ? response : String(response?.text || '');
 }
 
-function retryableError(code, message) {
+/**
+ * `detail` carries the shape of the reply that failed — how much text, how
+ * much reasoning, whether a fence was present. Without it every failure reads
+ * as the same "Archive needs attention", and a model that returned nothing is
+ * indistinguishable from one that reasoned past its budget or one that wrote
+ * prose and forgot the fence. Those need three different fixes.
+ */
+function retryableError(code, message, detail = null) {
     const error = new Error(message);
     error.name = 'ArchiveWorkerError';
     error.code = code;
+    if (detail) error.detail = detail;
     return error;
 }
 
@@ -263,6 +297,7 @@ function serializeError(error) {
     return Object.freeze({
         code: String(error?.code || (isAbortError(error) ? 'aborted' : 'worker-error')),
         message: errorChain(error),
+        ...(error?.detail ? { detail: Object.freeze({ ...error.detail }) } : {}),
     });
 }
 

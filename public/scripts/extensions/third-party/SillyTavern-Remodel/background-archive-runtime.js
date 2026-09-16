@@ -2,7 +2,8 @@ import { getContext } from '../../../st-context.js';
 import { executeMechanicsRequest, getCapabilityDictionary, MECHANICS_PROTOCOL } from './mechanics-capabilities.js';
 import { buildNarratorArchivistSections } from './narrator-prompt.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe, getPromptStudioRecipe, getStoryArchivePromptStudioRecipe, recordSentPromptTranscript } from './prompt-studio.js';
-import { buildLoomRecipeSources } from './loom-reconciliation.js';
+import { buildLoomRecipeSources, parseLoomReply } from './loom-reconciliation.js';
+import { reasoningDisabledPayload } from './narrator-reasoning-policy.js';
 import { resolveGenerationRoute } from './generation-route.js';
 import { streamChatPrompt } from './story-stream.js';
 import { ARCHIVE_CAPABILITY_NAMES, createArchiveIngestion } from './archive-ingestion.js';
@@ -23,16 +24,8 @@ const LOOM_SOURCE_MACROS = Object.freeze({
     lifecycleBoard: 'loom.lifecycle',
     playerAction: 'player.action',
     narratorDraft: 'narrator.draft',
+    storyArchiveCapture: 'story.archive_capture',
 });
-const ARCHIVE_POLICY = `You are the Loom's background Archive clerk and lifecycle observer. The accepted prose is already canonical and visible to the user. Read it as evidence and update the shared Loom Archive. When lifecycle proposal operations are advertised, you may also propose only those bounded Goal or Variable lifecycle changes; code applies them later through a separate authority boundary.
-
-Record distinct new events, changed scene facts, changed character state, hidden truths, and the unresolved open beat. Compare against the Current Archive. Do not duplicate, paraphrase an existing entry, invent facts, rewrite prose, continue the scene, roll or adjudicate unresolved Goals, change existing Variables, or propose lore.`;
-const ARCHIVE_CONTRACT = `Output NOTHING except one state fence:
-\`\`\`state
-{"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"the accepted prose establishes it"}]}
-\`\`\`
-
-Use only the operations advertised in this request. Lifecycle requests are proposals, never Archive facts or prose instructions. An empty requests array is valid when the accepted prose adds nothing new.`;
 
 let productionRuntime = null;
 const listeners = new Set();
@@ -51,19 +44,62 @@ export function createBackgroundArchiveRuntime({
 } = {}) {
     const scheduled = new Set();
     const waits = new Map();
+    // The job store keeps only what the Archive needs and drops the rest, so
+    // the Living Lore packet a job was shown, and what its reply said about
+    // lore, live here beside the runtime rather than on the job. In memory
+    // only: a reload between reply and filing loses the lore for that job,
+    // which is the same best-effort the live Loom already accepts.
+    const packets = new Map();
+    const replies = new Map();
     const worker = createArchiveWorker({
         repository,
         transport,
         ingestion,
         commit,
+        observeReply: ({ jobId, raw }) => {
+            const id = String(jobId || '');
+            const livingLorePacket = packets.get(id) || null;
+            const parsed = parseLoomReply(raw, { livingLorePacket });
+            replies.set(id, Object.freeze({
+                livingLorePacket,
+                loreProposals: parsed.loreProposals,
+                loreProposalRejections: parsed.loreProposalRejections,
+                loreKeywords: parsed.loreKeywords || [],
+                lorePromotionDecisions: parsed.lorePromotionDecisions || [],
+                lorePromotionDecisionRejections: parsed.lorePromotionDecisionRejections || [],
+            }));
+        },
         now,
         maxAttempts,
         retryDelayMs,
         timeoutMs,
     });
 
-    function notify(timelineId) {
-        try { onStateChange(status(timelineId)); } catch { /* UI listeners cannot break Archive work */ }
+    function forget(jobId) {
+        const id = String(jobId || '');
+        packets.delete(id);
+        replies.delete(id);
+    }
+
+    /**
+     * What the reply said about lore, once. Null until the job has replied —
+     * and a miss forgets nothing, because asking early must not throw away the
+     * packet the job is about to be parsed against.
+     */
+    function takeReply(jobId) {
+        const id = String(jobId || '');
+        const reply = replies.get(id) || null;
+        if (reply) forget(id);
+        return reply;
+    }
+
+    function notify(timelineId, settledJob = null) {
+        // The usual state is intentionally compact (and becomes `idle` as
+        // soon as a successful job leaves the queue).  A terminal job is
+        // supplied separately so consumers that own a post-Archive side effect
+        // — Living Lore, for example — can still identify the exact reply that
+        // just settled without pretending an idle worker is still running.
+        try { onStateChange(status(timelineId), settledJob); } catch { /* UI listeners cannot break Archive work */ }
     }
 
     function scheduleTimeline(timelineId, delay = 0) {
@@ -77,7 +113,8 @@ export function createBackgroundArchiveRuntime({
                 result = await worker.runNext(id);
             } finally {
                 scheduled.delete(id);
-                notify(id);
+                if (result) journalArchiveOutcome(result);
+                notify(id, result);
                 resolveWaiters(id);
             }
             if (!result) return;
@@ -92,6 +129,9 @@ export function createBackgroundArchiveRuntime({
 
     function enqueue(input) {
         const job = worker.enqueue(input);
+        if (input?.livingLorePacket && typeof input.livingLorePacket === 'object') {
+            packets.set(job.jobId, structuredClone(input.livingLorePacket));
+        }
         notify(job.timelineId);
         scheduleTimeline(job.timelineId);
         return job;
@@ -134,9 +174,10 @@ export function createBackgroundArchiveRuntime({
     }
 
     return Object.freeze({
-        enqueue, retry, recover, status, waitForTimeline,
-        supersede: worker.supersede,
-        cancel: worker.cancel,
+        enqueue, retry, recover, status, waitForTimeline, takeReply,
+        // A job that will never be taken must not keep its packet alive.
+        supersede: (jobId, replacementJobId) => { forget(jobId); return worker.supersede(jobId, replacementJobId); },
+        cancel: (jobId, reason) => { forget(jobId); return worker.cancel(jobId, reason); },
         get: worker.get,
         list: worker.list,
     });
@@ -150,6 +191,16 @@ export function prepareBackgroundArchiveJob({
     currentPlayerAction = '',
     archiveContext = '',
     recipe = null,
+    // The Selected Living Lore this pass may report against, already
+    // formatted, and the packet it came from. Both Story and Roleplay Archive
+    // passes receive these: canonical Roleplay has no foreground Loom round
+    // trip, so this background reply is its only Living Lore reporting path.
+    livingLore = '',
+    livingLorePacket = null,
+    // What earlier Scenes already settled that bears on this passage, already
+    // formatted. Without it the Loom starts every Story pass with amnesia
+    // about every other Scene and records known things as new.
+    recall = '',
     profiles = getContext().extensionSettings?.connectionManager?.profiles || [],
 } = {}) {
     const resolvedRecipe = recipe || resolveSceneLoomRecipe(scene, mode);
@@ -157,7 +208,7 @@ export function prepareBackgroundArchiveJob({
     const context = String(archiveContext || buildNarratorArchivistSections(scene.timelineId, scene.id));
     const lifecycleProjection = getTimelineLifecycleProjectionSwitches();
     const lifecycleContext = buildTimelineLifecyclePromptContext(scene.timelineId, lifecycleProjection);
-    const promptSnapshot = compileArchivePrompt({ acceptedProse, currentPlayerAction, archiveContext: context, recipe: resolvedRecipe, lifecycleProjection, lifecycleContext });
+    const promptSnapshot = compileArchivePrompt({ acceptedProse, currentPlayerAction, archiveContext: context, recipe: resolvedRecipe, lifecycleProjection, lifecycleContext, livingLore, recall });
     return {
         mode,
         timelineId: scene.timelineId,
@@ -168,10 +219,11 @@ export function prepareBackgroundArchiveJob({
         archiveContext: context,
         routeSnapshot,
         promptSnapshot,
+        livingLorePacket: livingLorePacket && typeof livingLorePacket === 'object' ? livingLorePacket : null,
     };
 }
 
-export function compileArchivePrompt({ acceptedProse, currentPlayerAction = '', archiveContext = '', recipe, lifecycleProjection = {}, lifecycleContext = '' } = {}) {
+export function compileArchivePrompt({ acceptedProse, currentPlayerAction = '', archiveContext = '', recipe, lifecycleProjection = {}, lifecycleContext = '', livingLore = '', recall = '' } = {}) {
     const capabilities = buildArchiveCapabilityGuide(lifecycleProjection);
     const lifecycle = String(lifecycleContext || '').trim();
     // The lifecycle board has its own macro so it can be positioned on its own.
@@ -184,23 +236,118 @@ export function compileArchivePrompt({ acceptedProse, currentPlayerAction = '', 
         playerAction: currentPlayerAction,
         narrativeState: archiveContext,
         mechanicsSkill: lifecyclePlaced ? capabilities : [capabilities, lifecycle].filter(Boolean).join('\n\n'),
-        livingLore: '',
+        livingLore,
     });
     sources.narratorDraft = `Accepted canonical prose (evidence only; never reproduce it):\n${String(acceptedProse || '').trim()}`;
-    sources.archiveState = `Current Loom Archive:\n${String(archiveContext || '').trim() || '[empty]'}`;
+    sources.storyArchiveCapture = sources.narratorDraft;
+    // The Scene's own Archive first, then what earlier Scenes settled — the
+    // same order the live Story adapter composes, so `{{loom.archive}}` reads
+    // identically whichever path built it. Recall carries its own heading.
+    sources.archiveState = [
+        `Current Loom Archive:\n${String(archiveContext || '').trim() || '[empty]'}`,
+        String(recall || '').trim(),
+    ].filter(Boolean).join('\n\n');
     sources.mechanicsBoard = lifecyclePlaced ? capabilities : [capabilities, lifecycle].filter(Boolean).join('\n\n');
     sources.lifecycleBoard = lifecycle;
     const messages = [...compilePromptRecipe(recipe, sources).messages];
-    // Policy and contract only. Everything else is the recipe's to place, move,
-    // or leave out: a block the owner removed must stay removed.
-    ensureMessage(messages, ARCHIVE_POLICY, 'system', true);
-    ensureMessage(messages, ARCHIVE_CONTRACT, 'system');
+    // A Loom recipe owns every model-facing instruction, including its policy
+    // and output contract. The worker still validates the returned state fence;
+    // it must not silently add a second policy or contract behind the owner's
+    // recipe, because that makes Prompt Studio previews dishonest.
     return {
         recipeId: String(recipe?.id || ''),
         recipeName: String(recipe?.name || 'Loom Archive'),
         revision: Number(recipe?.revision || recipe?.updatedAt || 0) || 0,
         messages,
     };
+}
+
+/**
+ * Say in the journal what happened to an Archive job.
+ *
+ * Until this existed the only Archive event was `job.queued`. A job that
+ * retried three times and gave up left no trace at all, so "Archive needs
+ * attention" was a dead end: the Debug Console showed the job going out and
+ * nothing coming back, and the only way to find the cause was to export the
+ * journal and hand-correlate `api.response.loom` records by timestamp.
+ *
+ * Every terminal and retrying outcome is recorded, with the failure code and
+ * the reply shape that produced it, so the three failures that look identical
+ * from the UI read differently here.
+ */
+const ARCHIVE_OUTCOME_SEVERITY = Object.freeze({
+    succeeded: 'info',
+    retrying: 'warn',
+    'failed-repairable': 'error',
+    rejected: 'error',
+    cancelled: 'info',
+    superseded: 'info',
+});
+
+function journalArchiveOutcome(job) {
+    const status = String(job?.status || '');
+    const severity = ARCHIVE_OUTCOME_SEVERITY[status];
+    // Pending/running are not outcomes; a job mid-flight has nothing to report.
+    if (!severity) return;
+    const attempts = Number(job?.attempts || 0);
+    const error = job?.error || null;
+    const operations = Number(job?.result?.operations?.length || 0);
+    recordDebugEvent('archive-worker', `job.${status}`, {
+        jobId: job.jobId,
+        timelineId: job.timelineId,
+        sceneId: job.sceneId,
+        mode: job.mode,
+        attempts,
+        status,
+        profileId: job?.routeSnapshot?.profileId || '',
+        recipeName: job?.promptSnapshot?.recipeName || '',
+        operations,
+        transactionId: job?.result?.commitReceipt?.transactionId || null,
+        ingestionReceipt: job?.result?.ingestionReceipt || null,
+        error,
+    }, {
+        correlationId: job.jobId,
+        severity,
+        summary: describeArchiveOutcome(status, attempts, operations, error),
+    });
+}
+
+function describeArchiveOutcome(status, attempts, operations, error) {
+    const cause = error?.code ? `${error.code}${describeReplyShape(error.detail)}` : 'unknown cause';
+    if (status === 'succeeded') return `Archive saved ${operations} operation${operations === 1 ? '' : 's'}`;
+    if (status === 'retrying') return `Archive attempt ${attempts} failed (${cause}); retrying`;
+    if (status === 'failed-repairable') return `Archive needs attention after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${cause}`;
+    if (status === 'rejected') return `Archive rejected permanently: ${cause}`;
+    return `Archive ${status}`;
+}
+
+/** The half a reader actually needs: what the model gave back. */
+function describeReplyShape(detail) {
+    if (!detail || typeof detail !== 'object') return '';
+    const parts = [];
+    if (detail.textChars !== undefined) parts.push(`text ${detail.textChars} chars`);
+    if (detail.reasoningChars) parts.push(`reasoning ${detail.reasoningChars} chars`);
+    if (detail.hasFence !== undefined) parts.push(detail.hasFence ? 'fence present but unparseable' : 'no fence');
+    return parts.length ? ` — ${parts.join(', ')}` : '';
+}
+
+/**
+ * What to add to an Archive retry so it is materially different from the
+ * attempt that failed.
+ *
+ * Only a reasoning-only reply earns an override, and only the provider fields
+ * that turn reasoning off. Every other failure — a malformed fence, a refusal,
+ * a timeout — is retried unchanged, because for those the identical request is
+ * the right request and quietly disabling reasoning would change the answer
+ * for a reason that had nothing to do with reasoning.
+ *
+ * Derived from the Connection Profile, never from the saved profile's stored
+ * settings: this is request-scoped and leaves the owner's reasoning controls
+ * exactly where they set them.
+ */
+export function archiveRetryOverride({ previousError, profileId } = {}) {
+    if (String(previousError?.code || '') !== 'reasoning-only') return {};
+    return reasoningDisabledPayload(profileId);
 }
 
 export function enqueueBackgroundArchive(input) {
@@ -211,7 +358,7 @@ export function enqueueBackgroundArchive(input) {
         messages: job.promptSnapshot.messages,
         request: { prompt: job.promptSnapshot.messages, transport: 'chat', purpose: 'background-archive' },
         transport: 'chat',
-    });
+    }, { correlationId: job.jobId });
     recordDebugEvent('archive-worker', 'job.queued', {
         jobId: job.jobId, timelineId: job.timelineId, sceneId: job.sceneId, mode: job.mode,
         profileId: job.routeSnapshot.profileId, sourceId: job.provenance.sourceId,
@@ -233,6 +380,15 @@ export function retryBackgroundArchive(jobId) {
 
 export function getBackgroundArchiveJob(jobId) {
     return getProductionRuntime().get(jobId);
+}
+
+/**
+ * What a job's reply said about Living Lore, taken once. The Archive port is
+ * archive-only and stays that way; this is the sibling channel a caller that
+ * files lore reads after the job has succeeded.
+ */
+export function takeBackgroundArchiveReply(jobId) {
+    return getProductionRuntime().takeReply(jobId);
 }
 
 export function supersedeBackgroundArchive(jobId, replacementJobId = '') {
@@ -262,19 +418,67 @@ function getProductionRuntime() {
     if (productionRuntime) return productionRuntime;
     ensureTimelineLifecycleProjectionRegistered();
     productionRuntime = createBackgroundArchiveRuntime({
-        transport: async ({ job, promptSnapshot, routeSnapshot, signal }) => {
-            const response = await streamChatPrompt({ prompt: promptSnapshot.messages, profileId: routeSnapshot.profileId, signal });
+        transport: async ({ job, promptSnapshot, routeSnapshot, previousError, signal }) => {
+            // A reply that was all reasoning and no text must not be retried
+            // identically: the next request otherwise carries the same
+            // reasoning mode and can spend its whole output budget the same
+            // way, so three attempts fail for one reason and the Archive
+            // stalls on "needs attention" with nothing to distinguish it from
+            // a model that simply does not answer.
+            //
+            // The Narrator has had this recovery at the
+            // CHAT_COMPLETION_SETTINGS_READY seam. The Loom never saw it: it
+            // sends its own request through streamChatPrompt and that event
+            // never fires for it. Same policy, applied where this path can
+            // reach it — profile-derived, and it never touches the saved
+            // profile or the owner's reasoning controls.
+            const overridePayload = archiveRetryOverride({ previousError, profileId: routeSnapshot.profileId });
+            if (Object.keys(overridePayload).length) {
+                recordDebugEvent('archive-worker', 'retry.reasoning-disabled', {
+                    jobId: job.jobId,
+                    timelineId: job.timelineId,
+                    sceneId: job.sceneId,
+                    mode: job.mode,
+                    attempt: Number(job.attempts || 0),
+                    profileId: routeSnapshot.profileId,
+                    providerFieldsApplied: Object.keys(overridePayload).length > 0,
+                }, {
+                    correlationId: job.jobId,
+                    severity: 'warn',
+                    summary: 'Archive retry: reasoning disabled after a reasoning-only reply',
+                });
+            }
+            const response = await streamChatPrompt({ prompt: promptSnapshot.messages, profileId: routeSnapshot.profileId, signal, overridePayload });
+            const responseText = typeof response === 'string' ? response : String(response?.text || '');
+            const responseReasoning = typeof response === 'object' ? String(response?.reasoning || '') : '';
+            const responseStreamed = typeof response === 'object' ? Boolean(response?.streamed) : false;
             recordApiTranscript('response', {
-                mode: 'loom', purpose: 'background-archive', text: typeof response === 'string' ? response : String(response?.text || ''),
-                reasoning: typeof response === 'object' ? String(response?.reasoning || '') : '',
-                streamed: typeof response === 'object' ? Boolean(response?.streamed) : false,
+                mode: 'loom', purpose: 'background-archive', text: responseText,
+                reasoning: responseReasoning,
+                streamed: responseStreamed,
             }, { type: 'api.response.loom', correlationId: job.jobId, summary: 'Background Loom Archive response received' });
+            // Keep a compact worker receipt beside the full transcript. It
+            // makes a completed Archive legible even when the console is
+            // filtered away from response rows, and ties its shape to the
+            // queued job without duplicating its potentially private text.
+            recordDebugEvent('archive-worker', 'response.received', {
+                jobId: job.jobId,
+                timelineId: job.timelineId,
+                sceneId: job.sceneId,
+                mode: job.mode,
+                textChars: responseText.length,
+                reasoningChars: responseReasoning.length,
+                streamed: responseStreamed,
+            }, {
+                correlationId: job.jobId,
+                summary: `Background Loom response received (${responseText.length} chars)`,
+            });
             return response;
         },
         commit: commitArchiveOperations,
-        onStateChange: (state) => {
+        onStateChange: (state, settledJob = null) => {
             for (const listener of listeners) {
-                try { listener(state); } catch { /* one view cannot break another */ }
+                try { listener(state, settledJob); } catch { /* one view cannot break another */ }
             }
         },
     });
@@ -349,14 +553,6 @@ function recipeUsesSource(recipe, sourceKey) {
     if (!macro) return false;
     return (recipe?.blocks || []).some((block) => block?.enabled !== false
         && String(block?.content || '').includes(`{{${macro}}}`));
-}
-
-function ensureMessage(messages, content, role, prepend = false) {
-    const text = String(content || '').trim();
-    if (!text || messages.some((message) => String(message?.content || '').includes(text))) return;
-    const entry = { role, content: text };
-    if (prepend) messages.unshift(entry);
-    else messages.push(entry);
 }
 
 export const backgroundArchiveIngestion = createArchiveIngestion(legacyArchiveIngestionAdapter);

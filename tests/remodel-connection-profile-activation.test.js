@@ -56,11 +56,29 @@ test('a failed Narrator profile activation does not abandon Scene creation', () 
     const catchStart = body.indexOf("console.error('Remodel: could not activate the selected Narrator connection profile'");
     expect(catchStart).toBeGreaterThan(-1);
     // From the failure report to the end of the catch block: no early return.
-    const catchBlock = body.slice(catchStart, body.indexOf('await context.selectCharacterById', catchStart));
+    const catchBlock = body.slice(catchStart, body.indexOf('await selectCharacterForNewScene', catchStart));
     expect(catchBlock).not.toMatch(/\breturn\b/);
     // ...and the Scene really is still created afterwards.
-    expect(body).toMatch(/await context\.selectCharacterById\(narratorIndex/);
-    expect(body).toMatch(/await createNewChatForScene\(sceneId\)/);
+    expect(body).toMatch(/await selectCharacterForNewScene\(context, narratorIndex\)/);
+    expect(body).toMatch(/await createNewChatForScene\(sceneId, \{ expectedCharacterId: narratorIndex \}\)/);
+});
+
+// THE DEFECT: selectCharacterById() deliberately does nothing while core is
+// saving a chat. The Scene flow then called doNewChat() anyway, which follows
+// the old selected_group and creates a group chat. The integrity guard belongs
+// before that branch and must reject a stale group selection.
+test('new Scene chats require the selected narrator and never inherit a group', () => {
+    const helperStart = timelineSpine.indexOf('async function selectCharacterForNewScene');
+    const createStart = timelineSpine.indexOf('async function createNewChatForScene');
+    expect(helperStart).toBeGreaterThan(-1);
+    expect(createStart).toBeGreaterThan(helperStart);
+    const helper = timelineSpine.slice(helperStart, createStart);
+    const create = timelineSpine.slice(createStart, timelineSpine.indexOf('async function waitForChatIdSettled', createStart));
+    expect(helper).toContain('await context.selectCharacterById(characterId, { switchMenu: false })');
+    expect(helper).toContain("String(current.characterId) === String(characterId) && !current.groupId");
+    expect(create).toContain('expectedCharacterId !== null');
+    expect(create).toContain('!context.groupId');
+    expect(create.indexOf('if (!isExpectedCharacter)')).toBeLessThan(create.indexOf('await doNewChat()'));
 });
 
 

@@ -310,3 +310,110 @@ test('a permanent contract rejection is terminal and never becomes Archive atten
     expect(await worker.runNext('timeline-1')).toBeNull();
     expect(commit).not.toHaveBeenCalled();
 });
+
+// --- The reply side channel ------------------------------------------------
+//
+// The Archive port is archive-only and refuses loreProposals in its output on
+// purpose. observeReply is the seam beside it: the whole reply, once it is
+// known to parse, before anything commits.
+
+test('observeReply sees the parsed reply once, before commit, and never a malformed one', async () => {
+    const seen = [];
+    const order = [];
+    const repository = createArchiveJobRepository({ persistence: createMemoryArchiveJobPersistence(), now: () => 1000 });
+    const worker = createArchiveWorker({
+        repository,
+        transport: async () => stateReply('The lantern lit.'),
+        ingestion: createArchiveIngestion(legacyArchiveIngestionAdapter),
+        commit: jest.fn(async ({ jobId }) => { order.push('commit'); return { transactionId: `tx:${jobId}` }; }),
+        observeReply: async ({ jobId, raw }) => { order.push('observe'); seen.push({ jobId, raw }); },
+        now: () => 1000, retryDelayMs: 0, timeoutMs: 1000,
+    });
+    const queued = worker.enqueue(job());
+    const done = await worker.runNext('timeline-1');
+    expect(done.status).toBe(ARCHIVE_JOB_STATUS.SUCCEEDED);
+    expect(seen).toEqual([{ jobId: queued.jobId, raw: stateReply('The lantern lit.') }]);
+    expect(order).toEqual(['observe', 'commit']);
+});
+
+test('a reply with no fence is retried without ever reaching observeReply', async () => {
+    const observeReply = jest.fn();
+    const repository = createArchiveJobRepository({ persistence: createMemoryArchiveJobPersistence(), now: () => 1000 });
+    const worker = createArchiveWorker({
+        repository,
+        transport: async () => 'I would rather keep narrating.',
+        ingestion: createArchiveIngestion(legacyArchiveIngestionAdapter),
+        commit: jest.fn(),
+        observeReply,
+        now: () => 1000, retryDelayMs: 0, timeoutMs: 1000, maxAttempts: 1,
+    });
+    worker.enqueue(job());
+    const done = await worker.runNext('timeline-1');
+    expect(done.status).toBe(ARCHIVE_JOB_STATUS.FAILED_REPAIRABLE);
+    expect(observeReply).not.toHaveBeenCalled();
+});
+
+test('an observer that throws cannot fail the Archive', async () => {
+    const commit = jest.fn(async ({ jobId }) => ({ transactionId: `tx:${jobId}` }));
+    const repository = createArchiveJobRepository({ persistence: createMemoryArchiveJobPersistence(), now: () => 1000 });
+    const worker = createArchiveWorker({
+        repository,
+        transport: async () => stateReply(),
+        ingestion: createArchiveIngestion(legacyArchiveIngestionAdapter),
+        commit,
+        observeReply: async () => { throw new Error('lore side effect exploded'); },
+        now: () => 1000, retryDelayMs: 0, timeoutMs: 1000,
+    });
+    worker.enqueue(job());
+    const done = await worker.runNext('timeline-1');
+    expect(done.status).toBe(ARCHIVE_JOB_STATUS.SUCCEEDED);
+    expect(commit).toHaveBeenCalledTimes(1);
+});
+
+
+// --- Retrying a reasoning-only reply --------------------------------------
+//
+// The worker clears `error` when it marks a job RUNNING, so unless the prior
+// failure is handed to the transport there is no way to tell a first attempt
+// from a retry, and every attempt sends the identical request.
+
+test('the transport is told what failed last time, and nothing on a first attempt', async () => {
+    const seen = [];
+    const repository = createArchiveJobRepository({ persistence: createMemoryArchiveJobPersistence(), now: () => 1000 });
+    let attempt = 0;
+    const worker = createArchiveWorker({
+        repository,
+        transport: async ({ previousError }) => {
+            seen.push(previousError ? previousError.code : null);
+            attempt += 1;
+            // Fail the first attempt the way a reasoning-only reply does.
+            return attempt === 1 ? { text: '', reasoning: 'thought about it at length' } : stateReply();
+        },
+        ingestion: createArchiveIngestion(legacyArchiveIngestionAdapter),
+        commit: jest.fn(async ({ jobId }) => ({ transactionId: `tx:${jobId}` })),
+        now: () => 1000, retryDelayMs: 0, timeoutMs: 1000, maxAttempts: 3,
+    });
+    worker.enqueue(job());
+    const first = await worker.runNext('timeline-1');
+    expect(first.status).toBe(ARCHIVE_JOB_STATUS.RETRYING);
+    expect(first.error.code).toBe('reasoning-only');
+    const second = await worker.runNext('timeline-1');
+    expect(second.status).toBe(ARCHIVE_JOB_STATUS.SUCCEEDED);
+    expect(seen).toEqual([null, 'reasoning-only']);
+});
+
+test('an empty reply with no reasoning is reported as empty-response, not reasoning-only', async () => {
+    const seen = [];
+    const repository = createArchiveJobRepository({ persistence: createMemoryArchiveJobPersistence(), now: () => 1000 });
+    const worker = createArchiveWorker({
+        repository,
+        transport: async ({ previousError }) => { seen.push(previousError ? previousError.code : null); return { text: '', reasoning: '' }; },
+        ingestion: createArchiveIngestion(legacyArchiveIngestionAdapter),
+        commit: jest.fn(),
+        now: () => 1000, retryDelayMs: 0, timeoutMs: 1000, maxAttempts: 2,
+    });
+    worker.enqueue(job());
+    await worker.runNext('timeline-1');
+    await worker.runNext('timeline-1');
+    expect(seen).toEqual([null, 'empty-response']);
+});
