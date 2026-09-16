@@ -12,13 +12,13 @@ import { buildLoomContext } from './loom-context.js';
 import { resolveByName } from './direction-address.js';
 import { resolveDirectionActions } from './turn-chrome.js';
 import { deriveBeats } from './direction-beats.js';
-import { compilePromptRecipe, getCurrentPromptStudioRecipe, recordLoomPromptTranscript } from './prompt-studio.js';
+import { compilePromptRecipe, getCurrentPromptStudioRecipe, recordLoomPromptTranscript, recordNarratorPromptTranscript } from './prompt-studio.js';
 import { repairDirectedNarratorRoles } from './narrator-history.js';
 import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
 import { splitReasoning } from './reasoning-strip.js';
 import { streamChatPrompt } from './story-stream.js';
-import { buildEmptyResponseNudge, buildNarratorArchivistSections, buildGoalObjectives } from './narrator-prompt.js';
+import { buildEmptyResponseNudge, buildNarratorArchivistSections, buildNarratorRecallSections, buildGoalObjectives } from './narrator-prompt.js';
 import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
 import { formatLivingLorePacket } from './living-lore-proposals.js';
 import { saveWorldSensePromotionDecisionReceipt, saveWorldSenseProposalRejections } from './world-sense-store.js';
@@ -42,8 +42,9 @@ import { listLivingLoreWrites } from './living-lore-store.js';
 import { listEvents } from './archivist-store.js';
 import { resolveWorldSenseFromContext, retrieveWorldSenseByKeywords, scheduleWorldSensePrefetch } from './world-sense-runtime.js';
 import { applyNarratorRetryPolicy } from './narrator-retry-policy.js';
+import { applyNarratorReasoningPolicy } from './narrator-reasoning-policy.js';
 import { describeNarratorOutput } from './narrator-output-contract.js';
-import { limitBoundedChatHistory } from './prompt-history-limit.js';
+import { limitBoundedChatHistory, removeLatestPlayerAction, removeLegacyNarratorConstraints, removeNativeNewChatBootstrap, restoreTaggedNextAction, tagNextAction } from './prompt-history-limit.js';
 import { buildSceneArchiveProjection } from './archive-projection.js';
 import { snapshotGenerationRoutes } from './generation-route.js';
 import { createNarratorDelivery } from './narrator-delivery.js';
@@ -67,14 +68,15 @@ import {
     recoverBackgroundArchive,
     retryBackgroundArchive,
     subscribeBackgroundArchive,
+    takeBackgroundArchiveReply,
 } from './background-archive-runtime.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const AUTONOMOUS_CONTINUE_ACTION = '[Continue the scene from accepted history.]';
 const PACING = Object.freeze({
-    slow: { cps: 28, wordMs: 35, min: 700, max: 2200, opening: 750 },
-    natural: { cps: 45, wordMs: 25, min: 400, max: 1400, opening: 600 },
-    fast: { cps: 75, wordMs: 12, min: 150, max: 650, opening: 350 },
+    slow: { cps: 16, wordMs: 55, min: 850, max: 2800, opening: 900 },
+    natural: { cps: 48, wordMs: 20, min: 250, max: 1050, opening: 450 },
+    fast: { cps: 120, wordMs: 5, min: 50, max: 220, opening: 100 },
     instant: { cps: Infinity, wordMs: 0, min: 0, max: 0, opening: 0 },
 });
 const archiveCatchups = new Map();
@@ -94,6 +96,10 @@ const hooks = {
     // than imported, because prompt-studio.js reaches oai_settings and this
     // module is driven from timeline-spine.js, which already owns that seam.
     setNativePromptContent: () => false,
+    getNarratorNote: () => '',
+    // Runs a bounded Narrator request with a Scene-selected recipe, restoring
+    // the ordinary Narrator recipe afterwards. Continue is the current user.
+    withPromptStudioRecipe: async (_recipeId, work) => work(),
     activateConnectionProfile: async () => null,
     // A response landed after a failure was reported. The notice is stale.
     onRecovered: () => {},
@@ -284,8 +290,16 @@ export function initLiveDirection(options = {}) {
     Object.assign(hooks, Object.fromEntries(Object.entries(options).filter(([, value]) => typeof value === 'function')));
     if (initialized) return;
     initialized = true;
-    subscribeBackgroundArchive(() => {
+    subscribeBackgroundArchive((_state, settledJob) => {
         notifyState();
+        if (settledJob) {
+            void settleBackgroundArchiveLore(settledJob).catch((error) => {
+                journal('lore.archive.settlement.failed', {
+                    jobId: settledJob.jobId,
+                    error: String(error?.message || error),
+                }, { severity: 'warn', summary: 'Archive saved, but its Living Lore reply could not be filed' });
+            });
+        }
     });
     recoverBackgroundArchive();
     const context = getContext();
@@ -324,15 +338,30 @@ export function initLiveDirection(options = {}) {
     context.eventSource.on(context.eventTypes.CHAT_COMPLETION_PROMPT_READY, (eventData) => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
         if (!eventData || !Array.isArray(eventData.chat)) return;
+        const bootstrapRemoved = removeNativeNewChatBootstrap(eventData.chat);
+        const legacyConstraintsRemoved = removeLegacyNarratorConstraints(eventData.chat);
+        const nextActionRemoved = activeRun.nextActionRouted
+            ? removeLatestPlayerAction(eventData.chat, activeRun.nextAction)
+            : 0;
         const limitedHistory = limitBoundedChatHistory(eventData.chat);
-        if (limitedHistory.applied) {
+        if (activeRun.nextActionRouted) restoreTaggedNextAction(eventData.chat);
+        if (limitedHistory.applied || bootstrapRemoved || legacyConstraintsRemoved || nextActionRemoved) {
             journal('history.bounded', {
                 directionId: activeRun.directionId,
                 limit: limitedHistory.limit,
-                removed: limitedHistory.removed,
+                removed: limitedHistory.removed + bootstrapRemoved + legacyConstraintsRemoved + nextActionRemoved,
+                bootstrapRemoved,
+                legacyConstraintsRemoved,
+                nextActionRemoved,
             }, {
                 correlationId: activeRun.directionId,
-                summary: `Narrator chat history limited to ${limitedHistory.limit} messages`,
+                summary: limitedHistory.applied
+                    ? `Narrator chat history limited to ${limitedHistory.limit} messages`
+                    : legacyConstraintsRemoved
+                        ? 'Legacy Narrator constraints removed from Chat History'
+                        : nextActionRemoved
+                            ? 'Newest player action routed separately from Chat History'
+                            : 'Narrator new-chat bootstrap removed from Chat History',
             });
         }
         // Outside the explicit {{chat.history messages=N}} boundary consumed
@@ -362,6 +391,19 @@ export function initLiveDirection(options = {}) {
     // and the user's reasoning controls remain untouched.
     context.eventSource.on(context.eventTypes.CHAT_COMPLETION_SETTINGS_READY, (request) => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
+        const profileId = activeRun.generationRoutes?.narrator?.profileId;
+        const policy = applyNarratorReasoningPolicy(request, { profileId });
+        if (policy.mode !== 'native') {
+            journal('narrator.reasoning-policy', {
+                directionId: activeRun.directionId,
+                profileId,
+                mode: policy.mode,
+                providerFieldsApplied: policy.applied,
+            }, {
+                correlationId: activeRun.directionId,
+                summary: `Narrator reasoning mode: ${policy.mode}`,
+            });
+        }
         const recovered = applyNarratorRetryPolicy(request, activeRun);
         if (!recovered) return;
         journal('retry.reasoning-disabled', {
@@ -455,7 +497,11 @@ export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
         openingLabel: activeRun?.openingLabel || '',
         canContinue: activeRun?.state === 'Waiting for you',
         canSend: !directing,
-        canStop: directing || Boolean(activeRun && !['Ready', 'Complete'].includes(activeRun.state)),
+        // A completed turn may deliberately remain available as a resume point
+        // while it says "Waiting for you" (or while the player is composing).
+        // That is an idle hold, not a provider request, Loom pass, or reveal
+        // that Stop could interrupt.
+        canStop: directing || Boolean(activeRun && !['Ready', 'Complete', 'Waiting for you', 'Held while you write'].includes(activeRun.state)),
         performerLabel: activeRun?.performer?.label || '',
         progress,
         // True when the last turn's Narrator produced no reasoning — extraction
@@ -479,7 +525,13 @@ export function clearLiveDirectionFailure() {
 export function setLiveDirectionPacing(scene, pacing) {
     if (!scene || !PACING[pacing]) return false;
     updateScene(scene.id, { liveDirection: { ...scene.liveDirection, pacing } });
-    if (activeRun?.sceneId === scene.id) activeRun.pacing = pacing;
+    if (activeRun?.sceneId === scene.id) {
+        activeRun.pacing = pacing;
+        // Do not make a newly chosen pace wait behind the old breath timer.
+        // This only affects the retired visible-Loom reveal path; canonical
+        // Narrator delivery reads the same live value from its own transport.
+        scheduleReveal(0, { replace: true });
+    }
     notifyState();
     return true;
 }
@@ -557,7 +609,7 @@ export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = 
  *        Regenerate supplies it after discarding the superseded take, so the
  *        retake occupies the moment it is a retake OF.
  */
-export async function requestNextDirection(scene = hooks.getActiveScene(), { notebookTurn = null, deliveryMode = 'canonical' } = {}) {
+export async function requestNextDirection(scene = hooks.getActiveScene(), { notebookTurn = null, deliveryMode = 'canonical', useContinueRecipe = false } = {}) {
     if (!isDirectedLiveScene(scene) || activeRun && !['Waiting for you', 'Complete'].includes(activeRun.state)) return false;
     // Guarded as well as activeRun: between a completed reveal and the moment a
     // new run exists there is a multi-second hidden window in which activeRun is
@@ -598,7 +650,15 @@ export async function requestNextDirection(scene = hooks.getActiveScene(), { not
             deliveryMode,
         });
     }
-    return beginDirection({ scene, action: AUTONOMOUS_CONTINUE_ACTION, insertUser: false, autonomousSequence: sequence, notebookTurn, deliveryMode });
+    return beginDirection({
+        scene,
+        action: AUTONOMOUS_CONTINUE_ACTION,
+        insertUser: false,
+        autonomousSequence: sequence,
+        notebookTurn,
+        deliveryMode,
+        continueRecipeId: useContinueRecipe ? scene.promptRecipeIds?.continue || null : null,
+    });
 }
 
 export function handleLiveDirectionDraft(value) {
@@ -659,7 +719,7 @@ function buildLiveDirectionLoreOptions(action) {
 export function continueLiveDirection() {
     if (!activeRun || activeRun.state !== 'Waiting for you') return false;
     if (activeRun.waitingAtEnd) {
-        requestNextDirection(hooks.getActiveScene(), { deliveryMode: activeRun.deliveryMode || 'legacy' });
+        requestNextDirection(hooks.getActiveScene(), { deliveryMode: activeRun.deliveryMode || 'legacy', useContinueRecipe: true });
         return true;
     }
     activeRun.holdReason = '';
@@ -721,7 +781,7 @@ export async function continueLiveStep(scene = hooks.getActiveScene(), { deliver
     // idle scene advances to the next turn. Resolved from the same function
     // the button is labelled from, so the two cannot disagree.
     if (advance.target === 'resume') return continueLiveDirection();
-    if (advance.target === 'loom') return requestNextDirection(scene, { deliveryMode });
+    if (advance.target === 'loom') return requestNextDirection(scene, { deliveryMode, useContinueRecipe: true });
     journal('continue.rejected', { reason: advance.reason }, { severity: 'warn' });
     return false;
 }
@@ -983,14 +1043,14 @@ export async function rerunDirectedRoleplayFromUserMessage({
     });
 }
 
-async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, postedMessage = null, deliveryMode = 'canonical' } = {}) {
+async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, postedMessage = null, deliveryMode = 'canonical', continueRecipeId = null } = {}) {
     // Checked before the Loom call, not after: the Loom costs a real
     // request and ~17s, and there is no point spending either when the
     // performer that follows it cannot speak.
     const blocked = !scene ? 'No active Scene.' : describeNativeGenerationBlock();
     if (blocked) {
         journal('blocked', { reason: blocked }, { severity: 'warn' });
-        return directionFailure(new Error(blocked), { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage, deliveryMode });
+        return directionFailure(new Error(blocked), { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage, deliveryMode, continueRecipeId });
     }
     // Last line of defence. Every caller checks the lock, but they are all async
     // and a caller that awaited something in between could still arrive here
@@ -1152,7 +1212,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         askedThePerformer = true;
         standingEnvelope = normalized;
         standingPerformer = performer;
-        return await generateDirectedPerformer({ scene, envelope: normalized, performer, autonomousSequence, token, deliveryMode });
+        return await generateDirectedPerformer({ scene, envelope: normalized, performer, autonomousSequence, token, deliveryMode, continueRecipeId });
     } catch (error) {
         // Stop/supersede deliberately aborts whichever provider call owns the
         // pass. The resulting AbortError (often surfaced only as "Generation
@@ -1178,7 +1238,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             }, { correlationId: token.id, severity: 'warn', summary: 'direction.failed: suppressed, the empty-response retry owns this turn' });
             return false;
         }
-        return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage, deliveryMode });
+        return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage, deliveryMode, continueRecipeId });
     } finally {
         // A take that never reached the performer produced nothing — no
         // message, no state change — so its entries must not bind the turn
@@ -1298,6 +1358,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     const worldSense = await worldSensePromise;
     const activation = await activateWorldSenseSelection(context, worldSense, { phase: preview ? 'preview' : 'dry-run' });
     journalWorldSenseActivation(activation, directionInFlight?.id || worldSense?.receipt?.id || null);
+    journalWorldSenseDelivery(worldSense, directionInFlight?.id || worldSense?.receipt?.id || null);
     let lore = {};
     try {
         const scan = worldInfoScanCorpus([action, ...history.slice(-12).reverse().map((message) => message.content)]);
@@ -1469,7 +1530,25 @@ function ownedByEmptyRetry(directionId) {
     return Boolean(directionId) && retryingEmpty.has(directionId);
 }
 
-async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0, previousReasoningLength = 0, previousFailureCause = '', deliveryMode = 'canonical' }) {
+async function generateDirectedPerformer({ scene, envelope, performer, autonomousSequence, token = null, emptyRetries = 0, previousReasoningLength = 0, previousFailureCause = '', deliveryMode = 'canonical', continueRecipeId = null, continueRecipeApplied = false }) {
+    // The recipe scope has to include profile activation and native prompt
+    // capture, not merely the provider call. Re-enter once under the scope so
+    // both canonical and legacy Narrator delivery receive the same behaviour.
+    if (continueRecipeId && !continueRecipeApplied) {
+        return hooks.withPromptStudioRecipe(continueRecipeId, () => generateDirectedPerformer({
+            scene,
+            envelope,
+            performer,
+            autonomousSequence,
+            token,
+            emptyRetries,
+            previousReasoningLength,
+            previousFailureCause,
+            deliveryMode,
+            continueRecipeId,
+            continueRecipeApplied: true,
+        }));
+    }
     const generationRoutes = testAdapters ? null : snapshotGenerationRoutes({
         scene,
         roles: deliveryMode === 'canonical' ? ['narrator'] : ['narrator', 'loom'],
@@ -1513,6 +1592,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         emptyRetries: Number(emptyRetries) || 0,
         previousReasoningLength: Number(previousReasoningLength) || 0,
         previousFailureCause: String(previousFailureCause || ''),
+        continueRecipeId: String(continueRecipeId || ''),
         progress: token?.progress || createDirectionProgress(envelope.directionId),
     };
     if (token) runPassTokens.set(activeRun, token);
@@ -1528,12 +1608,12 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     }
     // The Narrator generates natively — its full configured prompt (system
     // prompt, card, persona, world info, author's notes, examples, history) —
-    // with the Loom's readable Archive state resolved into the recipe-owned
-    // Narrator Grounding macro. Placement and policy remain user-authored.
-    const archivistState = buildNarratorArchivistSections(scene.timelineId, scene.id, { archiveProjection: envelope.archiveProjection });
+    // with eligible earlier-Scene continuity resolved into the recipe-owned
+    // Narrator Recall macro. Current-Scene state stays in native Chat History.
+    const recallState = buildNarratorRecallSections(scene.timelineId, scene.id, { archiveProjection: envelope.archiveProjection });
     // A retry must not re-send the request that just failed. The empty-response
     // path was re-issuing a byte-identical body — verified on the wire — so the
-    // nudge rides the grounding channel, which is the one injection point already
+    // nudge rides the recall channel, which is the request-scoped injection point
     // proven to reach the request (notes.bridge reports its length every turn).
     const retryNudge = buildEmptyResponseNudge(Number(emptyRetries) + 1, {
         // Passed in, not read back: activeRun.messageId is only assigned when
@@ -1543,22 +1623,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     });
     // Goals travel once through the recipe-owned story.goals macro. Duplicating
     // them here made one objective look like two independent constraints.
-    const groundedState = [archivistState, retryNudge].filter(Boolean).join('\n\n');
-    const groundingRouted = hooks.setNativePromptContent('narratorGrounding', (args = {}) => [
-        buildNarratorArchivistSections(scene.timelineId, scene.id, {
-            events: args.events,
-            archiveProjection: envelope.archiveProjection,
-            archiveQuery: envelope.archiveProjection?.queryTerms || [],
-        }),
-        retryNudge,
-    ].filter(Boolean).join('\n\n'));
-    journal('notes.bridge', {
-        directionId: envelope.directionId,
-        routed: groundingRouted ? 'recipe-macro' : 'recipe-macro-disabled',
-        groundingChars: groundedState.length,
-        retryNudged: Boolean(retryNudge),
-        hasArchivist: Boolean(String(archivistState || '').trim()),
-    }, { correlationId: envelope.directionId });
+    const groundedState = [recallState, retryNudge].filter(Boolean).join('\n\n');
     // The user message was inserted explicitly above. Native normal
     // generation also reads #send_textarea and would send any stale draft a
     // second time, producing a duplicate user line and a second response.
@@ -1593,6 +1658,31 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
                 durationMs: Date.now() - activationStartedAt,
             }, { correlationId: envelope.directionId, summary: 'Narrator connection ready' });
         }
+        // Profile activation can replace core's prompt objects. Restore the
+        // recipe first, then resolve request-scoped recall into its recipe-owned
+        // slot so profile activation cannot erase it.
+        const recallRouted = hooks.setNativePromptContent('narratorRecall', (args = {}) => [
+            buildNarratorRecallSections(scene.timelineId, scene.id, {
+                scenes: args.scenes,
+                archiveProjection: envelope.archiveProjection,
+            }),
+            retryNudge,
+        ].filter(Boolean).join('\n\n'));
+        const narratorNoteRouted = hooks.setNativePromptContent('narratorNote', hooks.getNarratorNote());
+        const nextAction = envelope.currentPlayerAction === AUTONOMOUS_CONTINUE_ACTION
+            ? ''
+            : String(envelope.currentPlayerAction || '').trim();
+        activeRun.nextAction = nextAction;
+        activeRun.nextActionRouted = Boolean(nextAction) && hooks.setNativePromptContent('nextAction', tagNextAction(nextAction));
+        journal('notes.bridge', {
+            directionId: envelope.directionId,
+            routed: recallRouted ? 'recipe-macro' : 'recipe-macro-disabled',
+            groundingChars: groundedState.length,
+            retryNudged: Boolean(retryNudge),
+            hasRecall: Boolean(String(recallState || '').trim()),
+            narratorNoteRouted,
+            nextActionRouted: activeRun.nextActionRouted,
+        }, { correlationId: envelope.directionId });
         const loreActivation = await activateWorldSenseSelection(context, envelope.worldSense, { phase: 'generation' });
         journalWorldSenseActivation(loreActivation, envelope.directionId);
         // force_chid is read by generateGroupWrapper as `typeof … == 'number'`,
@@ -1656,9 +1746,11 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
     } finally {
         if (generationOwned) ownedGenerationDepth = Math.max(0, ownedGenerationDepth - 1);
         // Dynamic macro content is request-scoped even though its native prompt
-        // object persists with the recipe. Clear the resolved Archive after
-        // assembly so a later free-play request cannot inherit it.
-        hooks.setNativePromptContent('narratorGrounding', '');
+        // objects persist with the recipe. Clear recall after assembly so a later
+        // free-play request cannot inherit this turn's continuity.
+        hooks.setNativePromptContent('narratorRecall', '');
+        hooks.setNativePromptContent('narratorNote', '');
+        hooks.setNativePromptContent('nextAction', '');
         if (generationOwned) {
             journal('generation.end', {
                 directionId: envelope.directionId,
@@ -1684,44 +1776,42 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
  */
 async function generateCanonicalNarrator({ scene, run, performer }) {
     const context = getContext();
-    const archivistState = buildNarratorArchivistSections(scene.timelineId, scene.id, {
+    const recallState = buildNarratorRecallSections(scene.timelineId, scene.id, {
         archiveProjection: run.envelope.archiveProjection,
     });
-    const groundingRouted = hooks.setNativePromptContent('narratorGrounding', (args = {}) => buildNarratorArchivistSections(
-        scene.timelineId,
-        scene.id,
-        {
-            events: args.events,
-            archiveProjection: run.envelope.archiveProjection,
-            archiveQuery: run.envelope.archiveProjection?.queryTerms || [],
-        },
-    ));
-    journal('canonical.notes.bridge', {
-        directionId: run.directionId,
-        routed: groundingRouted ? 'recipe-macro' : 'recipe-macro-disabled',
-        groundingChars: archivistState.length,
-    }, { correlationId: run.directionId });
-
     try {
         const repaired = repairDirectedNarratorRoles(context.chat);
         if (repaired) await context.saveChat();
         const profileId = run.generationRoutes?.narrator?.profileId || scene.generationProfileIds?.narrator;
         if (!profileId) throw new Error('Narrator has no Connection Profile assigned.');
         await hooks.activateConnectionProfile(profileId);
+        // The activated profile can replace the native prompt objects. The
+        // hook restores the active Scene recipe, so only now is it safe to
+        // write this turn's earlier-Scene recall into its intended prompt slot.
+        const recallRouted = hooks.setNativePromptContent('narratorRecall', (args = {}) => buildNarratorRecallSections(
+            scene.timelineId,
+            scene.id,
+            {
+                scenes: args.scenes,
+                archiveProjection: run.envelope.archiveProjection,
+            },
+        ));
+        const narratorNoteRouted = hooks.setNativePromptContent('narratorNote', hooks.getNarratorNote());
+        const nextAction = run.envelope.currentPlayerAction === AUTONOMOUS_CONTINUE_ACTION
+            ? ''
+            : String(run.envelope.currentPlayerAction || '').trim();
+        run.nextAction = nextAction;
+        run.nextActionRouted = Boolean(nextAction) && hooks.setNativePromptContent('nextAction', tagNextAction(nextAction));
+        journal('canonical.notes.bridge', {
+            directionId: run.directionId,
+            routed: recallRouted ? 'recipe-macro' : 'recipe-macro-disabled',
+            groundingChars: recallState.length,
+            narratorNoteRouted,
+            nextActionRouted: run.nextActionRouted,
+        }, { correlationId: run.directionId });
         const activation = await activateWorldSenseSelection(context, run.envelope.worldSense, { phase: 'generation' });
         journalWorldSenseActivation(activation, run.directionId);
         if (run.canonicalCancelled || activeRun !== run) return false;
-        const autonomousContinue = !run.envelope.currentPlayerAction;
-        // A native Continue dry-run alone leaves some raw Connection Manager
-        // transports with an assistant-ended request and no explicit turn
-        // boundary, so this turn needs an explicit one. The wording is the
-        // recipe's: this only decides whether the turn is autonomous and lets
-        // the Autonomous Continue block say what it says. A recipe that removed
-        // the block sends nothing, which is the owner's call to make.
-        const continueRouted = hooks.setNativePromptContent(
-            'continueDirective',
-            (args = {}) => (autonomousContinue ? String(args.text || '') : ''),
-        );
         // Which verbs this turn offers is the recipe's call. Captured from the
         // block's own argument while the prompt assembles; a removed block
         // leaves this empty and the Narrator is never told the verbs exist.
@@ -1735,23 +1825,27 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
         const generationType = 'normal';
         const capturedPrompt = testAdapters?.captureNarratorPrompt
             ? await testAdapters.captureNarratorPrompt({ scene, run, performer, context, generationType })
-            : await captureNativeNarratorPrompt({ context, performer, generationType });
-        // Only fall back to the request-only control message when the recipe has
-        // no Continue block to carry it.
-        const prompt = prepareNativeNarratorPrompt(capturedPrompt, { autonomousContinue: autonomousContinue && !continueRouted });
+            : await captureNativeNarratorPrompt({ context, performer, generationType, nextAction: run.nextActionRouted ? nextAction : '' });
+        const prompt = prepareNativeNarratorPrompt(capturedPrompt);
         journal('canonical.prompt.captured', {
             directionId: run.directionId,
             generationType,
-            turnIntent: autonomousContinue ? 'autonomous-continue' : 'player-action',
+            turnIntent: run.envelope.currentPlayerAction ? 'player-action' : 'autonomous-continue',
             messageCount: prompt.length,
             connectionProfileId: profileId,
         }, {
             correlationId: run.directionId,
             summary: `Canonical Narrator prompt captured as ${generationType}`,
         });
-        hooks.setNativePromptContent('narratorGrounding', '');
-        hooks.setNativePromptContent('continueDirective', '');
+        hooks.setNativePromptContent('narratorRecall', '');
+        hooks.setNativePromptContent('narratorNote', '');
+        hooks.setNativePromptContent('nextAction', '');
         if (run.canonicalCancelled || activeRun !== run) return false;
+
+        // The native Narrator transport bypasses Prompt Studio's core
+        // GENERATE_AFTER_DATA hook. Record the final captured array here so a
+        // streamed Narrator response always has the request that produced it.
+        recordNarratorPromptTranscript(prompt);
 
         advancePassStage(run, 'reveal');
         const transport = testAdapters?.streamCanonicalNarrator
@@ -1783,13 +1877,23 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
         run.canonicalSession = session;
         const result = await session.completion;
         run.canonicalSession = null;
+        run.reasoning = String(result.reasoning || '');
+        journalResponse('narrator', {
+            text: result.acceptedText,
+            reasoning: run.reasoning,
+            streamed: true,
+        }, {
+            correlationId: run.directionId,
+            purpose: 'canonical-narrator',
+        });
         if (!result.acceptedText && ['empty', 'failed'].includes(result.status)) {
             throw new Error(result.error?.message || 'The Narrator returned no visible prose.');
         }
         return true;
     } finally {
-        hooks.setNativePromptContent('narratorGrounding', '');
-        hooks.setNativePromptContent('continueDirective', '');
+        hooks.setNativePromptContent('narratorRecall', '');
+        hooks.setNativePromptContent('narratorNote', '');
+        hooks.setNativePromptContent('nextAction', '');
     }
 }
 
@@ -1832,6 +1936,7 @@ function createCanonicalMessageStore({ context, run, performer, scene }) {
             run.interrupted = ['interrupted', 'stopped'].includes(result.status);
             run.acceptedComplete = true;
             run.waitingAtEnd = true;
+            run.reasoning = String(result.reasoning || run.reasoning || '');
             run.holdReason = 'hard';
             run.state = 'Waiting for you';
             message.mes = result.acceptedText;
@@ -1869,6 +1974,9 @@ function queueCanonicalArchive({ scene, run, message, messageId, result }) {
             mode: 'roleplay',
             acceptedProse: result.acceptedText,
             currentPlayerAction: String(run.envelope?.currentPlayerAction || ''),
+            // Roleplay Loom currently owns Archive upkeep and World Sense
+            // keyword refresh only. Living Lore writing is deliberately
+            // retired until its separate workflow is redesigned.
             provenance: {
                 kind: interrupted ? 'interrupted-prefix' : 'current-turn',
                 sourceId: run.directionId,
@@ -1880,6 +1988,11 @@ function queueCanonicalArchive({ scene, run, message, messageId, result }) {
         const job = enqueueBackgroundArchive(prepared);
         message.extra ??= {};
         message.extra.remodelArchiveJobId = job.jobId;
+        // The terminal message was saved immediately before the job existed.
+        // Persist this correlation too, so a reload cannot make a successful
+        // Archive reply impossible to file as Living Lore.
+        const context = getContext();
+        if (typeof context.saveChat === 'function') void Promise.resolve(context.saveChat()).catch(() => {});
     } catch (error) {
         journal('archive.background.enqueue.failed', {
             directionId: run.directionId,
@@ -1888,6 +2001,128 @@ function queueCanonicalArchive({ scene, run, message, messageId, result }) {
             error: String(error?.message || error),
         }, { correlationId: run.directionId, severity: 'warn', summary: 'Accepted prose was saved, but could not be queued for the Loom Archive' });
     }
+}
+
+// World Sense has two separate delivery paths. Selected Timeline/Living Lore
+// is put straight into Remodel's Narrator snapshot, while selected native
+// World Info is activated through SillyTavern. Recording both prevents the
+// latter's `0` from being read as no continuity at all.
+function journalWorldSenseDelivery(worldSense, correlationId = null) {
+    try {
+        const selected = Array.isArray(worldSense?.selected) ? worldSense.selected : [];
+        const continuity = Array.isArray(worldSense?.continuity) ? worldSense.continuity : [];
+        recordDebugEvent('world-sense', 'context.delivered', {
+            phase: worldSense?.phase || 'context',
+            selected: selected.length,
+            entries: selected.map((entry) => ({ book: entry.book, uid: entry.uid, name: entry.name || '' })),
+            continuity: continuity.length,
+            fromContext: Boolean(worldSense?.fromContext),
+            degraded: Boolean(worldSense?.degraded),
+            receiptId: worldSense?.receipt?.id || null,
+        }, {
+            severity: worldSense?.degraded ? 'warn' : 'info',
+            correlationId: correlationId || directionInFlight?.id || activeRun?.directionId || null,
+            summary: selected.length
+                ? `World Sense delivered ${selected.length} direct continuity entr${selected.length === 1 ? 'y' : 'ies'} to the Narrator`
+                : 'World Sense had no direct continuity entries for this turn',
+        });
+    } catch {
+        // Direct prompt delivery must not depend on diagnostics.
+    }
+}
+
+/**
+ * The Archive worker owns the roleplay Loom request. Once its Archive commit
+ * succeeds, consume its separate Living Lore reply exactly once and attach it
+ * to the canonical message that earned it. This is intentionally post-commit:
+ * unsupported or interrupted prose must never gain a lore write merely because
+ * a model suggested one.
+ */
+async function settleBackgroundArchiveLore(job) {
+    if (String(job?.status || '') !== 'succeeded') return;
+    const reply = takeBackgroundArchiveReply(job.jobId);
+    if (!reply) return;
+
+    const context = getContext();
+    const messageId = (context.chat || []).findIndex((message) =>
+        !message?.is_user && String(message?.extra?.remodelArchiveJobId || '') === String(job.jobId));
+    const message = messageId >= 0 ? context.chat[messageId] : null;
+    const saved = message?.extra?.remodelDirection;
+    if (!message || !saved || String(saved.sceneId || '') !== String(job.sceneId || '') || String(saved.timelineId || '') !== String(job.timelineId || '')) {
+        journal('lore.archive.orphaned', {
+            jobId: job.jobId,
+            timelineId: job.timelineId,
+            sceneId: job.sceneId,
+            hasMessage: Boolean(message),
+        }, { severity: 'warn', summary: 'Archive reply could not be matched to its accepted Roleplay message' });
+        return;
+    }
+
+    // Roleplay Loom cannot write Living Lore. Even a model that ignores the
+    // current fence and emits old proposal fields is contained here.
+    const proposals = [];
+    const rejections = [];
+    const loreKeywords = Array.isArray(reply.loreKeywords) ? reply.loreKeywords : [];
+    const directionId = String(saved.directionId || job.provenance?.sourceId || '');
+    journal('lore.archive.received', {
+        jobId: job.jobId,
+        directionId,
+        messageId,
+        packetBook: '',
+        proposals: proposals.length,
+        rejected: rejections.length,
+        loreKeywords,
+    }, {
+        correlationId: directionId || job.jobId,
+        severity: 'info',
+        summary: loreKeywords.length
+            ? `Background Loom requested World Sense refresh for ${loreKeywords.join(', ')}`
+            : 'Background Loom completed without a World Sense refresh',
+    });
+    const run = {
+        directionId,
+        sceneId: saved.sceneId,
+        timelineId: saved.timelineId,
+        messageId,
+        deliveryMode: 'canonical',
+        acceptedVisibleText: sanitizeDirectionText(saved.acceptedText ?? message.mes ?? ''),
+        rawBufferedText: sanitizeDirectionText(saved.acceptedText ?? message.mes ?? ''),
+        rawOffset: String(saved.acceptedText ?? message.mes ?? '').length,
+        envelope: {
+            ...(saved.envelope || {}),
+            loreProposals: mergeLoreProposals(saved.envelope?.loreProposals, proposals),
+            loreProposalRejections: [...(saved.envelope?.loreProposalRejections || []), ...rejections],
+            loreKeywords,
+        },
+        loreProposalIds: [...(saved.loreProposalIds || [])],
+        checkpointTransactionIds: [...(saved.checkpointTransactionIds || [])],
+        committedArchiveFacts: job.result?.archiveFacts || [],
+        checkpointDiagnostics: [],
+    };
+    // This happens after the Archive has committed. It only replaces the stored working
+    // set; an already-started Narrator request keeps its original context.
+    if (loreKeywords.length) {
+        try {
+            const retrieved = await retrieveWorldSenseByKeywords({ id: saved.sceneId, timelineId: saved.timelineId }, loreKeywords);
+            const count = retrieved?.selected?.length || 0;
+            journal('world-sense.keyword-request', {
+                source: 'background-archive',
+                jobId: job.jobId,
+                keywords: loreKeywords,
+                selected: (retrieved?.selected || []).map((item) => item.name).filter(Boolean),
+                degraded: Boolean(retrieved?.degraded),
+            }, {
+                correlationId: directionId || job.jobId,
+                severity: retrieved?.degraded ? 'warn' : 'info',
+                summary: `Background Loom replaced the working lore with ${count} entr${count === 1 ? 'y' : 'ies'} for ${loreKeywords.join(', ')}`,
+            });
+        } catch (error) {
+            journal('world-sense.keyword-request.failed', {
+                source: 'background-archive', jobId: job.jobId, keywords: loreKeywords, error: String(error?.message || error),
+            }, { correlationId: directionId || job.jobId, severity: 'warn' });
+        }
+    }
+    await amendSavedLoreLifecycle(run);
 }
 
 function reflectCanonicalDeliveryEvent(run, event) {
@@ -2156,10 +2391,24 @@ async function beginLoomVisibleStream(run, scene) {
     return true;
 }
 
-function scheduleReveal(delay = 50) {
+function scheduleReveal(delay = 50, { replace = false } = {}) {
     if (!activeRun || activeRun.holdReason) return;
+    // Incoming provider chunks used to cancel and restart the same timer. A
+    // fast provider therefore starved the reveal loop, then released it in
+    // visibly choppy jumps. Preserve a scheduled breath unless the user has
+    // explicitly changed pace and needs the new choice immediately.
+    if (revealTimer !== null && !replace) return;
     clearRevealTimer();
     revealTimer = setTimeout(revealStep, Math.max(0, delay));
+}
+
+function revealBeats(run) {
+    const length = String(run?.rawBufferedText || '').length;
+    if (run.revealBeatsLength !== length) {
+        run.revealBeats = deriveBeats(run.rawBufferedText);
+        run.revealBeatsLength = length;
+    }
+    return run.revealBeats || [];
 }
 
 async function revealStep() {
@@ -2174,11 +2423,9 @@ async function revealStep() {
     const pace = PACING[run.pacing] || PACING.natural;
     const budget = pace.cps === Infinity ? Number.MAX_SAFE_INTEGER : Math.max(1, Math.ceil(pace.cps / 20));
     // Beats come from the prose itself now, not from markers the model was
-    // asked to type — see direction-beats.js. Derived once per revealed
-    // chunk, not per character: the offsets are stable positions in whatever
-    // text has streamed in so far, so recomputing per character would just
-    // repeat the same answer.
-    const beats = deriveBeats(run.rawBufferedText);
+    // asked to type — see direction-beats.js. Cache them for the current raw
+    // buffer so each render tick does not repeatedly parse the same passage.
+    const beats = revealBeats(run);
     let emitted = 0;
     while (activeRun === run && !run.holdReason && emitted < budget) {
         const unit = readDirectionUnit(run.rawBufferedText, run.rawOffset, { final: run.generationFinished });
@@ -2197,7 +2444,10 @@ async function revealStep() {
         run.lastBreathOffset = run.acceptedVisibleText.length;
         run.state = beat.kind === 'opening' ? 'Opening' : 'Breathing';
         run.openingLabel = beat.kind === 'opening' ? 'Opportunity' : '';
-        persistRun(run, true);
+        // Saving a chat on every breath competes with the renderer and was the
+        // other source of periodic freezes. Metadata is still persisted, just
+        // coalesced with the normal short reveal debounce.
+        persistRun(run, false);
         notifyState();
         const adaptive = pace.cps === Infinity ? 0 : Math.max(pace.min, Math.min(pace.max, words * pace.wordMs));
         scheduleReveal(adaptive + (beat.kind === 'opening' ? pace.opening : 0));
@@ -3040,6 +3290,10 @@ async function queueAcceptedLoreProposals(run, { proposals = null, phase = 'comp
             severity: result.rejected.length ? 'warn' : 'info',
             summary: `Living Lore filed ${result.applied.length}/${candidates.length} report(s): ${result.appended} appended, ${result.created} created`,
         });
+        run.loreProposalIds = [...new Set([
+            ...(run.loreProposalIds || []),
+            ...result.applied.map((item) => item.writeId).filter(Boolean),
+        ])];
         return result;
     } catch (error) {
         journal('lore.intake.lifecycle.failed', {
@@ -3261,6 +3515,7 @@ async function amendSavedLoreLifecycle(run) {
     saved.envelope ??= {};
     saved.envelope.loreProposals = structuredClone(run.envelope?.loreProposals || []);
     saved.envelope.loreProposalRejections = structuredClone(run.envelope?.loreProposalRejections || []);
+    saved.envelope.loreKeywords = structuredClone(run.envelope?.loreKeywords || []);
     saved.loreProposalIds = [...(run.loreProposalIds || [])];
     saved.checkpointTransactionIds = [...(run.checkpointTransactionIds || [])];
     saved.updatedAt = new Date().toISOString();

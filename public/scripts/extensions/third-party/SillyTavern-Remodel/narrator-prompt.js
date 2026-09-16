@@ -1,6 +1,7 @@
 import { listSceneFacts, listCharStates, getBeat } from './archivist-store.js';
 import { getSceneGoals } from './story-goals-store.js';
 import { buildSceneArchiveProjection, renderArchiveProjection } from './archive-projection.js';
+import { getTimelineStore } from './timeline-state.js';
 
 /**
  * Active Goals for the Loom's readable Archive view. The Narrator receives
@@ -54,6 +55,48 @@ export function buildNarratorArchivistSections(timelineId, sceneId, { events: ev
         sections.push(['Open thread — provisional', `Unresolved momentum, not a required outcome. It never overrides the latest accepted action.\n${beat.directive}${tone}`]);
     }
     return sections.map(([label, body]) => `## ${label}\n${body}`).join('\n\n');
+}
+
+/**
+ * Render only continuity selected from earlier Timeline Scenes.
+ *
+ * The current Scene's facts, character states, events, and open thread are
+ * intentionally absent: native Chat History already carries the active Scene.
+ * World Sense has already applied Look into earlier scenes, Allow later recall,
+ * exclusions, pins, and relevance before these recall entries reach us.
+ */
+export function buildNarratorRecallSections(timelineId, sceneId, { scenes = null, archiveProjection = null } = {}) {
+    const requested = normalizeSceneLookback(scenes);
+    if (requested === 0) return '';
+    const allowedSceneIds = requested === null ? null : previousTimelineSceneIds(timelineId, sceneId, requested);
+    const entries = (archiveProjection?.entries || []).filter((entry) => {
+        if (entry?.kind !== 'recall') return false;
+        if (allowedSceneIds === null) return true;
+        return allowedSceneIds.has(String(entry.provenance?.sceneId || ''));
+    });
+    if (!entries.length) return '';
+    return `## Earlier Scene recall — already happened\n${renderArchiveProjection({ entries })}`;
+}
+
+function normalizeSceneLookback(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const parsed = Math.floor(Number(value));
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : null;
+}
+
+function previousTimelineSceneIds(timelineId, sceneId, count) {
+    const store = getTimelineStore();
+    const timeline = store.timelines[String(timelineId || '')];
+    const ordered = [];
+    for (const arcId of timeline?.arcIds || []) {
+        for (const id of store.arcs[arcId]?.sceneIds || []) {
+            const scene = store.scenes[id];
+            if (scene?.mode === 'roleplay' || scene?.mode === 'story') ordered.push(String(id));
+        }
+    }
+    const targetIndex = ordered.indexOf(String(sceneId || ''));
+    if (targetIndex < 0) return new Set();
+    return new Set(ordered.slice(Math.max(0, targetIndex - count), targetIndex));
 }
 
 function boundedTail(items, requested) {

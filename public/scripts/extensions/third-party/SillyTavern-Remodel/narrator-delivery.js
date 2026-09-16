@@ -124,6 +124,7 @@ class NarratorDeliverySession {
     #acceptedText = '';
     #receivedText = '';
     #reasoning = '';
+    #reasoningHistory = [];
     #finishReason = '';
     #recoveryKind = null;
     #heldForDraft = false;
@@ -206,6 +207,7 @@ class NarratorDeliverySession {
             while (!this.#termination && this.#attempt < this.#input.maxAttempts) {
                 this.#attempt += 1;
                 this.#receivedText = '';
+                if (this.#reasoning) this.#reasoningHistory.push(this.#reasoning);
                 this.#reasoning = '';
                 this.#finishReason = '';
                 this.#state = this.#heldForDraft ? 'held' : 'streaming';
@@ -308,6 +310,7 @@ class NarratorDeliverySession {
             status: state,
             acceptedText: this.#acceptedText,
             acceptedLength: this.#acceptedText.length,
+            reasoning: [...this.#reasoningHistory, this.#reasoning].filter(Boolean).join('\n\n'),
             attemptCount: this.#attempt,
             finishReason: this.#finishReason,
             error: publicError(error),

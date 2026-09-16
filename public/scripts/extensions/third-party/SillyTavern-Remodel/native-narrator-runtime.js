@@ -1,36 +1,28 @@
 import { setCharacterId, setCharacterName } from '../../../../script.js';
-import { ConnectionManagerRequestService } from '../../shared.js';
-import { normalizeReasoningEffortForModel } from '../../../reasoning-compat.js';
 import { describeIncompleteProse } from './generation-budget.js';
 import { describeNarratorOutput } from './narrator-output-contract.js';
-import { limitBoundedChatHistory } from './prompt-history-limit.js';
+import { limitBoundedChatHistory, removeLatestPlayerAction, removeLegacyNarratorConstraints, removeNativeNewChatBootstrap, restoreTaggedNextAction } from './prompt-history-limit.js';
 import { streamChatPrompt } from './story-stream.js';
 import { DEFAULT_MECHANICS_CONTINUATIONS, appendMechanicsContinuation, collectMechanicsToolCalls } from './mechanics-transport.js';
+import { createReasoningStreamFilter } from './reasoning-strip.js';
+import { reasoningDisabledPayload, resolveNarratorReasoningPolicy } from './narrator-reasoning-policy.js';
 
-/** Canonical reveal speed in characters per second, matching the legacy Live
- * Direction curve so the four settings feel the way they used to. The previous
- * implementation throttled each whole provider snapshot by 0-75ms, which almost
- * never bound: network chunks rarely arrive closer together than that, so every
- * setting looked identical. */
-const PACING_REVEAL_CPS = Object.freeze({ slow: 28, natural: 45, fast: 75, instant: Infinity });
-const REVEAL_TICK_MS = 50;
-/** A provider can outrun the slowest reveal. Cap how many ticks may be spent
- * draining what is pending so visible prose can never fall unboundedly behind
- * the accepted text. */
-const MAX_CATCHUP_TICKS = 40;
-const AUTONOMOUS_CONTINUE_REQUEST = 'Continue the scene autonomously from the accepted history. Return only the next new passage of scene prose. Do not repeat, summarize, or explain existing prose, and do not wait for player input.';
-
-/** Add a request-only turn boundary without writing a fake player chat row. */
-export function prepareNativeNarratorPrompt(prompt, { autonomousContinue = false } = {}) {
-    const messages = structuredClone(Array.isArray(prompt) ? prompt : []);
-    if (autonomousContinue) {
-        messages.push({ role: 'user', content: AUTONOMOUS_CONTINUE_REQUEST });
-    }
-    return messages;
+/** Canonical reveal speed in characters per second. The gaps are deliberate:
+ * the old 28/45/75 curve was close enough that provider chunking made the
+ * controls feel interchangeable. A 60fps cadence keeps ordinary prose smooth
+ * without turning Pacing into a provider/network throttle. */
+const PACING_REVEAL_CPS = Object.freeze({ slow: 16, natural: 48, fast: 120, instant: Infinity });
+const REVEAL_TICK_MS = 16;
+/**
+ * Clone the assembled native prompt without adding Remodel-owned prompt text.
+ * Continue is an execution action, never an invisible user instruction.
+ */
+export function prepareNativeNarratorPrompt(prompt) {
+    return structuredClone(Array.isArray(prompt) ? prompt : []);
 }
 
 /** Capture the exact flattened prompt native generation would send. */
-export async function captureNativeNarratorPrompt({ context, performer, generationType = 'normal' } = {}) {
+export async function captureNativeNarratorPrompt({ context, performer, generationType = 'normal', nextAction = '' } = {}) {
     if (!context?.eventSource || typeof context.generate !== 'function') {
         throw new Error('Native Narrator prompt assembly is unavailable.');
     }
@@ -44,7 +36,13 @@ export async function captureNativeNarratorPrompt({ context, performer, generati
     const restoreGroupName = bridgeGroupNarratorName(group, performer?.name || performer?.label || 'Narrator');
     let generateData = null;
     const capture = (data) => { generateData = data; };
-    const boundHistory = (eventData) => limitBoundedChatHistory(eventData?.chat);
+    const boundHistory = (eventData) => {
+        removeNativeNewChatBootstrap(eventData?.chat);
+        removeLegacyNarratorConstraints(eventData?.chat);
+        removeLatestPlayerAction(eventData?.chat, nextAction);
+        limitBoundedChatHistory(eventData?.chat);
+        restoreTaggedNextAction(eventData?.chat);
+    };
 
     context.eventSource.once(context.eventTypes.GENERATE_AFTER_DATA, capture);
     context.eventSource.once(context.eventTypes.CHAT_COMPLETION_PROMPT_READY, boundHistory);
@@ -99,11 +97,10 @@ export function createNativeNarratorTransport({
     return Object.freeze({
         async *stream({ prompt, route, recovery, signal } = {}) {
             const queue = [];
-            let wake = null;
-            let settled = false;
             let failure = null;
             let final = { text: '', reasoning: '', streamed: false };
             let latestText = '';
+            const reasoningFilter = createReasoningStreamFilter();
             const push = (frame) => {
                 const text = String(frame?.text || '');
                 if (text) {
@@ -114,10 +111,10 @@ export function createNativeNarratorTransport({
                     latestText = text;
                 }
                 queue.push(frame);
-                wake?.();
-                wake = null;
             };
+            const reasoningPolicy = resolveNarratorReasoningPolicy(route?.profileId);
             const overridePayload = {
+                ...reasoningPolicy.override,
                 ...(recovery?.requestReasoning === false ? reasoningDisabledPayload(route?.profileId) : {}),
                 ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
             };
@@ -136,9 +133,13 @@ export function createNativeNarratorTransport({
                         profileId: route?.profileId,
                         signal,
                         overridePayload,
-                        onChunk: ({ text, reasoning }) => push({ type: 'snapshot', text: carry + String(text || ''), reasoning }),
+                        onChunk: ({ text, reasoning }) => {
+                            const filtered = reasoningFilter.accept(text, reasoning);
+                            push({ type: 'snapshot', text: carry + filtered.prose, reasoning: filtered.reasoning });
+                        },
                     });
-                    final = result || final;
+                    const filtered = reasoningFilter.accept(result?.text, result?.reasoning);
+                    final = { ...(result || final), text: filtered.prose, reasoning: filtered.reasoning };
                     const whole = carry + String(final.text || '');
                     // Streaming transports commonly trim their returned final
                     // value even though the last cumulative snapshot retains a
@@ -166,69 +167,40 @@ export function createNativeNarratorTransport({
                 }
             })().catch((error) => {
                 failure = error;
-            }).finally(() => {
-                settled = true;
-                wake?.();
-                wake = null;
             });
-
-            let previousLength = 0;
-            while (!settled || queue.length) {
-                if (!queue.length) {
-                    // eslint-disable-next-line no-await-in-loop
-                    await new Promise((resolve) => { wake = resolve; });
-                    continue;
-                }
-                const frame = queue.shift();
-                const text = String(frame.text || '');
-                // The opening characters are never delayed: time to first token
-                // stays gated by the Narrator alone. Non-snapshot frames and
-                // snapshots that do not grow the text pass straight through.
-                if (frame.type !== 'snapshot' || !previousLength || text.length <= previousLength) {
-                    previousLength = Math.max(previousLength, text.length);
-                    yield frame;
-                    continue;
-                }
-                // Reveal the NEW characters at the configured speed rather than
-                // throttling the snapshot as a whole. Frames are cumulative, so
-                // emitting intermediate slices is what the delivery layer
-                // already expects. Reveal pacing never waits for Loom, Archive,
-                // saving, or another model.
-                while (previousLength < text.length) {
-                    const cps = readCps();
-                    if (cps === Infinity) break;
-                    const pending = text.length - previousLength;
-                    const step = Math.max(Math.ceil(cps / (1000 / REVEAL_TICK_MS)), Math.ceil(pending / MAX_CATCHUP_TICKS));
-                    const take = Math.min(step, pending);
-                    // eslint-disable-next-line no-await-in-loop
-                    await abortableDelay(Math.round((take / cps) * 1000), signal);
-                    previousLength += take;
-                    if (previousLength >= text.length) break;
-                    yield { ...frame, text: text.slice(0, previousLength) };
-                }
-                previousLength = text.length;
-                yield frame;
-            }
             await request;
             if (failure) throw failure;
+
+            // Rendering starts only after the complete Narrator request has
+            // settled. Provider token/chunk timing therefore cannot affect the
+            // Roleplay UI: Instant drops one whole response, while the other
+            // modes reveal that same fixed response at their selected speed.
+            const frame = queue.filter((candidate) => candidate?.type === 'snapshot').at(-1)
+                || { type: 'snapshot', text: String(final.text || ''), reasoning: String(final.reasoning || '') };
+            const text = String(frame.text || '');
+            let previousLength = 0;
+            while (previousLength < text.length) {
+                const cps = readCps();
+                if (cps === Infinity) break;
+                const pending = text.length - previousLength;
+                // The response is already complete before this loop begins.
+                // Never turn a long response into large catch-up batches: that
+                // made the visible text arrive in obvious bursts. Keep each
+                // update bounded by the selected cadence instead, independent
+                // of total response length.
+                const step = Math.max(1, Math.ceil(cps / (1000 / REVEAL_TICK_MS)));
+                const take = Math.min(step, pending);
+                // eslint-disable-next-line no-await-in-loop
+                await abortableDelay(Math.round((take / cps) * 1000), signal);
+                previousLength += take;
+                if (previousLength >= text.length) break;
+                yield { ...frame, text: text.slice(0, previousLength) };
+            }
+            yield frame;
             const incomplete = describeIncompleteProse(final.text || '').incomplete;
             yield { type: 'complete', finishReason: incomplete ? 'length' : 'stop', truncated: incomplete };
         },
     });
-}
-
-function reasoningDisabledPayload(profileId) {
-    try {
-        const profile = ConnectionManagerRequestService.getProfile(profileId);
-        const selected = ConnectionManagerRequestService.validateProfile(profile);
-        if (selected?.selected !== 'openai') return {};
-        return {
-            reasoning_effort: normalizeReasoningEffortForModel(selected.source, profile?.model, 'none'),
-            include_reasoning: false,
-        };
-    } catch {
-        return {};
-    }
 }
 
 function abortableDelay(delayMs, signal) {

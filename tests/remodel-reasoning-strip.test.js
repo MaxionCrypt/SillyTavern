@@ -1,5 +1,6 @@
 import { expect, test } from '@jest/globals';
 import {
+    createReasoningStreamFilter,
     DEFAULT_REASONING_PREFIX,
     splitReasoning,
     stripReasoning,
@@ -74,4 +75,23 @@ test('empty and missing input do not throw', () => {
 test('stripReasoning returns the prose alone', () => {
     expect(stripReasoning('<think>a</think>B.', M)).toBe('B.');
     expect(DEFAULT_REASONING_PREFIX).toBe('<think>');
+});
+
+test('stream filtering never reveals a complete opening marker or its pending audit', () => {
+    const filter = createReasoningStreamFilter(M);
+    expect(filter.accept('<thi').prose).toBe('');
+    expect(filter.accept('<think>check facts').prose).toBe('');
+    expect(filter.accept('<think>check facts</think>\nShe stepped inside.')).toMatchObject({
+        prose: 'She stepped inside.',
+        reasoning: 'check facts',
+        pending: false,
+    });
+});
+
+test('stream filtering preserves prose around tagged reasoning and provider reasoning', () => {
+    const filter = createReasoningStreamFilter(M);
+    expect(filter.accept('Before. <think>audit</think> After.', 'native trace')).toMatchObject({
+        prose: 'Before.  After.',
+        reasoning: 'native trace\n\naudit',
+    });
 });

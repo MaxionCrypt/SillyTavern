@@ -5,6 +5,7 @@ import {
     createNativeNarratorTransport,
     prepareNativeNarratorPrompt,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/native-narrator-runtime.js';
+import { tagNextAction } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/prompt-history-limit.js';
 
 async function collect(iterator) {
     const frames = [];
@@ -12,7 +13,7 @@ async function collect(iterator) {
     return frames;
 }
 
-test('native transport preserves cumulative provider frames and the strict profile route', async () => {
+test('native transport keeps the strict profile route and emits the completed response once', async () => {
     const send = jest.fn(async ({ profileId, onChunk }) => {
         expect(profileId).toBe('profile-narrator');
         onChunk({ text: 'The door', reasoning: '' });
@@ -28,7 +29,6 @@ test('native transport preserves cumulative provider frames and the strict profi
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0].prompt).toEqual([{ role: 'user', content: 'Continue.' }]);
     expect(frames).toEqual([
-        { type: 'snapshot', text: 'The door', reasoning: '' },
         { type: 'snapshot', text: 'The door opened.', reasoning: '' },
         { type: 'complete', finishReason: 'stop', truncated: false },
     ]);
@@ -48,31 +48,31 @@ test('native transport turns a non-streamed reply into one visible snapshot', as
     ]);
 });
 
-test('autonomous continuation adds one request-only turn boundary without mutating the native prompt', () => {
+test('autonomous continuation does not append a hidden request instruction', () => {
     const native = [{ role: 'system', content: 'Policy' }, { role: 'assistant', content: 'Accepted prose.' }];
     const autonomous = prepareNativeNarratorPrompt(native, { autonomousContinue: true });
     const playerTurn = prepareNativeNarratorPrompt(native, { autonomousContinue: false });
 
     expect(native).toHaveLength(2);
     expect(playerTurn).toEqual(native);
-    expect(autonomous.slice(0, -1)).toEqual(native);
-    expect(autonomous.at(-1)).toEqual(expect.objectContaining({
-        role: 'user',
-        content: expect.stringMatching(/Continue the scene autonomously/),
-    }));
+    expect(autonomous).toEqual(native);
 });
 
-test('native transport rejects visible reasoning or Loom protocol before accepting it as prose', async () => {
+test('native transport keeps tagged reasoning out of visible prose', async () => {
     const send = jest.fn(async ({ onChunk }) => {
         onChunk({ text: '<think>I need to plan this response.</think>', reasoning: '' });
         return { text: '<think>I need to plan this response.</think>', reasoning: '', streamed: true };
     });
     const transport = createNativeNarratorTransport({ pacing: 'instant', send });
 
-    await expect(collect(transport.stream({
+    const frames = await collect(transport.stream({
         prompt: { messages: [{ role: 'user', content: 'Continue.' }] },
         route: { profileId: 'profile-narrator' },
-    }))).rejects.toThrow(/private planning/);
+    }));
+    expect(frames).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'snapshot', text: '', reasoning: 'I need to plan this response.' }),
+        expect.objectContaining({ type: 'complete' }),
+    ]));
 });
 
 test('reasoning-only recovery disables reasoning only on its retried request', async () => {
@@ -136,7 +136,44 @@ test('prompt capture uses native dry-run assembly and restores group ordering', 
     expect(listeners.size).toBe(0);
 });
 
-test('reveal pacing subdivides a growing snapshot instead of throttling it whole', async () => {
+test('prompt capture removes the separately routed newest player action before limiting history', async () => {
+    const listeners = new Map();
+    const eventSource = {
+        once(type, handler) { listeners.set(type, handler); },
+        removeListener(type, handler) { if (listeners.get(type) === handler) listeners.delete(type); },
+    };
+    const boundary = { start: '[[RM:CHAT_HISTORY_START:2]]', end: '[[RM:CHAT_HISTORY_END]]' };
+    const context = {
+        characterId: 0,
+        name2: 'Narrator',
+        eventSource,
+        eventTypes: { GENERATE_AFTER_DATA: 'after', CHAT_COMPLETION_PROMPT_READY: 'ready' },
+        async generate() {
+            const chat = [
+                { role: 'system', content: boundary.start },
+                { role: 'user', content: 'Earlier player action.' },
+                { role: 'assistant', content: 'Earlier narrator response.' },
+                { role: 'user', content: 'Newest player action.' },
+                { role: 'system', content: boundary.end },
+                { role: 'user', content: tagNextAction('Newest player action.') },
+            ];
+            listeners.get('ready')?.({ chat });
+            listeners.get('after')?.({ prompt: chat });
+        },
+    };
+
+    const captured = await captureNativeNarratorPrompt({
+        context,
+        performer: { characterId: 0, name: 'Narrator' },
+        nextAction: 'Newest player action.',
+    });
+
+    expect(captured.map((message) => message.content)).toEqual([
+        'Earlier player action.', 'Earlier narrator response.', 'Newest player action.',
+    ]);
+});
+
+test('paced reveal subdivides the completed response rather than provider chunks', async () => {
     const send = jest.fn(async ({ onChunk }) => {
         onChunk({ text: 'Open.', reasoning: '' });
         onChunk({ text: 'Open. She crossed the room.', reasoning: '' });
@@ -146,7 +183,8 @@ test('reveal pacing subdivides a growing snapshot instead of throttling it whole
     const frames = await collect(transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } }));
     const snapshots = frames.filter((frame) => frame.type === 'snapshot').map((frame) => frame.text);
 
-    expect(snapshots[0]).toBe('Open.');
+    expect(snapshots[0].length).toBeLessThan('Open. She crossed the room.'.length);
+    expect(snapshots[0]).not.toBe('Open.');
     expect(snapshots.length).toBeGreaterThan(2);
     expect(snapshots.at(-1)).toBe('Open. She crossed the room.');
     for (let i = 1; i < snapshots.length; i += 1) {
@@ -154,7 +192,7 @@ test('reveal pacing subdivides a growing snapshot instead of throttling it whole
     }
 });
 
-test('instant reveals every snapshot whole, adding no intermediate frames', async () => {
+test('instant drops only the completed response, adding no intermediate frames', async () => {
     const send = jest.fn(async ({ onChunk }) => {
         onChunk({ text: 'Open.', reasoning: '' });
         onChunk({ text: 'Open. She crossed the room.', reasoning: '' });
@@ -164,7 +202,7 @@ test('instant reveals every snapshot whole, adding no intermediate frames', asyn
     const frames = await collect(transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } }));
 
     expect(frames.filter((frame) => frame.type === 'snapshot').map((frame) => frame.text))
-        .toEqual(['Open.', 'Open. She crossed the room.']);
+        .toEqual(['Open. She crossed the room.']);
 });
 
 test('switching Pacing mid-turn takes effect on prose still being revealed', async () => {
@@ -187,18 +225,64 @@ test('switching Pacing mid-turn takes effect on prose still being revealed', asy
     expect(snapshots.at(-1).text).toBe('A. ' + 'x'.repeat(60));
 });
 
-test('the opening snapshot is never delayed by reveal pacing', async () => {
+test('paced reveal starts from a prefix of the completed response', async () => {
+    const prose = 'x'.repeat(60);
     const send = jest.fn(async ({ onChunk }) => {
-        onChunk({ text: 'x'.repeat(200), reasoning: '' });
-        return { text: 'x'.repeat(200), reasoning: '', streamed: true };
+        onChunk({ text: prose, reasoning: '' });
+        return { text: prose, reasoning: '', streamed: true };
     });
-    const transport = createNativeNarratorTransport({ pacing: 'slow', send });
+    const transport = createNativeNarratorTransport({ pacing: 'fast', send });
     const started = Date.now();
     const iterator = transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } });
     const first = await iterator.next();
-    expect(first.value.text).toBe('x'.repeat(200));
+    expect(first.value.text.length).toBeGreaterThan(0);
+    expect(first.value.text.length).toBeLessThan(prose.length);
     expect(Date.now() - started).toBeLessThan(200);
     await collect(iterator);
+});
+
+test('paced reveal does not turn a long completed response into catch-up bursts', async () => {
+    const prose = 'x'.repeat(2400);
+    const send = jest.fn(async ({ onChunk }) => {
+        onChunk({ text: prose, reasoning: '' });
+        return { text: prose, reasoning: '', streamed: true };
+    });
+    const transport = createNativeNarratorTransport({ pacing: 'fast', send });
+    const iterator = transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } });
+    const first = await iterator.next();
+
+    // Fast reveals at 120 cps on a ~60fps cadence: two characters per paint,
+    // not the 60-character burst the former 40-tick catch-up limiter created.
+    expect(first.value).toMatchObject({ type: 'snapshot', text: 'xx' });
+    await iterator.return();
+});
+
+test('transport withholds every provider burst until the Narrator request settles', async () => {
+    let release;
+    const send = jest.fn(async ({ onChunk }) => {
+        onChunk({ text: 'A small', reasoning: '' });
+        await new Promise((resolve) => { release = resolve; });
+        onChunk({ text: 'A small buffer makes the visible reveal smooth and steady.', reasoning: '' });
+        return { text: 'A small buffer makes the visible reveal smooth and steady.', reasoning: '', streamed: true };
+    });
+    const transport = createNativeNarratorTransport({
+        pacing: 'instant',
+        send,
+    });
+    const iterator = transport.stream({ prompt: { messages: [] }, route: { profileId: 'p' } });
+    let yielded = false;
+    const next = iterator.next().then((value) => {
+        yielded = true;
+        return value;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(yielded).toBe(false);
+    release();
+    const first = await next;
+    const frames = [first.value, ...(await collect(iterator))];
+    const snapshots = frames.filter((frame) => frame.type === 'snapshot').map((frame) => frame.text);
+
+    expect(snapshots).toEqual(['A small buffer makes the visible reveal smooth and steady.']);
 });
 
 // --- Commit 11-12 reconnection: resumable mechanics inside one logical turn ---

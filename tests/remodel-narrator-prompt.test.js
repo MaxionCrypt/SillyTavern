@@ -2,7 +2,7 @@ import {
     createPromptRecipe,
     NARRATOR_POLICY_DEFAULT,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/prompt-studio-store.js';
-import { buildEmptyResponseNudge } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/narrator-prompt.js';
+import { buildEmptyResponseNudge, buildNarratorRecallSections } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/narrator-prompt.js';
 import { __setExtensionSettings } from './util/st-context-stub.js';
 
 beforeEach(() => __setExtensionSettings({}));
@@ -17,18 +17,44 @@ test('the default Narrator policy is editable recipe text, not engine code', () 
     expect(policy.content).toMatch(/never (restate|repeat|quote|acknowledge)[^.]*instruction/i);
 });
 
-test('the default recipe places editable policy before dynamic Narrator grounding', () => {
+test('the default recipe places editable policy before earlier-Scene recall', () => {
     const recipe = createPromptRecipe({ mode: 'roleplay', apiType: 'chat' });
     const policyIndex = recipe.blocks.findIndex((block) => block.content === NARRATOR_POLICY_DEFAULT);
-    const groundingIndex = recipe.blocks.findIndex((block) => block.content === '{{narrator.grounding}}');
+    const recallIndex = recipe.blocks.findIndex((block) => block.content === '{{narrator.recall scenes=3}}');
 
     expect(policyIndex).toBeGreaterThanOrEqual(0);
-    expect(groundingIndex).toBeGreaterThan(policyIndex);
-    expect(recipe.blocks[groundingIndex]).toMatchObject({
-        nativeIdentifier: 'remodel_narrator_grounding',
+    expect(recallIndex).toBeGreaterThan(policyIndex);
+    expect(recipe.blocks[recallIndex]).toMatchObject({
+        nativeIdentifier: 'remodel_narrator_recall',
         role: 'system',
         enabled: true,
     });
+});
+
+test('Narrator recall excludes current-Scene Archive and honors the scenes lookback', () => {
+    __setExtensionSettings({ remodel: { timelineV1: {
+        version: 1,
+        timelineIds: ['timeline'], activeTimelineId: 'timeline',
+        timelines: { timeline: { id: 'timeline', arcIds: ['arc'], activeSceneId: 'scene-3' } },
+        arcs: { arc: { id: 'arc', timelineId: 'timeline', sceneIds: ['scene-1', 'scene-2', 'scene-3'] } },
+        scenes: {
+            'scene-1': { id: 'scene-1', timelineId: 'timeline', arcId: 'arc', mode: 'story' },
+            'scene-2': { id: 'scene-2', timelineId: 'timeline', arcId: 'arc', mode: 'roleplay' },
+            'scene-3': { id: 'scene-3', timelineId: 'timeline', arcId: 'arc', mode: 'roleplay' },
+        },
+    } } });
+    const archiveProjection = { entries: [
+        { kind: 'recall', summary: 'Oldest fact', sourceLabel: 'Arc · One', provenance: { sceneId: 'scene-1' } },
+        { kind: 'recall', summary: 'Nearest fact', sourceLabel: 'Arc · Two', provenance: { sceneId: 'scene-2' } },
+        { kind: 'event', summary: 'Current scene event', provenance: { sceneId: 'scene-3' } },
+    ] };
+
+    const result = buildNarratorRecallSections('timeline', 'scene-3', { scenes: 1, archiveProjection });
+
+    expect(result).toContain('Nearest fact');
+    expect(result).not.toContain('Oldest fact');
+    expect(result).not.toContain('Current scene event');
+    expect(buildNarratorRecallSections('timeline', 'scene-3', { scenes: 0, archiveProjection })).toBe('');
 });
 
 // THE DEFECT: the empty-response path re-sent a byte-identical request body.

@@ -83,3 +83,68 @@ export function splitReasoning(source, markers = getReasoningMarkers()) {
 export function stripReasoning(source, markers = getReasoningMarkers()) {
     return splitReasoning(source, markers).prose;
 }
+
+/**
+ * Convert cumulative provider snapshots to a safe prose stream. A tagged
+ * reasoning block is hidden as soon as its opening marker is complete, not
+ * after the final message lands. This keeps private audit text from flashing
+ * in the bubble while preserving ordinary prose before and after the block.
+ */
+export function createReasoningStreamFilter(markers = getReasoningMarkers()) {
+    let latestRaw = '';
+    let latestReasoning = '';
+    return Object.freeze({
+        accept(text, providerReasoning = '') {
+            const hasText = text !== null && text !== undefined;
+            const raw = hasText ? String(text) : latestRaw;
+            // Native transports provide cumulative snapshots. A shorter frame
+            // is a provider rewrite/reset; use it as the new source rather
+            // than carrying a prior block into another reply.
+            latestRaw = raw;
+            const parsed = splitStreamingReasoning(latestRaw, markers);
+            latestReasoning = joinReasoning(providerReasoning, parsed.reasoning);
+            return Object.freeze({ prose: parsed.prose, reasoning: latestReasoning, pending: parsed.pending });
+        },
+    });
+}
+
+function splitStreamingReasoning(source, markers) {
+    const text = String(source ?? '');
+    const prefix = String(markers?.prefix || DEFAULT_REASONING_PREFIX);
+    const suffix = String(markers?.suffix || DEFAULT_REASONING_SUFFIX);
+    if (!text || !prefix || !suffix) return { prose: text, reasoning: '', pending: false };
+    const reasoning = [];
+    let prose = '';
+    let cursor = 0;
+    for (;;) {
+        const open = text.indexOf(prefix, cursor);
+        if (open < 0) {
+            prose += text.slice(cursor, text.length - incompletePrefixLength(text.slice(cursor), prefix));
+            break;
+        }
+        prose += text.slice(cursor, open);
+        const close = text.indexOf(suffix, open + prefix.length);
+        if (close < 0) return { prose, reasoning: reasoning.join('\n\n').trim(), pending: true };
+        reasoning.push(text.slice(open + prefix.length, close));
+        cursor = close + suffix.length;
+    }
+    return {
+        prose: reasoning.length ? prose.replace(/^\s+/, '') : prose,
+        reasoning: reasoning.join('\n\n').trim(),
+        pending: false,
+    };
+}
+
+function incompletePrefixLength(value, prefix) {
+    const upper = Math.min(value.length, prefix.length - 1);
+    for (let length = upper; length > 0; length -= 1) {
+        if (value.endsWith(prefix.slice(0, length))) return length;
+    }
+    return 0;
+}
+
+function joinReasoning(providerReasoning, taggedReasoning) {
+    return [String(providerReasoning || '').trim(), String(taggedReasoning || '').trim()]
+        .filter(Boolean)
+        .join('\n\n');
+}

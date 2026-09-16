@@ -98,6 +98,7 @@ test('retries reasoning-only output on the same message identity with request-sc
 
     expect(result.status).toBe('complete');
     expect(result.acceptedText).toBe('Marisol answered.');
+    expect(result.reasoning).toBe('I should continue the scene carefully.');
     expect(result.attemptCount).toBe(2);
     expect(store.reserve).toHaveBeenCalledTimes(1);
     expect(transport.calls).toHaveLength(2);
