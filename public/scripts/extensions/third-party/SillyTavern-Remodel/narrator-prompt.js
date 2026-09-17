@@ -1,7 +1,8 @@
-import { listSceneFacts, listCharStates, getBeat } from './archivist-store.js';
-import { getSceneGoals } from './story-goals-store.js';
+import { listSceneFacts, listCharStates, getBeat, listSecrets } from './archivist-store.js';
+import { getSceneGoals, getTimelineGoals } from './story-goals-store.js';
 import { buildSceneArchiveProjection, renderArchiveProjection } from './archive-projection.js';
 import { getTimelineStore } from './timeline-state.js';
+import { listVariableValues, formatVariable } from './variables-store.js';
 
 /**
  * Active Goals for the Loom's readable Archive view. The Narrator receives
@@ -76,6 +77,102 @@ export function buildNarratorRecallSections(timelineId, sceneId, { scenes = null
     });
     if (!entries.length) return '';
     return `## Earlier Scene recall — already happened\n${renderArchiveProjection({ entries })}`;
+}
+
+// --- Granular Loom state renderers -----------------------------------------
+//
+// Each is one macro's worth of state, kept separate so a recipe can name
+// exactly the slice it wants ({{loom.scene}}, {{loom.goals}}, …) instead of
+// the old bundled boards. All return '' when there is nothing to show, so an
+// empty section never prints a bare header.
+
+/** {{loom.action}} — the player's authoritative turn input. */
+export function renderLoomAction(action) {
+    const text = String(action || '').trim();
+    if (!text) return '';
+    return [
+        'CURRENT PLAYER ACTION — AUTHORITATIVE TURN INPUT',
+        'This is the player\'s explicit speech, voluntary action, or attempted action for this turn. It outranks conflicting inference in the Narrator draft. Preserve what the player explicitly said or attempted, judge only uncertain outcomes and world reactions, and never invent additional voluntary player speech, thoughts, decisions, or actions.',
+        text,
+    ].join('\n');
+}
+
+/** {{loom.scene}} — the current Scene's recorded facts. */
+export function renderLoomScene(timelineId, sceneId) {
+    const facts = listSceneFacts(timelineId, sceneId);
+    return facts.length ? `## Scene\n${facts.map((fact) => `- ${fact.key}: ${fact.value}`).join('\n')}` : '';
+}
+
+/** {{loom.characters}} — the current Scene's character states. */
+export function renderLoomCharacters(timelineId, sceneId) {
+    const charStates = listCharStates(timelineId, sceneId);
+    if (!charStates.length) return '';
+    const lines = charStates.map((state) => {
+        const facets = Object.entries(state.facets || {}).map(([key, value]) => `${key}: ${value}`).join(', ');
+        return `- ${state.charId} — ${facets}`;
+    });
+    return `## Characters\n${lines.join('\n')}`;
+}
+
+/** {{loom.events}} — events recorded for the current Scene only. */
+export function renderLoomEvents(timelineId, sceneId, { events = null } = {}) {
+    const options = events === null || events === undefined || events === '' ? {} : { maxEntries: events };
+    const projection = buildSceneArchiveProjection(timelineId, sceneId, options);
+    return projection.entries.length
+        ? `## What has happened (already written — do NOT narrate this again)\n${renderArchiveProjection(projection)}`
+        : '';
+}
+
+/** {{loom.secrets}} — the current Scene's secrets. Loom-only: never place this
+ *  macro in a player-facing recipe, or the writing model sees hidden twists. */
+export function renderLoomSecrets(timelineId, sceneId) {
+    const secrets = listSecrets(timelineId, sceneId);
+    if (!secrets.length) return '';
+    const lines = secrets.map((secret) => `- ${secret.key}: ${secret.value}`);
+    return `## Secrets — hidden from the player\n${lines.join('\n')}`;
+}
+
+/** {{loom.goals}} — every open Goal for the Timeline, with its numbers. Secret
+ *  Goals are hidden unless secret=true, so this macro is safe in a player-facing
+ *  recipe; the Loom recipe passes secret=true to see them. */
+export function renderLoomGoals(timelineId, { limit = null, secret = false } = {}) {
+    const all = getTimelineGoals(String(timelineId || ''), { includeResolved: false });
+    const goals = secret === true ? all : all.filter((goal) => goal.visibility !== 'secret');
+    const selected = limit === null || limit === undefined || limit === ''
+        ? goals
+        : goals.slice(-Math.max(0, Math.floor(Number(limit) || 0)));
+    if (!selected.length) return '';
+    const lines = selected.map((goal) => {
+        const rate = Number.isFinite(Number(goal.successRate)) ? ` — ${Number(goal.successRate)}%` : '';
+        const facets = [goal.status, goal.visibility].filter(Boolean).join(', ');
+        const holders = (Array.isArray(goal.holderRefs) ? goal.holderRefs : [])
+            .map((holder) => holder?.label || holder?.id).filter(Boolean).join(', ');
+        const detail = [String(goal.description || '').trim(), holders ? `Held by: ${holders}` : '']
+            .filter(Boolean).map((line) => `  ${line}`);
+        return [`- ${goal.title}${rate}${facets ? ` (${facets})` : ''}`, ...detail].join('\n');
+    });
+    return `## Goals\n${lines.join('\n')}`;
+}
+
+/** {{loom.variables}} — every Variable for the Timeline, with its value. */
+export function renderLoomVariables(timelineId, { limit = null } = {}) {
+    const variables = listVariableValues({ timelineId: String(timelineId || '') });
+    const selected = limit === null || limit === undefined || limit === ''
+        ? variables
+        : variables.slice(-Math.max(0, Math.floor(Number(limit) || 0)));
+    if (!selected.length) return '';
+    const lines = selected.map((variable) => {
+        const value = formatVariable(variable);
+        const meaning = String(variable.description || '').trim();
+        return `- ${variable.name}: ${value}${meaning ? ` — ${meaning}` : ''}`;
+    });
+    return `## Variables\n${lines.join('\n')}`;
+}
+
+/** {{prev.events N}} — the last N Scenes' events, current Scene excluded.
+ *  Reuses the proven recall engine (same positional "N preceding Scenes"). */
+export function renderPrevEvents(timelineId, sceneId, { scenes = null, archiveProjection = null } = {}) {
+    return buildNarratorRecallSections(timelineId, sceneId, { scenes, archiveProjection });
 }
 
 function normalizeSceneLookback(value) {
