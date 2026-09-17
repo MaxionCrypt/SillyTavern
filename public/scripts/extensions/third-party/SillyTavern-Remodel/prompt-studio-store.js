@@ -10,7 +10,7 @@ import {
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 31;
+const STORE_VERSION = 33;
 
 export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
@@ -23,9 +23,83 @@ const ROLEPLAY_LOOM_LIVING_LORE_POLICY = [
     'When World Sense supplies promotion candidates, decide each one with `lorePromotionDecisions`. Use empty arrays when no durable lore action is warranted.',
 ].join('\n');
 
+// The operations manual, seeded as a plain editable block (not a computed
+// macro). Since goal requests are now provider-enforced by the fence schema,
+// this no longer teaches argument syntax — it carries what a schema cannot: WHEN
+// to use each operation and how to judge a Goal's Success Rate. Edit or remove
+// it like any other block.
+export const LOOM_OPERATIONS_MANUAL = [
+    '## Operations — what you may change, and when',
+    'Request changes in the state fence; code validates and applies them. Never roll dice or change a value yourself.',
+    '- goal.create — a new outcome someone is actively working toward. Give it a title, a condition it is measured against, at least one holder, and a starting Success Rate.',
+    '- goal.edit — change a Goal: its Success Rate, status, title, condition, or visibility. A turn that materially helped or obstructed a Goal should move its rate here even when no roll occurred.',
+    '- goal.reach — one decisive attempt against a Goal. Code freezes the inputs and rolls a d100; a hit achieves it, a miss changes nothing on its own.',
+    '- goal.relate — link two Goals as sympathetic (progress helps) or antagonistic (progress hurts).',
+    '- goal.delete — remove a Goal that should not exist at all. Prefer goal.edit with a terminal status when it simply ended.',
+    '',
+    '## Archive — record what the Scene establishes (always available)',
+    'These need no Goals or Variables and are how the Scene remembers itself. Record only what the accepted turn made true.',
+    '- event.record — one line of what just happened, appended to the permanent Archive the Narrator reads as already written.',
+    '- scene.set — a durable scene fact, by a stable key (location, weather, who is present).',
+    '- char_state.set — a facet of a character’s current state (mood, injury, stance).',
+    '- secret.set — a fact hidden from the player, by key. Never surfaced in the visible narration.',
+    '- beat.set — the unresolved thread that may develop next turn. Provisional, and never overrides the latest accepted action.',
+    '',
+    "## Rating a Goal",
+    "Every active Goal's Success Rate is the chance its holder still has of achieving it from where the fiction has reached. These are reference points, not a list to choose from — state the number that fits:",
+    '  5 nearly impossible · 15 extreme · 30 difficult · 50 uncertain · 70 favourable · 85 strongly favoured · 95 nearly assured',
+    'Rates hold between 5 and 95: a Goal already certain or already lost is a status, not a roll. A small pressure is a few points, a meaningful turn is nearer seven, and a decisive reversal is twenty or more. A reach returns a result you must respect — narrate the hit or miss you were given, never the one you wanted.',
+].join('\n');
+
+// The "pressures, not guarantees" framing that used to be baked into the
+// story.goals render. Now a plain editable block seeded next to loom.goals in a
+// Narrator recipe, so the framing is yours to tune while the macro stays data.
+export const GOALS_PRESSURE_FRAMING = [
+    'Goals describe outcomes their holders are trying to achieve. They are pressures on the scene, never protected outcomes or instructions to preserve. The latest action may help, obstruct, redirect, or defeat them; narrate those consequences honestly.',
+].join('\n');
+
+// The Story-Archive worker's operations manual. The background Archive boundary
+// is narrower than the live Loom: no goal.reach (the manuscript already decided
+// the outcome) and no goal.delete. Listing only what it may actually do keeps it
+// from attempting operations the ingestion boundary would reject.
+export const ARCHIVE_OPERATIONS_MANUAL = [
+    '## Operations — record what the accepted passage established',
+    'Request changes in the state fence; code validates and applies them. Never roll dice or change a value yourself. Record only what the passage made true.',
+    '- event.record — one line of what happened, appended to the permanent Archive.',
+    '- scene.set / scene.clear — set or clear a durable scene fact by a stable key.',
+    '- char_state.set / char_state.clear — set or clear a facet of a character’s state (mood, injury, stance).',
+    '- secret.set / secret.clear — set or clear a fact hidden from the player, by key.',
+    '- beat.set — the unresolved thread that may develop next.',
+    '- goal.create — a new outcome someone is working toward: title, the condition it is measured against, at least one holder, a starting Success Rate.',
+    '- goal.edit — change a Goal’s Success Rate, status, title, condition, or visibility to match what the passage established.',
+    '- goal.relate — link two Goals as sympathetic (progress helps) or antagonistic (progress hurts).',
+    '- variable.create — a new Variable. Do not duplicate a name already listed under Variables.',
+    '',
+    "## Rating a Goal",
+    "A Goal's Success Rate is the chance its holder still has of achieving it from where the passage left things. Reference points — state the number that fits: 5 nearly impossible · 30 difficult · 50 uncertain · 70 favourable · 95 nearly assured. Rates hold between 5 and 95.",
+].join('\n');
+
 export const PROMPT_MODES = ['story', 'roleplay', 'loom'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
 export const PROMPT_ROLES = ['system', 'instruction', 'user', 'assistant'];
+
+// Split, single-purpose state macros, available in EVERY recipe (getSourceDefinitions
+// appends this set to whatever mode is being edited). Each renders one slice of
+// the shared state so a recipe names exactly what it wants; the old bundled
+// boards (loom.archive/loom.mechanics/loom.lifecycle) are gone. Native
+// identifiers let them mirror into a roleplay recipe's native prompt, same as
+// storyGoals. loom.secrets and loom.goals secret=true must not go in a
+// player-facing recipe.
+export const UNIVERSAL_STATE_MACROS = Object.freeze([
+    template('loomAction', 'Player Action', 'user', 'loom.action', { nativeIdentifier: 'remodel_loom_action', description: 'The current player-authored speech or attempted action. It is authoritative over conflicting inference in the Narrator draft.' }),
+    template('loomScene', 'Scene Facts', 'system', 'loom.scene', { nativeIdentifier: 'remodel_loom_scene', description: 'The current Scene’s recorded facts.' }),
+    template('loomCharacters', 'Character States', 'system', 'loom.characters', { nativeIdentifier: 'remodel_loom_characters', description: 'The current Scene’s character states.' }),
+    template('loomEvents', 'Scene Events', 'system', 'loom.events', { nativeIdentifier: 'remodel_loom_events', description: 'Events recorded for the current Scene.', arguments: 'events=N limits how many recent events are shown.' }),
+    template('prevEvents', 'Previous Scene Events', 'system', 'prev.events', { nativeIdentifier: 'remodel_prev_events', content: '{{prev.events scenes=3}}', description: 'Events from the Scenes before this one; the current Scene is excluded.', arguments: 'scenes=N includes the N preceding Scenes. Zero disables it; omit for all earlier Scenes.' }),
+    template('loomGoals', 'Goals', 'system', 'loom.goals', { nativeIdentifier: 'remodel_loom_goals', description: 'Open Goals with Success Rate, holders, and condition. Secret Goals are hidden unless secret=true.', arguments: 'limit=N keeps the newest N Goals; secret=true also shows secret Goals (Loom recipe only).' }),
+    template('loomVariables', 'Variables', 'system', 'loom.variables', { nativeIdentifier: 'remodel_loom_variables', description: 'Every Variable with its current value and meaning.', arguments: 'limit=N keeps the newest N Variables.' }),
+    template('loomSecrets', 'Secrets', 'system', 'loom.secrets', { nativeIdentifier: 'remodel_loom_secrets', description: 'The current Scene’s secrets. Never place this in a player-facing recipe — the writing model would see hidden twists.' }),
+]);
 
 export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
     story: Object.freeze([
@@ -48,28 +122,10 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         template('scenario', 'Scenario', 'system', 'scene.scenario', { nativeIdentifier: 'scenario' }),
         template('worldInfoAfter', 'World Info (after)', 'system', 'world.info.after', { nativeIdentifier: 'worldInfoAfter' }),
         template('dialogueExamples', 'Dialogue Examples', 'user', 'character.examples', { nativeIdentifier: 'dialogueExamples' }),
-        template('storyGoals', 'Story Goals', 'system', 'story.goals', { nativeIdentifier: 'remodel_story_goals', description: 'Active Goals framed as consequential pressures, never protected outcomes.', arguments: 'limit=N keeps the newest N active Goals.' }),
-        // Rendered by Remodel as the Narrator's dynamic Archive grounding,
-        // same as storyGoals above — not resolved from a card or lorebook.
-        // `nativeIdentifier` is required, not decorative: a roleplay recipe is
-        // mirrored into SillyTavern's native Prompt Manager (applyRoleplayChatRecipe),
-        // and that mirroring is the only thing that gets this block's content
-        // into the real Narrator generation. A source with no native identifier
-        // renders in the editor, accepts a depth setting, and reaches nothing —
-        // this is the storyGoals precedent, followed exactly.
-        template('narratorGrounding', 'Narrator Grounding', 'system', 'narrator.grounding', {
-            nativeIdentifier: 'remodel_narrator_grounding',
-            description: 'The current Narrator-visible Loom Archive and provisional open thread, resolved when the request is assembled.',
-            advancedWarning: NARRATOR_GROUNDING_WARNING,
-            arguments: 'events=N keeps the newest N “What happened” records; events=0 hides that section.',
-        }),
-        template('narratorRecall', 'Earlier Scene Recall', 'system', 'narrator.recall', {
-            nativeIdentifier: 'remodel_narrator_recall',
-            content: '{{narrator.recall scenes=3}}',
-            description: 'Relevant Loom Archive records from eligible earlier Timeline Scenes only. The current Scene is excluded.',
-            advancedWarning: NARRATOR_RECALL_WARNING,
-            arguments: 'scenes=N limits how many preceding Timeline Scenes are eligible. Zero disables recall; omit the argument for all earlier Scenes.',
-        }),
+        // story.goals / narrator.grounding / narrator.recall are retired: the
+        // Narrator now uses the universal split macros (loom.goals with its
+        // framing block, loom.scene/characters/events, prev.events), mirrored
+        // into the native prompt the same way. See migrateRoleplayStateMacros.
         template('narratorNote', 'Narrator Note', 'system', 'narrator.note', {
             nativeIdentifier: 'remodel_narrator_note',
             description: 'Your per-scene Narrator Note. It is empty until you write one in the roleplay rail.',
@@ -97,10 +153,8 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         template('nativeContext', 'Native Roleplay Context', 'system', 'roleplay.native', { textOnly: true }),
     ]),
     loom: Object.freeze([
-        template('playerAction', 'Current Player Action', 'user', 'player.action', { description: 'The current player-authored speech or attempted action only. It is authoritative over conflicting inference in the Narrator draft.' }),
-        template('archiveState', 'Archive, Goals & Open Thread', 'system', 'loom.archive', { description: 'The Loom-readable scene facts, character state, recorded events, provisional open thread, and active Goals.', arguments: 'events=N limits “What happened”; goals=N limits active Goals. Zero hides that section.' }),
-        template('mechanicsBoard', 'Archive Operations & Mechanics', 'system', 'loom.mechanics', { description: 'The Archive operations always available to the Loom, plus the current Goals and Variables board when mechanics are enabled.' }),
-        template('lifecycleBoard', 'Goal & Variable Lifecycle Board', 'system', 'loom.lifecycle', { description: 'The exact open Goal and existing Variable addresses this pass may propose against. Placed on its own, it moves independently; left out of the recipe, it rides on the end of Archive Operations & Mechanics.' }),
+        // The split state macros (loom.scene/goals/…) live in UNIVERSAL_STATE_MACROS
+        // and are appended to every mode by getSourceDefinitions.
         template('livingLore', 'Selected Living Lore', 'system', 'loom.lore', { description: 'The bounded, revisioned Timeline lore entries selected by World Sense, plus the typed proposal contract. Proposals do not write directly.' }),
         template('narratorDraft', 'Narrator Draft', 'user', 'narrator.draft', { description: 'The held Narrator prose being reconciled before it becomes visible.' }),
         template('storyArchiveCapture', 'Story Archive Capture', 'user', 'story.archive_capture', { description: 'One accepted, bounded Story manuscript block. The Story Loom records it as canonical evidence and never rewrites it.' }),
@@ -130,6 +184,14 @@ const nativeMarkerToSource = Object.freeze({
     remodel_narrator_grounding: 'narratorGrounding',
     remodel_narrator_recall: 'narratorRecall',
     remodel_narrator_note: 'narratorNote',
+    remodel_loom_action: 'loomAction',
+    remodel_loom_scene: 'loomScene',
+    remodel_loom_characters: 'loomCharacters',
+    remodel_loom_events: 'loomEvents',
+    remodel_prev_events: 'prevEvents',
+    remodel_loom_goals: 'loomGoals',
+    remodel_loom_variables: 'loomVariables',
+    remodel_loom_secrets: 'loomSecrets',
     // Read-only migration aliases. New recipes always use the canonical name.
     remodel_loom_context: 'narratorGrounding',
     remodel_director_notes: 'narratorGrounding',
@@ -268,7 +330,8 @@ export function createPromptBlock({ kind = 'message', role = 'instruction', cont
 
 /** Insert an editable ordinary message from the mode's template catalog. */
 export function createPromptBlockFromTemplate(mode, templateKey) {
-    const definition = PROMPT_TEMPLATE_DEFINITIONS[mode]?.find((item) => item.key === templateKey);
+    const definition = PROMPT_TEMPLATE_DEFINITIONS[mode]?.find((item) => item.key === templateKey)
+        || UNIVERSAL_STATE_MACROS.find((item) => item.key === templateKey);
     if (!definition) return null;
     return createPromptBlock({
         kind: 'message',
@@ -450,10 +513,14 @@ const PATCH_LOOM_RECIPE_NAME = 'Loom · Patch (fast)';
 function patchLoomBlocks() {
     return [
         createPromptBlock({ kind: 'message', role: 'system', content: LOOM_POLICY_PATCH }),
-        createPromptBlockFromTemplate('loom', 'playerAction'),
-        createPromptBlockFromTemplate('loom', 'archiveState'),
-        createPromptBlockFromTemplate('loom', 'mechanicsBoard'),
+        createPromptBlockFromTemplate('loom', 'loomAction'),
+        createPromptBlockFromTemplate('loom', 'loomScene'),
+        createPromptBlockFromTemplate('loom', 'loomCharacters'),
+        createPromptBlockFromTemplate('loom', 'loomEvents'),
+        createPromptBlock({ kind: 'message', role: 'system', content: '{{loom.goals secret=true}}', nativeIdentifier: 'remodel_loom_goals' }),
+        createPromptBlockFromTemplate('loom', 'loomVariables'),
         createPromptBlockFromTemplate('loom', 'livingLore'),
+        createPromptBlock({ kind: 'message', role: 'system', content: LOOM_OPERATIONS_MANUAL }),
         createPromptBlockFromTemplate('loom', 'narratorDraft'),
         createPromptBlockFromTemplate('loom', 'narratorReasoning'),
         createPromptBlock({
@@ -468,10 +535,15 @@ function patchLoomBlocks() {
 function storyArchiveLoomBlocks() {
     return [
         createPromptBlock({ kind: 'message', role: 'system', content: STORY_ARCHIVE_POLICY }),
-        createPromptBlockFromTemplate('loom', 'archiveState'),
-        createPromptBlockFromTemplate('loom', 'mechanicsBoard'),
+        createPromptBlockFromTemplate('loom', 'loomScene'),
+        createPromptBlockFromTemplate('loom', 'loomCharacters'),
+        createPromptBlockFromTemplate('loom', 'loomEvents'),
+        createPromptBlockFromTemplate('loom', 'prevEvents'),
+        createPromptBlock({ kind: 'message', role: 'system', content: '{{loom.goals secret=true}}', nativeIdentifier: 'remodel_loom_goals' }),
+        createPromptBlockFromTemplate('loom', 'loomVariables'),
         createPromptBlockFromTemplate('loom', 'livingLore'),
         createPromptBlockFromTemplate('loom', 'storyArchiveCapture'),
+        createPromptBlock({ kind: 'message', role: 'system', content: ARCHIVE_OPERATIONS_MANUAL }),
         createPromptBlock({
             kind: 'message',
             role: 'system',
@@ -512,8 +584,20 @@ function blocksFromNativeChat(prompts, promptOrder) {
     return order.map((entry) => {
         const prompt = promptMap.get(entry.identifier) || {};
         const sourceKey = nativeMarkerToSource[entry.identifier];
+        if (RETIRED_SOURCE_MACROS[sourceKey]) {
+            // A native prompt-order still carrying a retired Remodel marker maps
+            // to the split macros, not a dead {{native.prompt}} block.
+            return createPromptBlock({
+                kind: 'message',
+                role: prompt.role || sourceRole('roleplay', sourceKey) || 'system',
+                content: RETIRED_SOURCE_MACROS[sourceKey],
+                enabled: entry.enabled !== false,
+                nativeIdentifier: '',
+            });
+        }
         if (prompt.marker || sourceKey) {
-            const definition = PROMPT_TEMPLATE_DEFINITIONS.roleplay.find((item) => item.key === (sourceKey || ''));
+            const definition = PROMPT_TEMPLATE_DEFINITIONS.roleplay.find((item) => item.key === (sourceKey || ''))
+                || UNIVERSAL_STATE_MACROS.find((item) => item.key === (sourceKey || ''));
             return createPromptBlock({
                 kind: 'message',
                 role: prompt.role || sourceRole('roleplay', sourceKey) || 'system',
@@ -889,14 +973,31 @@ function normalizeStore(store, seed) {
             changed = true;
         }
     }
+
+    // v32/v33: retire the bundled boards and the Narrator-specific state macros
+    // for the universal split macros. Runs last so it catches sources added by
+    // an earlier gate (player.action, story.goals, narrator.recall, …).
+    if (previousVersion < 33) {
+        for (const id of store.recipeIds) {
+            const recipe = store.recipes[id];
+            if (recipe?.mode === 'loom' && migrateLoomStateBoards(recipe)) changed = true;
+            if (recipe?.mode === 'roleplay' && migrateRoleplayStateMacros(recipe)) changed = true;
+        }
+    }
     return changed;
 }
 
 function ensureStoryGoalsSource(blocks) {
-    if (!Array.isArray(blocks) || blocks.some((block) => block.content?.includes('{{story.goals}}'))) return false;
-    const source = createPromptBlockFromTemplate('roleplay', 'storyGoals');
+    // Now seeds the universal loom.goals plus its editable "pressures" framing.
+    // Idempotent against the legacy story.goals too, so it never duplicates a
+    // recipe the v33 migration will convert.
+    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*(story\.goals|loom\.goals)\b/i.test(block.content || ''))) return false;
     const historyIndex = blocks.findIndex((block) => /{{chat\.(history|input)\b/i.test(block.content || ''));
-    blocks.splice(historyIndex >= 0 ? historyIndex : blocks.length, 0, source);
+    const at = historyIndex >= 0 ? historyIndex : blocks.length;
+    blocks.splice(at, 0,
+        createPromptBlock({ kind: 'message', role: 'system', content: GOALS_PRESSURE_FRAMING }),
+        createPromptBlockFromTemplate('roleplay', 'loomGoals'),
+    );
     return true;
 }
 
@@ -944,8 +1045,9 @@ function ensureMechanicsToolsSource(blocks) {
 }
 
 function ensurePlayerActionSource(blocks) {
-    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*player\.action\b/i.test(block.content || ''))) return false;
-    const source = createPromptBlockFromTemplate('loom', 'playerAction');
+    // Now seeds loom.action; idempotent against the legacy player.action too.
+    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*(player\.action|loom\.action)\b/i.test(block.content || ''))) return false;
+    const source = createPromptBlockFromTemplate('loom', 'loomAction');
     const draftIndex = blocks.findIndex((block) => /\{\{\s*narrator\.draft\b/i.test(block.content || ''));
     blocks.splice(draftIndex >= 0 ? draftIndex : blocks.length, 0, source);
     return true;
@@ -958,8 +1060,9 @@ function withStoryGoalsSource(blocks) {
 
 /** Earlier-Scene recall belongs immediately before native chat history. */
 function ensureNarratorRecallSource(blocks) {
-    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*narrator\.recall\b/i.test(block.content || ''))) return false;
-    const source = createPromptBlockFromTemplate('roleplay', 'narratorRecall');
+    // Now seeds prev.events; idempotent against the legacy narrator.recall too.
+    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*(narrator\.recall|prev\.events)\b/i.test(block.content || ''))) return false;
+    const source = createPromptBlockFromTemplate('roleplay', 'prevEvents');
     const historyIndex = blocks.findIndex((block) => /{{chat\.(history|input)\b/i.test(block.content || ''));
     blocks.splice(historyIndex >= 0 ? historyIndex : blocks.length, 0, source);
     return true;
@@ -981,6 +1084,140 @@ function retireNarratorTimeSource(blocks) {
     if (kept.length === blocks.length) return false;
     blocks.splice(0, blocks.length, ...kept);
     return true;
+}
+
+/** The macro of a block that is EXACTLY one macro ("{{loom.archive events=3}}"
+ *  → "loom.archive"); '' when the block holds anything else. */
+function soleBlockMacro(content) {
+    const match = String(content || '').trim().match(/^\{\{\s*([a-z][\w.-]*)(?:\s+[^{}]*?)?\s*\}\}$/i);
+    return match ? match[1].toLowerCase() : '';
+}
+
+/** Inline-rewrite the dead board macros to the split ones, preserving anything
+ *  else in the same block (an authored block with other macros or prose). */
+function rewriteLoomBoardTokens(content) {
+    return String(content || '')
+        .replace(/\{\{\s*player\.action\b[^{}]*\}\}/gi, '{{loom.action}}')
+        .replace(/\{\{\s*loom\.archive\b[^{}]*\}\}/gi, '{{loom.scene}}\n\n{{loom.characters}}\n\n{{loom.events}}')
+        .replace(/\{\{\s*loom\.mechanics\b[^{}]*\}\}/gi, '{{loom.goals secret=true}}\n\n{{loom.variables}}')
+        .replace(/\{\{\s*loom\.lifecycle\b[^{}]*\}\}/gi, '');
+}
+
+/**
+ * v32: retire a Loom recipe's bundled boards for the split state macros.
+ *   player.action   → loom.action
+ *   loom.archive    → loom.scene + loom.characters + loom.events
+ *   loom.mechanics  → loom.goals + loom.variables + operations manual block
+ *   loom.lifecycle  → dropped (folded into loom.goals / loom.variables)
+ * A block that is exactly one dead macro is expanded into separate template
+ * blocks (nicer to edit); a block that merely CONTAINS one — an authored block
+ * with surrounding text or other macros — is rewritten token-by-token so nothing
+ * around it is lost. Every other block and the ordering are untouched.
+ */
+function migrateLoomStateBoards(recipe) {
+    if (recipe?.mode !== 'loom' || !Array.isArray(recipe.blocks)) return false;
+    // The background Story-Archive recipe has a narrower operations boundary, so
+    // it gets the archive manual rather than the live Loom one. It also received
+    // earlier-Scene recall bundled inside loom.archive, so its split keeps
+    // prev.events; the live Loom's loom.archive never carried recall.
+    const isStoryArchive = recipe.name === STORY_ARCHIVE_LOOM_RECIPE_NAME;
+    const opsManual = isStoryArchive ? ARCHIVE_OPERATIONS_MANUAL : LOOM_OPERATIONS_MANUAL;
+    const EXPANSIONS = {
+        'player.action': ['loomAction'],
+        'loom.archive': isStoryArchive ? ['loomScene', 'loomCharacters', 'loomEvents', 'prevEvents'] : ['loomScene', 'loomCharacters', 'loomEvents'],
+        'loom.mechanics': ['loomGoals', 'loomVariables'],
+        'loom.lifecycle': [],
+    };
+    let changed = false;
+    const next = [];
+    for (const block of recipe.blocks) {
+        const macro = soleBlockMacro(block.content);
+        if (macro && Object.prototype.hasOwnProperty.call(EXPANSIONS, macro)) {
+            changed = true;
+            for (const key of EXPANSIONS[macro]) {
+                const created = createPromptBlockFromTemplate('loom', key);
+                if (!created) continue;
+                created.enabled = block.enabled !== false;
+                // The Loom recipe is trusted, so its Goals board includes secrets.
+                if (key === 'loomGoals') created.content = '{{loom.goals secret=true}}';
+                next.push(created);
+            }
+            // The operations manual is a plain block, not a template, so it
+            // rides along where the mechanics board used to sit.
+            if (macro === 'loom.mechanics') {
+                next.push(createPromptBlock({ kind: 'message', role: 'system', content: opsManual, enabled: block.enabled !== false }));
+            }
+            continue;
+        }
+        const rewritten = rewriteLoomBoardTokens(block.content);
+        if (rewritten !== String(block.content || '')) {
+            block.content = rewritten.replace(/\n{3,}/g, '\n\n').trim();
+            changed = true;
+        }
+        next.push(block);
+    }
+    if (changed) recipe.blocks = next;
+    return changed;
+}
+
+/**
+ * v33: retire the Narrator-specific state macros for the universal split ones.
+ *   narrator.grounding → loom.scene + loom.characters + loom.events
+ *   story.goals        → a "pressures, not guarantees" framing block + loom.goals
+ *   narrator.recall    → prev.events (keeping any scenes=N argument)
+ * Whole-macro blocks expand into separate blocks; a macro inside an authored
+ * block is rewritten in place, and the goals framing is only auto-added for a
+ * whole-macro story.goals block (an authored block keeps its own framing).
+ */
+function migrateRoleplayStateMacros(recipe) {
+    if (recipe?.mode !== 'roleplay' || !Array.isArray(recipe.blocks)) return false;
+    let changed = false;
+    const next = [];
+    for (const block of recipe.blocks) {
+        const macro = soleBlockMacro(block.content);
+        if (macro === 'narrator.grounding') {
+            changed = true;
+            for (const key of ['loomScene', 'loomCharacters', 'loomEvents']) {
+                const created = createPromptBlockFromTemplate('roleplay', key);
+                if (created) { created.enabled = block.enabled !== false; next.push(created); }
+            }
+            continue;
+        }
+        if (macro === 'story.goals') {
+            changed = true;
+            next.push(createPromptBlock({ kind: 'message', role: 'system', content: GOALS_PRESSURE_FRAMING, enabled: block.enabled !== false }));
+            const goals = createPromptBlockFromTemplate('roleplay', 'loomGoals');
+            if (goals) { goals.enabled = block.enabled !== false; next.push(goals); }
+            continue;
+        }
+        if (macro === 'narrator.recall') {
+            changed = true;
+            const created = createPromptBlockFromTemplate('roleplay', 'prevEvents');
+            if (created) {
+                created.enabled = block.enabled !== false;
+                const args = (String(block.content || '').match(/\{\{\s*narrator\.recall\b([^{}]*)\}\}/i)?.[1] || '').trim();
+                if (args) created.content = `{{prev.events ${args}}}`;
+                next.push(created);
+            }
+            continue;
+        }
+        // Mixed authored block: rewrite the dead macro tokens in place and drop
+        // any legacy native id (a mixed block cannot own a single one).
+        const rewritten = String(block.content || '')
+            .replace(/\{\{\s*narrator\.grounding\b[^{}]*\}\}/gi, '{{loom.scene}}\n\n{{loom.characters}}\n\n{{loom.events}}')
+            .replace(/\{\{\s*story\.goals\b[^{}]*\}\}/gi, '{{loom.goals}}')
+            .replace(/\{\{\s*narrator\.recall\b([^{}]*)\}\}/gi, '{{prev.events$1}}');
+        if (rewritten !== String(block.content || '')) {
+            block.content = rewritten.replace(/\n{3,}/g, '\n\n').trim();
+            if (['remodel_narrator_grounding', 'remodel_narrator_recall', 'remodel_story_goals'].includes(block.nativeIdentifier)) {
+                block.nativeIdentifier = '';
+            }
+            changed = true;
+        }
+        next.push(block);
+    }
+    if (changed) recipe.blocks = next;
+    return changed;
 }
 
 function migrateNarratorRecallSource(blocks) {
@@ -1018,7 +1255,7 @@ function restoreRoleplayLivingLoreInstructions(blocks) {
 /** Seed one editable anti-echo/append-only policy before the Archive macro. */
 function ensureNarratorPolicy(blocks) {
     if (!Array.isArray(blocks) || blocks.some((block) => block.content === NARRATOR_POLICY_DEFAULT)) return false;
-    const recallIndex = blocks.findIndex((block) => /\{\{\s*narrator\.recall\b/i.test(block.content || ''));
+    const recallIndex = blocks.findIndex((block) => /\{\{\s*(narrator\.recall|prev\.events)\b/i.test(block.content || ''));
     blocks.splice(recallIndex >= 0 ? recallIndex : blocks.length, 0, createPromptBlock({
         kind: 'message',
         role: 'instruction',
@@ -1096,11 +1333,24 @@ function normalizeBlocks(value, mode, apiType) {
     return blocks;
 }
 
+// Retired source keys map to the universal split macros (narrator.grounding,
+// narrator.recall, story.goals and the ancient loom-context/director-notes are
+// gone). Everything else resolves against the mode's templates or the universal set.
+const RETIRED_SOURCE_MACROS = Object.freeze({
+    directorNotes: '{{loom.scene}}\n\n{{loom.characters}}\n\n{{loom.events}}',
+    loomContext: '{{loom.scene}}\n\n{{loom.characters}}\n\n{{loom.events}}',
+    narratorGrounding: '{{loom.scene}}\n\n{{loom.characters}}\n\n{{loom.events}}',
+    narratorRecall: '{{prev.events scenes=3}}',
+    storyGoals: '{{loom.goals}}',
+});
+
 function sourceBlockToMacroMessage(mode, value) {
     if (!value || value.kind !== 'source') return value;
-    const legacyGrounding = ['directorNotes', 'loomContext'].includes(value.sourceKey);
-    const migratedKey = legacyGrounding ? 'narratorGrounding' : value.sourceKey;
-    const definition = PROMPT_TEMPLATE_DEFINITIONS[mode]?.find((item) => item.key === migratedKey);
+    if (RETIRED_SOURCE_MACROS[value.sourceKey]) {
+        return { ...value, kind: 'message', content: RETIRED_SOURCE_MACROS[value.sourceKey], sourceKey: '', nativeIdentifier: '', advancedWarning: value.advancedWarning || '' };
+    }
+    const definition = PROMPT_TEMPLATE_DEFINITIONS[mode]?.find((item) => item.key === value.sourceKey)
+        || UNIVERSAL_STATE_MACROS.find((item) => item.key === value.sourceKey);
     if (!definition) return { ...value, kind: 'message', content: `{{source key="${String(value.sourceKey || '')}"}}` };
     const args = Object.entries(value.settings || {})
         .map(([key, item]) => `${key}=${JSON.stringify(item)}`)
@@ -1110,7 +1360,7 @@ function sourceBlockToMacroMessage(mode, value) {
         kind: 'message',
         content: `{{${definition.macro}${args ? ` ${args}` : ''}}}`,
         sourceKey: '',
-        nativeIdentifier: legacyGrounding ? definition.nativeIdentifier : (value.nativeIdentifier || definition.nativeIdentifier || ''),
+        nativeIdentifier: value.nativeIdentifier || definition.nativeIdentifier || '',
         advancedWarning: value.advancedWarning || '',
     };
 }

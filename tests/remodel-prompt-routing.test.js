@@ -50,15 +50,15 @@ test('a roleplay recipe active for roleplay/chat does not leak into resolveLoomR
     expect(recipe?.mode).toBe('loom');
 });
 
-test('Narrator recall resolves into its recipe-owned native prompt', () => {
+test('a universal state macro (prev.events) resolves into its recipe-owned native prompt', () => {
     initPromptStudio({ getRuntimeMode: () => 'roleplay', getRuntimeRecipeId: () => null });
     const recipe = createPromptRecipe({ name: 'Narrator', mode: 'roleplay', apiType: 'chat' });
     setActivePromptRecipe('roleplay', 'chat', recipe.id);
     applyPromptStudioRuntimeRecipe();
 
-    expect(setRemodelNativePromptContent('narratorRecall', '## Earlier Scene recall\n- the gate was locked')).toBe(true);
-    expect(oai_settings.prompts.find((prompt) => prompt.identifier === 'remodel_narrator_recall')).toMatchObject({
-        name: 'Earlier Scene Recall',
+    expect(setRemodelNativePromptContent('prevEvents', '## Earlier Scene recall\n- the gate was locked')).toBe(true);
+    expect(oai_settings.prompts.find((prompt) => prompt.identifier === 'remodel_prev_events')).toMatchObject({
+        name: 'Previous Scene Events',
         marker: false,
         role: 'system',
         content: '## Earlier Scene recall\n- the gate was locked',

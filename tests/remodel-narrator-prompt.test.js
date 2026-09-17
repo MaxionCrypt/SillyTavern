@@ -20,12 +20,12 @@ test('the default Narrator policy is editable recipe text, not engine code', () 
 test('the default recipe places editable policy before earlier-Scene recall', () => {
     const recipe = createPromptRecipe({ mode: 'roleplay', apiType: 'chat' });
     const policyIndex = recipe.blocks.findIndex((block) => block.content === NARRATOR_POLICY_DEFAULT);
-    const recallIndex = recipe.blocks.findIndex((block) => block.content === '{{narrator.recall scenes=3}}');
+    const recallIndex = recipe.blocks.findIndex((block) => block.content === '{{prev.events scenes=3}}');
 
     expect(policyIndex).toBeGreaterThanOrEqual(0);
     expect(recallIndex).toBeGreaterThan(policyIndex);
     expect(recipe.blocks[recallIndex]).toMatchObject({
-        nativeIdentifier: 'remodel_narrator_recall',
+        nativeIdentifier: 'remodel_prev_events',
         role: 'system',
         enabled: true,
     });

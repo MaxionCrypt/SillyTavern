@@ -16,6 +16,7 @@ import {
     PROMPT_MODES,
     PROMPT_ROLES,
     PROMPT_TEMPLATE_DEFINITIONS,
+    UNIVERSAL_STATE_MACROS,
     captureTextTransport,
     clonePromptRecipe,
     createPromptBlock,
@@ -1183,7 +1184,11 @@ function applyRecipeToNative(recipe) {
  * These are the two that must not be markers. Everything else in a roleplay
  * recipe names something core already knows how to fill.
  */
-const REMODEL_RENDERED_SOURCES = new Set(['narratorGrounding', 'narratorRecall', 'narratorNote', 'storyGoals', 'nextAction']);
+const REMODEL_RENDERED_SOURCES = new Set([
+    'narratorGrounding', 'narratorRecall', 'narratorNote', 'storyGoals', 'nextAction',
+    // Universal split-state macros, rendered by Remodel when used in a roleplay recipe.
+    'loomAction', 'loomScene', 'loomCharacters', 'loomEvents', 'prevEvents', 'loomGoals', 'loomVariables', 'loomSecrets',
+]);
 
 /**
  * Put fresh text into one of our own native prompts, at whatever position the
@@ -1631,7 +1636,12 @@ function closeTemplatePicker() {
 }
 
 function getSourceDefinitions(recipe) {
-    return PROMPT_TEMPLATE_DEFINITIONS[recipe?.mode] || [];
+    // Every mode also sees the universal split-state macros (loom.scene/goals/…),
+    // so they can be dropped into any recipe. Mode-specific templates win a key
+    // collision, so a legacy loom entry is never shadowed.
+    const modeDefinitions = PROMPT_TEMPLATE_DEFINITIONS[recipe?.mode] || [];
+    const modeKeys = new Set(modeDefinitions.map((item) => item.key));
+    return [...modeDefinitions, ...UNIVERSAL_STATE_MACROS.filter((item) => !modeKeys.has(item.key))];
 }
 
 function getSourceDefinition(recipe, key) {
