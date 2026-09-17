@@ -224,35 +224,28 @@ test('superseding a job forgets its packet and reply', async () => {
     expect(runtime.takeReply(queued.jobId)).toBeNull();
 });
 
-// --- Recall inside {{loom.archive}} ------------------------------------------
+// --- Earlier-Scene recall via {{prev.events}} --------------------------------
 
-const archiveOnlyRecipe = {
+const prevEventsRecipe = {
     mode: 'loom', apiType: 'chat',
-    blocks: [{ id: 'archive', kind: 'message', role: 'system', content: '{{loom.archive}}', enabled: true }],
+    blocks: [{ id: 'prev', kind: 'message', role: 'system', content: '{{prev.events}}', enabled: true }],
 };
 
-test("recall is placed after the Scene's own Archive, inside the same source", () => {
+test('earlier-Scene recall reaches the Archive prompt via prev.events', () => {
     const { messages } = compileArchivePrompt({
         acceptedProse: 'Mara locked the door.',
-        archiveContext: 'location: observatory',
-        recipe: archiveOnlyRecipe,
+        timelineId: 'tl-recall', sceneId: 'sc-recall',
+        recipe: prevEventsRecipe,
         recall: '=== WORLD SENSE RECALL ===\nAccepted evidence recalled from earlier Timeline Scenes:\n- [Arrival / The Cellar / event] Mara hid the key.',
     });
     const text = messages.map((message) => message.content).join('\n');
-    const archiveAt = text.indexOf('Current Loom Archive:');
-    const recallAt = text.indexOf('=== WORLD SENSE RECALL ===');
-    expect(archiveAt).toBeGreaterThanOrEqual(0);
-    expect(recallAt).toBeGreaterThan(archiveAt);
-    expect(text).toContain('location: observatory');
+    expect(text).toContain('=== WORLD SENSE RECALL ===');
     expect(text).toContain('[Arrival / The Cellar / event] Mara hid the key.');
 });
 
-test('no recall means the Archive source is exactly what it was before', () => {
-    const without = compileArchivePrompt({ acceptedProse: 'x', archiveContext: 'gate: closed', recipe: archiveOnlyRecipe });
-    const blank = compileArchivePrompt({ acceptedProse: 'x', archiveContext: 'gate: closed', recipe: archiveOnlyRecipe, recall: '   ' });
-    const render = (snapshot) => snapshot.messages.map((message) => message.content).join('\n');
-    expect(render(blank)).toBe(render(without));
-    expect(render(without)).toBe('Current Loom Archive:\ngate: closed');
+test('no recall leaves prev.events empty', () => {
+    const { messages } = compileArchivePrompt({ acceptedProse: 'x', timelineId: 'tl-recall', sceneId: 'sc-recall', recipe: prevEventsRecipe, recall: '   ' });
+    expect(messages.map((message) => message.content).join('\n').trim()).toBe('');
 });
 
 

@@ -1,4 +1,7 @@
 import { compileArchivePrompt } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/background-archive-runtime.js';
+import { setSceneFact } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
+import { createTimelineGoal } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js';
+import { __setExtensionSettings } from './util/st-context-stub.js';
 
 const block = (id, role, content) => ({ id, kind: 'message', role, content, enabled: true });
 const recipe = (...contents) => ({
@@ -6,19 +9,19 @@ const recipe = (...contents) => ({
     blocks: contents.map((content, index) => block(`b${index}`, 'system', content)),
 });
 
-const input = {
+const base = {
     acceptedProse: 'She crossed the room.',
     currentPlayerAction: 'I cross the room.',
-    archiveContext: 'The gate is open.',
-    lifecycleProjection: { goals: true, variables: true },
-    lifecycleContext: '[EXISTING TIMELINE LIFECYCLE — exact addresses]\nGOALS — none currently open.',
+    timelineId: 'tl-arch',
+    sceneId: 'sc-arch',
 };
 
 const joined = (compiled) => compiled.messages.map((message) => message.content).join('\n---\n');
 
+beforeEach(() => __setExtensionSettings({ remodel: {} }));
+
 test('the recipe owns its policy and output contract', () => {
-    const compiled = compileArchivePrompt({ ...input, recipe: recipe('My Archive policy.', '{{loom.archive}}', 'My Archive contract.') });
-    const text = joined(compiled);
+    const text = joined(compileArchivePrompt({ ...base, recipe: recipe('My Archive policy.', '{{loom.action}}', 'My Archive contract.') }));
     expect(text).toContain('My Archive policy.');
     expect(text).toContain('My Archive contract.');
     expect(text).not.toContain("You are the Loom's background Archive clerk");
@@ -26,55 +29,35 @@ test('the recipe owns its policy and output contract', () => {
 });
 
 test('a source the recipe does not place is not appended behind the owner', () => {
-    // Only the Archive state is placed; nothing else may smuggle itself in.
-    const compiled = compileArchivePrompt({ ...input, recipe: recipe('{{loom.archive}}') });
-    const text = joined(compiled);
-    expect(text).toContain('Current Loom Archive:');
-    expect(text).not.toContain('I cross the room.');
+    // Only the player action is placed; the accepted prose (narrator.draft) may not smuggle itself in.
+    const text = joined(compileArchivePrompt({ ...base, recipe: recipe('{{loom.action}}') }));
+    expect(text).toContain('I cross the room.');
     expect(text).not.toContain('She crossed the room.');
 });
 
 test('a placed source appears where the recipe puts it', () => {
-    const compiled = compileArchivePrompt({ ...input, recipe: recipe('{{player.action}}', '{{narrator.draft}}') });
-    const text = joined(compiled);
+    const text = joined(compileArchivePrompt({ ...base, recipe: recipe('{{loom.action}}', '{{narrator.draft}}') }));
     expect(text).toContain('I cross the room.');
     expect(text).toContain('She crossed the room.');
 });
 
 test('removing every source leaves only the recipe authored by the owner', () => {
-    const compiled = compileArchivePrompt({ ...input, recipe: recipe('Just my own words.') });
-    const text = joined(compiled);
+    const text = joined(compileArchivePrompt({ ...base, recipe: recipe('Just my own words.') }));
     expect(text).toContain('Just my own words.');
-    expect(text).not.toContain('Current Loom Archive:');
     expect(text).not.toContain('I cross the room.');
+    expect(text).not.toContain('She crossed the room.');
     expect(text).not.toContain("You are the Loom's background Archive clerk");
-    expect(text).not.toContain('Output NOTHING except one state fence');
 });
 
-test('an unplaced lifecycle board still rides on the mechanics board', () => {
-    const compiled = compileArchivePrompt({ ...input, recipe: recipe('{{loom.mechanics}}') });
-    expect(joined(compiled)).toContain('EXISTING TIMELINE LIFECYCLE');
+test('split state macros are rooted in the live Scene, not a passed-in string', () => {
+    setSceneFact('tl-arch', 'sc-arch', 'location', 'the observatory');
+    createTimelineGoal('tl-arch', { title: 'Reach the vault', description: 'before dawn', successRate: 40 }, { actor: 'loom' });
+    const text = joined(compileArchivePrompt({ ...base, recipe: recipe('{{loom.scene}}', '{{loom.goals secret=true}}') }));
+    expect(text).toContain('- location: the observatory');
+    expect(text).toContain('Reach the vault — 40%');
 });
 
-test('a placed lifecycle board follows the recipe order, not the mechanics board', () => {
-    // Adjacent same-role blocks merge into one message, so position is what is
-    // observable here, not message count.
-    const after = joined(compileArchivePrompt({ ...input, recipe: recipe('{{loom.mechanics}}', '{{loom.lifecycle}}') }));
-    expect(after.indexOf('event.record')).toBeLessThan(after.indexOf('EXISTING TIMELINE LIFECYCLE'));
-
-    const before = joined(compileArchivePrompt({ ...input, recipe: recipe('{{loom.lifecycle}}', '{{loom.mechanics}}') }));
-    expect(before.indexOf('EXISTING TIMELINE LIFECYCLE')).toBeLessThan(before.indexOf('event.record'));
-});
-
-test('a placed lifecycle board is not also duplicated into the mechanics board', () => {
-    const text = joined(compileArchivePrompt({ ...input, recipe: recipe('{{loom.mechanics}}', '{{loom.lifecycle}}') }));
-    expect(text.split('EXISTING TIMELINE LIFECYCLE')).toHaveLength(2);
-});
-
-test('a disabled block does not count as placing its source', () => {
-    const withDisabled = recipe('{{loom.mechanics}}', '{{loom.lifecycle}}');
-    withDisabled.blocks[1].enabled = false;
-    const compiled = compileArchivePrompt({ ...input, recipe: withDisabled });
-    // The lifecycle board falls back onto the mechanics board rather than vanishing.
-    expect(joined(compiled)).toContain('EXISTING TIMELINE LIFECYCLE');
+test('prev.events carries the earlier-Scene recall string', () => {
+    const text = joined(compileArchivePrompt({ ...base, recall: '=== WORLD SENSE RECALL ===\n- the vault was sealed', recipe: recipe('{{prev.events}}') }));
+    expect(text).toContain('the vault was sealed');
 });

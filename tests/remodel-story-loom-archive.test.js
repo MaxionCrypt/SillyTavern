@@ -3,7 +3,7 @@ import { createArchiveJobRepository, createMemoryArchiveJobPersistence } from '.
 import { createArchiveIngestion } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archive-ingestion.js';
 import { legacyArchiveIngestionAdapter } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/legacy-archive-ingestion-adapter.js';
 import { createBackgroundArchiveRuntime, setBackgroundArchiveRuntimeForTests } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/background-archive-runtime.js';
-import { listEvents, listSceneFacts, recordEvent } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
+import { listEvents, listSceneFacts, recordEvent, setSceneFact } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { listArchiveSceneDescriptors } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archive-scene-list.js';
 import { listLivingLoreProposals, queueLivingLoreProposals } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-mutations.js';
 import { listLivingLoreWrites, upsertLivingLoreMetadata } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
@@ -102,15 +102,15 @@ test('Story and Roleplay Scenes appear in the same Timeline Archive list', () =>
 });
 
 test('the Story Loom prompt contains only the selected recipe and its placed sources', () => {
+    setSceneFact('tl-own', 'sc-own', 'location', 'observatory');
     const prompt = buildStoryArchivePrompt({
         passage: 'Mara locked the door.',
-        archiveState: 'location: observatory',
+        timelineId: 'tl-own', sceneId: 'sc-own',
         recipe: {
             mode: 'loom', apiType: 'chat',
             blocks: [
                 { id: 'policy', kind: 'message', role: 'system', content: 'Accepted manuscript is immutable.', enabled: true },
-                { id: 'archive', kind: 'message', role: 'system', content: '{{loom.archive}}', enabled: true },
-                { id: 'operations', kind: 'message', role: 'system', content: '{{loom.mechanics}}', enabled: true },
+                { id: 'scene', kind: 'message', role: 'system', content: '{{loom.scene}}', enabled: true },
                 { id: 'passage', kind: 'message', role: 'user', content: '{{story.archive_capture}}', enabled: true },
                 { id: 'contract', kind: 'message', role: 'system', content: 'Return a single state fence.', enabled: true },
             ],
@@ -118,7 +118,7 @@ test('the Story Loom prompt contains only the selected recipe and its placed sou
     });
     const text = prompt.map((message) => message.content).join('\n');
     expect(text).toContain('Accepted manuscript is immutable.');
-    expect(text).toContain('event.record');
+    expect(text).toContain('- location: observatory');
     expect(text).toContain('Mara locked the door.');
     expect(text).toContain('Return a single state fence.');
     expect(text).not.toContain('You are the Loom reading an accepted Story manuscript passage');
@@ -676,13 +676,17 @@ test('production Story capture shows the Loom what earlier Scenes already settle
     expect(applied.status).toBe('applied');
     expect(prompts).toHaveLength(1);
     const text = prompts[0];
-    expect(text).toContain('=== WORLD SENSE RECALL ===');
-    expect(text).toContain('[Arrival / The Cellar / event] Mara locked the observatory door for the night.');
-    // Recall is earlier Scenes only. The current Scene's own event is in its
-    // Archive above and must not be echoed back as something to remember.
-    const recall = text.slice(text.indexOf('=== WORLD SENSE RECALL ==='), text.indexOf('[ARCHIVE OPERATIONS'));
+    const recallStart = text.indexOf('=== WORLD SENSE RECALL ===');
+    // Earlier-Scene recall reaches the Loom via prev.events.
+    expect(recallStart).toBeGreaterThan(0);
+    expect(text).toContain('Mara locked the observatory door for the night.');
+    // Recall is earlier Scenes only. The current Scene's own event is in its own
+    // Archive (loom.events) and must not be echoed back as something to remember.
+    // Bound the recall block to prev.events, before the Living Lore section.
+    const recall = text.slice(recallStart, text.indexOf('Selected Living Lore'));
     expect(recall).not.toContain('lantern oil');
-    expect(text.slice(0, text.indexOf('=== WORLD SENSE RECALL ==='))).toContain('Mara counted the lantern oil.');
-    // And it sits inside the Archive source, after the Scene's own Archive.
-    expect(text.indexOf('=== WORLD SENSE RECALL ===')).toBeGreaterThan(text.indexOf('Current Loom Archive:'));
+    const beforeRecall = text.slice(0, recallStart);
+    expect(beforeRecall).toContain('Mara counted the lantern oil.');
+    // The current Scene's own events sit above the earlier-Scene recall.
+    expect(recallStart).toBeGreaterThan(text.indexOf('Mara counted the lantern oil.'));
 });

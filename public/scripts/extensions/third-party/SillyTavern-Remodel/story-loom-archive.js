@@ -1,6 +1,10 @@
 import { executeMechanicsRequest, getCapabilityDictionary, MECHANICS_PROTOCOL, undoMechanicsTransaction } from './mechanics-capabilities.js';
 import { getContext } from '../../../st-context.js';
-import { buildNarratorArchivistSections } from './narrator-prompt.js';
+import {
+    buildNarratorArchivistSections,
+    renderLoomScene, renderLoomCharacters, renderLoomEvents,
+    renderLoomSecrets, renderLoomGoals, renderLoomVariables,
+} from './narrator-prompt.js';
 import {
     compilePromptRecipe,
     getPromptStudioRecipe,
@@ -87,20 +91,27 @@ export function describeStoryArchiveCaptureState(docId) {
     return { status: 'idle', label: 'Saved' };
 }
 
-export function buildStoryArchivePrompt({ passage, archiveState, worldSense = null, webPacket = null, recipe = getStoryArchivePromptStudioRecipe() } = {}) {
+export function buildStoryArchivePrompt({ passage, worldSense = null, webPacket = null, recipe = getStoryArchivePromptStudioRecipe(), timelineId = '', sceneId = '' } = {}) {
     const continuity = formatStoryWorldSenseContinuity(worldSense);
-    const currentArchive = String(archiveState || '').trim()
-        ? `Current Timeline Loom Archive for this Scene:\n${String(archiveState).trim()}`
-        : 'Current Timeline Loom Archive for this Scene: empty.';
+    const tl = String(timelineId || '');
+    const sc = String(sceneId || '');
+    const capture = `Accepted Story manuscript passage (evidence only; never reproduce it):\n${String(passage || '').trim()}`;
     const sources = {
-        archiveState: [currentArchive, continuity, formatStoryTimelineWebPacket(webPacket)].filter(Boolean).join('\n\n'),
-        mechanicsBoard: buildArchiveCapabilityGuide(),
+        // Split state macros, rooted in the live Scene (this path holds it).
+        loomScene: renderLoomScene(tl, sc),
+        loomCharacters: renderLoomCharacters(tl, sc),
+        loomEvents: (args = {}) => renderLoomEvents(tl, sc, { events: args.events }),
+        loomGoals: (args = {}) => renderLoomGoals(tl, { limit: args.limit, secret: args.secret }),
+        loomVariables: (args = {}) => renderLoomVariables(tl, { limit: args.limit }),
+        loomSecrets: renderLoomSecrets(tl, sc),
+        // Earlier-Scene recall plus the Story timeline web ride prev.events.
+        prevEvents: [continuity, formatStoryTimelineWebPacket(webPacket)].filter(Boolean).join('\n\n'),
         livingLore: formatLivingLorePacket(worldSense?.loomPacket),
-        narratorDraft: `Accepted Story manuscript passage (evidence only; never reproduce it):\n${String(passage || '').trim()}`,
+        narratorDraft: capture,
         // Kept separate from narratorDraft so the Story Archive recipe says
         // exactly what it consumes. narratorDraft remains as a compatibility
         // alias for owner-authored older recipes.
-        storyArchiveCapture: `Accepted Story manuscript passage (evidence only; never reproduce it):\n${String(passage || '').trim()}`,
+        storyArchiveCapture: capture,
         narratorReasoning: '',
     };
     // This direct path is used by the Story Archive test adapter. It must have
@@ -368,13 +379,15 @@ export async function processStoryArchiveCapture({ scene, docId, captureId, onSt
             error: String(error?.message || error),
         }, { correlationId: `story-archive:${capture.id}`, severity: 'warn', summary: 'Story World Sense failed open; Archive capture continued' });
     }
+    // Still needed for the ingestion's before-state, even though the prompt's
+    // Scene state is now rendered by the split macros.
     const archiveState = buildNarratorArchivistSections(scene.timelineId, scene.id);
     const webPacket = buildStoryTimelineWebPacket({ scene, worldSense });
     const selectedRecipe = getPromptStudioRecipe(scene.promptRecipeIds?.loom);
     const recipe = selectedRecipe?.mode === 'loom' && selectedRecipe?.apiType === 'chat'
         ? selectedRecipe
         : getStoryArchivePromptStudioRecipe();
-    const prompt = buildStoryArchivePrompt({ passage, archiveState, worldSense, webPacket, recipe });
+    const prompt = buildStoryArchivePrompt({ passage, worldSense, webPacket, recipe, timelineId: scene.timelineId, sceneId: scene.id });
     const correlationId = `story-archive:${capture.id}`;
     recordSentPromptTranscript('loom', {
         recipeName: `${recipe?.name || 'Loom'} Â· Story Archive`,
@@ -649,16 +662,6 @@ function updateCapture(docId, captureId, patch, onStateChange) {
     const capture = updateStoryArchiveCapture(docId, captureId, patch);
     try { onStateChange?.(describeStoryArchiveCaptureState(docId), capture); } catch { /* UI feedback cannot break ingestion */ }
     return capture;
-}
-
-function buildArchiveCapabilityGuide() {
-    const guide = getCapabilityDictionary()
-        .filter((capability) => STORY_ARCHIVE_CAPABILITY_SET.has(capability.name))
-        .map((capability) => {
-            const required = (capability.requiredArguments || []).map((argument) => `${argument.key} â€” ${argument.hint}`).join('; ');
-            return `- ${capability.name}: ${capability.description}${required ? `\n    arguments: ${required}` : ''}`;
-        }).join('\n');
-    return `[TIMELINE WEB OPERATIONS — the only capabilities enabled in this pass]\n${guide}`;
 }
 
 function captureReceipt(scene, docId, capture) {

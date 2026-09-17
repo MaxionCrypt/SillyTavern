@@ -1,31 +1,22 @@
 import { getContext } from '../../../st-context.js';
-import { executeMechanicsRequest, getCapabilityDictionary, MECHANICS_PROTOCOL } from './mechanics-capabilities.js';
-import { buildNarratorArchivistSections } from './narrator-prompt.js';
+import { executeMechanicsRequest, MECHANICS_PROTOCOL } from './mechanics-capabilities.js';
+import {
+    buildNarratorArchivistSections,
+    renderLoomAction, renderLoomScene, renderLoomCharacters, renderLoomEvents,
+    renderLoomSecrets, renderLoomGoals, renderLoomVariables,
+} from './narrator-prompt.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe, getPromptStudioRecipe, getStoryArchivePromptStudioRecipe, recordSentPromptTranscript } from './prompt-studio.js';
 import { buildLoomRecipeSources, parseLoomReply } from './loom-reconciliation.js';
 import { reasoningDisabledPayload } from './narrator-reasoning-policy.js';
 import { resolveGenerationRoute } from './generation-route.js';
 import { streamChatPrompt } from './story-stream.js';
-import { ARCHIVE_CAPABILITY_NAMES, createArchiveIngestion } from './archive-ingestion.js';
+import { createArchiveIngestion } from './archive-ingestion.js';
 import { legacyArchiveIngestionAdapter } from './legacy-archive-ingestion-adapter.js';
 import { createArchiveJobRepository } from './archive-job-store.js';
 import { createArchiveWorker } from './archive-worker.js';
 import { recordApiTranscript, recordDebugEvent } from './debug-console.js';
 import { createArchiveSettlementEvent, publishArchiveSettlement } from './archive-consequences.js';
-import { buildTimelineLifecyclePromptGuide } from './timeline-lifecycle-contract.js';
-import { buildTimelineLifecyclePromptContext, ensureTimelineLifecycleProjectionRegistered, getTimelineLifecycleProjectionSwitches } from './timeline-lifecycle-projection.js';
-
-const ARCHIVE_CAPABILITY_SET = new Set(ARCHIVE_CAPABILITY_NAMES);
-
-/** Loom source keys to the macro an owner writes in a block. */
-const LOOM_SOURCE_MACROS = Object.freeze({
-    archiveState: 'loom.archive',
-    mechanicsBoard: 'loom.mechanics',
-    lifecycleBoard: 'loom.lifecycle',
-    playerAction: 'player.action',
-    narratorDraft: 'narrator.draft',
-    storyArchiveCapture: 'story.archive_capture',
-});
+import { ensureTimelineLifecycleProjectionRegistered } from './timeline-lifecycle-projection.js';
 
 let productionRuntime = null;
 const listeners = new Set();
@@ -206,9 +197,7 @@ export function prepareBackgroundArchiveJob({
     const resolvedRecipe = recipe || resolveSceneLoomRecipe(scene, mode);
     const routeSnapshot = resolveGenerationRoute({ scene, role: 'loom', profiles });
     const context = String(archiveContext || buildNarratorArchivistSections(scene.timelineId, scene.id));
-    const lifecycleProjection = getTimelineLifecycleProjectionSwitches();
-    const lifecycleContext = buildTimelineLifecyclePromptContext(scene.timelineId, lifecycleProjection);
-    const promptSnapshot = compileArchivePrompt({ acceptedProse, currentPlayerAction, archiveContext: context, recipe: resolvedRecipe, lifecycleProjection, lifecycleContext, livingLore, recall });
+    const promptSnapshot = compileArchivePrompt({ acceptedProse, currentPlayerAction, archiveContext: context, recipe: resolvedRecipe, livingLore, recall, timelineId: scene.timelineId, sceneId: scene.id });
     return {
         mode,
         timelineId: scene.timelineId,
@@ -223,32 +212,29 @@ export function prepareBackgroundArchiveJob({
     };
 }
 
-export function compileArchivePrompt({ acceptedProse, currentPlayerAction = '', archiveContext = '', recipe, lifecycleProjection = {}, lifecycleContext = '', livingLore = '', recall = '' } = {}) {
-    const capabilities = buildArchiveCapabilityGuide(lifecycleProjection);
-    const lifecycle = String(lifecycleContext || '').trim();
-    // The lifecycle board has its own macro so it can be positioned on its own.
-    // A recipe that does not place it still receives it, appended to the
-    // mechanics board exactly as before, so splitting the macro out cannot
-    // silently drop it from a recipe written before the macro existed.
-    const lifecyclePlaced = recipeUsesSource(recipe, 'lifecycleBoard');
+export function compileArchivePrompt({ acceptedProse, currentPlayerAction = '', archiveContext = '', recipe, lifecycleProjection = {}, lifecycleContext = '', livingLore = '', recall = '', timelineId = '', sceneId = '' } = {}) {
     const sources = buildLoomRecipeSources({
         draft: acceptedProse,
         playerAction: currentPlayerAction,
         narrativeState: archiveContext,
-        mechanicsSkill: lifecyclePlaced ? capabilities : [capabilities, lifecycle].filter(Boolean).join('\n\n'),
         livingLore,
     });
     sources.narratorDraft = `Accepted canonical prose (evidence only; never reproduce it):\n${String(acceptedProse || '').trim()}`;
     sources.storyArchiveCapture = sources.narratorDraft;
-    // The Scene's own Archive first, then what earlier Scenes settled — the
-    // same order the live Story adapter composes, so `{{loom.archive}}` reads
-    // identically whichever path built it. Recall carries its own heading.
-    sources.archiveState = [
-        `Current Loom Archive:\n${String(archiveContext || '').trim() || '[empty]'}`,
-        String(recall || '').trim(),
-    ].filter(Boolean).join('\n\n');
-    sources.mechanicsBoard = lifecyclePlaced ? capabilities : [capabilities, lifecycle].filter(Boolean).join('\n\n');
-    sources.lifecycleBoard = lifecycle;
+    // Split state macros, rooted in the live Scene the same way the live Loom
+    // path roots them — the worker compiles at capture time, so the stores are
+    // current. The Archive is trusted, so its Goals board includes secrets.
+    const tl = String(timelineId || '');
+    const sc = String(sceneId || '');
+    sources.loomAction = renderLoomAction(currentPlayerAction);
+    sources.loomScene = renderLoomScene(tl, sc);
+    sources.loomCharacters = renderLoomCharacters(tl, sc);
+    sources.loomEvents = (args = {}) => renderLoomEvents(tl, sc, { events: args.events });
+    sources.loomGoals = (args = {}) => renderLoomGoals(tl, { limit: args.limit, secret: args.secret });
+    sources.loomVariables = (args = {}) => renderLoomVariables(tl, { limit: args.limit });
+    sources.loomSecrets = renderLoomSecrets(tl, sc);
+    // prev.events is the already-formatted earlier-Scene recall string.
+    sources.prevEvents = String(recall || '').trim();
     const messages = [...compilePromptRecipe(recipe, sources).messages];
     // A Loom recipe owns every model-facing instruction, including its policy
     // and output contract. The worker still validates the returned state fence;
@@ -532,27 +518,9 @@ function resolveSceneLoomRecipe(scene, mode) {
     return mode === 'story' ? getStoryArchivePromptStudioRecipe() : getCurrentPromptStudioRecipe('loom', 'chat');
 }
 
-function buildArchiveCapabilityGuide(lifecycleProjection = {}) {
-    const guide = getCapabilityDictionary()
-        .filter((capability) => ARCHIVE_CAPABILITY_SET.has(capability.name))
-        .map((capability) => {
-            const required = (capability.requiredArguments || []).map((argument) => `${argument.key}: ${argument.hint}`).join('; ');
-            return `- ${capability.name}: ${capability.description}${required ? `\n  arguments: ${required}` : ''}`;
-        }).join('\n');
-    const lifecycleGuide = buildTimelineLifecyclePromptGuide(lifecycleProjection);
-    return [`[ARCHIVE OPERATIONS — always enabled]\n${guide}`, lifecycleGuide].filter(Boolean).join('\n\n');
-}
-
 /**
  * Does this recipe place a given Loom source itself? Read from the recipe's own
  * enabled blocks rather than from a compiled result, because the question is
  * what the owner arranged, not what happened to render.
  */
-function recipeUsesSource(recipe, sourceKey) {
-    const macro = LOOM_SOURCE_MACROS[sourceKey];
-    if (!macro) return false;
-    return (recipe?.blocks || []).some((block) => block?.enabled !== false
-        && String(block?.content || '').includes(`{{${macro}}}`));
-}
-
 export const backgroundArchiveIngestion = createArchiveIngestion(legacyArchiveIngestionAdapter);
