@@ -15,7 +15,6 @@ import {
     upsertLivingLoreMetadata,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
 import { buildLivingLorePacket } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-proposals.js';
-import { updateWorldSenseProfile } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-store.js';
 import { __setContextOverrides, __setExtensionSettings } from './util/st-context-stub.js';
 import { __clearDebugEvents, __getDebugEvents } from './util/debug-console-stub.js';
 
@@ -64,9 +63,6 @@ function proposal(operation, value, overrides = {}) {
 beforeEach(() => {
     __clearDebugEvents();
     __setExtensionSettings({ remodel: {} });
-    // Automation is retired by default now, so a test that exercises queueing
-    // has to ask for it. The engine's behaviour under 'suggest' is unchanged.
-    updateWorldSenseProfile({ mode: 'suggest' });
     nativeBook = { entries: { 42: entry(42), 77: entry(77, { comment: 'Second entry' }) } };
     saves = [];
     __setContextOverrides({
@@ -102,7 +98,6 @@ test('Suggest mode queues a field-level diff without writing native lore', async
 });
 
 test('a downstream Archive projection can force review-only while guarded automation is still being evaluated', async () => {
-    updateWorldSenseProfile({ mode: 'auto-safe', autoSafeConfidence: 0.9, autoSafeOperations: ['fact.append'] });
     const result = await queueLivingLoreProposals({
         timelineId: TIMELINE, packet: packet(), acceptedProse: 'The bell rang twice.',
         proposals: [proposal('fact.append', 'The bell answers footsteps.', { confidence: 0.99 })],
@@ -135,8 +130,7 @@ test('adopts a native lore entry sidecar when applying its first queued proposal
     expect(nativeBook.entries[88].content).toContain('Current\nNewly active.');
 });
 
-test('manual Apply safe runs the safe policy even while World Sense is in suggest mode', async () => {
-    updateWorldSenseProfile({ mode: 'suggest', autoSafeConfidence: 0.9, autoSafeOperations: ['fact.append'] });
+test('manual Apply safe runs the safe policy even while automation stays in suggest mode', async () => {
     const queued = await queueLivingLoreProposals({
         timelineId: TIMELINE, packet: packet(), acceptedProse: 'The bell rang twice.',
         proposals: [proposal('fact.append', 'The bell now answers footsteps.', { id: 'manual-safe', confidence: 0.97 })],
@@ -202,7 +196,6 @@ test('supports legacy semicolon-joined exact quotations but rejects a compound w
 });
 
 test('Auto-safe atomically applies only admitted Loom proposals and leaves the rest reviewable', async () => {
-    updateWorldSenseProfile({ mode: 'auto-safe', autoSafeConfidence: 0.9, autoSafeOperations: ['fact.append', 'alias.add'] });
     const result = await queueLivingLoreProposals({
         timelineId: TIMELINE, packet: packet(), acceptedProse: 'The bell rang twice.',
         proposals: [
@@ -210,6 +203,7 @@ test('Auto-safe atomically applies only admitted Loom proposals and leaves the r
             proposal('alias.add', 'Quiet Bell', { id: 'weak-alias', confidence: 0.6 }),
         ],
         source: { directionId: 'direction-auto', stage: 'accepted-fiction' },
+        automationModeOverride: 'auto-safe',
     });
 
     expect(result.autoSafe).toMatchObject({ ok: true, applied: ['automatic-fact'], review: [{ id: 'weak-alias', reason: 'below-confidence' }] });
@@ -218,7 +212,7 @@ test('Auto-safe atomically applies only admitted Loom proposals and leaves the r
         expect.objectContaining({ id: 'weak-alias', status: 'suggested' }),
     ]));
     expect(nativeBook.entries[42].content).toContain('The bell now answers footsteps.');
-    expect(listLivingLoreHistory({ timelineId: TIMELINE })[0].application).toMatchObject({ authority: 'auto-safe', confidenceThreshold: 0.9 });
+    expect(listLivingLoreHistory({ timelineId: TIMELINE })[0].application).toMatchObject({ authority: 'auto-safe', confidenceThreshold: 0.92 });
     expect(__getDebugEvents()).toEqual(expect.arrayContaining([
         expect.objectContaining({ category: 'world-sense', type: 'auto-safe.applied', detail: expect.objectContaining({ proposalIds: ['automatic-fact'] }) }),
     ]));

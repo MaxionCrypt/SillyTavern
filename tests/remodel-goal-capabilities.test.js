@@ -177,8 +177,8 @@ test('goal.create places a Goal on a character rather than throwing', () => {
 });
 
 // The atomicity is the reason the missing function was so expensive: one bad
-// request must not be able to silently discard the turn's whole Archive.
-test('a Goal for a character does not defer, so Archive requests in the same turn survive', () => {
+// request must not be able to silently discard the turn's whole batch.
+test('a Goal for a character does not defer, so companion requests in the same turn survive', () => {
     const result = run([
         {
             id: 'r1',
@@ -186,7 +186,12 @@ test('a Goal for a character does not defer, so Archive requests in the same tur
             arguments: { title: 'Finish the chapter', holderRefs: [{ kind: 'character', id: 'm', label: 'Marissa' }] },
             reason: 'her own reason',
         },
-        { id: 'r2', capability: 'event.record', arguments: { summary: 'She turned a page.' }, reason: 'it happened' },
+        {
+            id: 'r2',
+            capability: 'goal.create',
+            arguments: { title: 'Reach the tower by dusk', holderRefs: [{ kind: 'character', id: 'm', label: 'Marissa' }] },
+            reason: 'it follows from the first',
+        },
     ]);
 
     expect(result.ok).toBe(true);
@@ -224,8 +229,8 @@ test('description is advertised as required, with the condition as its hint', ()
 
 // ...but advertised is NOT enforced. A MechanicsError rolls the whole
 // transaction back, so throwing over a missing sentence would destroy every
-// event.record and beat.set in the same turn — the exact blast radius that the
-// undefined isAuthorizedOwner produced. A thin Goal beats a lost Archive.
+// other request in the same turn — the exact blast radius that the undefined
+// isAuthorizedOwner produced. A thin Goal beats a lost turn.
 test('a Goal with no description still lands, taking the turn with it', () => {
     const result = run([
         {
@@ -234,7 +239,12 @@ test('a Goal with no description still lands, taking the turn with it', () => {
             arguments: { title: 'Make the early shift', holderRefs: [{ kind: 'character', id: 'm', label: 'Marissa' }] },
             reason: 'her own schedule',
         },
-        { id: 'r2', capability: 'event.record', arguments: { summary: 'She checked the clock.' }, reason: 'it happened' },
+        {
+            id: 'r2',
+            capability: 'goal.create',
+            arguments: { title: 'Check the roster', description: 'She wants the early slot before anyone else claims it.', holderRefs: [{ kind: 'character', id: 'm', label: 'Marissa' }] },
+            reason: 'it follows from the first',
+        },
     ]);
 
     expect(result.ok).toBe(true);

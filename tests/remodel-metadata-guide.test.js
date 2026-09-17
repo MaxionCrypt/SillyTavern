@@ -1,7 +1,4 @@
 import { buildMetadataGuide } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/metadata-guide.js';
-import { ARCHIVE_CAPABILITY_NAMES } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archive-ingestion.js';
-import { TIMELINE_LIFECYCLE_CAPABILITIES } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/timeline-lifecycle-contract.js';
-import { legacyArchiveIngestionAdapter } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/legacy-archive-ingestion-adapter.js';
 import {
     getCapabilityDictionary,
     getMechanicsRequestSchema,
@@ -11,7 +8,6 @@ import {
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/mechanics-capabilities.js';
 import { MAX_INFORMATION_CHARS, readLoomInformation } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-intake.js';
 import { readLoreKeywords } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js';
-import { parsePromotionDecisions } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-promotion.js';
 import { buildProviderToolDefinitions, NARRATOR_MECHANIC_TOOLS } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/mechanics-gateway.js';
 
 const argumentSchema = () => getMechanicsRequestSchema().schema.properties.requests.items.properties.arguments.properties;
@@ -113,33 +109,7 @@ describe('Remodel metadata guide', () => {
 
     test('surface sets match the live filters', () => {
         const byId = new Map(buildMetadataGuide().surfaces.map((surface) => [surface.id, surface]));
-        expect(byId.get('background-archive').accepts).toEqual([...ARCHIVE_CAPABILITY_NAMES, ...TIMELINE_LIFECYCLE_CAPABILITIES]);
         expect(byId.get('roleplay-loom').accepts).toEqual(getCapabilityDictionary().map((item) => item.name));
-    });
-
-    // The guide once derived Story from the test adapter's wider set and printed
-    // capabilities production drops. So: run every capability through the REAL
-    // background ingestion and require the guide to agree with what survives.
-    test('the background surface is exactly what the production ingestion keeps', async () => {
-        const surface = buildMetadataGuide().surfaces.find((item) => item.id === 'background-archive');
-        const requests = getCapabilityDictionary().map((capability, index) => ({
-            id: `r${index}`, capability: capability.name, arguments: {}, reason: 'probe',
-        }));
-        const reply = '```state\n' + JSON.stringify({ requests }) + '\n```';
-        const result = await legacyArchiveIngestionAdapter.ingest({ candidateReply: reply });
-        const kept = [...result.operations, ...result.lifecycleProposals].map((request) => request.capability).sort();
-        expect([...surface.accepts].sort()).toEqual(kept);
-        for (const rejected of result.rejected) {
-            expect(surface.accepts).not.toContain(rejected.capability);
-            expect(surface.note).toContain(rejected.capability);
-        }
-    });
-
-    test('names goal.reach as refused on the background surface, derived not typed', () => {
-        const surface = buildMetadataGuide().surfaces.find((item) => item.id === 'background-archive');
-        expect(surface.accepts).not.toContain('goal.reach');
-        expect(surface.note).toContain('goal.reach');
-        expect(surface.note).toContain('successRate');
     });
 
     // --- The fence and the envelope ----------------------------------------
@@ -185,24 +155,6 @@ describe('Remodel metadata guide', () => {
     test('the stated keyword ceiling is the ceiling that is enforced', () => {
         const stated = Number(buildMetadataGuide().lore.keywords.arguments[0].hint.match(/Up to (\d+)/)[1]);
         expect(readLoreKeywords(Array.from({ length: stated + 3 }, (_, index) => `key-${index}`))).toHaveLength(stated);
-    });
-
-    test('the promotion example is a decision the parser accepts', () => {
-        const decision = JSON.parse(buildMetadataGuide().lore.promotion.example);
-        const packet = { candidates: [{ id: decision.candidateId }] };
-        expect(parsePromotionDecisions([decision], packet).rejected).toEqual([]);
-        expect(parsePromotionDecisions(
-            [{ ...decision, decision: 'maybe' }], packet,
-        ).rejected[0].code).toBe('invalid-decision');
-    });
-
-    test('the promotion decision words are the words the parser allows', () => {
-        const words = buildMetadataGuide().lore.promotion.arguments
-            .find((argument) => argument.key === 'decision').values;
-        expect(words.length).toBeGreaterThan(1);
-        const packet = { candidates: words.map((word, index) => ({ id: `c${index}` })) };
-        const decisions = words.map((word, index) => ({ candidateId: `c${index}`, decision: word, reason: 'because' }));
-        expect(parsePromotionDecisions(decisions, packet).rejected).toEqual([]);
     });
 
     // --- The Narrator side --------------------------------------------------

@@ -36,10 +36,10 @@ test('the whole schema is strict-mode valid', () => {
     expect(strictViolations(getRoleplayLoomGoalSchema().schema)).toEqual([]);
 });
 
-test('the top-level fence carries exactly the six state-fence keys', () => {
+test('the top-level fence carries exactly the five state-fence keys', () => {
     const schema = getRoleplayLoomGoalSchema().schema;
     expect(new Set(Object.keys(schema.properties)))
-        .toEqual(new Set(['swaps', 'requests', 'loreProposals', 'lorePromotionDecisions', 'loreKeywords', 'flow']));
+        .toEqual(new Set(['swaps', 'requests', 'loreProposals', 'loreKeywords', 'flow']));
 });
 
 test('only goal operations plus the two bookkeeping ops are permitted — no variable/scene/etc.', () => {

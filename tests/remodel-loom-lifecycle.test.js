@@ -22,15 +22,13 @@ import {
     DIRECTION_PROTOCOL,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { directedTurnController } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/legacy-directed-turn-adapter.js';
-import { listEvents, recordEvent } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { listLivingLoreWrites } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
 import { withdrawLivingLoreWrites } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-withdrawal.js';
-import { updateWorldSenseProfile } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/world-sense-store.js';
 import { upsertLivingLoreMetadata } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
 import { buildLivingLorePacket } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-proposals.js';
 import { __setContextOverrides, __setExtensionSettings, __getChat, __emit, __onEvent } from './util/st-context-stub.js';
 import { __setOnlineStatus } from './util/script-stub.js';
-import { __clearDebugEvents, __getDebugEvents } from './util/debug-console-stub.js';
+import { __clearDebugEvents } from './util/debug-console-stub.js';
 
 globalThis.document ??= { getElementById: () => null };
 globalThis.HTMLTextAreaElement ??= class HTMLTextAreaElement {};
@@ -87,9 +85,6 @@ async function until(predicate, timeoutMs = 3000) {
 beforeEach(() => {
     __clearDebugEvents();
     __setExtensionSettings({});
-    // Automation is retired by default now, so a lifecycle test that asserts
-    // proposals are queued has to ask for it explicitly.
-    updateWorldSenseProfile({ mode: 'suggest' });
     nativeLore = { entries: { 42: { uid: 42, key: ['Wren'], keysecondary: [], comment: 'Wren', content: 'Current\nWren watches the gate.', disable: false } } };
     __setContextOverrides({
         async loadWorldInfo() { return structuredClone(nativeLore); },
@@ -276,18 +271,6 @@ test('a Loom turn commits the Narrator draft and waits for the user', async () =
     expect(__getChat().at(-1).mes).toBe(RESPONSE);
 });
 
-test('a turn records an inspectable Archive projection receipt', async () => {
-    recordEvent(scene.timelineId, scene.id, 'Wren hid the gate key under the sundial.');
-    await requestNextDirection(scene, { deliveryMode: 'legacy' });
-    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
-    expect(__getDebugEvents()).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-            type: 'archive.projection',
-            detail: expect.objectContaining({ storedCount: 1, projectedCount: 1, recentIds: expect.any(Array) }),
-        }),
-    ]));
-});
-
 test('a completed turn files its evidence-backed lore exactly once', async () => {
     const proposal = loreProposal('wren-moved', 'Wren stands between the fighters.');
     setLiveDirectionTestAdapters({
@@ -372,13 +355,7 @@ test('editing the latest user message rewinds its response and reruns without du
         loomReconciliation: async () => {
             take += 1;
             const proposal = loreProposal(`edit-take-${take}`, take === 1 ? 'Old action state.' : 'Edited action state.');
-            const request = {
-                id: `event-${take}`,
-                capability: 'event.record',
-                arguments: { summary: take === 1 ? 'The old action happened.' : 'The edited action happened.' },
-                reason: 'Record the accepted version of the action.',
-            };
-            return `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [request], loreProposals: [proposal], flow: { continue: false } })}\n\`\`\``;
+            return `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [proposal], flow: { continue: false } })}\n\`\`\``;
         },
     });
 
@@ -407,7 +384,6 @@ test('editing the latest user message rewinds its response and reruns without du
     expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toEqual([
         expect.objectContaining({ content: 'Edited action state.' }),
     ]);
-    expect(listEvents(scene.timelineId, scene.id).map((event) => event.summary)).toEqual(['The edited action happened.']);
     stopEdited();
     stopUpdated();
 });
@@ -492,9 +468,8 @@ test('reload recovery files only lore evidenced by the prefix saved before a cra
     expect(__getChat()[0].mes).toBe(accepted);
 });
 
-test('Narrator recall excludes the current scene and request-scoped sources clear after assembly', async () => {
+test('Narrator recall carries no pacing directive and request-scoped sources clear after assembly', async () => {
     const promptContent = [];
-    recordEvent(scene.timelineId, scene.id, 'Wren entered the courtyard.');
     initLiveDirection({
         setNativePromptContent: (...args) => {
             promptContent.push(args);
@@ -507,7 +482,6 @@ test('Narrator recall excludes the current scene and request-scoped sources clea
 
     const recall = promptContent.filter(([key]) => key === 'narratorRecall');
     const resolvedRecall = typeof recall[0]?.[1] === 'function' ? recall[0][1]({ scenes: 3 }) : recall[0]?.[1];
-    expect(resolvedRecall).not.toContain('Wren entered the courtyard.');
     expect(resolvedRecall).not.toMatch(/Continue the scene forward/i);
     expect(recall.at(-1)?.[1]).toBe('');
 
@@ -580,7 +554,6 @@ test('an empty performer response is reported, not silently accepted as a turn',
     // The empty run never becomes a finished turn: it does not reach the
     // waiting state with a kept message, and the empty row is not left behind.
     expect(await until(() => getLiveDirectionRun() === null || getLiveDirectionRun()?.state !== 'Speaking', 3000)).toBe(true);
-    expect(listEvents(scene.timelineId, scene.id)).toEqual([]);
 });
 
 test('a reasoning-only OpenRouter reply retries once with reasoning disabled and keeps the recovered prose', async () => {
@@ -712,7 +685,6 @@ test('an intervention stores only the visible Loom prefix and never the private 
     const visible = 'The guard reaches for the alarm—';
     const full = `${visible}and presses it before Wren can move.`;
     let pushTail = () => {};
-    let archivePrompt = '';
     setLiveDirectionTestAdapters({
         generatePerformer: speak,
         livingLorePacket: livingLorePacket(),
@@ -721,17 +693,6 @@ test('an intervention stores only the visible Loom prefix and never the private 
             pushTail = () => onChunk(full);
             signal.addEventListener('abort', () => resolve(`${full}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [loreProposal('hidden-tail', 'The alarm is sounding.', 'presses it')], flow: { continue: false } })}\n\`\`\``), { once: true });
         }),
-        archiveCatchup: async ({ prompt }) => {
-            archivePrompt = prompt.map((message) => message.content).join('\n');
-            return `${visible}\n\n\`\`\`state\n${JSON.stringify({
-                requests: [{ id: 'archive-1', capability: 'event.record', arguments: { summary: 'The guard reached for the alarm' }, reason: 'This is the accepted interrupted prefix.' }],
-                loreProposals: [
-                    loreProposal('accepted-prefix', 'Wren sees the guard reach for the alarm.', 'The guard reaches for the alarm'),
-                    loreProposal('rejected-tail', 'The alarm is sounding.', 'presses it'),
-                ],
-                flow: { continue: false },
-            })}\n\`\`\``;
-        },
     });
 
     const pending = requestNextDirection(scene, { deliveryMode: 'legacy' });
@@ -745,17 +706,9 @@ test('an intervention stores only the visible Loom prefix and never the private 
     expect(__getChat().at(-1).mes).toBe(visible);
     expect(__getChat().at(-1).mes).not.toContain('presses it');
     expect(__getChat().at(-1).mes).not.toBe(RESPONSE);
-    expect(await until(() => listEvents(scene.timelineId, scene.id).length === 1)).toBe(true);
-    expect(listEvents(scene.timelineId, scene.id)[0].summary).toBe('The guard reached for the alarm');
-    expect(archivePrompt).toContain(visible);
-    expect(archivePrompt).toContain('Selected Living Lore');
-    expect(archivePrompt).not.toContain('presses it');
-    expect(archivePrompt).not.toContain(RESPONSE);
-    // Only the accepted prefix is admissible: the tail's evidence never
-    // appeared in fiction the reader saw.
-    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toEqual([
-        expect.objectContaining({ content: 'Wren sees the guard reach for the alarm.' }),
-    ]);
+    // The buffered tail's lore never appeared in the fiction the reader saw, so
+    // nothing from it is filed.
+    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toEqual([]);
 });
 
 

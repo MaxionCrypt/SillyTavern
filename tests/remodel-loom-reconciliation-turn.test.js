@@ -5,7 +5,6 @@ import {
     initLiveDirection, setLiveDirectionTestAdapters, requestNextDirection,
     getLiveDirectionRun, stopLiveDirection, clearLiveDirectionFailure,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
-import { listEvents } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { __setExtensionSettings, __getChat, __emit } from './util/st-context-stub.js';
 import { __setOnlineStatus } from './util/script-stub.js';
 
@@ -23,7 +22,7 @@ const DRAFT = 'Eli leans in and Marissa melts into him.';
 const COMMITTED = 'Eli leans in, but Marissa turns her cheek at the last second.';
 const fence = JSON.stringify({
     swaps: [{ find: DRAFT, replace: COMMITTED }],
-    requests: [{ id: 'r1', capability: 'event.record', arguments: { summary: 'Eli tried to kiss Marissa; she pulled back' }, reason: 'roll failed' }],
+    requests: [],
     flow: { continue: false },
 });
 
@@ -72,6 +71,4 @@ test('a Loom turn posts reconciled prose, not the raw Narrator draft', async () 
     // The committed prose is what lands — the draft is never stored.
     expect(__getChat().at(-1).mes).toBe(COMMITTED);
     expect(__getChat().at(-1).mes).not.toBe(DRAFT);
-    // The Loom's state fence was recorded.
-    expect(listEvents(scene.timelineId, scene.id).map((e) => e.summary)).toEqual(['Eli tried to kiss Marissa; she pulled back']);
 });

@@ -126,7 +126,6 @@ describe('Prompt Studio instruction templates', () => {
         const guide = buildMetadataGuide();
         expect(getPromptInstructionTemplate('loom', 'chat', 'lore.report').content).toContain(guide.lore.proposal.example);
         expect(getPromptInstructionTemplate('loom', 'chat', 'lore.keywords').content).toContain(guide.lore.keywords.example);
-        expect(getPromptInstructionTemplate('loom', 'chat', 'lore.promotion').content).toContain(guide.lore.promotion.example);
     });
 
     // --- Per-mode availability ---------------------------------------------
