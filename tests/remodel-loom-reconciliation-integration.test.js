@@ -82,7 +82,9 @@ test('Archive operations remain available when optional Goals and Variables mech
     const snapshot = await __buildLoomSnapshot(scene);
     await runLoomReconciliation({ scene, snapshot, draft: 'The draft stands.' });
 
-    expect(sentPrompt).toContain('[ARCHIVE OPERATIONS — always available]');
+    // The operations manual carries the archive-recording ops, so they stay
+    // advertised even with the numeric Goals/Variables system off.
+    expect(sentPrompt).toContain('always available');
     expect(sentPrompt).toContain('event.record');
     expect(sentPrompt).toContain('scene.set');
     expect(sentPrompt).toContain('beat.set');

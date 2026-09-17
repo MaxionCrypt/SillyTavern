@@ -146,7 +146,11 @@ import {
 import { directedTurnController } from './legacy-directed-turn-adapter.js';
 import { activateWorldSenseSelection } from './world-sense-activation.js';
 import { sanitizeDirectionText } from './live-direction-markers.js';
-import { buildNarratorArchivistSections, buildNarratorRecallSections } from './narrator-prompt.js';
+import {
+    buildNarratorArchivistSections, buildNarratorRecallSections,
+    renderLoomAction, renderLoomScene, renderLoomCharacters, renderLoomEvents,
+    renderLoomSecrets, renderLoomGoals, renderLoomVariables, renderPrevEvents,
+} from './narrator-prompt.js';
 import { buildSceneArchiveProjection } from './archive-projection.js';
 import { resolveRoleplayMessageIds } from './roleplay-message-list.js';
 import { resolveDirectionChromeMode } from './turn-chrome.js';
@@ -2472,7 +2476,7 @@ function registerAllInsertedTextSlotMacros() {
 // promptPreviewInFlight now lives in session-state.js's panels domain — see
 // getPanelsState()/setPromptPreviewInFlight() imported above.
 
-async function runPromptPreviewDryRun(generationType, { composerText: composerTextOverride, narratorGrounding, narratorRecall, narratorNote, worldSense, stripNativeNewChatBootstrap = false } = {}) {
+async function runPromptPreviewDryRun(generationType, { composerText: composerTextOverride, narratorGrounding, narratorRecall, prevEvents, narratorNote, worldSense, stripNativeNewChatBootstrap = false } = {}) {
     const context = getContext();
     // A Connection Profile can replace the native Prompt Manager stack. The
     // selected Prompt Studio recipe is authoritative for Roleplay, so rebuild
@@ -2510,6 +2514,11 @@ async function runPromptPreviewDryRun(generationType, { composerText: composerTe
     const narratorRecallRouted = narratorRecall === undefined
         ? null
         : setRemodelNativePromptContent('narratorRecall', narratorRecall);
+    // The universal split macros the recipe actually uses now: prev.events
+    // carries the same earlier-Scene recall; loom.action mirrors nextAction.
+    const prevEventsRouted = prevEvents === undefined
+        ? null
+        : setRemodelNativePromptContent('prevEvents', prevEvents);
     const previousNarratorNote = narratorNote === undefined
         ? null
         : String(oai_settings.prompts?.find((prompt) => prompt?.identifier === 'remodel_narrator_note')?.content || '');
@@ -2532,6 +2541,7 @@ async function runPromptPreviewDryRun(generationType, { composerText: composerTe
     const nextActionRouted = stripNativeNewChatBootstrap && nextAction
         ? setRemodelNativePromptContent('nextAction', tagNextAction(nextAction))
         : false;
+    const loomActionRouted = setRemodelNativePromptContent('loomAction', renderLoomAction(nextAction));
 
     let capturedPrompt = null;
     const captureListener = (generateData) => {
@@ -2629,6 +2639,8 @@ async function runPromptPreviewDryRun(generationType, { composerText: composerTe
 
         if (narratorGrounding !== undefined) setRemodelNativePromptContent('narratorGrounding', '');
         if (narratorRecall !== undefined) setRemodelNativePromptContent('narratorRecall', '');
+        if (prevEventsRouted) setRemodelNativePromptContent('prevEvents', '');
+        if (loomActionRouted) setRemodelNativePromptContent('loomAction', '');
         // Unlike request-scoped Archive grounding, this value is also live
         // scene state. A Preview must put it back exactly as it found it so
         // the next actual Narrator turn still receives the saved note.
@@ -9864,7 +9876,7 @@ async function openRoleplayPromptPreview() {
                 ${previewTab('narrator', 'Narrator', defaultTab)}
                 ${previewTab('loom', 'Loom', defaultTab)}
             </div>
-            ${previewPanel('narrator', defaultTab, `<div class="remodel-rp-preview-note">The Narrator Policy and prompt order are editable in Prompt Studio. <strong>{{narrator.grounding}}</strong> resolves the current Narrator-visible Loom Archive at request time.</div>`)}
+            ${previewPanel('narrator', defaultTab, `<div class="remodel-rp-preview-note">The Narrator Policy and prompt order are editable in Prompt Studio. <strong>{{loom.scene}}</strong>, <strong>{{loom.characters}}</strong> and <strong>{{loom.events}}</strong> resolve the current Narrator-visible Loom Archive at request time.</div>`)}
             ${previewPanel('loom', defaultTab, '<div class="remodel-rp-preview-note">The private Narrator draft and reasoning do not exist until Narrator runs, so those two values are shown as explicit placeholders. Every other Loom recipe block is resolved from the current scene and composer draft.</div>')}
         </div>
     `;
@@ -9912,6 +9924,7 @@ async function openRoleplayPromptPreview() {
             composerText,
             narratorGrounding,
             narratorRecall,
+            prevEvents: narratorRecall,
             narratorNote: readRoleplayNarratorNote(),
             worldSense,
             stripNativeNewChatBootstrap: true,
@@ -11589,6 +11602,21 @@ function renderRoleplayScene() {
     // Written onto the native prompt rather than injected at a chat depth, so
     // the recipe's own ordering places it. See setRemodelNativePromptContent.
     setRemodelNativePromptContent('storyGoals', (args = {}) => formatStoryGoalsPrompt(activeRoleplayScene, { limit: args.limit }));
+    // Universal split-state macros. Each is a no-op unless the recipe actually
+    // uses it, so routing all of them here is safe. The self-contained ones
+    // resolve from the active scene; prev.events/loom.action need per-request
+    // context (a recall projection / the live action) and are filled at
+    // generation time, so they resolve empty here and are overwritten then.
+    const tl = activeRoleplayScene?.timelineId;
+    const sc = activeRoleplayScene?.id;
+    setRemodelNativePromptContent('loomScene', () => renderLoomScene(tl, sc));
+    setRemodelNativePromptContent('loomCharacters', () => renderLoomCharacters(tl, sc));
+    setRemodelNativePromptContent('loomEvents', (args = {}) => renderLoomEvents(tl, sc, { events: args.events }));
+    setRemodelNativePromptContent('loomGoals', (args = {}) => renderLoomGoals(tl, { limit: args.limit, secret: args.secret }));
+    setRemodelNativePromptContent('loomVariables', (args = {}) => renderLoomVariables(tl, { limit: args.limit }));
+    setRemodelNativePromptContent('loomSecrets', () => renderLoomSecrets(tl, sc));
+    setRemodelNativePromptContent('loomAction', () => renderLoomAction(''));
+    setRemodelNativePromptContent('prevEvents', (args = {}) => renderPrevEvents(tl, sc, { scenes: args.scenes }));
     // Narrator Grounding is dynamic recipe content. Keep its persistent native
     // prompt object empty between requests; live generation and Preview resolve
     // the current Archive into it only while assembling their request.

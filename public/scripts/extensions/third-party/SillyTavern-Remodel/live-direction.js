@@ -5,8 +5,10 @@ import {
     executeMechanicsRequest,
     getCapabilityDictionary,
     MECHANICS_PROTOCOL,
+    toCoreJsonSchema,
     undoMechanicsTransaction,
 } from './mechanics-capabilities.js';
+import { getRoleplayLoomGoalSchema } from './loom-fence-schema.js';
 import { buildMechanicalSnapshot, previewMechanicalContext } from './mechanics-runtime.js';
 import { buildLoomContext } from './loom-context.js';
 import { resolveByName } from './direction-address.js';
@@ -18,7 +20,11 @@ import { getMechanicsProfile, listMechanicsTransactions } from './variables-stor
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
 import { splitReasoning } from './reasoning-strip.js';
 import { streamChatPrompt } from './story-stream.js';
-import { buildEmptyResponseNudge, buildNarratorArchivistSections, buildNarratorRecallSections, buildGoalObjectives } from './narrator-prompt.js';
+import {
+    buildEmptyResponseNudge, buildNarratorArchivistSections, buildNarratorRecallSections, buildGoalObjectives,
+    renderLoomAction, renderLoomScene, renderLoomCharacters, renderLoomEvents,
+    renderLoomSecrets, renderLoomGoals, renderLoomVariables, renderPrevEvents,
+} from './narrator-prompt.js';
 import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
 import { formatLivingLorePacket } from './living-lore-proposals.js';
 import { saveWorldSensePromotionDecisionReceipt, saveWorldSenseProposalRejections } from './world-sense-store.js';
@@ -109,6 +115,27 @@ const hooks = {
     // hands callers. No-op by default so a caller that never registers one
     // costs nothing; timeline-spine.js registers updateDirectionStreamCard.
 };
+
+/**
+ * Route the self-contained universal state macros (those that resolve from the
+ * live Scene, needing no per-request context) into their native prompt slots.
+ *
+ * These are also set once by renderRoleplayScene, but Narrator profile
+ * activation can replace core's prompt objects with EMPTY remodel_loom_* slots
+ * (the same reason recall/note/nextAction are re-routed here). So a generation
+ * site must re-route them AFTER activation, or a recipe placing {{loom.scene}}
+ * or {{loom.goals}} renders blank on any turn where activation actually applies.
+ */
+export function routeUniversalStateMacros(setContent, scene) {
+    const tl = scene?.timelineId;
+    const sc = scene?.id;
+    setContent('loomScene', () => renderLoomScene(tl, sc));
+    setContent('loomCharacters', () => renderLoomCharacters(tl, sc));
+    setContent('loomEvents', (args = {}) => renderLoomEvents(tl, sc, { events: args.events }));
+    setContent('loomGoals', (args = {}) => renderLoomGoals(tl, { limit: args.limit, secret: args.secret }));
+    setContent('loomVariables', (args = {}) => renderLoomVariables(tl, { limit: args.limit }));
+    setContent('loomSecrets', () => renderLoomSecrets(tl, sc));
+}
 
 let initialized = false;
 let activeRun = null;
@@ -1668,12 +1695,20 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             }),
             retryNudge,
         ].filter(Boolean).join('\n\n'));
+        // prev.events is the recall replacement — same projection, no nudge.
+        hooks.setNativePromptContent('prevEvents', (args = {}) => buildNarratorRecallSections(scene.timelineId, scene.id, {
+            scenes: args.scenes,
+            archiveProjection: envelope.archiveProjection,
+        }));
         const narratorNoteRouted = hooks.setNativePromptContent('narratorNote', hooks.getNarratorNote());
         const nextAction = envelope.currentPlayerAction === AUTONOMOUS_CONTINUE_ACTION
             ? ''
             : String(envelope.currentPlayerAction || '').trim();
         activeRun.nextAction = nextAction;
         activeRun.nextActionRouted = Boolean(nextAction) && hooks.setNativePromptContent('nextAction', tagNextAction(nextAction));
+        // loom.action carries the same live player action, for recipes that use it.
+        hooks.setNativePromptContent('loomAction', renderLoomAction(nextAction));
+        routeUniversalStateMacros(hooks.setNativePromptContent, scene);
         journal('notes.bridge', {
             directionId: envelope.directionId,
             routed: recallRouted ? 'recipe-macro' : 'recipe-macro-disabled',
@@ -1751,6 +1786,8 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         hooks.setNativePromptContent('narratorRecall', '');
         hooks.setNativePromptContent('narratorNote', '');
         hooks.setNativePromptContent('nextAction', '');
+        hooks.setNativePromptContent('prevEvents', '');
+        hooks.setNativePromptContent('loomAction', '');
         if (generationOwned) {
             journal('generation.end', {
                 directionId: envelope.directionId,
@@ -1796,12 +1833,18 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
                 archiveProjection: run.envelope.archiveProjection,
             },
         ));
+        hooks.setNativePromptContent('prevEvents', (args = {}) => buildNarratorRecallSections(scene.timelineId, scene.id, {
+            scenes: args.scenes,
+            archiveProjection: run.envelope.archiveProjection,
+        }));
         const narratorNoteRouted = hooks.setNativePromptContent('narratorNote', hooks.getNarratorNote());
         const nextAction = run.envelope.currentPlayerAction === AUTONOMOUS_CONTINUE_ACTION
             ? ''
             : String(run.envelope.currentPlayerAction || '').trim();
         run.nextAction = nextAction;
         run.nextActionRouted = Boolean(nextAction) && hooks.setNativePromptContent('nextAction', tagNextAction(nextAction));
+        hooks.setNativePromptContent('loomAction', renderLoomAction(nextAction));
+        routeUniversalStateMacros(hooks.setNativePromptContent, scene);
         journal('canonical.notes.bridge', {
             directionId: run.directionId,
             routed: recallRouted ? 'recipe-macro' : 'recipe-macro-disabled',
@@ -1840,6 +1883,8 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
         hooks.setNativePromptContent('narratorRecall', '');
         hooks.setNativePromptContent('narratorNote', '');
         hooks.setNativePromptContent('nextAction', '');
+        hooks.setNativePromptContent('prevEvents', '');
+        hooks.setNativePromptContent('loomAction', '');
         if (run.canonicalCancelled || activeRun !== run) return false;
 
         // The native Narrator transport bypasses Prompt Studio's core
@@ -1894,6 +1939,8 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
         hooks.setNativePromptContent('narratorRecall', '');
         hooks.setNativePromptContent('narratorNote', '');
         hooks.setNativePromptContent('nextAction', '');
+        hooks.setNativePromptContent('prevEvents', '');
+        hooks.setNativePromptContent('loomAction', '');
     }
 }
 
@@ -2575,6 +2622,16 @@ function compileLoomRequest({ scene, snapshot, draft, draftReasoning = '' }) {
     const playerAction = String(snapshot?.currentPlayerAction || '');
     const sources = buildLoomRecipeSources({ draft, draftReasoning, playerAction, narrativeState, mechanicsSkill, livingLore });
     sources.archiveState = (args = {}) => buildLoomRecipeSources({ narrativeState: resolveArchive(args) }).archiveState;
+    // Split state macros (loom.scene/characters/events/goals/variables/secrets,
+    // prev.events). Each renders one slice from the live scene + snapshot.
+    sources.loomAction = renderLoomAction(playerAction);
+    sources.loomScene = renderLoomScene(scene.timelineId, scene.id);
+    sources.loomCharacters = renderLoomCharacters(scene.timelineId, scene.id);
+    sources.loomEvents = (args = {}) => renderLoomEvents(scene.timelineId, scene.id, { events: args.events });
+    sources.loomGoals = (args = {}) => renderLoomGoals(scene.timelineId, { limit: args.limit, secret: args.secret });
+    sources.loomVariables = (args = {}) => renderLoomVariables(scene.timelineId, { limit: args.limit });
+    sources.loomSecrets = renderLoomSecrets(scene.timelineId, scene.id);
+    sources.prevEvents = (args = {}) => renderPrevEvents(scene.timelineId, scene.id, { scenes: args.scenes, archiveProjection: snapshot?.archiveProjection });
     const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
     const compiled = compilePromptRecipe(recipe, sources, { trace: true });
     const usedFallback = !compiled.messages.length;
@@ -2643,6 +2700,9 @@ export async function runLoomReconciliation({
                 prompt,
                 signal: token?.controller?.signal,
                 profileId: loomProfileId || scene.generationProfileIds?.loom || undefined,
+                // Provider-enforced goal fence (experimental branch). The reply
+                // returns as bare JSON, which readLoomEnvelope already recovers.
+                overridePayload: { json_schema: toCoreJsonSchema(getRoleplayLoomGoalSchema()) },
                 onChunk: ({ text, reasoning }) => onChunk?.({ text: readLoomProse(text), reasoning }),
             });
             raw = String(out?.text || '');
