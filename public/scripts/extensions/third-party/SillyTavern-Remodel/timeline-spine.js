@@ -9924,7 +9924,7 @@ async function openRoleplayPromptPreview() {
             composerText,
             narratorGrounding,
             narratorRecall,
-            prevEvents: narratorRecall,
+            prevEvents: activeScene ? (args = {}) => renderPrevEvents(activeScene.timelineId, activeScene.id, { scenes: args.scenes }) : undefined,
             narratorNote: readRoleplayNarratorNote(),
             worldSense,
             stripNativeNewChatBootstrap: true,

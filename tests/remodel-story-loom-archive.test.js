@@ -676,17 +676,16 @@ test('production Story capture shows the Loom what earlier Scenes already settle
     expect(applied.status).toBe('applied');
     expect(prompts).toHaveLength(1);
     const text = prompts[0];
-    const recallStart = text.indexOf('=== WORLD SENSE RECALL ===');
-    // Earlier-Scene recall reaches the Loom via prev.events.
-    expect(recallStart).toBeGreaterThan(0);
+    const prevStart = text.indexOf('## Earlier Scenes');
+    // Earlier Scenes' events reach the Loom via prev.events, read directly.
+    expect(prevStart).toBeGreaterThan(0);
     expect(text).toContain('Mara locked the observatory door for the night.');
-    // Recall is earlier Scenes only. The current Scene's own event is in its own
-    // Archive (loom.events) and must not be echoed back as something to remember.
-    // Bound the recall block to prev.events, before the Living Lore section.
-    const recall = text.slice(recallStart, text.indexOf('Selected Living Lore'));
-    expect(recall).not.toContain('lantern oil');
-    const beforeRecall = text.slice(0, recallStart);
-    expect(beforeRecall).toContain('Mara counted the lantern oil.');
-    // The current Scene's own events sit above the earlier-Scene recall.
-    expect(recallStart).toBeGreaterThan(text.indexOf('Mara counted the lantern oil.'));
+    // prev.events is earlier Scenes only. The current Scene's own event is in its
+    // own Archive (loom.events) and must not appear inside prev.events.
+    const prev = text.slice(prevStart, text.indexOf('Selected Living Lore'));
+    expect(prev).not.toContain('lantern oil');
+    const beforePrev = text.slice(0, prevStart);
+    expect(beforePrev).toContain('Mara counted the lantern oil.');
+    // The current Scene's own events sit above the earlier-Scene prev.events.
+    expect(prevStart).toBeGreaterThan(text.indexOf('Mara counted the lantern oil.'));
 });

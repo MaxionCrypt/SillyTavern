@@ -1,6 +1,8 @@
 import { expect, jest, test } from '@jest/globals';
 import { createArchiveIngestion } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archive-ingestion.js';
 import { createArchiveJobRepository, createMemoryArchiveJobPersistence } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archive-job-store.js';
+import { recordEvent } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
+import { createArc, createScene, createTimeline } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/timeline-state.js';
 import { archiveRetryOverride, compileArchivePrompt, createBackgroundArchiveRuntime } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/background-archive-runtime.js';
 import { __setConnectionProfiles } from './util/connection-request-stub.js';
 import { legacyArchiveIngestionAdapter } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/legacy-archive-ingestion-adapter.js';
@@ -231,20 +233,21 @@ const prevEventsRecipe = {
     blocks: [{ id: 'prev', kind: 'message', role: 'system', content: '{{prev.events}}', enabled: true }],
 };
 
-test('earlier-Scene recall reaches the Archive prompt via prev.events', () => {
-    const { messages } = compileArchivePrompt({
-        acceptedProse: 'Mara locked the door.',
-        timelineId: 'tl-recall', sceneId: 'sc-recall',
-        recipe: prevEventsRecipe,
-        recall: '=== WORLD SENSE RECALL ===\nAccepted evidence recalled from earlier Timeline Scenes:\n- [Arrival / The Cellar / event] Mara hid the key.',
-    });
+test('earlier Scenes\' events reach the Archive prompt via prev.events, completely', () => {
+    const tl = createTimeline('Recall').id;
+    const arc = createArc(tl, 'Arrival').id;
+    const earlier = createScene(arc, 'story', 'The Cellar').id;
+    const current = createScene(arc, 'story', 'The Hall').id;
+    recordEvent(tl, earlier, 'Mara hid the key.');
+    recordEvent(tl, earlier, 'Mara sealed the vault behind her.');
+    const { messages } = compileArchivePrompt({ acceptedProse: 'Mara locked the door.', timelineId: tl, sceneId: current, recipe: prevEventsRecipe });
     const text = messages.map((message) => message.content).join('\n');
-    expect(text).toContain('=== WORLD SENSE RECALL ===');
-    expect(text).toContain('[Arrival / The Cellar / event] Mara hid the key.');
+    expect(text).toContain('Mara hid the key.');
+    expect(text).toContain('Mara sealed the vault behind her.');
 });
 
-test('no recall leaves prev.events empty', () => {
-    const { messages } = compileArchivePrompt({ acceptedProse: 'x', timelineId: 'tl-recall', sceneId: 'sc-recall', recipe: prevEventsRecipe, recall: '   ' });
+test('no earlier Scenes leaves prev.events empty', () => {
+    const { messages } = compileArchivePrompt({ acceptedProse: 'x', timelineId: 'tl-none', sceneId: 'sc-none', recipe: prevEventsRecipe });
     expect(messages.map((message) => message.content).join('\n').trim()).toBe('');
 });
 

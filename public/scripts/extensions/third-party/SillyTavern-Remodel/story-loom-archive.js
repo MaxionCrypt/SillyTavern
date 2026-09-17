@@ -3,7 +3,7 @@ import { getContext } from '../../../st-context.js';
 import {
     buildNarratorArchivistSections,
     renderLoomScene, renderLoomCharacters, renderLoomEvents,
-    renderLoomSecrets, renderLoomGoals, renderLoomVariables,
+    renderLoomSecrets, renderLoomGoals, renderLoomVariables, renderPrevEvents,
 } from './narrator-prompt.js';
 import {
     compilePromptRecipe,
@@ -92,7 +92,6 @@ export function describeStoryArchiveCaptureState(docId) {
 }
 
 export function buildStoryArchivePrompt({ passage, worldSense = null, webPacket = null, recipe = getStoryArchivePromptStudioRecipe(), timelineId = '', sceneId = '' } = {}) {
-    const continuity = formatStoryWorldSenseContinuity(worldSense);
     const tl = String(timelineId || '');
     const sc = String(sceneId || '');
     const capture = `Accepted Story manuscript passage (evidence only; never reproduce it):\n${String(passage || '').trim()}`;
@@ -104,8 +103,9 @@ export function buildStoryArchivePrompt({ passage, worldSense = null, webPacket 
         loomGoals: (args = {}) => renderLoomGoals(tl, { limit: args.limit, secret: args.secret }),
         loomVariables: (args = {}) => renderLoomVariables(tl, { limit: args.limit }),
         loomSecrets: renderLoomSecrets(tl, sc),
-        // Earlier-Scene recall plus the Story timeline web ride prev.events.
-        prevEvents: [continuity, formatStoryTimelineWebPacket(webPacket)].filter(Boolean).join('\n\n'),
+        // prev.events reads the earlier Scenes' events directly; the Story
+        // timeline web rides alongside it.
+        prevEvents: (args = {}) => [renderPrevEvents(tl, sc, { scenes: args.scenes }), formatStoryTimelineWebPacket(webPacket)].filter(Boolean).join('\n\n'),
         livingLore: formatLivingLorePacket(worldSense?.loomPacket),
         narratorDraft: capture,
         // Kept separate from narratorDraft so the Story Archive recipe says

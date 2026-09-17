@@ -1,6 +1,7 @@
 import { compileArchivePrompt } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/background-archive-runtime.js';
-import { setSceneFact } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
+import { setSceneFact, recordEvent } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { createTimelineGoal } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js';
+import { createArc, createScene, createTimeline } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/timeline-state.js';
 import { __setExtensionSettings } from './util/st-context-stub.js';
 
 const block = (id, role, content) => ({ id, kind: 'message', role, content, enabled: true });
@@ -57,7 +58,18 @@ test('split state macros are rooted in the live Scene, not a passed-in string', 
     expect(text).toContain('Reach the vault — 40%');
 });
 
-test('prev.events carries the earlier-Scene recall string', () => {
-    const text = joined(compileArchivePrompt({ ...base, recall: '=== WORLD SENSE RECALL ===\n- the vault was sealed', recipe: recipe('{{prev.events}}') }));
-    expect(text).toContain('the vault was sealed');
+test('prev.events reads earlier Scenes\' events directly and completely (last event not dropped)', () => {
+    const tl = createTimeline('Prev').id;
+    const arc = createArc(tl, 'Arc').id;
+    const earlier = createScene(arc, 'roleplay', 'The Cellar').id;
+    const current = createScene(arc, 'roleplay', 'The Observatory').id;
+    recordEvent(tl, earlier, 'The key turned in the lock.');
+    recordEvent(tl, earlier, 'A ledger was hidden under the floor.');
+    recordEvent(tl, earlier, 'The last thing that happened here.');
+    const text = joined(compileArchivePrompt({ acceptedProse: 'x', timelineId: tl, sceneId: current, recipe: recipe('{{prev.events}}') }));
+    // Every event of the earlier Scene appears — including the last, which the
+    // old recall-filtered path could silently drop.
+    expect(text).toContain('The key turned in the lock.');
+    expect(text).toContain('A ledger was hidden under the floor.');
+    expect(text).toContain('The last thing that happened here.');
 });

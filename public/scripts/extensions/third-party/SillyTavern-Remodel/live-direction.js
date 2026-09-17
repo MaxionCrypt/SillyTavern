@@ -1696,10 +1696,7 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             retryNudge,
         ].filter(Boolean).join('\n\n'));
         // prev.events is the recall replacement — same projection, no nudge.
-        hooks.setNativePromptContent('prevEvents', (args = {}) => buildNarratorRecallSections(scene.timelineId, scene.id, {
-            scenes: args.scenes,
-            archiveProjection: envelope.archiveProjection,
-        }));
+        hooks.setNativePromptContent('prevEvents', (args = {}) => renderPrevEvents(scene.timelineId, scene.id, { scenes: args.scenes }));
         const narratorNoteRouted = hooks.setNativePromptContent('narratorNote', hooks.getNarratorNote());
         const nextAction = envelope.currentPlayerAction === AUTONOMOUS_CONTINUE_ACTION
             ? ''
@@ -1833,10 +1830,7 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
                 archiveProjection: run.envelope.archiveProjection,
             },
         ));
-        hooks.setNativePromptContent('prevEvents', (args = {}) => buildNarratorRecallSections(scene.timelineId, scene.id, {
-            scenes: args.scenes,
-            archiveProjection: run.envelope.archiveProjection,
-        }));
+        hooks.setNativePromptContent('prevEvents', (args = {}) => renderPrevEvents(scene.timelineId, scene.id, { scenes: args.scenes }));
         const narratorNoteRouted = hooks.setNativePromptContent('narratorNote', hooks.getNarratorNote());
         const nextAction = run.envelope.currentPlayerAction === AUTONOMOUS_CONTINUE_ACTION
             ? ''
@@ -2631,7 +2625,7 @@ function compileLoomRequest({ scene, snapshot, draft, draftReasoning = '' }) {
     sources.loomGoals = (args = {}) => renderLoomGoals(scene.timelineId, { limit: args.limit, secret: args.secret });
     sources.loomVariables = (args = {}) => renderLoomVariables(scene.timelineId, { limit: args.limit });
     sources.loomSecrets = renderLoomSecrets(scene.timelineId, scene.id);
-    sources.prevEvents = (args = {}) => renderPrevEvents(scene.timelineId, scene.id, { scenes: args.scenes, archiveProjection: snapshot?.archiveProjection });
+    sources.prevEvents = (args = {}) => renderPrevEvents(scene.timelineId, scene.id, { scenes: args.scenes });
     const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
     const compiled = compilePromptRecipe(recipe, sources, { trace: true });
     const usedFallback = !compiled.messages.length;

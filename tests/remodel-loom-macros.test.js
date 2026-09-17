@@ -6,6 +6,7 @@ import {
 import { setSceneFact, setCharStateFacet, recordEvent, setSecret } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/archivist-store.js';
 import { createTimelineGoal } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js';
 import { createVariableValue } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
+import { createArc, createScene, createTimeline } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/timeline-state.js';
 
 const TL = 'tl-macros';
 const SC = 'sc-macros';
@@ -99,11 +100,25 @@ test('{{loom.variables}} shows variable name, value, and meaning', () => {
     expect(out).toContain("- Aiden's Nerve: 12 — his steadiness under pressure");
 });
 
-test('{{prev.events}} disables cleanly at scenes=0 and needs no pre-built projection', () => {
-    // The heavy recall behavior is covered by the recall suite; here we only
-    // prove the delegation is wired and the disable path holds.
+test('{{prev.events}} disables at scenes=0 and is empty with no earlier Scenes', () => {
     expect(renderPrevEvents(TL, SC, { scenes: 0 })).toBe('');
     expect(renderPrevEvents(TL, SC, { scenes: 3 })).toBe('');
+});
+
+test('{{prev.events}} reads every event of the earlier Scenes directly (last event not dropped)', () => {
+    const tl = createTimeline('Prev').id;
+    const arc = createArc(tl, 'Arc').id;
+    const earlier = createScene(arc, 'roleplay', 'The Cellar').id;
+    const current = createScene(arc, 'roleplay', 'The Loft').id;
+    recordEvent(tl, earlier, 'The first thing happened.');
+    recordEvent(tl, earlier, 'The middle thing happened.');
+    recordEvent(tl, earlier, 'The last thing happened.');
+    recordEvent(tl, current, 'This is the current Scene.');
+    const out = renderPrevEvents(tl, current, { scenes: 3 });
+    expect(out).toContain('## Earlier Scenes');
+    expect(out).toContain('The first thing happened.');
+    expect(out).toContain('The last thing happened.'); // completeness — no silent drop
+    expect(out).not.toContain('This is the current Scene.'); // current Scene excluded
 });
 
 test('routeUniversalStateMacros re-routes all six self-contained macros (post-activation fix)', async () => {

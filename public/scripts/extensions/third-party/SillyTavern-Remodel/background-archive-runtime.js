@@ -3,7 +3,7 @@ import { executeMechanicsRequest, MECHANICS_PROTOCOL } from './mechanics-capabil
 import {
     buildNarratorArchivistSections,
     renderLoomAction, renderLoomScene, renderLoomCharacters, renderLoomEvents,
-    renderLoomSecrets, renderLoomGoals, renderLoomVariables,
+    renderLoomSecrets, renderLoomGoals, renderLoomVariables, renderPrevEvents,
 } from './narrator-prompt.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe, getPromptStudioRecipe, getStoryArchivePromptStudioRecipe, recordSentPromptTranscript } from './prompt-studio.js';
 import { buildLoomRecipeSources, parseLoomReply } from './loom-reconciliation.js';
@@ -233,8 +233,8 @@ export function compileArchivePrompt({ acceptedProse, currentPlayerAction = '', 
     sources.loomGoals = (args = {}) => renderLoomGoals(tl, { limit: args.limit, secret: args.secret });
     sources.loomVariables = (args = {}) => renderLoomVariables(tl, { limit: args.limit });
     sources.loomSecrets = renderLoomSecrets(tl, sc);
-    // prev.events is the already-formatted earlier-Scene recall string.
-    sources.prevEvents = String(recall || '').trim();
+    // prev.events reads the earlier Scenes' events directly, completely.
+    sources.prevEvents = (args = {}) => renderPrevEvents(tl, sc, { scenes: args.scenes });
     const messages = [...compilePromptRecipe(recipe, sources).messages];
     // A Loom recipe owns every model-facing instruction, including its policy
     // and output contract. The worker still validates the returned state fence;

@@ -1,4 +1,4 @@
-import { listSceneFacts, listCharStates, getBeat, listSecrets } from './archivist-store.js';
+import { listSceneFacts, listCharStates, getBeat, listSecrets, listEvents } from './archivist-store.js';
 import { getSceneGoals, getTimelineGoals } from './story-goals-store.js';
 import { buildSceneArchiveProjection, renderArchiveProjection } from './archive-projection.js';
 import { getTimelineStore } from './timeline-state.js';
@@ -169,10 +169,49 @@ export function renderLoomVariables(timelineId, { limit = null } = {}) {
     return `## Variables\n${lines.join('\n')}`;
 }
 
-/** {{prev.events N}} — the last N Scenes' events, current Scene excluded.
- *  Reuses the proven recall engine (same positional "N preceding Scenes"). */
-export function renderPrevEvents(timelineId, sceneId, { scenes = null, archiveProjection = null } = {}) {
-    return buildNarratorRecallSections(timelineId, sceneId, { scenes, archiveProjection });
+/**
+ * The Scenes immediately before `sceneId`, in order, with a label each. `count`
+ * null means every earlier Scene; otherwise the last `count`. Current excluded.
+ */
+function orderedPreviousScenes(timelineId, sceneId, count) {
+    const store = getTimelineStore();
+    const timeline = store.timelines[String(timelineId || '')];
+    const ordered = [];
+    for (const arcId of timeline?.arcIds || []) {
+        const arc = store.arcs[arcId];
+        for (const id of arc?.sceneIds || []) {
+            const scene = store.scenes[id];
+            if (scene?.mode === 'roleplay' || scene?.mode === 'story') {
+                ordered.push({ id: String(id), label: [arc?.title, scene?.title].filter(Boolean).join(' · ') || String(id) });
+            }
+        }
+    }
+    const targetIndex = ordered.findIndex((scene) => scene.id === String(sceneId || ''));
+    if (targetIndex < 0) return [];
+    const start = count === null ? 0 : Math.max(0, targetIndex - count);
+    return ordered.slice(start, targetIndex);
+}
+
+/**
+ * {{prev.events N}} — every recorded event of the last N Scenes, current Scene
+ * excluded. Read straight from each Scene's Archive (not the relevance-ranked,
+ * budget-capped World Sense recall), so nothing that happened in those Scenes
+ * is silently dropped. `scenes=0` disables it; omit for all earlier Scenes.
+ */
+export function renderPrevEvents(timelineId, sceneId, { scenes = null } = {}) {
+    const requested = normalizeSceneLookback(scenes);
+    if (requested === 0) return '';
+    const scenesList = orderedPreviousScenes(timelineId, sceneId, requested);
+    const blocks = [];
+    for (const scene of scenesList) {
+        const events = listEvents(timelineId, scene.id)
+            .filter((event) => String(event?.summary || '').trim())
+            .slice()
+            .sort((left, right) => Number(left.seq || 0) - Number(right.seq || 0));
+        if (!events.length) continue;
+        blocks.push(`### ${scene.label}\n${events.map((event) => `- ${event.summary}`).join('\n')}`);
+    }
+    return blocks.length ? `## Earlier Scenes — already happened\n${blocks.join('\n\n')}` : '';
 }
 
 function normalizeSceneLookback(value) {
