@@ -1,5 +1,4 @@
 import { initTimelineSpine } from './timeline-spine.js';
-import { ensureLoreIndexAutoRefresh } from './world-sense-embeddings.js';
 
 const INIT_TIMEOUT_MS = 10000;
 const SIDEBAR_DRAWERS = [
@@ -68,9 +67,6 @@ export async function init() {
     initialized = true;
 
     initTimelineSpine();
-    // Keeps the vector index current as lore changes, instead of only when
-    // someone presses Reindex. Idempotent, so a re-init cannot double-bind.
-    ensureLoreIndexAutoRefresh();
     configureSidebarRail();
     bindRemodelEvents();
     observeSidebarRailChanges();

@@ -1,8 +1,5 @@
 import { getContext } from '../../../st-context.js';
 import { getMechanicsProfile, updateMechanicsProfile } from './variables-store.js';
-import { benchmarkWorldSense, ensureWorldSenseIndex } from './world-sense-embeddings.js';
-import { getActiveTimeline } from './timeline-state.js';
-import { getWorldSenseIndexState, getWorldSenseProfile, getWorldSenseStore, updateWorldSenseProfile } from './world-sense-store.js';
 import { buildMetadataGuide } from './metadata-guide.js';
 
 const STORAGE_KEY = 'remodel.debugJournal.v1';
@@ -43,8 +40,7 @@ let broadcastTimer = null;
 let pendingBroadcast = [];
 let refreshHandle = 0;
 let droppedMutations = 0;
-let worldSenseTask = '';
-const TAB_ID = `tab-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
+const TAB_ID =`tab-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
 
 const settings = {
     recording: true,
@@ -742,7 +738,6 @@ export function renderDebugConsoleWorkspace() {
             </div>
             ${renderMetadataGuide()}
             ${renderMechanicsProfile()}
-            ${renderWorldSenseBenchmark()}
             <div class="remodel-debug-filters">
                 <select data-remodel-debug-source><option value="all">all source tabs</option>${sources.map((source) => `<option value="${escapeHtml(source.tabId)}" ${settings.source === source.tabId ? 'selected' : ''}>${escapeHtml(source.shortId)} · ${escapeHtml(source.label)}</option>`).join('')}</select>
                 <select data-remodel-debug-category>${categories.map((category) => `<option value="${escapeHtml(category)}" ${settings.category === category ? 'selected' : ''}>${escapeHtml(category)}</option>`).join('')}</select>
@@ -814,10 +809,6 @@ function renderMetadataGuide() {
         '<code>loreKeywords</code>',
         guideArguments(guide.lore.keywords.arguments),
         `<code class="remodel-debug-guide-snippet">${escapeHtml(guide.lore.keywords.example)}</code>`,
-    ], [
-        '<code>lorePromotionDecisions[]</code>',
-        guideArguments(guide.lore.promotion.arguments),
-        `<code class="remodel-debug-guide-snippet">${escapeHtml(guide.lore.promotion.example)}</code>`,
     ]])}
                 <p class="remodel-debug-guide-note">${escapeHtml(guide.lore.proposal.note)} ${escapeHtml(guide.lore.keywords.note)}</p>`)}
 
@@ -899,41 +890,6 @@ function renderMechanicsProfile() {
         </details>`;
 }
 
-function renderWorldSenseBenchmark() {
-    const timeline = getActiveTimeline();
-    const profile = getWorldSenseProfile();
-    const benchmark = getWorldSenseStore().benchmark;
-    const index = timeline ? getWorldSenseIndexState(timeline.id) : null;
-    const result = benchmark?.ok
-        ? `${benchmark.accepted ? 'PASS' : 'REVIEW'} · cold ${benchmark.coldLoadMs} ms · warm p50 ${benchmark.warmQueryP50Ms} ms / p95 ${benchmark.warmQueryP95Ms} ms · ${formatBytes(benchmark.memoryRssDeltaBytes)} RSS · ${benchmark.entryCount} entries`
-        : benchmark?.error || 'No benchmark recorded.';
-    return `
-        <details class="remodel-debug-mechanics">
-            <summary>World Sense local model — <b>${escapeHtml(index?.status || 'idle')}</b></summary>
-            <div class="remodel-debug-mechanics-grid">
-                <label class="is-wide">Hugging Face model
-                    <input type="text" data-remodel-debug-world-sense="modelId" value="${escapeHtml(profile.modelId)}"></label>
-                <label>Warm p95 target (ms)
-                    <input type="number" min="50" max="5000" data-remodel-debug-world-sense="warmQueryTargetMs" value="${profile.warmQueryTargetMs}"></label>
-                <label>Representative book size
-                    <input type="number" min="10" max="5000" data-remodel-debug-world-sense="supportedBookSize" value="${profile.supportedBookSize}"></label>
-                <label>Entries per turn
-                    <input type="number" min="1" max="50" data-remodel-debug-world-sense="maxEntries" value="${profile.maxEntries}"></label>
-                <label>Lore token budget
-                    <input type="number" min="100" max="12000" data-remodel-debug-world-sense="maxTokens" value="${profile.maxTokens}"></label>
-                <label>Semantic similarity floor
-                    <input type="number" min="0" max="1" step="0.01" data-remodel-debug-world-sense="semanticThreshold" value="${profile.semanticThreshold}"></label>
-                <label>Semantic-only entry cap
-                    <input type="number" min="1" max="20" data-remodel-debug-world-sense="semanticOnlyLimit" value="${profile.semanticOnlyLimit}"></label>
-                <div class="is-wide remodel-debug-actions">
-                    <button type="button" data-remodel-debug-action="world-sense-index" ${!timeline || worldSenseTask ? 'disabled' : ''}>${worldSenseTask === 'index' ? 'Indexing…' : 'Build incremental index'}</button>
-                    <button type="button" data-remodel-debug-action="world-sense-benchmark" ${!timeline || worldSenseTask ? 'disabled' : ''}>${worldSenseTask === 'benchmark' ? 'Benchmarking…' : 'Run local benchmark'}</button>
-                </div>
-            </div>
-            <p class="remodel-debug-mechanics-note">${escapeHtml(result)}${index?.error ? ` · ${escapeHtml(index.error)}` : ''}</p>
-        </details>`;
-}
-
 export function refreshDebugConsoleWorkspace() {
     if (settings.viewPaused) return;
     const stream = document.querySelector('[data-remodel-debug-stream]');
@@ -961,20 +917,6 @@ export function handleDebugConsoleClick(target, requestRender) {
     if (action === 'dom') settings.recordDom = !settings.recordDom;
     if (action === 'export') downloadDebugRecords();
     if (action === 'clear') clearDebugRecords();
-    if (action === 'world-sense-index' || action === 'world-sense-benchmark') {
-        const timeline = getActiveTimeline();
-        if (!timeline || worldSenseTask) return true;
-        worldSenseTask = action === 'world-sense-index' ? 'index' : 'benchmark';
-        const task = worldSenseTask;
-        requestRender();
-        const operation = task === 'index' ? ensureWorldSenseIndex(timeline.id, { force: true }) : benchmarkWorldSense(timeline.id);
-        operation.then((result) => recordDebugEvent('world-sense', `embedding.${task}`, result, {
-            force: true, severity: result.ok ? 'info' : 'warn', summary: result.ok ? `World Sense ${task} completed` : `World Sense ${task} unavailable`,
-        })).catch((error) => recordDebugEvent('world-sense', `embedding.${task}`, { error }, {
-            force: true, severity: 'error', summary: `World Sense ${task} failed`,
-        })).finally(() => { worldSenseTask = ''; requestRender(); });
-        return true;
-    }
     persist();
     if (action === 'record' || action === 'dom') broadcastSharedSettings();
     requestRender();
@@ -989,13 +931,6 @@ export function handleDebugConsoleInput(target) {
 }
 
 export function handleDebugConsoleChange(target, requestRender) {
-    const worldSenseField = target.dataset?.remodelDebugWorldSense;
-    if (worldSenseField) {
-        const profile = updateWorldSenseProfile({ [worldSenseField]: target.value });
-        recordDebugEvent('world-sense', 'profile.changed', { field: worldSenseField, stored: profile[worldSenseField] }, { force: true, summary: `World Sense ${worldSenseField} updated` });
-        requestRender();
-        return true;
-    }
     const mechanicsField = target.dataset?.remodelDebugMechanics;
     if (mechanicsField) {
         const value = target.type === 'checkbox' ? target.checked : target.value;

@@ -1,5 +1,4 @@
 import { readLoomInformation } from './living-lore-intake.js';
-import { parsePromotionDecisions } from './world-sense-promotion.js';
 
 // The "rewrite everything" contract is retired. The Loom no longer re-emits the
 // whole turn: it names only the spans a ruling changed. The PATCH contract
@@ -45,10 +44,9 @@ export function isSupersededLoomPatchPolicy(value) {
 
 export const LOOM_POLICY_PATCH = `You are the Loom: the final continuity editor and mechanical referee. You receive the Narrator's draft before anything becomes visible. The draft is already canonical - do NOT rewrite or reproduce it.
 
-STEP 1 - Archive. Keep the Archive caught up with only the fiction this response makes canonical. Record each distinct new event with event.record. Update durable scene facts with scene.set, changed character facets with char_state.set, hidden truths with secret.set, and the unresolved open thread with beat.set. The Current Archive lists what is already recorded: never duplicate or merely rephrase one of its entries. Do not invent state the prose does not establish. A beat is provisional momentum, never a guaranteed outcome and never stronger than the latest accepted action.
-STEP 2 - Consequences. Goals describe outcomes their holders are trying to achieve, never outcomes the story must protect. Ask what materially changed because this turn happened. A Goal's description guides measurement but is not an exhaustive whitelist: if new fiction reveals that its condition is incomplete, refine the description with goal.edit rather than declaring the action irrelevant. When the fiction helps or obstructs an open Goal, use goal.edit to set its Success Rate to the holder's new chance of achieving it, even when no roll is needed. Small pressure may move it a few points; a meaningful reversal should move it substantially. Close a Goal with goal.edit when it becomes achieved, abandoned, or impossible. Use goal.create only when the fiction establishes a meaningful unresolved outcome worth tracking, never merely because a named character lacks one. Use goal.reach only for a decisive attempt whose outcome is genuinely uncertain; routine or already-established consequences need no roll. Code rolls the dice, never you.
-STEP 3 - Patch. If, and ONLY if, continuity or an authorized roll contradicts the draft, name the exact span to replace. Quote the draft verbatim in "find". Most turns need no patch at all.
-STEP 4 - Durable Lore Check. When a Selected Living Lore packet is present, ask whether this accepted fiction establishes information that will remain useful beyond the immediate moment. Propose precise evidence-backed lore changes for a meaningfully reusable person, place, group, institution, stable relationship, discovered rule, persistent condition, or durable open thread. Do not promote transient actions, momentary moods or positions, scene summaries, decorative details, or facts already represented in the Archive or selected lore. A named extra appearing once is not automatically durable lore. Most turns may correctly return no proposals.`;
+STEP 1 - Consequences. Goals describe outcomes their holders are trying to achieve, never outcomes the story must protect. Ask what materially changed because this turn happened. A Goal's description guides measurement but is not an exhaustive whitelist: if new fiction reveals that its condition is incomplete, refine the description with goal.edit rather than declaring the action irrelevant. When the fiction helps or obstructs an open Goal, use goal.edit to set its Success Rate to the holder's new chance of achieving it, even when no roll is needed. Small pressure may move it a few points; a meaningful reversal should move it substantially. Close a Goal with goal.edit when it becomes achieved, abandoned, or impossible. Use goal.create only when the fiction establishes a meaningful unresolved outcome worth tracking, never merely because a named character lacks one. Use goal.reach only for a decisive attempt whose outcome is genuinely uncertain; routine or already-established consequences need no roll. Code rolls the dice, never you.
+STEP 2 - Patch. If, and ONLY if, continuity or an authorized roll contradicts the draft, name the exact span to replace. Quote the draft verbatim in "find". Most turns need no patch at all.
+STEP 3 - Durable Lore Check. When a Selected Living Lore packet is present, ask whether this accepted fiction establishes information that will remain useful beyond the immediate moment. Propose precise evidence-backed lore changes for a meaningfully reusable person, place, group, institution, stable relationship, discovered rule, persistent condition, or durable open thread. Do not promote transient actions, momentary moods or positions, scene summaries, decorative details, or facts already represented in the Archive or selected lore. A named extra appearing once is not automatically durable lore. Most turns may correctly return no proposals.`;
 
 const LOOM_OUTPUT_CONTRACT_PATCH_V21 = `Output NOTHING except one state fence. Do not restate the prose.
 \`\`\`state
@@ -90,14 +88,12 @@ export function isSupersededLoomPatchContract(value) {
 
 export const LOOM_OUTPUT_CONTRACT_PATCH = `Output NOTHING except one state fence. Do not restate the prose.
 \`\`\`state
-{"swaps":[],"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"what happened"},"reason":"why, one line"},{"id":"r2","capability":"goal.edit","arguments":{"goalRef":"the exact Goal name","successRate":23},"reason":"how this turn changed its holder's position"},{"id":"r3","capability":"beat.set","arguments":{"directive":"the unresolved thread after this turn"},"reason":"why, one line"}],"loreProposals":[],"lorePromotionDecisions":[],"flow":{"continue":false}}
+{"swaps":[],"requests":[{"id":"r1","capability":"goal.edit","arguments":{"goalRef":"the exact Goal name","successRate":23},"reason":"how this turn changed its holder's position"}],"loreProposals":[],"flow":{"continue":false}}
 \`\`\`
 
 Every request is its own object. Close one with } and open the next with {, exactly as above. Never repeat "id" inside a single object.
 
 Always include the top-level loreProposals array. Leave it empty when the Durable Lore Check finds no warranted change; otherwise follow the Selected Living Lore proposal shape exactly.
-
-When promotion candidates are present, always include lorePromotionDecisions and account for every candidate ID. This receipt explains why accumulated Archive material did or did not become a proposal.
 
 Each swap is {"find":"exact text from the draft","replace":"what it becomes"}. A find that is not present verbatim in the draft is discarded, so copy it exactly.`;
 
@@ -324,8 +320,6 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
     let loreProposals = [];
     let loreKeywords = [];
     let loreProposalRejections = [];
-    let lorePromotionDecisions = [];
-    let lorePromotionDecisionRejections = [];
     if (envelope.parsed) {
         try {
             const parsed = envelope.value;
@@ -337,11 +331,6 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
             loreKeywords = readLoreKeywords(parsed?.loreKeywords);
             loreProposals = proposals.accepted;
             loreProposalRejections = proposals.rejected;
-            if (livingLorePacket?.promotion?.candidates?.length) {
-                const decisions = parsePromotionDecisions(parsed?.lorePromotionDecisions, livingLorePacket.promotion);
-                lorePromotionDecisions = decisions.accepted;
-                lorePromotionDecisionRejections = decisions.rejected;
-            }
             if (parsed?.flow && typeof parsed.flow === 'object') {
                 flow = {
                     continueAfter: Boolean(parsed.flow.continue ?? parsed.flow.continueAfter),
@@ -353,11 +342,10 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
                     && typeof s.find === 'string' && s.find.length > 0
                     && typeof s.replace === 'string');
             }
-        } catch { swaps = []; requests = []; flow = null; loreProposals = []; loreProposalRejections = []; lorePromotionDecisions = []; lorePromotionDecisionRejections = []; }
+        } catch { swaps = []; requests = []; flow = null; loreProposals = []; loreProposalRejections = []; }
     }
     return {
         prose, swaps, requests, flow, loreProposals, loreProposalRejections, loreKeywords,
-        ...(livingLorePacket?.promotion?.candidates?.length ? { lorePromotionDecisions, lorePromotionDecisionRejections } : {}),
     };
 }
 
@@ -394,8 +382,6 @@ export function describeLoomReply(raw, { tailChars = 400, fenceChars = 2000 } = 
         swapCount: parsed.swaps.length,
         loreProposalCount: parsed.loreProposals.length,
         loreProposalRejectedCount: parsed.loreProposalRejections.length,
-        lorePromotionDecisionCount: parsed.lorePromotionDecisions?.length || 0,
-        lorePromotionDecisionRejectedCount: parsed.lorePromotionDecisionRejections?.length || 0,
         tail: text.slice(-tailChars),
     };
 }

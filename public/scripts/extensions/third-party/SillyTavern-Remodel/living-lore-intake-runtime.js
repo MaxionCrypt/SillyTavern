@@ -21,10 +21,7 @@ import { evidenceSource } from './living-lore-mutations.js';
 import { listLivingLoreMetadata } from './living-lore-store.js';
 import { placeLivingLoreInformation, readLoomInformation } from './living-lore-intake.js';
 import { applyLivingLoreIntake } from './living-lore-writer.js';
-import { queryWorldSense } from './world-sense-embeddings.js';
 import { invalidateTimelineLoreCache, loadTimelineLore } from './world-sense-lore.js';
-
-const SEMANTIC_TOP_K = 500;
 
 /**
  * @param {object} options
@@ -66,16 +63,7 @@ export async function applyLoomLoreReports({
         if (!target) { refused.push({ index: -1, code: 'book-unavailable' }); break; }
         const metadata = listLivingLoreMetadata({ timelineId, book: target });
 
-        let semanticMatches = [];
-        try {
-            const query = await queryWorldSense(timelineId, information.content, { topK: SEMANTIC_TOP_K, threshold: 0 });
-            semanticMatches = query?.matches || [];
-        } catch {
-            // A missing vector costs one of three signals, not the placement.
-            // Mentions and time still decide, which is the same degradation
-            // retrieval accepts.
-            semanticMatches = [];
-        }
+        const semanticMatches = [];
 
         const placement = placeLivingLoreInformation({
             content: information.content,

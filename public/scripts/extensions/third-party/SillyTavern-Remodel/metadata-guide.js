@@ -20,13 +20,10 @@
 //
 // Pure: data only, no DOM, no store, no network. The Debug Console renders it.
 
-import { ARCHIVE_CAPABILITY_NAMES } from './archive-ingestion.js';
-import { TIMELINE_LIFECYCLE_CAPABILITIES } from './timeline-lifecycle-contract.js';
 import { getCapabilityDictionary, getMechanicsRequestSchema, REQUIRED_ARGUMENTS } from './mechanics-capabilities.js';
 import { MAX_INFORMATION_CHARS, MAX_INFORMATION_EVIDENCE, MAX_INFORMATION_KEYS } from './living-lore-intake.js';
 import { MAX_LORE_KEYWORDS } from './loom-reconciliation.js';
 import { buildProviderToolDefinitions, NARRATOR_MECHANIC_TOOLS } from './mechanics-gateway.js';
-import { PROMOTION_DECISIONS } from './world-sense-promotion.js';
 
 export function buildMetadataGuide() {
     return Object.freeze({
@@ -47,8 +44,8 @@ function fence() {
         example: [
             '```state',
             '{"requests":[',
-            '  {"id":"r1","capability":"event.record","arguments":{"summary":"Teo forced the lighthouse door"},"reason":"the accepted prose establishes it"}',
-            '],"loreProposals":[],"lorePromotionDecisions":[],"flow":{"continue":false}}',
+            '  {"id":"r1","capability":"goal.edit","arguments":{"goalRef":"Reach the lighthouse before dawn","successRate":23},"reason":"the accepted prose changed his odds"}',
+            '],"loreProposals":[],"flow":{"continue":false}}',
             '```',
         ].join('\n'),
     });
@@ -58,14 +55,12 @@ function fence() {
 
 function envelope() {
     return Object.freeze([
-        key('requests', 'array', 'Archive and mechanics operations, one advertised capability each.',
-            '"requests":[{"id":"r1","capability":"beat.set","arguments":{"directive":"the keeper has not answered"},"reason":"why, one line"}]'),
+        key('requests', 'array', 'Goal and Variable mechanics operations, one advertised capability each.',
+            '"requests":[{"id":"r1","capability":"goal.edit","arguments":{"goalRef":"Reach the lighthouse before dawn","successRate":23},"reason":"why, one line"}]'),
         key('loreProposals', 'array', 'Durable information reported for Living Lore.',
             '"loreProposals":[{"content":"...","name":"...","keys":["..."],"evidence":["..."]}]'),
         key('loreKeywords', 'array', 'Replaces the working lore for this scene. Omit it to keep what is there.',
             '"loreKeywords":["Queens Lake University","Marissa"]'),
-        key('lorePromotionDecisions', 'array', 'One verdict per promotion candidate shown.',
-            `"lorePromotionDecisions":[{"candidateId":"c1","decision":"${PROMOTION_DECISIONS[0]}","reason":"one sentence"}]`),
         key('flow', 'object', 'Whether the turn continues. Absent means neither.',
             '"flow":{"continue":false,"hardPause":false}'),
         key('swaps', 'array', 'Patch contract only, and only applied when the reply carries no prose.',
@@ -80,33 +75,20 @@ function key(name, type, purpose, example) {
 // --- Which surface accepts what --------------------------------------------
 
 /**
- * Two surfaces, not three. The live Roleplay Loom reconciles a draft and may
- * request anything. Everything else — the roleplay background Archive and the
- * whole of Story — runs through one background worker with one ingestion
- * boundary, so it is one surface with two entry points. Deriving Story from
- * the test adapter's wider set once printed capabilities here that production
- * silently drops; the set below is the one the worker actually accepts.
+ * One surface. The live Roleplay Loom reconciles a draft and may request the
+ * full dictionary of Goal and Variable operations. The background Archive is
+ * dissolved, so there is no second background-ingestion surface.
  */
 function surfaces() {
     const all = getCapabilityDictionary().map((capability) => capability.name);
-    const background = [...ARCHIVE_CAPABILITY_NAMES, ...TIMELINE_LIFECYCLE_CAPABILITIES];
     return Object.freeze([
         surface('roleplay-loom', 'Roleplay Loom', 'Loom recipe, live reconciliation', all,
-            'The full dictionary. The only surface that may roll.'),
-        surface('background-archive', 'Background Archive — Roleplay and Story', 'Loom · Story Archive, and the roleplay background pass', background,
-            `Refused as outside-archive-boundary: ${difference(all, background).join(', ') || 'nothing'}. `
-            + 'Lifecycle requests are further checked after settlement: goal.edit may close (achieved | abandoned | impossible) or annotate, never reopen and never change successRate; '
-            + 'variable.create only — no set, adjust, transition or modifier; a Goal held by the persona is held for review rather than applied.'),
+            'The full dictionary of Goal and Variable operations the Loom may request.'),
     ]);
 }
 
 function surface(id, label, recipe, accepts, note) {
     return Object.freeze({ id, label, recipe, accepts: Object.freeze(accepts), note });
-}
-
-function difference(all, allowed) {
-    const permitted = new Set(allowed);
-    return all.filter((name) => !permitted.has(name));
 }
 
 // --- Operations -------------------------------------------------------------
@@ -129,7 +111,6 @@ const OPTIONAL_ARGUMENTS = Object.freeze({
     'variable.adjust': Object.freeze(['field']),
     'variable.transition': Object.freeze(['field']),
     'modifier.add': Object.freeze(['endingCondition']),
-    'beat.set': Object.freeze(['tone']),
 });
 
 /** One runnable request per capability, as the model would emit it. */
@@ -162,14 +143,6 @@ const EXAMPLE_ARGUMENTS = Object.freeze({
     'variable.lore.detach': { variableRef: 'Teo\'s Resolve', loreBook: 'Queens Lake', loreUid: '42', loreRevision: 1 },
     'modifier.add': { variableRef: 'Teo\'s Resolve', label: 'Wounded', delta: -2, target: 'value', endingCondition: 'until the wound is dressed' },
     'modifier.remove': { variableRef: 'Teo\'s Resolve', modifierId: 'mod-7f2a' },
-    'scene.set': { key: 'location', value: 'the lighthouse stair, rain-soaked' },
-    'scene.clear': { key: 'location' },
-    'event.record': { summary: 'Teo forced the lighthouse door' },
-    'char_state.set': { charId: 'Teo Alvarez', facet: 'injury', value: 'left hand torn open' },
-    'char_state.clear': { charId: 'Teo Alvarez', facet: 'injury' },
-    'beat.set': { directive: 'The keeper has not answered, and the light is still turning.', tone: 'tense' },
-    'secret.set': { key: 'keeper', value: 'The keeper died three nights ago; the light runs on a timer.' },
-    'secret.clear': { key: 'keeper' },
 });
 
 const EXAMPLE_REASONS = Object.freeze({
@@ -261,7 +234,7 @@ function lore() {
             }),
             arguments: Object.freeze([
                 field('content', 'string', true, `What is now durably true, in prose. Over ${MAX_INFORMATION_CHARS} characters the whole report is rejected, not truncated.`),
-                field('evidence', 'string | array of strings', true, `1 to ${MAX_INFORMATION_EVIDENCE} independently checkable excerpts from the accepted prose, or archive:<record-id>. Never join two quotations into one string.`),
+                field('evidence', 'string | array of strings', true, `1 to ${MAX_INFORMATION_EVIDENCE} independently checkable excerpts from the accepted prose. Never join two quotations into one string.`),
                 field('name', 'string', false, 'Used only if this turns out to be its own subject; discarded if it is filed inside an entry that already exists.'),
                 field('keys', 'array of strings', false, `Up to ${MAX_INFORMATION_KEYS}. Same rule as name.`),
             ]),
@@ -273,14 +246,6 @@ function lore() {
                 field('loreKeywords', 'array of strings', false, `Up to ${MAX_LORE_KEYWORDS}. Must be the exact key an entry answers to — "Queens" will not find "Queens Lake University".`),
             ]),
             note: 'The result replaces the working lore and stays until replaced again. It is not a per-turn top-up.',
-        }),
-        promotion: Object.freeze({
-            example: JSON.stringify({ candidateId: 'c1', decision: PROMOTION_DECISIONS[0], reason: 'the accepted passage states it outright' }),
-            arguments: Object.freeze([
-                field('candidateId', 'string', true, 'Exactly as advertised. Every candidate needs its own entry.'),
-                field('decision', 'string', true, 'What you did with the candidate. Nothing else is accepted.', PROMOTION_DECISIONS),
-                field('reason', 'string', true, 'One sentence. Required even on a rejection.'),
-            ]),
         }),
     });
 }

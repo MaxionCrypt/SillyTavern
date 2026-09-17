@@ -3,7 +3,6 @@ import { getContext } from '../../../st-context.js';
 import { generateGroupWrapper, is_group_generating } from '../../../group-chats.js';
 import {
     executeMechanicsRequest,
-    getCapabilityDictionary,
     MECHANICS_PROTOCOL,
     toCoreJsonSchema,
     undoMechanicsTransaction,
@@ -21,15 +20,11 @@ import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from
 import { splitReasoning } from './reasoning-strip.js';
 import { streamChatPrompt } from './story-stream.js';
 import {
-    buildEmptyResponseNudge, buildNarratorArchivistSections, buildNarratorRecallSections, buildGoalObjectives,
-    renderLoomAction, renderLoomScene, renderLoomCharacters, renderLoomEvents,
-    renderLoomSecrets, renderLoomGoals, renderLoomVariables, renderPrevEvents,
+    buildEmptyResponseNudge, buildGoalObjectives,
+    renderLoomAction, renderLoomGoals, renderLoomVariables,
 } from './narrator-prompt.js';
 import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
 import { formatLivingLorePacket } from './living-lore-proposals.js';
-import { saveWorldSensePromotionDecisionReceipt, saveWorldSenseProposalRejections } from './world-sense-store.js';
-import {
-} from './living-lore-mutations.js';
 import { describeBudgetWarning, describeGenerationBudget, describeIncompleteProse } from './generation-budget.js';
 import { createLoomTurnEnvelope } from './loom-turn.js';
 import { updateScene } from './timeline-state.js';
@@ -40,42 +35,19 @@ import {
     describeDirectionProgress,
     settleDirectionProgress,
 } from './direction-progress.js';
-import { activateWorldSenseSelection } from './world-sense-activation.js';
-import { worldInfoScanCorpus } from './world-sense-scan-authority.js';
 import { applyLoomLoreReports } from './living-lore-intake-runtime.js';
 import { withdrawLivingLoreWrites } from './living-lore-withdrawal.js';
 import { listLivingLoreWrites } from './living-lore-store.js';
-import { listEvents } from './archivist-store.js';
-import { resolveWorldSenseFromContext, retrieveWorldSenseByKeywords, scheduleWorldSensePrefetch } from './world-sense-runtime.js';
 import { applyNarratorRetryPolicy } from './narrator-retry-policy.js';
 import { applyNarratorReasoningPolicy } from './narrator-reasoning-policy.js';
 import { describeNarratorOutput } from './narrator-output-contract.js';
 import { limitBoundedChatHistory, removeLatestPlayerAction, removeLegacyNarratorConstraints, removeNativeNewChatBootstrap, restoreTaggedNextAction, tagNextAction } from './prompt-history-limit.js';
-import { buildSceneArchiveProjection } from './archive-projection.js';
 import { snapshotGenerationRoutes } from './generation-route.js';
 import { createNarratorDelivery } from './narrator-delivery.js';
 import { captureNativeNarratorPrompt, createNativeNarratorTransport, prepareNativeNarratorPrompt } from './native-narrator-runtime.js';
 import { createTurnMechanicsForScene } from './pipeline-runtime.js';
 import { buildProviderToolDefinitions } from './mechanics-gateway.js';
 import { selectImplementation } from './pipeline-diagnostics.js';
-import {
-    archiveEvidenceFromOperations,
-    createArchiveIngestion,
-    isArchiveCapability,
-} from './archive-ingestion.js';
-import {
-    legacyArchiveIngestionAdapter,
-    roleplayArchiveIngestionInput,
-} from './legacy-archive-ingestion-adapter.js';
-import {
-    describeBackgroundArchive,
-    enqueueBackgroundArchive,
-    prepareBackgroundArchiveJob,
-    recoverBackgroundArchive,
-    retryBackgroundArchive,
-    subscribeBackgroundArchive,
-    takeBackgroundArchiveReply,
-} from './background-archive-runtime.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
 const AUTONOMOUS_CONTINUE_ACTION = '[Continue the scene from accepted history.]';
@@ -85,9 +57,6 @@ const PACING = Object.freeze({
     fast: { cps: 120, wordMs: 5, min: 50, max: 220, opening: 100 },
     instant: { cps: Infinity, wordMs: 0, min: 0, max: 0, opening: 0 },
 });
-const archiveCatchups = new Map();
-const legacyArchiveIngestion = createArchiveIngestion(legacyArchiveIngestionAdapter);
-
 const hooks = {
     getActiveScene: () => null,
     getCast: () => [],
@@ -128,13 +97,8 @@ const hooks = {
  */
 export function routeUniversalStateMacros(setContent, scene) {
     const tl = scene?.timelineId;
-    const sc = scene?.id;
-    setContent('loomScene', () => renderLoomScene(tl, sc));
-    setContent('loomCharacters', () => renderLoomCharacters(tl, sc));
-    setContent('loomEvents', (args = {}) => renderLoomEvents(tl, sc, { events: args.events }));
     setContent('loomGoals', (args = {}) => renderLoomGoals(tl, { limit: args.limit, secret: args.secret }));
     setContent('loomVariables', (args = {}) => renderLoomVariables(tl, { limit: args.limit }));
-    setContent('loomSecrets', () => renderLoomSecrets(tl, sc));
 }
 
 let initialized = false;
@@ -190,26 +154,6 @@ function journal(type, detail = {}, { severity = 'info', correlationId = null, s
         });
     } catch {
         // Diagnostics must never be able to break a generation.
-    }
-}
-
-function journalWorldSenseActivation(activation, correlationId = null) {
-    try {
-        recordDebugEvent('world-sense', `activation.${activation.phase || 'unknown'}`, {
-            requested: activation.requested,
-            activated: activation.activated,
-            missing: activation.missing,
-            failedOpen: !activation.ok,
-            error: activation.error,
-        }, {
-            severity: activation.ok ? 'info' : 'warn',
-            correlationId: correlationId || directionInFlight?.id || activeRun?.directionId || null,
-            summary: activation.ok
-                ? `World Sense activated ${activation.activated} native lore entr${activation.activated === 1 ? 'y' : 'ies'} for ${activation.phase}`
-                : `World Sense ${activation.phase} activation fell back to native keywords`,
-        });
-    } catch {
-        // Native activation must not depend on Debug being available.
     }
 }
 
@@ -317,18 +261,6 @@ export function initLiveDirection(options = {}) {
     Object.assign(hooks, Object.fromEntries(Object.entries(options).filter(([, value]) => typeof value === 'function')));
     if (initialized) return;
     initialized = true;
-    subscribeBackgroundArchive((_state, settledJob) => {
-        notifyState();
-        if (settledJob) {
-            void settleBackgroundArchiveLore(settledJob).catch((error) => {
-                journal('lore.archive.settlement.failed', {
-                    jobId: settledJob.jobId,
-                    error: String(error?.message || error),
-                }, { severity: 'warn', summary: 'Archive saved, but its Living Lore reply could not be filed' });
-            });
-        }
-    });
-    recoverBackgroundArchive();
     const context = getContext();
     context.eventSource.on(context.eventTypes.STREAM_TOKEN_RECEIVED, (text) => {
         if (!ownsLiveDirectionGeneration() || !activeRun) return;
@@ -535,14 +467,7 @@ export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
         // ran on prose alone, which is less accurate. The toolbar surfaces this
         // as a prompt to enable thinking or switch to a reasoning-capable model.
         reasoningWarning: reasoningAbsentByScene.get(String(scene.id)) === true,
-        archive: describeBackgroundArchive(scene.timelineId),
     };
-}
-
-export function retryLiveDirectionArchive(scene = hooks.getActiveScene()) {
-    const archive = describeBackgroundArchive(scene?.timelineId);
-    if (archive.repairAction !== 'retry' || !archive.jobId) return null;
-    return retryBackgroundArchive(archive.jobId);
 }
 
 export function clearLiveDirectionFailure() {
@@ -711,36 +636,6 @@ export function handleLiveDirectionDraft(value) {
         notifyState();
         scheduleReveal(0);
     }
-}
-
-/** Warm read-only lore ranking while the user composes. Send reuses the result
- * only when the complete bounded query hashes identically. */
-export function prefetchLiveDirectionLore(scene, action) {
-    if (!isDirectedLiveScene(scene)) return;
-    scheduleWorldSensePrefetch(scene, buildLiveDirectionLoreOptions(action));
-}
-
-/** The lore Prompt Preview would send, which is the Scene's working set — the
- * same one Send reads. Preview cannot retrieve: retrieving is what the Loom
- * asks for, and showing a preview that quietly replaced the working set would
- * change the next turn just by looking at it. */
-export async function previewLiveDirectionLore(scene, action) {
-    if (!isDirectedLiveScene(scene)) return null;
-    return resolveWorldSenseFromContext(scene, buildLiveDirectionLoreOptions(action));
-}
-
-function buildLiveDirectionLoreOptions(action) {
-    const history = (getContext().chat || []).slice(-12).map((message) => ({
-        role: message.is_user ? 'user' : 'assistant',
-        name: message.name || '',
-        content: sanitizeDirectionText(message.extra?.remodelDirection?.acceptedText ?? message.mes ?? ''),
-    })).filter((message) => message.content.trim());
-    return {
-        action,
-        history,
-        cast: (hooks.getCast() || []).filter((member) => !member.disabled),
-        persona: hooks.getPersona() || null,
-    };
 }
 
 export function continueLiveDirection() {
@@ -1225,12 +1120,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // without paying for a second retrieval after the turn. A distinct field:
         // envelope.mechanics is the Loom's pending-requests payload.
         normalized.mechanicsSnapshot = snapshot.mechanics;
-        // The dry-run consumed the first native force-activation. Keep only
-        // the identity receipt so generation can apply the same selection
-        // again immediately before core performs its real World Info scan.
-        normalized.worldSense = snapshot.worldSense;
         normalized.livingLore = snapshot.livingLore;
-        normalized.archiveProjection = snapshot.archiveProjection;
         if (token.aborted) return abandonPass(token, 'normalized');
         // Set BEFORE the call, not after: from here the performer has been
         // asked, so the turn is live even if generation then fails. The
@@ -1370,25 +1260,9 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     const cutOff = effectiveChat[effectiveChat.length - 1];
     const cutOffRecord = recentChat[recentChat.length - 1] === cutOff ? readInterruptionRecord(cutOff) : null;
     const performingCast = cast.filter((member) => !member.disabled);
-    // Retrieval no longer runs per turn: the Scene works from what the last
-    // one left behind, and only the Loom asking replaces it. Preview reads the
-    // same set, so what it shows is what Send will use.
-    const worldSensePromise = resolveWorldSenseFromContext(scene, {
-        action,
-        history,
-        cast: performingCast,
-        persona,
-    }).catch((error) => {
-        journal('world-sense.failed-open', { error: String(error?.message || error) }, { severity: 'warn' });
-        return null;
-    });
-    const worldSense = await worldSensePromise;
-    const activation = await activateWorldSenseSelection(context, worldSense, { phase: preview ? 'preview' : 'dry-run' });
-    journalWorldSenseActivation(activation, directionInFlight?.id || worldSense?.receipt?.id || null);
-    journalWorldSenseDelivery(worldSense, directionInFlight?.id || worldSense?.receipt?.id || null);
     let lore = {};
     try {
-        const scan = worldInfoScanCorpus([action, ...history.slice(-12).reverse().map((message) => message.content)]);
+        const scan = [action, ...history.slice(-12).reverse().map((message) => message.content)];
         lore = await context.getWorldInfoPrompt(scan, context.maxContext, true);
     } catch (error) {
         lore = { warning: String(error?.message || error) };
@@ -1411,20 +1285,6 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
             activatedEntries,
             correlationId: directionInFlight?.id || null,
         });
-    const archiveQuery = [
-        action,
-        ...history.map((message) => `${message.name || message.role}: ${message.content}`),
-        ...performingCast.flatMap((member) => [member.label || member.name || '', member.description || '', member.scenario || '']),
-        ...(mechanics?.goals || []).flatMap((goal) => [goal.title || goal.name || '', goal.description || '']),
-    ];
-    const archiveProjection = buildSceneArchiveProjection(scene.timelineId, scene.id, {
-        query: archiveQuery,
-        continuity: worldSense?.continuity || [],
-    });
-    journal('archive.projection', archiveProjection.receipt, {
-        correlationId: directionInFlight?.id || null,
-        summary: `Archive projected ${archiveProjection.receipt.projectedCount}/${archiveProjection.receipt.storedCount} local entries with ${archiveProjection.receipt.recalledCount || 0} recalled`,
-    });
     return {
         scene: { id: scene.id, timelineId: scene.timelineId, title: scene.title },
         currentAction: action,
@@ -1434,8 +1294,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         narratorRef: scene.liveDirection?.narratorRef || null,
         persona,
         acceptedHistory: history,
-        worldSense: worldSense?.receipt || (preview ? worldSense : null),
-        livingLore: testAdapters?.livingLorePacket || worldSense?.loomPacket || null,
+        livingLore: testAdapters?.livingLorePacket || null,
         // What the user cut into, in the performer's own words — the half that
         // reached them (already in acceptedHistory, ending exactly where the
         // reveal froze) and the half that did not. Null on an ordinary turn.
@@ -1448,7 +1307,6 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         interruption: cutOffRecord ? { performer: String(cutOff.name || '').trim(), ...cutOffRecord } : null,
         lore: { before: lore.worldInfoBefore || '', after: lore.worldInfoAfter || '', examples: lore.worldInfoExamples || [], depth: lore.worldInfoDepth || [] },
         mechanics,
-        archiveProjection,
         // Receipts carry before/after snapshots of whole records, which is how
         // persistent Variable and Goal ids used to reach the model even though
         // everything else addresses them by ref. The model needs what changed,
@@ -1604,7 +1462,6 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         openingLabel: '',
         checkpointTransactionIds: [],
         loreProposalIds: [],
-        committedArchiveFacts: [],
         generationFinished: false,
         generationSettled: false,
         interrupted: false,
@@ -1634,23 +1491,17 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         return generateCanonicalNarrator({ scene, run: activeRun, performer });
     }
     // The Narrator generates natively — its full configured prompt (system
-    // prompt, card, persona, world info, author's notes, examples, history) —
-    // with eligible earlier-Scene continuity resolved into the recipe-owned
-    // Narrator Recall macro. Current-Scene state stays in native Chat History.
-    const recallState = buildNarratorRecallSections(scene.timelineId, scene.id, { archiveProjection: envelope.archiveProjection });
+    // prompt, card, persona, world info, author's notes, examples, history).
     // A retry must not re-send the request that just failed. The empty-response
     // path was re-issuing a byte-identical body — verified on the wire — so the
-    // nudge rides the recall channel, which is the request-scoped injection point
-    // proven to reach the request (notes.bridge reports its length every turn).
+    // nudge rides a request-scoped injection point that reaches the request.
     const retryNudge = buildEmptyResponseNudge(Number(emptyRetries) + 1, {
         // Passed in, not read back: activeRun.messageId is only assigned when
         // MESSAGE_RECEIVED lands, so at this point it names nothing.
         reasoningLength: Number(previousReasoningLength) || 0,
         failureCause: String(previousFailureCause || ''),
     });
-    // Goals travel once through the recipe-owned story.goals macro. Duplicating
-    // them here made one objective look like two independent constraints.
-    const groundedState = [recallState, retryNudge].filter(Boolean).join('\n\n');
+    const groundedState = retryNudge;
     // The user message was inserted explicitly above. Native normal
     // generation also reads #send_textarea and would send any stale draft a
     // second time, producing a duplicate user line and a second response.
@@ -1686,17 +1537,9 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             }, { correlationId: envelope.directionId, summary: 'Narrator connection ready' });
         }
         // Profile activation can replace core's prompt objects. Restore the
-        // recipe first, then resolve request-scoped recall into its recipe-owned
-        // slot so profile activation cannot erase it.
-        const recallRouted = hooks.setNativePromptContent('narratorRecall', (args = {}) => [
-            buildNarratorRecallSections(scene.timelineId, scene.id, {
-                scenes: args.scenes,
-                archiveProjection: envelope.archiveProjection,
-            }),
-            retryNudge,
-        ].filter(Boolean).join('\n\n'));
-        // prev.events is the recall replacement — same projection, no nudge.
-        hooks.setNativePromptContent('prevEvents', (args = {}) => renderPrevEvents(scene.timelineId, scene.id, { scenes: args.scenes }));
+        // recipe first, then resolve the request-scoped retry nudge into its
+        // recipe-owned slot so profile activation cannot erase it.
+        const recallRouted = hooks.setNativePromptContent('narratorRecall', () => retryNudge);
         const narratorNoteRouted = hooks.setNativePromptContent('narratorNote', hooks.getNarratorNote());
         const nextAction = envelope.currentPlayerAction === AUTONOMOUS_CONTINUE_ACTION
             ? ''
@@ -1711,12 +1554,9 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
             routed: recallRouted ? 'recipe-macro' : 'recipe-macro-disabled',
             groundingChars: groundedState.length,
             retryNudged: Boolean(retryNudge),
-            hasRecall: Boolean(String(recallState || '').trim()),
             narratorNoteRouted,
             nextActionRouted: activeRun.nextActionRouted,
         }, { correlationId: envelope.directionId });
-        const loreActivation = await activateWorldSenseSelection(context, envelope.worldSense, { phase: 'generation' });
-        journalWorldSenseActivation(loreActivation, envelope.directionId);
         // force_chid is read by generateGroupWrapper as `typeof … == 'number'`,
         // and NaN passes that test — a member with no resolvable index would
         // activate character NaN rather than falling back. Refuse instead.
@@ -1810,9 +1650,6 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
  */
 async function generateCanonicalNarrator({ scene, run, performer }) {
     const context = getContext();
-    const recallState = buildNarratorRecallSections(scene.timelineId, scene.id, {
-        archiveProjection: run.envelope.archiveProjection,
-    });
     try {
         const repaired = repairDirectedNarratorRoles(context.chat);
         if (repaired) await context.saveChat();
@@ -1822,15 +1659,6 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
         // The activated profile can replace the native prompt objects. The
         // hook restores the active Scene recipe, so only now is it safe to
         // write this turn's earlier-Scene recall into its intended prompt slot.
-        const recallRouted = hooks.setNativePromptContent('narratorRecall', (args = {}) => buildNarratorRecallSections(
-            scene.timelineId,
-            scene.id,
-            {
-                scenes: args.scenes,
-                archiveProjection: run.envelope.archiveProjection,
-            },
-        ));
-        hooks.setNativePromptContent('prevEvents', (args = {}) => renderPrevEvents(scene.timelineId, scene.id, { scenes: args.scenes }));
         const narratorNoteRouted = hooks.setNativePromptContent('narratorNote', hooks.getNarratorNote());
         const nextAction = run.envelope.currentPlayerAction === AUTONOMOUS_CONTINUE_ACTION
             ? ''
@@ -1841,13 +1669,9 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
         routeUniversalStateMacros(hooks.setNativePromptContent, scene);
         journal('canonical.notes.bridge', {
             directionId: run.directionId,
-            routed: recallRouted ? 'recipe-macro' : 'recipe-macro-disabled',
-            groundingChars: recallState.length,
             narratorNoteRouted,
             nextActionRouted: run.nextActionRouted,
         }, { correlationId: run.directionId });
-        const activation = await activateWorldSenseSelection(context, run.envelope.worldSense, { phase: 'generation' });
-        journalWorldSenseActivation(activation, run.directionId);
         if (run.canonicalCancelled || activeRun !== run) return false;
         // Which verbs this turn offers is the recipe's call. Captured from the
         // block's own argument while the prompt assembles; a removed block
@@ -1986,7 +1810,6 @@ function createCanonicalMessageStore({ context, run, performer, scene }) {
             context.addOneMessage(message, { type: 'swipe', forceId: messageId, scroll: false });
             advancePassStage(run, 'save');
             await context.saveChat();
-            queueCanonicalArchive({ scene, run, message, messageId, result });
             settlePassProgress(run, result.status === 'complete' ? 'complete' : result.status);
             pendingFailure = null;
             hooks.onRecovered();
@@ -2007,71 +1830,6 @@ function createCanonicalMessageStore({ context, run, performer, scene }) {
     };
 }
 
-function queueCanonicalArchive({ scene, run, message, messageId, result }) {
-    try {
-        const interrupted = ['interrupted', 'stopped', 'truncated'].includes(result.status);
-        const prepared = prepareBackgroundArchiveJob({
-            scene,
-            mode: 'roleplay',
-            acceptedProse: result.acceptedText,
-            currentPlayerAction: String(run.envelope?.currentPlayerAction || ''),
-            // Roleplay Loom currently owns Archive upkeep and World Sense
-            // keyword refresh only. Living Lore writing is deliberately
-            // retired until its separate workflow is redesigned.
-            provenance: {
-                kind: interrupted ? 'interrupted-prefix' : 'current-turn',
-                sourceId: run.directionId,
-                messageId,
-                checkpointId: 'accepted',
-                interrupted,
-            },
-        });
-        const job = enqueueBackgroundArchive(prepared);
-        message.extra ??= {};
-        message.extra.remodelArchiveJobId = job.jobId;
-        // The terminal message was saved immediately before the job existed.
-        // Persist this correlation too, so a reload cannot make a successful
-        // Archive reply impossible to file as Living Lore.
-        const context = getContext();
-        if (typeof context.saveChat === 'function') void Promise.resolve(context.saveChat()).catch(() => {});
-    } catch (error) {
-        journal('archive.background.enqueue.failed', {
-            directionId: run.directionId,
-            timelineId: run.timelineId,
-            sceneId: run.sceneId,
-            error: String(error?.message || error),
-        }, { correlationId: run.directionId, severity: 'warn', summary: 'Accepted prose was saved, but could not be queued for the Loom Archive' });
-    }
-}
-
-// World Sense has two separate delivery paths. Selected Timeline/Living Lore
-// is put straight into Remodel's Narrator snapshot, while selected native
-// World Info is activated through SillyTavern. Recording both prevents the
-// latter's `0` from being read as no continuity at all.
-function journalWorldSenseDelivery(worldSense, correlationId = null) {
-    try {
-        const selected = Array.isArray(worldSense?.selected) ? worldSense.selected : [];
-        const continuity = Array.isArray(worldSense?.continuity) ? worldSense.continuity : [];
-        recordDebugEvent('world-sense', 'context.delivered', {
-            phase: worldSense?.phase || 'context',
-            selected: selected.length,
-            entries: selected.map((entry) => ({ book: entry.book, uid: entry.uid, name: entry.name || '' })),
-            continuity: continuity.length,
-            fromContext: Boolean(worldSense?.fromContext),
-            degraded: Boolean(worldSense?.degraded),
-            receiptId: worldSense?.receipt?.id || null,
-        }, {
-            severity: worldSense?.degraded ? 'warn' : 'info',
-            correlationId: correlationId || directionInFlight?.id || activeRun?.directionId || null,
-            summary: selected.length
-                ? `World Sense delivered ${selected.length} direct continuity entr${selected.length === 1 ? 'y' : 'ies'} to the Narrator`
-                : 'World Sense had no direct continuity entries for this turn',
-        });
-    } catch {
-        // Direct prompt delivery must not depend on diagnostics.
-    }
-}
-
 /**
  * The Archive worker owns the roleplay Loom request. Once its Archive commit
  * succeeds, consume its separate Living Lore reply exactly once and attach it
@@ -2079,93 +1837,6 @@ function journalWorldSenseDelivery(worldSense, correlationId = null) {
  * unsupported or interrupted prose must never gain a lore write merely because
  * a model suggested one.
  */
-async function settleBackgroundArchiveLore(job) {
-    if (String(job?.status || '') !== 'succeeded') return;
-    const reply = takeBackgroundArchiveReply(job.jobId);
-    if (!reply) return;
-
-    const context = getContext();
-    const messageId = (context.chat || []).findIndex((message) =>
-        !message?.is_user && String(message?.extra?.remodelArchiveJobId || '') === String(job.jobId));
-    const message = messageId >= 0 ? context.chat[messageId] : null;
-    const saved = message?.extra?.remodelDirection;
-    if (!message || !saved || String(saved.sceneId || '') !== String(job.sceneId || '') || String(saved.timelineId || '') !== String(job.timelineId || '')) {
-        journal('lore.archive.orphaned', {
-            jobId: job.jobId,
-            timelineId: job.timelineId,
-            sceneId: job.sceneId,
-            hasMessage: Boolean(message),
-        }, { severity: 'warn', summary: 'Archive reply could not be matched to its accepted Roleplay message' });
-        return;
-    }
-
-    // Roleplay Loom cannot write Living Lore. Even a model that ignores the
-    // current fence and emits old proposal fields is contained here.
-    const proposals = [];
-    const rejections = [];
-    const loreKeywords = Array.isArray(reply.loreKeywords) ? reply.loreKeywords : [];
-    const directionId = String(saved.directionId || job.provenance?.sourceId || '');
-    journal('lore.archive.received', {
-        jobId: job.jobId,
-        directionId,
-        messageId,
-        packetBook: '',
-        proposals: proposals.length,
-        rejected: rejections.length,
-        loreKeywords,
-    }, {
-        correlationId: directionId || job.jobId,
-        severity: 'info',
-        summary: loreKeywords.length
-            ? `Background Loom requested World Sense refresh for ${loreKeywords.join(', ')}`
-            : 'Background Loom completed without a World Sense refresh',
-    });
-    const run = {
-        directionId,
-        sceneId: saved.sceneId,
-        timelineId: saved.timelineId,
-        messageId,
-        deliveryMode: 'canonical',
-        acceptedVisibleText: sanitizeDirectionText(saved.acceptedText ?? message.mes ?? ''),
-        rawBufferedText: sanitizeDirectionText(saved.acceptedText ?? message.mes ?? ''),
-        rawOffset: String(saved.acceptedText ?? message.mes ?? '').length,
-        envelope: {
-            ...(saved.envelope || {}),
-            loreProposals: mergeLoreProposals(saved.envelope?.loreProposals, proposals),
-            loreProposalRejections: [...(saved.envelope?.loreProposalRejections || []), ...rejections],
-            loreKeywords,
-        },
-        loreProposalIds: [...(saved.loreProposalIds || [])],
-        checkpointTransactionIds: [...(saved.checkpointTransactionIds || [])],
-        committedArchiveFacts: job.result?.archiveFacts || [],
-        checkpointDiagnostics: [],
-    };
-    // This happens after the Archive has committed. It only replaces the stored working
-    // set; an already-started Narrator request keeps its original context.
-    if (loreKeywords.length) {
-        try {
-            const retrieved = await retrieveWorldSenseByKeywords({ id: saved.sceneId, timelineId: saved.timelineId }, loreKeywords);
-            const count = retrieved?.selected?.length || 0;
-            journal('world-sense.keyword-request', {
-                source: 'background-archive',
-                jobId: job.jobId,
-                keywords: loreKeywords,
-                selected: (retrieved?.selected || []).map((item) => item.name).filter(Boolean),
-                degraded: Boolean(retrieved?.degraded),
-            }, {
-                correlationId: directionId || job.jobId,
-                severity: retrieved?.degraded ? 'warn' : 'info',
-                summary: `Background Loom replaced the working lore with ${count} entr${count === 1 ? 'y' : 'ies'} for ${loreKeywords.join(', ')}`,
-            });
-        } catch (error) {
-            journal('world-sense.keyword-request.failed', {
-                source: 'background-archive', jobId: job.jobId, keywords: loreKeywords, error: String(error?.message || error),
-            }, { correlationId: directionId || job.jobId, severity: 'warn' });
-        }
-    }
-    await amendSavedLoreLifecycle(run);
-}
-
 function reflectCanonicalDeliveryEvent(run, event) {
     if (activeRun !== run) return;
     const state = event?.snapshot?.state;
@@ -2396,7 +2067,6 @@ async function beginLoomVisibleStream(run, scene) {
         ...await __buildLoomSnapshot({ id: run.sceneId, timelineId: run.timelineId }),
         currentPlayerAction: run.envelope?.currentPlayerAction || '',
         livingLore: run.envelope?.livingLore || null,
-        archiveProjection: run.envelope?.archiveProjection || null,
     };
     const token = { controller: run.loomController };
     const result = await runLoomReconciliation({
@@ -2422,8 +2092,6 @@ async function beginLoomVisibleStream(run, scene) {
     run.envelope.mechanics.pendingRequests = [...(result?.requests || [])];
     run.envelope.loreProposals = structuredClone(result?.loreProposals || []);
     run.envelope.loreProposalRejections = structuredClone(result?.loreProposalRejections || []);
-    run.envelope.lorePromotionDecisions = structuredClone(result?.lorePromotionDecisions || []);
-    run.envelope.lorePromotionDecisionRejections = structuredClone(result?.lorePromotionDecisionRejections || []);
     if (result?.flow) run.envelope.flow = result.flow;
     run.generationFinished = true;
     run.generationSettled = true;
@@ -2602,30 +2270,16 @@ export async function __buildLoomSnapshot(scene) {
 }
 
 function compileLoomRequest({ scene, snapshot, draft, draftReasoning = '' }) {
-    const resolveArchive = (args = {}) => [
-        buildNarratorArchivistSections(scene.timelineId, scene.id, {
-            events: args.events,
-            archiveProjection: snapshot?.archiveProjection,
-            archiveQuery: snapshot?.archiveProjection?.queryTerms || [snapshot?.currentAction || '', ...(snapshot?.acceptedHistory || []).map((item) => item.content || '')],
-        }),
-        buildGoalObjectives(scene.id, { limit: args.goals }),
-    ].filter((part) => String(part || '').trim()).join('\n\n');
-    const narrativeState = resolveArchive();
+    const narrativeState = buildGoalObjectives(scene.id);
     const mechanicsSkill = buildLoomSkill(snapshot?.mechanics);
     const livingLore = formatLivingLorePacket(snapshot?.livingLore);
     const playerAction = String(snapshot?.currentPlayerAction || '');
     const sources = buildLoomRecipeSources({ draft, draftReasoning, playerAction, narrativeState, mechanicsSkill, livingLore });
-    sources.archiveState = (args = {}) => buildLoomRecipeSources({ narrativeState: resolveArchive(args) }).archiveState;
-    // Split state macros (loom.scene/characters/events/goals/variables/secrets,
-    // prev.events). Each renders one slice from the live scene + snapshot.
+    // Surviving state macros: Goals, Variables, and the player action. The
+    // Archive-backed macros were dissolved with the Loom Archive.
     sources.loomAction = renderLoomAction(playerAction);
-    sources.loomScene = renderLoomScene(scene.timelineId, scene.id);
-    sources.loomCharacters = renderLoomCharacters(scene.timelineId, scene.id);
-    sources.loomEvents = (args = {}) => renderLoomEvents(scene.timelineId, scene.id, { events: args.events });
     sources.loomGoals = (args = {}) => renderLoomGoals(scene.timelineId, { limit: args.limit, secret: args.secret });
     sources.loomVariables = (args = {}) => renderLoomVariables(scene.timelineId, { limit: args.limit });
-    sources.loomSecrets = renderLoomSecrets(scene.timelineId, scene.id);
-    sources.prevEvents = (args = {}) => renderPrevEvents(scene.timelineId, scene.id, { scenes: args.scenes });
     const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
     const compiled = compilePromptRecipe(recipe, sources, { trace: true });
     const usedFallback = !compiled.messages.length;
@@ -2720,44 +2374,13 @@ export async function runLoomReconciliation({
     // did not advance — name the real cause here instead.
     await checkGenerationBudget({ text: raw, reasoning: '', label: 'The Loom pass', directionId: null });
     journalLoomReply(raw, 'loom-pass', scene?.id || null);
-    const { prose, swaps, requests, flow, loreProposals, loreProposalRejections, loreKeywords = [], lorePromotionDecisions = [], lorePromotionDecisionRejections = [] } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
-    // A retrieval request replaces the working set for the turns that follow.
-    // It cannot affect this one: the Narrator was given its lore before the
-    // Loom answered.
-    if (loreKeywords.length && scene?.id) {
-        try {
-            const retrieved = await retrieveWorldSenseByKeywords(scene, loreKeywords);
-            const count = retrieved?.selected?.length || 0;
-            journal('world-sense.keyword-request', {
-                keywords: loreKeywords,
-                selected: (retrieved?.selected || []).map((item) => item.name).filter(Boolean),
-                degraded: Boolean(retrieved?.degraded),
-            }, { severity: 'info', summary: `Loom replaced the working lore with ${count} entr${count === 1 ? 'y' : 'ies'} for ${loreKeywords.join(', ')}` });
-        } catch (error) {
-            journal('world-sense.keyword-request.failed', { keywords: loreKeywords, error: String(error?.message || error) }, { severity: 'warn' });
-        }
-    }
-    if (snapshot?.livingLore?.promotion?.candidates?.length) {
-        saveWorldSensePromotionDecisionReceipt(snapshot?.worldSense?.id, {
-            decisions: lorePromotionDecisions,
-            rejections: lorePromotionDecisionRejections,
-        });
-        try {
-            recordDebugEvent('world-sense', 'promotion.decisions', {
-                timelineId: scene?.timelineId || '', sceneId: scene?.id || '',
-                candidates: snapshot.livingLore.promotion.candidates,
-                decisions: lorePromotionDecisions,
-                rejections: lorePromotionDecisionRejections,
-            }, {
-                severity: lorePromotionDecisionRejections.length ? 'warn' : 'info',
-                correlationId: directionInFlight?.id || activeRun?.directionId || null,
-                summary: `Loom judged ${lorePromotionDecisions.length}/${snapshot.livingLore.promotion.candidates.length} World Sense promotion candidate(s)`,
-            });
-        } catch { /* diagnostics cannot break reconciliation */ }
-    }
+    const { prose, swaps, requests, flow, loreProposals, loreProposalRejections, loreKeywords = [] } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
+    // Full-prose replies are the v12 contract. Preserve-and-patch remains a
+    // compatibility fallback for owner-authored recipes using the old fence.
+    const committedProse = prose || applySwaps(draft, swaps).prose;
     if (loreProposals.length || loreProposalRejections.length) {
         try {
-            recordDebugEvent('world-sense', 'lore.proposals.parsed', {
+            recordDebugEvent('living-lore', 'lore.proposals.parsed', {
                 proposals: loreProposals,
                 rejections: loreProposalRejections,
                 book: snapshot?.livingLore?.book || '',
@@ -2771,10 +2394,7 @@ export async function runLoomReconciliation({
             // A Debug viewer cannot be allowed to break reconciliation.
         }
     }
-    // Full-prose replies are the v12 contract. Preserve-and-patch remains a
-    // compatibility fallback for owner-authored recipes using the old fence.
-    const committedProse = prose || applySwaps(draft, swaps).prose;
-    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections, lorePromotionDecisions, lorePromotionDecisionRejections };
+    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections };
     try {
         const result = executeDirectionRequests(requests, {
             scene: { id: scene.id, timelineId: scene.timelineId },
@@ -2784,10 +2404,10 @@ export async function runLoomReconciliation({
             authorizedGoalIds: [],
         });
         journal('loom', { requestCount: requests.length, ok: result.ok, patched: committedProse !== draft }, { summary: 'Loom reconciled and recorded the turn' });
-        return { committedProse, requests, result, flow, loreProposals, loreProposalRejections, lorePromotionDecisions, lorePromotionDecisionRejections };
+        return { committedProse, requests, result, flow, loreProposals, loreProposalRejections };
     } catch (error) {
         journal('loom.failed', { phase: 'apply', error: String(error?.message || error) }, { severity: 'warn' });
-        return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections, lorePromotionDecisions, lorePromotionDecisionRejections };
+        return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections };
     }
 }
 
@@ -2825,11 +2445,7 @@ async function completeVisibleRun(run) {
     // over it and commit its reconciled version instead — the draft is never
     // stored (the reveal-hold that keeps the draft off screen is Task 7).
     await finalizeRunMessage(run, { state: 'complete' });
-    if (!run.archiveRequestsApplied) queueArchiveCatchup(run, 'no-archive-requests');
     run.acceptedComplete = true;
-    // The main Loom fence normally records state. If it omitted every Archive
-    // operation, the queued same-recipe catch-up above repairs that omission
-    // without holding the visible turn open.
     run.autonomousSequence += 1;
     // A response landed, so any failure notice still on screen is describing a
     // turn that has since recovered. The empty-response retries are the case
@@ -3120,9 +2736,6 @@ async function interruptLiveDirection({ preserveForIntervention }) {
     // set by confidence would still let hidden evidence become canon.
     run.envelope.loreProposals = [];
     run.envelope.loreProposalRejections = [];
-    run.envelope.lorePromotionDecisions = [];
-    run.envelope.lorePromotionDecisionRejections = [];
-    run.archiveRequestsApplied = false;
 
     // Loom mode: Stop CUTS OFF, it does not delete. The reveal lags the buffer
     // for pacing, so at the moment of a Stop most of what the model generated
@@ -3132,7 +2745,6 @@ async function interruptLiveDirection({ preserveForIntervention }) {
     // so finalizeRunMessage still deletes the truly-empty case. Loom mode
     // keeps its original discard-the-unrevealed-tail behaviour (and its tests).
     await finalizeRunMessage(run, { state: preserveForIntervention ? 'interrupted' : 'stopped' });
-    queueArchiveCatchup(run, preserveForIntervention ? 'user-interruption' : 'stopped');
     activeRun = null;
     notifyState();
     hooks.onSettled();
@@ -3230,15 +2842,6 @@ async function persistFinalizedRunMessage(run, state) {
     if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)) message.swipes[message.swipe_id] = accepted;
     writeDirectionMetadata(message, serializeRun(run, state));
     await context.saveChat();
-    // The user normally reads a completed turn before pressing Continue. Spend
-    // that idle time warming the exact autonomous query instead of making the
-    // Continue click pay the local semantic-model cost serially.
-    if (state === 'complete') {
-        const scene = hooks.getActiveScene();
-        if (scene?.id === run.sceneId && isDirectedLiveScene(scene)) {
-            scheduleWorldSensePrefetch(scene, buildLiveDirectionLoreOptions(AUTONOMOUS_CONTINUE_ACTION));
-        }
-    }
 }
 
 
@@ -3253,7 +2856,6 @@ function applyPendingRequests(run) {
     run.pendingRequestsApplied = true;
     const pending = run.envelope.mechanics.pendingRequests;
     if (!pending?.length) return;
-    const archiveRequestCount = pending.filter((request) => isArchiveCapability(request?.capability)).length;
     const scene = hooks.getActiveScene();
     if (!scene || scene.id !== run.sceneId) {
         journal('mechanics.accepted.skipped', {
@@ -3276,10 +2878,6 @@ function applyPendingRequests(run) {
         transactionId: result.transaction?.id || null,
     }, { correlationId: run.directionId, severity: result.ok ? 'info' : 'error' });
     if (result.transaction?.id) run.checkpointTransactionIds.push(result.transaction.id);
-    if (result.ok && archiveRequestCount) {
-        run.archiveRequestsApplied = true;
-        run.committedArchiveFacts = mergeStrings(run.committedArchiveFacts, archiveEvidenceFromOperations(pending));
-    }
     // unresolvedReasons carries the specific reason (unknown vs. duplicated
     // name) that addressRequestsByName already worked out; folded in even on
     // an otherwise-ok result, since one request can name an unresolvable
@@ -3304,26 +2902,18 @@ async function queueAcceptedLoreProposals(run, { proposals = null, phase = 'comp
     const candidates = Array.isArray(proposals) ? proposals : run?.envelope?.loreProposals;
     if (!packet?.book || !Array.isArray(candidates) || !candidates.length || !acceptedProse(run)) return { ok: true, applied: [], rejected: [] };
     try {
-        // The Archive records the turn before lore settles, so its newest
-        // record is when this information was recorded. Placement scores
-        // against that rather than against wall clock at write time.
+        // Lore intake now runs on prose evidence alone — the Archive that used
+        // to supply recordedAt and corroborating facts is dissolved.
         const result = await applyLoomLoreReports({
             timelineId: run.timelineId,
             book: packet.book,
             records: candidates,
-            recordedAt: latestArchiveRecordTime(run.timelineId, run.sceneId),
+            recordedAt: new Date().toISOString(),
             acceptedProse: acceptedProse(run),
-            archiveFacts: run.committedArchiveFacts || [],
+            archiveFacts: [],
             source: { directionId: run.directionId, sceneId: run.sceneId, messageId: run.messageId },
         });
         if (result.rejected.length) {
-            saveWorldSenseProposalRejections({
-                timelineId: run.timelineId,
-                sceneId: run.sceneId,
-                directionId: run.directionId,
-                phase,
-                rejected: result.rejected,
-            });
             run.checkpointDiagnostics = [
                 ...(run.checkpointDiagnostics || []),
                 ...result.rejected.map((item) => `Living Lore report refused: ${item.code}.`),
@@ -3360,242 +2950,30 @@ async function queueAcceptedLoreProposals(run, { proposals = null, phase = 'comp
     }
 }
 
-/** When the Archive last recorded something for this scene. Falls back to now
- * only when the scene has no stamped records, which is the first turn or lore
- * settled before archive events carried a time. */
-function latestArchiveRecordTime(timelineId, sceneId) {
-    try {
-        const stamped = (listEvents(timelineId, sceneId) || []).map((event) => event?.at).filter(Boolean);
-        if (stamped.length) return stamped[stamped.length - 1];
-    } catch { /* an unreadable Archive is not a reason to refuse the write */ }
-    return new Date().toISOString();
-}
-
-/**
- * Record what a Loom-shaped reply actually contained.
- *
- * Logged at `warn` when it carries no Archive operation, because that is the
- * case where the scene silently stops remembering: the prose lands, the turn
- * reads as complete, and nothing says the Archive did not move.
- */
+/** Record what a Loom-shaped reply actually contained, for diagnostics. */
 function journalLoomReply(raw, phase, sceneId, directionId = null) {
     try {
         const reply = describeLoomReply(raw);
-        const archiveCount = reply.capabilities.filter((name) => isArchiveCapability(name)).length;
         const reason = !reply.hasFence
             ? 'no state fence in the reply'
-            : (!reply.fenceParsed
-                ? 'the state fence is not valid JSON'
-                : (!archiveCount
-                    ? 'the fence carried no Archive operation'
-                    : ''));
-        journal('loom.reply', { phase, sceneId, directionId, archiveCount, ...reply }, {
+            : (!reply.fenceParsed ? 'the state fence is not valid JSON' : '');
+        journal('loom.reply', { phase, sceneId, directionId, ...reply }, {
             correlationId: directionId || undefined,
             severity: reason ? 'warn' : 'info',
-            summary: reason
-                ? `Loom reply (${phase}): ${reason}.`
-                : `Loom reply (${phase}): ${archiveCount} Archive operation(s).`,
+            summary: reason ? `Loom reply (${phase}): ${reason}.` : `Loom reply (${phase}) parsed.`,
         });
     } catch { /* diagnostics must never break a turn */ }
 }
 
-/**
- * Reconcile accepted prose into the Archive when the visible Loom pass could
- * not supply a trustworthy state fence (most importantly, an interruption).
- * This deliberately reuses the selected Loom recipe and connection profile;
- * its returned prose is ignored and only narrative Archive requests apply.
- */
-async function catchUpArchive(run, reason) {
-    const prose = acceptedProse(run);
-    if (!prose) return;
-    if (testAdapters && !testAdapters.archiveCatchup) return;
-
-    const scene = { id: run.sceneId, timelineId: run.timelineId };
-    const mechanics = run.envelope?.mechanicsSnapshot || null;
-    const mechanicsSkill = buildLoomSkill(mechanics);
-    const narrativeState = [
-        buildNarratorArchivistSections(run.timelineId, run.sceneId, {
-            archiveProjection: run.envelope?.archiveProjection,
-            archiveQuery: run.envelope?.archiveProjection?.queryTerms || [prose],
-        }),
-        buildGoalObjectives(run.sceneId),
-    ].filter((part) => String(part || '').trim()).join('\n\n');
-    const sources = buildLoomRecipeSources({
-        draft: prose,
-        draftReasoning: narratorReasoning(run),
-        playerAction: run.envelope?.currentPlayerAction || '',
-        narrativeState,
-        mechanicsSkill,
-        livingLore: formatLivingLorePacket(run.envelope?.livingLore),
-    });
-    const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
-    const compiled = compilePromptRecipe(recipe, sources, { trace: true });
-    const prompt = compiled.messages.length
-        ? compiled.messages
-        : buildLoomPrompt({
-            draft: prose,
-            draftReasoning: narratorReasoning(run),
-            playerAction: run.envelope?.currentPlayerAction || '',
-            narrativeState,
-            mechanicsSkill,
-            livingLore: formatLivingLorePacket(run.envelope?.livingLore),
-        });
-    recordLoomPromptTranscript(recipe?.name, prompt);
-
-    let raw = '';
-    let responseReasoning = '';
-    let responseStreamed = false;
-    try {
-        if (testAdapters?.archiveCatchup) {
-            raw = String(await testAdapters.archiveCatchup({ run, prose, prompt, reason }) || '');
-        } else {
-            const out = await streamChatPrompt({
-                prompt,
-                profileId: run.loomProfileId || undefined,
-            });
-            raw = String(out?.text || '');
-            responseReasoning = String(out?.reasoning || '');
-            responseStreamed = Boolean(out?.streamed);
-        }
-    } catch (error) {
-        journal('archive.catchup.failed', { directionId: run.directionId, reason, phase: 'generate', error: String(error?.message || error) }, { correlationId: run.directionId, severity: 'warn' });
-        return;
-    }
-
-    journalResponse('loom', { text: raw, reasoning: responseReasoning, streamed: responseStreamed }, {
-        correlationId: run.directionId,
-        purpose: `archive-catchup:${reason}`,
-    });
-    journalLoomReply(raw, `archive-catchup:${reason}`, run.sceneId, run.directionId);
-    const parsed = parseLoomReply(raw, { livingLorePacket: run.envelope?.livingLore });
-    run.envelope.lorePromotionDecisions = structuredClone(parsed.lorePromotionDecisions || []);
-    run.envelope.lorePromotionDecisionRejections = structuredClone(parsed.lorePromotionDecisionRejections || []);
-    saveWorldSensePromotionDecisionReceipt(run.envelope?.worldSense?.id, {
-        decisions: parsed.lorePromotionDecisions || [],
-        rejections: parsed.lorePromotionDecisionRejections || [],
-    });
-    const ingestion = await legacyArchiveIngestion.ingest(roleplayArchiveIngestionInput({
-        run,
-        acceptedProse: prose,
-        candidateReply: raw,
-        archiveState: narrativeState,
-        reason,
-    }));
-    const requests = ingestion.operations;
-    const freshLoreProposals = parsed.loreProposals.filter((proposal) =>
-        !(run.envelope?.loreProposals || []).some((existing) => sameLoreProposal(existing, proposal)));
-    if (!requests.length && !freshLoreProposals.length) {
-        journal('archive.catchup.empty', { directionId: run.directionId, reason }, { correlationId: run.directionId, severity: 'warn' });
-        return;
-    }
-    try {
-        const result = requests.length
-            ? executeDirectionRequests(requests, {
-                scene,
-                directionId: `${run.directionId}:archive`,
-                messageId: run.messageId,
-                addressBook: run.addressBook,
-                variableRefs: run.variableRefs,
-                goalRefs: run.goalRefs,
-                authorizedGoalIds: [],
-            })
-            : { ok: true, transaction: null, errors: [] };
-        // The catch-up writes state on behalf of THIS turn, so Retry has to be
-        // able to undo it. Two separate reasons it used to survive Retry, and
-        // repairing either one alone leaves the bug intact:
-        //
-        //   1. this transaction id was recorded nowhere, unlike the one
-        //      applyPendingRequests keeps above;
-        //   2. finalizeRunMessage has ALREADY serialized the run by the time a
-        //      queued catch-up lands, so the undo set regenerateLastDirected-
-        //      Response reads back was snapshotted before this transaction
-        //      existed.
-        //
-        // Hence the id goes onto the run AND into the saved snapshot. This is
-        // deliberately not persistRun(): that recomputes the stored `state`
-        // from run.state and would clobber the interrupted/stopped marker
-        // finalizeRunMessage set from its own argument.
-        if (result.transaction?.id) {
-            run.checkpointTransactionIds.push(result.transaction.id);
-            const stored = getContext().chat?.[run.messageId];
-            const saved = stored && !stored.is_user ? stored.extra?.remodelDirection : null;
-            // Matched on directionId rather than trusting the index: a queued
-            // catch-up can land after the chat has moved under it, and amending
-            // another turn's undo set would make its Retry roll back state the
-            // user kept.
-            if (saved?.directionId === run.directionId) {
-                saved.checkpointTransactionIds = [...run.checkpointTransactionIds];
-            }
-        }
-        if (result.ok && requests.length) {
-            run.committedArchiveFacts = mergeStrings(run.committedArchiveFacts, ingestion.archiveFacts);
-        }
-        run.envelope.loreProposals = mergeLoreProposals(run.envelope.loreProposals, freshLoreProposals);
-        run.envelope.loreProposalRejections = [
-            ...(run.envelope.loreProposalRejections || []),
-            ...(parsed.loreProposalRejections || []),
-        ];
-        await queueAcceptedLoreProposals(run, { proposals: freshLoreProposals, phase: `archive-catchup:${reason}` });
-        await amendSavedLoreLifecycle(run);
-        journal('archive.catchup', {
-            directionId: run.directionId,
-            reason,
-            requestCount: requests.length,
-            loreProposalCount: freshLoreProposals.length,
-            ok: result.ok,
-            errors: result.errors || [],
-        }, { correlationId: run.directionId, severity: result.ok ? 'info' : 'warn', summary: 'Loom caught the Archive up to accepted prose' });
-    } catch (error) {
-        journal('archive.catchup.failed', { directionId: run.directionId, reason, phase: 'apply', error: String(error?.message || error) }, { correlationId: run.directionId, severity: 'warn' });
-    }
-}
-
-function queueArchiveCatchup(run, reason) {
-    const key = String(run?.sceneId || '');
-    if (!key || !acceptedProse(run)) return Promise.resolve();
-    const prior = archiveCatchups.get(key) || Promise.resolve();
-    const task = prior.catch(() => {}).then(() => catchUpArchive(run, reason));
-    archiveCatchups.set(key, task);
-    task.finally(() => {
-        if (archiveCatchups.get(key) === task) archiveCatchups.delete(key);
-    });
-    return task;
-}
-
-async function amendSavedLoreLifecycle(run) {
-    const message = getContext().chat?.[run.messageId];
-    const saved = message && !message.is_user ? message.extra?.remodelDirection : null;
-    if (!saved || saved.directionId !== run.directionId) return false;
-    saved.envelope ??= {};
-    saved.envelope.loreProposals = structuredClone(run.envelope?.loreProposals || []);
-    saved.envelope.loreProposalRejections = structuredClone(run.envelope?.loreProposalRejections || []);
-    saved.envelope.loreKeywords = structuredClone(run.envelope?.loreKeywords || []);
-    saved.loreProposalIds = [...(run.loreProposalIds || [])];
-    saved.checkpointTransactionIds = [...(run.checkpointTransactionIds || [])];
-    saved.updatedAt = new Date().toISOString();
-    writeDirectionMetadata(message, saved);
-    await getContext().saveChat();
-    return true;
-}
-
-async function waitForArchiveCatchup(sceneId) {
-    const pending = archiveCatchups.get(String(sceneId || ''));
-    if (pending) await pending.catch(() => {});
-}
+// The Archive catch-up worker was dissolved with the Loom Archive; retry and
+// regenerate flows still await this, so it stays as a resolved no-op.
+async function waitForArchiveCatchup() { /* no-op */ }
 
 function buildLoomSkill(mechanics) {
     if (mechanics && getMechanicsProfile().enabled) {
-        try { return buildLoomContext({ mechanics }, { mechanicsEnabled: true }).mechanicsSkill || ''; } catch { /* use the Archive-only guide below */ }
+        try { return buildLoomContext({ mechanics }, { mechanicsEnabled: true }).mechanicsSkill || ''; } catch { /* mechanics unavailable this turn */ }
     }
-    const guide = getCapabilityDictionary()
-        .filter((capability) => isArchiveCapability(capability.name))
-        .map((capability) => {
-            const required = (capability.requiredArguments || [])
-                .map((argument) => `${argument.key} — ${argument.hint}`).join('; ');
-            return `- ${capability.name}: ${capability.description}${required ? `\n    arguments: ${required}` : ''}`;
-        })
-        .join('\n');
-    return `[ARCHIVE OPERATIONS — always available]\n${guide}`;
+    return '';
 }
 
 /** Keep Remodel metadata with the active native swipe as well as the message. */
@@ -3675,7 +3053,6 @@ async function recoverLiveDirectionMessages() {
                 holdReason: 'hard', state: 'Waiting for you', openingLabel: '',
                 checkpointTransactionIds: [...(recovered.metadata.checkpointTransactionIds || [])],
                 loreProposalIds: [...(recovered.metadata.loreProposalIds || [])],
-                committedArchiveFacts: [],
                 variableRefs: new Map(Object.entries(recovered.metadata.variableRefs || {})),
                 goalRefs: new Map(Object.entries(recovered.metadata.goalRefs || {})),
                 addressBook: recovered.metadata.addressBook || { entries: [], duplicates: [] },
@@ -3767,7 +3144,6 @@ async function reconcileCurrentChatLoreProposals() {
             rawBufferedText: sanitizeDirectionText(saved.acceptedText ?? message.mes ?? ''),
             rawOffset: String(saved.acceptedText ?? message.mes ?? '').length,
             loreProposalIds: [...(saved.loreProposalIds || [])],
-            committedArchiveFacts: [],
             checkpointDiagnostics: [],
         };
         // eslint-disable-next-line no-await-in-loop
@@ -4067,13 +3443,9 @@ function normalizeEnvelope(value, scene) {
         mechanics: { pendingRequests },
         mechanicsSnapshot: value.mechanicsSnapshot ? structuredClone(value.mechanicsSnapshot) : null,
         currentPlayerAction: String(value.currentPlayerAction || ''),
-        worldSense: value.worldSense ? structuredClone(value.worldSense) : null,
         livingLore: value.livingLore ? structuredClone(value.livingLore) : null,
-        archiveProjection: value.archiveProjection ? structuredClone(value.archiveProjection) : null,
         loreProposals: Array.isArray(value.loreProposals) ? structuredClone(value.loreProposals) : [],
         loreProposalRejections: Array.isArray(value.loreProposalRejections) ? structuredClone(value.loreProposalRejections) : [],
-        lorePromotionDecisions: Array.isArray(value.lorePromotionDecisions) ? structuredClone(value.lorePromotionDecisions) : [],
-        lorePromotionDecisionRejections: Array.isArray(value.lorePromotionDecisionRejections) ? structuredClone(value.lorePromotionDecisionRejections) : [],
         sceneId: scene.id,
     };
 }

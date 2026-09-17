@@ -177,17 +177,6 @@ function loreTemplates(guide) {
                 'Shape:',
                 guide.lore.keywords.example,
             ].join('\n')),
-        instruction('lore.promotion', 'Promotion decisions', 'lore', 'system',
-            'How to account for every promotion candidate you were shown.', [
-                'When promotion candidates are present, account for every one of them in a top-level "lorePromotionDecisions" array.',
-                '',
-                ...guide.lore.promotion.arguments.map(describeArgument),
-                '',
-                'A candidate you leave out is recorded as a missing decision.',
-                '',
-                'Shape, one entry per candidate:',
-                guide.lore.promotion.example,
-            ].join('\n')),
     ];
 }
 

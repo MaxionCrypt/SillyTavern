@@ -12,7 +12,6 @@ import {
 import { parseLivingLoreProposals } from './living-lore-proposals.js';
 import { classifyAutoSafeProposals } from './living-lore-auto-safe.js';
 import { invalidateTimelineLoreCache } from './world-sense-lore.js';
-import { getWorldSenseProfile } from './world-sense-store.js';
 
 const MODE = 'suggest';
 const MAX_PROPOSALS_PER_TRANSACTION = 12;
@@ -42,7 +41,7 @@ export async function queueLivingLoreProposals({
 } = {}) {
     const automationMode = ['off', 'observe', 'suggest', 'auto-safe'].includes(automationModeOverride)
         ? automationModeOverride
-        : getWorldSenseProfile().mode || 'suggest';
+        : 'suggest';
     if (automationMode === 'off' || automationMode === 'observe') {
         return { ok: true, queued: [], rejected: [], observed: automationMode === 'observe' };
     }
@@ -173,8 +172,8 @@ export async function applyAutoSafeLivingLoreProposals({ timelineId = '', propos
     const bucket = getTimelineLivingLoreState(timelineId, { create: false });
     const ids = uniqueStrings(proposalIds);
     const records = ids.map((id) => bucket?.proposals?.[id]).filter(Boolean);
-    const profile = getWorldSenseProfile();
-    const decision = classifyAutoSafeProposals(records, manual ? { ...profile, mode: 'auto-safe' } : profile);
+    const profile = { mode: 'auto-safe', autoSafeConfidence: 0.92, autoSafeOperations: ['fact.append', 'alias.add', 'entry.link', 'current.set'] };
+    const decision = classifyAutoSafeProposals(records, profile);
     if (!decision.eligible.length) {
         debug('auto-safe.review', { timelineId, review: decision.review, threshold: decision.threshold });
         return { ok: true, applied: [], review: decision.review, policy: decision };

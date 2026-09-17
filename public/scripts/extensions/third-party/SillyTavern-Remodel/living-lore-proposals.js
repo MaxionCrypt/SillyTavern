@@ -3,7 +3,6 @@ import {
     normalizeLivingLoreMetadata,
     loreEntryKey,
 } from './living-lore-model.js';
-import { formatWorldSensePromotionPacket } from './world-sense-promotion.js';
 
 export const LIVING_LORE_OPERATIONS = Object.freeze([
     'entry.create',
@@ -86,15 +85,14 @@ export function formatLivingLorePacket(packet) {
         JSON.stringify(lorePacket, null, 2),
         'Do not rewrite lore directly. When accepted fiction establishes something durable, add a top-level "loreProposals" array to the state fence reporting it.',
         'You do not choose where information is filed. Do not name an entry, a uid, a revision, an operation or a section: where it belongs is worked out from what it says. Report what is now true.',
-        'Shape: {"content":"what is now durably true, in prose","name":"a name for it if it turns out to be its own subject","keys":["what it would be called","an alias"],"evidence":["one exact accepted excerpt","archive:record-id"]}',
+        'Shape: {"content":"what is now durably true, in prose","name":"a name for it if it turns out to be its own subject","keys":["what it would be called","an alias"],"evidence":["one exact accepted excerpt"]}',
         'name and keys are suggestions used only if the information proves to be a new subject; if it belongs inside something that already exists, they are discarded and only content is kept.',
         'One report is one piece of information. Split unrelated facts into separate entries in the array rather than combining them.',
-        'Evidence may be one string or an array of 1-6 independently checkable strings. Prefer archive:<record-id> for supplied Archive or promotion evidence. Never combine separate quotations into one string with "and" or semicolons.',
+        'Evidence may be one string or an array of 1-6 independently checkable strings drawn from the accepted prose. Never combine separate quotations into one string with "and" or semicolons.',
         'Use "loreProposals":[] when accepted fiction established nothing durable.',
         'The lore above is what this Scene is working from, and it stays until you replace it. When the scene has moved on far enough that it no longer fits, add a top-level "loreKeywords" array naming what to look up instead: {"loreKeywords":["Queens Lake University","Marissa"]}.',
         'Use the exact key an entry answers to. Partial names do not match: "Queens" will not find "Queens Lake University".',
         'Replacing costs a retrieval and discards what is there, so ask only when you have reason to. Leave "loreKeywords" out when the current lore still serves.',
-        formatWorldSensePromotionPacket(packet.promotion),
     ].filter(Boolean).join('\n');
 }
 

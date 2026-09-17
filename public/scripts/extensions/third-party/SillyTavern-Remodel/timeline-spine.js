@@ -38,34 +38,17 @@ import {
     updateTimeline,
 } from './timeline-state.js';
 import {
-    createStoryArchiveCaptures,
     createStoryDoc,
     getStoryDoc,
-    previewStoryArchiveCatchUp,
     updateStoryDoc,
 } from './story-doc.js';
-import {
-    captureStoryArchiveCatchUp,
-    describeStoryArchiveCaptureState,
-    queueStoryArchiveCaptures,
-    resumeStoryArchiveCaptures,
-    supersedeStoryBeatArchive,
-} from './story-loom-archive.js';
 import { generateProse } from './story-generate.js';
-import { splitStoryArchiveAddition, STORY_ARCHIVE_PASSAGE_MAX_WORDS } from './story-archive-provenance.js';
-import { listArchiveSceneDescriptors } from './archive-scene-list.js';
 import {
     advanceStoryWorldInfoState,
     getStoryLorebookNames,
     getStoryWorldInfoMaxContext,
     resolveStoryWorldInfo,
 } from './story-world-info.js';
-import {
-    buildStoryWorldSenseOptions,
-    formatStoryWorldSenseContinuity,
-    storyWorldSenseLoreSelection,
-} from './story-world-sense.js';
-import { previewWorldSense, resolveWorldSense } from './world-sense-runtime.js';
 import {
     applyPromptStudioRuntimeRecipe,
     capturePromptStudioRuntimeSettings,
@@ -78,7 +61,6 @@ import {
     getPromptApiType,
     getPromptStudioRecipe,
     getPromptStudioRecipes,
-    getStoryArchivePromptStudioRecipe,
     initPromptStudio,
     recordSentPromptTranscript,
     renderPromptStudioWorkspace,
@@ -95,28 +77,9 @@ import {
     isStoryPipelineRunning,
     renderStoryGoalsForRoleplay,
 } from './story-goals.js';
-import { deleteStoryGoal, getSceneGoals, updateSceneGoalState } from './story-goals-store.js';
+import { deleteStoryGoal, getSceneGoals, getTimelineGoals, updateSceneGoalState } from './story-goals-store.js';
 import { clearMechanicsReceiptInjection } from './mechanics-runtime.js';
-import { mountWorldSenseWorkspace, renderWorldSenseWorkspaceShell } from './world-sense-workspace.js';
 import { deleteVariableValue, listVariablesForLoreRef, listVariableValues } from './variables-store.js';
-import {
-    listEvents as archiveListEvents,
-    updateEvent as archiveUpdateEvent,
-    deleteEvent as archiveDeleteEvent,
-    listSceneFacts as archiveListSceneFacts,
-    listCharStates as archiveListCharStates,
-    listSecrets as archiveListSecrets,
-    setSceneFact as archiveSetSceneFact,
-    clearSceneFact as archiveClearSceneFact,
-    setSecret as archiveSetSecret,
-    clearSecret as archiveClearSecret,
-    setCharStateFacet as archiveSetCharStateFacet,
-    clearCharStateFacet as archiveClearCharStateFacet,
-    getSceneContinuitySettings as archiveGetContinuitySettings,
-    setSceneContinuitySettings as archiveSetContinuitySettings,
-    pinContinuityRecord as archivePinContinuityRecord,
-    unpinContinuityRecord as archiveUnpinContinuityRecord,
-} from './archivist-store.js';
 import {
     buildVariableStateBodyMarkup,
     handleVariablesUiChange,
@@ -133,25 +96,16 @@ import {
     isDirectedLiveScene,
     isLatestUserMessage,
     ownsLiveDirectionGeneration,
-    prefetchLiveDirectionLore,
-    previewLiveDirectionLore,
     previewLoomPrompt,
     describeLiveStepActions,
-    retryLiveDirectionArchive,
     sendWithoutLiveDirection,
     setLiveDirectionEnabled,
     setLiveDirectionPacing,
     setNextPerformerOverride,
 } from './live-direction.js';
 import { directedTurnController } from './legacy-directed-turn-adapter.js';
-import { activateWorldSenseSelection } from './world-sense-activation.js';
 import { sanitizeDirectionText } from './live-direction-markers.js';
-import {
-    buildNarratorArchivistSections, buildNarratorRecallSections,
-    renderLoomAction, renderLoomScene, renderLoomCharacters, renderLoomEvents,
-    renderLoomSecrets, renderLoomGoals, renderLoomVariables, renderPrevEvents,
-} from './narrator-prompt.js';
-import { buildSceneArchiveProjection } from './archive-projection.js';
+import { renderLoomAction, renderLoomGoals, renderLoomVariables } from './narrator-prompt.js';
 import { resolveRoleplayMessageIds } from './roleplay-message-list.js';
 import { resolveDirectionChromeMode } from './turn-chrome.js';
 import { isLinkedGroupChatLoaded } from './scene-open-state.js';
@@ -228,20 +182,6 @@ let liveProgressRefreshTimer = null;
 // file (storyGenerating, timelineChromeStages, etc.).
 const loomArchive = {
     open: false,
-    // Which Scene's Archive is showing. Null selects the Timeline's own
-    // activeSceneId (or the first eligible Scene) at render time, so the
-    // picker doesn't have to be primed before the panel can open.
-    sceneId: null,
-    // Whose view of the Archive: 'loom' sees everything (secrets, odds,
-    // variable values); 'narrator' sees the filtered view (no secrets, goals
-    // as objectives without numbers, no variables).
-    view: 'loom', // 'loom' | 'narrator'
-    // The one record currently showing an inline edit field instead of
-    // read-only text, or '' when none. Deliberately NOT mirrored into a
-    // re-rendered-on-every-keystroke state field: this workspace replaces its
-    // whole body innerHTML on every queueRender(), which would steal focus and
-    // cursor position. The field is read directly from the DOM at Save time.
-    editingId: '',
 };
 
 let restoredUiScroll = null;
@@ -264,14 +204,14 @@ function stableUiLocation(scrollTop = null) {
         focusedTimelineId: state.focusedTimelineId,
         sceneId: activeScene?.id || null,
         codexOpen: state.codexOpen,
-        archive: { open: loomArchive.open, sceneId: loomArchive.sceneId, view: loomArchive.view },
+        archive: { open: loomArchive.open },
         scroll,
     };
 }
 
 function uiLocationScrollKey() {
     const state = getSessionState();
-    const archive = loomArchive.open ? `archive:${loomArchive.sceneId || 'active'}` : state.codexOpen ? 'variables' : 'scenes';
+    const archive = loomArchive.open ? 'archive' : state.codexOpen ? 'variables' : 'scenes';
     return `${state.activeTavernTab}:${state.focusedTimelineId || 'deck'}:${archive}`;
 }
 
@@ -297,8 +237,6 @@ function hydrateStableUiLocation() {
     setCodexOpen(saved.codexOpen);
     setCurrentWindow(saved.currentWindow);
     loomArchive.open = saved.archive.open;
-    loomArchive.sceneId = saved.archive.sceneId;
-    loomArchive.view = saved.archive.view;
     restoredUiScroll = saved.scroll;
     return saved;
 }
@@ -322,9 +260,6 @@ async function restoreSavedNativeScene(location) {
 
 function resetLoomArchiveView() {
     loomArchive.open = false;
-    loomArchive.sceneId = null;
-    loomArchive.view = 'loom';
-    loomArchive.editingId = '';
 }
 
 const TIMELINE_SCROLL_RESISTANCE = 160;
@@ -2476,7 +2411,7 @@ function registerAllInsertedTextSlotMacros() {
 // promptPreviewInFlight now lives in session-state.js's panels domain — see
 // getPanelsState()/setPromptPreviewInFlight() imported above.
 
-async function runPromptPreviewDryRun(generationType, { composerText: composerTextOverride, narratorGrounding, narratorRecall, prevEvents, narratorNote, worldSense, stripNativeNewChatBootstrap = false } = {}) {
+async function runPromptPreviewDryRun(generationType, { composerText: composerTextOverride, narratorGrounding, narratorRecall, narratorNote, stripNativeNewChatBootstrap = false } = {}) {
     const context = getContext();
     // A Connection Profile can replace the native Prompt Manager stack. The
     // selected Prompt Studio recipe is authoritative for Roleplay, so rebuild
@@ -2514,11 +2449,6 @@ async function runPromptPreviewDryRun(generationType, { composerText: composerTe
     const narratorRecallRouted = narratorRecall === undefined
         ? null
         : setRemodelNativePromptContent('narratorRecall', narratorRecall);
-    // The universal split macros the recipe actually uses now: prev.events
-    // carries the same earlier-Scene recall; loom.action mirrors nextAction.
-    const prevEventsRouted = prevEvents === undefined
-        ? null
-        : setRemodelNativePromptContent('prevEvents', prevEvents);
     const previousNarratorNote = narratorNote === undefined
         ? null
         : String(oai_settings.prompts?.find((prompt) => prompt?.identifier === 'remodel_narrator_note')?.content || '');
@@ -2588,30 +2518,6 @@ async function runPromptPreviewDryRun(generationType, { composerText: composerTe
             setCharacterName(groupPreviewSpeaker.name);
         }
 
-        const loreActivation = await activateWorldSenseSelection(context, worldSense, { phase: 'preview' });
-        try {
-            recordDebugEvent('world-sense', 'activation.preview', {
-                requested: loreActivation.requested,
-                activated: loreActivation.activated,
-                missing: loreActivation.missing,
-                failedOpen: !loreActivation.ok,
-                error: loreActivation.error,
-            }, {
-                severity: loreActivation.ok ? 'info' : 'warn',
-                correlationId: worldSense?.queryHash || null,
-                summary: loreActivation.ok
-                    ? `World Sense activated ${loreActivation.activated} native lore entr${loreActivation.activated === 1 ? 'y' : 'ies'} for Preview`
-                    : 'World Sense Preview activation fell back to native keywords',
-            });
-        } catch {
-            // Prompt Preview must not depend on Debug being available.
-        }
-        if (!loreActivation.ok) {
-            toastrErrors.push(`World Sense preview fell back to native keywords: ${loreActivation.error}`);
-        } else if (loreActivation.missing.length) {
-            toastrErrors.push(`${loreActivation.missing.length} selected Living Lore entr${loreActivation.missing.length === 1 ? 'y was' : 'ies were'} changed before Preview and could not be activated.`);
-        }
-
         await context.generate(generationType, groupPreviewSpeaker
             ? { force_chid: groupPreviewSpeaker.characterId }
             : {}, true);
@@ -2639,7 +2545,6 @@ async function runPromptPreviewDryRun(generationType, { composerText: composerTe
 
         if (narratorGrounding !== undefined) setRemodelNativePromptContent('narratorGrounding', '');
         if (narratorRecall !== undefined) setRemodelNativePromptContent('narratorRecall', '');
-        if (prevEventsRouted) setRemodelNativePromptContent('prevEvents', '');
         if (loomActionRouted) setRemodelNativePromptContent('loomAction', '');
         // Unlike request-scoped Archive grounding, this value is also live
         // scene state. A Preview must put it back exactly as it found it so
@@ -3348,71 +3253,7 @@ async function handleAction(element) {
             break;
         case 'toggle-archive':
             loomArchive.open = !loomArchive.open;
-            loomArchive.editingId = '';
             break;
-        case 'archive-view':
-            loomArchive.view = element.dataset.view === 'narrator' ? 'narrator' : 'loom';
-            loomArchive.editingId = '';
-            break;
-        case 'archive-edit-start':
-            loomArchive.editingId = element.dataset.recordId || '';
-            break;
-        case 'archive-edit-cancel':
-            loomArchive.editingId = '';
-            break;
-        case 'archive-edit-save': {
-            const { timelineId, sceneId, recordId } = element.dataset;
-            // Read straight off the DOM rather than tracked state — the panel
-            // re-renders on every keystroke, which would steal the caret.
-            const draft = element.closest('.remodel-archive-item')?.querySelector('[data-remodel-archive-draft]');
-            if (timelineId && sceneId && recordId && draft instanceof HTMLElement) {
-                applyArchiveEdit(timelineId, sceneId, recordId, draft.innerText);
-            }
-            loomArchive.editingId = '';
-            break;
-        }
-        case 'archive-delete': {
-            const { timelineId, sceneId, recordId } = element.dataset;
-            if (timelineId && sceneId && recordId && confirm(describeArchiveDeleteConfirmation(recordId))) {
-                applyArchiveDelete(timelineId, sceneId, recordId);
-                if (loomArchive.editingId === recordId) loomArchive.editingId = '';
-            }
-            break;
-        }
-        case 'archive-catch-up':
-            openStoryArchiveCatchUp(element.dataset.sceneId);
-            return;
-        case 'archive-continuity-read': {
-            const { timelineId, sceneId } = element.dataset;
-            const settings = archiveGetContinuitySettings(timelineId, sceneId);
-            archiveSetContinuitySettings(timelineId, sceneId, { readPrevious: !settings.readPrevious });
-            break;
-        }
-        case 'archive-continuity-share': {
-            const { timelineId, sceneId } = element.dataset;
-            const settings = archiveGetContinuitySettings(timelineId, sceneId);
-            archiveSetContinuitySettings(timelineId, sceneId, { shareForward: !settings.shareForward });
-            break;
-        }
-        case 'archive-continuity-exclude': {
-            const { timelineId, sceneId, sourceSceneId } = element.dataset;
-            const settings = archiveGetContinuitySettings(timelineId, sceneId);
-            const excluded = new Set(settings.excludedSceneIds || []);
-            if (excluded.has(sourceSceneId)) excluded.delete(sourceSceneId);
-            else excluded.add(sourceSceneId);
-            archiveSetContinuitySettings(timelineId, sceneId, { excludedSceneIds: [...excluded] });
-            break;
-        }
-        case 'archive-continuity-pin': {
-            const { timelineId, sceneId, sourceSceneId, recordType, recordId } = element.dataset;
-            const pin = { sourceSceneId, recordType, recordId };
-            const settings = archiveGetContinuitySettings(timelineId, sceneId);
-            const key = `${sourceSceneId}:${recordType}:${recordId}`;
-            const pinned = (settings.pins || []).some((item) => `${item.sourceSceneId}:${item.recordType}:${item.recordId}` === key);
-            if (pinned) archiveUnpinContinuityRecord(timelineId, sceneId, pin);
-            else archivePinContinuityRecord(timelineId, sceneId, pin);
-            break;
-        }
         case 'create-arc': {
             const title = askForTitle('Arc title?', 'New Arc');
             if (title) {
@@ -3459,13 +3300,6 @@ async function handleAction(element) {
 
     persistStableUiLocation();
     queueRender();
-}
-
-function describeArchiveDeleteConfirmation(recordId) {
-    const type = String(recordId || '').split(':', 1)[0];
-    if (type === 'goal') return 'Remove this Goal from the Timeline? Its Scene links and Goal relations will also be removed. This cannot be undone.';
-    if (type === 'variable') return 'Remove this Variable from the Timeline? This cannot be undone.';
-    return 'Remove this from the Loom\'s memory? This cannot be undone.';
 }
 
 async function handleCharacterAction(element) {
@@ -3624,11 +3458,6 @@ async function handleFieldChange(field) {
         case 'arc-summary':
             updateArc(field.dataset.arcId, { summary: value });
             break;
-        case 'archive-scene':
-            loomArchive.sceneId = value || null;
-            loomArchive.editingId = '';
-            persistStableUiLocation();
-            break;
         default:
             break;
     }
@@ -3728,23 +3557,6 @@ function renderTimelinePanel() {
         }
     }
 
-    if (loomArchive.editingId) {
-        const draft = body.querySelector('[data-remodel-archive-draft]');
-
-        if (draft instanceof HTMLElement) {
-            draft.focus();
-            // Keep the prose itself in place. Unlike an input, this preserves
-            // the paragraph's width and wrapping while the owner edits it.
-            const selection = window.getSelection?.();
-            if (selection) {
-                const range = document.createRange();
-                range.selectNodeContents(draft);
-                range.collapse(false);
-                selection.removeAllRanges();
-                selection.addRange(range);
-            }
-        }
-    }
 }
 
 function ensureViewportShell(content) {
@@ -4252,7 +4064,7 @@ function renderTimelineFocus(timeline, store) {
                     </button>
                 </div>
             </header>
-            ${getSessionState().codexOpen ? `<div class="remodel-route-layout is-codex">${renderVariableCodex()}</div>` : loomArchive.open ? `<div class="remodel-route-layout is-archive">${renderLoomArchive(timeline, store)}</div>` : `
+            ${getSessionState().codexOpen ? `<div class="remodel-route-layout is-codex">${renderVariableCodex()}</div>` : loomArchive.open ? `<div class="remodel-route-layout is-archive"><div class="remodel-loom-archive-empty">The Loom Archive has moved to lorebooks.</div></div>` : `
             <div class="remodel-route-layout">
                 <aside class="remodel-route-side">
                     <label class="remodel-timeline-card remodel-route-cover-card" title="Change timeline cover">
@@ -4308,277 +4120,6 @@ function renderTimelineFocus(timeline, store) {
             </div>`}
         </section>
     `;
-}
-
-// --- Loom's Archive (Timeline focus surface) --------------------------------
-//
-// The owner-facing view onto the Loom's memory of a Scene: its own store
-// (events, scene facts, character states, secrets) plus the Goals and
-// Variables it posts to. Reached from the same toolbar as the Variables Codex
-// (toggle-archive / toggle-codex are siblings) and replaces the same arc-stage
-// layout while open. A view toggle switches between the Loom's full view
-// (everything, including secrets and the numbers) and the Narrator's filtered
-// view (no secrets, goals as objectives without odds, no variables) — so the
-// owner can see exactly what each side of the turn is allowed to know.
-
-/** One Archive section: a titled, counted list of items (each already HTML),
- * or an empty line when there is nothing to show. */
-function renderArchiveSection(title, icon, items, emptyText, { tone = '' } = {}) {
-    return `<section class="remodel-archive-section ${tone}">
-        <header class="remodel-archive-section-head">
-            <i class="fa-solid ${icon}" aria-hidden="true"></i>
-            <span>${escapeHtml(title)}</span>
-            <span class="remodel-archive-count">${items.length}</span>
-        </header>
-        ${items.length
-        ? `<ul class="remodel-archive-list">${items.join('')}</ul>`
-        : `<p class="remodel-archive-empty-line">${escapeHtml(emptyText)}</p>`}
-    </section>`;
-}
-
-/**
- * A keyed item: an optional key/label on the left, its value text on the
- * right, and an optional trailing badge (odds / a number). When `recordId` is
- * given and the item is editable/deletable, it also carries the Loom-only edit
- * (inline editable prose) and delete controls that correct the Loom's memory.
- * The prose remains at its natural width and wrapping while
- * `loomArchive.editingId` matches its `recordId`.
- */
-function renderArchiveItem(key, text, {
-    badge = '', recordId = '', editable = false, deletable = false, editValue = '', timelineId = '', sceneId = '', extraAction = '',
-} = {}) {
-    const editing = recordId && loomArchive.editingId === recordId;
-    const attrs = `data-record-id="${escapeAttribute(recordId)}" data-timeline-id="${escapeAttribute(timelineId)}" data-scene-id="${escapeAttribute(sceneId)}"`;
-
-    if (editing) {
-        return `<li class="remodel-archive-item${key ? ' has-key' : ''} is-editing">
-            ${key ? `<span class="remodel-archive-key">${escapeHtml(key)}</span>` : ''}
-            <span class="remodel-archive-edit">
-                <span class="remodel-archive-item-text remodel-archive-editable-text" data-remodel-archive-draft contenteditable="plaintext-only" role="textbox" aria-multiline="true">${escapeHtml(editValue)}</span>
-                <button type="button" data-remodel-timeline-action="archive-edit-save" ${attrs}>Save</button>
-                <button type="button" data-remodel-timeline-action="archive-edit-cancel">Cancel</button>
-            </span>
-        </li>`;
-    }
-
-    const actions = (recordId && (editable || deletable)) || extraAction
-        ? `<span class="remodel-archive-item-actions">
-            ${editable ? `<button type="button" title="Edit" aria-label="Edit" data-remodel-timeline-action="archive-edit-start" ${attrs}><i class="fa-solid fa-pen" aria-hidden="true"></i></button>` : ''}
-            ${deletable ? `<button type="button" class="danger" title="Remove from the Loom's memory" aria-label="Remove" data-remodel-timeline-action="archive-delete" ${attrs}><i class="fa-solid fa-trash-can" aria-hidden="true"></i></button>` : ''}
-            ${extraAction}
-        </span>`
-        : '';
-
-    return `<li class="remodel-archive-item${key ? ' has-key' : ''}">
-        ${key ? `<span class="remodel-archive-key">${escapeHtml(key)}</span>` : ''}
-        <span class="remodel-archive-item-text">${text}</span>
-        ${badge ? `<span class="remodel-archive-badge">${escapeHtml(badge)}</span>` : ''}
-        ${actions}
-    </li>`;
-}
-
-/** Apply an owner correction from the Archive. Events retain their provenance;
- * character facets are deliberately edited one at a time so one correction
- * cannot erase another part of that character's state. */
-function applyArchiveEdit(timelineId, sceneId, recordId, value) {
-    const separator = recordId.indexOf(':');
-    const type = recordId.slice(0, separator);
-    const key = recordId.slice(separator + 1);
-    if (type === 'fact') archiveSetSceneFact(timelineId, sceneId, key, value);
-    else if (type === 'secret') archiveSetSecret(timelineId, sceneId, key, value);
-    else if (type === 'event') archiveUpdateEvent(timelineId, sceneId, key, value);
-    else if (type === 'char') {
-        const [encodedCharId, encodedFacet] = key.split(':', 2);
-        if (!encodedCharId || !encodedFacet) return;
-        try {
-            archiveSetCharStateFacet(timelineId, sceneId, decodeURIComponent(encodedCharId), decodeURIComponent(encodedFacet), value);
-        } catch {
-            // A malformed DOM id must never create a differently named state.
-        }
-    }
-}
-
-/** Delete a record from the Loom's memory. Character facets may be removed
- * individually; retain the whole-character fallback for saved pre-editor DOM. */
-function applyArchiveDelete(timelineId, sceneId, recordId) {
-    const separator = recordId.indexOf(':');
-    const type = recordId.slice(0, separator);
-    const key = recordId.slice(separator + 1);
-    if (type === 'event') archiveDeleteEvent(timelineId, sceneId, key);
-    else if (type === 'fact') archiveClearSceneFact(timelineId, sceneId, key);
-    else if (type === 'secret') archiveClearSecret(timelineId, sceneId, key);
-    else if (type === 'goal') deleteStoryGoal(key, { sceneId, actor: 'user', reason: 'Removed from Loom Archive' });
-    else if (type === 'variable') deleteVariableValue(key, { timelineId, sceneId, actor: 'user', reason: 'Removed from Loom Archive' });
-    else if (type === 'char') {
-        const [encodedCharId, encodedFacet] = key.split(':', 2);
-        if (encodedCharId && encodedFacet) {
-            try {
-                archiveClearCharStateFacet(timelineId, sceneId, decodeURIComponent(encodedCharId), decodeURIComponent(encodedFacet));
-            } catch {
-                // Ignore a malformed stale DOM id.
-            }
-            return;
-        }
-        const record = archiveListCharStates(timelineId, sceneId).find((char) => char.charId === key);
-        for (const facet of Object.keys(record?.facets || {})) archiveClearCharStateFacet(timelineId, sceneId, key, facet);
-    }
-}
-
-function renderArchiveViewToggle() {
-    const isNarrator = loomArchive.view === 'narrator';
-    return `<div class="remodel-archive-viewtoggle" role="group" aria-label="Whose view of the Archive">
-        <button type="button" class="${isNarrator ? '' : 'is-active'}" aria-pressed="${isNarrator ? 'false' : 'true'}" data-remodel-timeline-action="archive-view" data-view="loom"><i class="fa-solid fa-eye" aria-hidden="true"></i> Loom's view</button>
-        <button type="button" class="${isNarrator ? 'is-active' : ''}" aria-pressed="${isNarrator ? 'true' : 'false'}" data-remodel-timeline-action="archive-view" data-view="narrator"><i class="fa-solid fa-feather-pointed" aria-hidden="true"></i> Narrator's view</button>
-    </div>`;
-}
-
-function renderArchiveContinuityButton(label, icon, active, action, data = {}) {
-    const attrs = Object.entries(data).map(([key, value]) => `data-${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}="${escapeAttribute(String(value ?? ''))}"`).join(' ');
-    return `<button type="button" class="remodel-archive-continuity-button ${active ? 'is-active' : ''}" aria-pressed="${active ? 'true' : 'false'}" data-remodel-timeline-action="${action}" ${attrs}>
-        <i class="fa-solid ${icon}" aria-hidden="true"></i><span>${escapeHtml(label)}</span><b class="remodel-archive-continuity-state" aria-hidden="true">${active ? 'On' : 'Off'}</b>
-    </button>`;
-}
-
-function renderArchiveRecallAction({ timelineId, targetSceneId, sourceSceneId, recordType, recordId, pinned, targetTitle }) {
-    if (!targetSceneId || !sourceSceneId || targetSceneId === sourceSceneId) return '';
-    const title = pinned ? `Stop explicitly recalling this in ${targetTitle}` : `Explicitly recall this in ${targetTitle}`;
-    return `<button type="button" class="${pinned ? 'is-active' : ''}" title="${escapeAttribute(title)}" aria-label="${escapeAttribute(title)}" aria-pressed="${pinned ? 'true' : 'false'}"
-        data-remodel-timeline-action="archive-continuity-pin" data-timeline-id="${escapeAttribute(timelineId)}" data-scene-id="${escapeAttribute(targetSceneId)}"
-        data-source-scene-id="${escapeAttribute(sourceSceneId)}" data-record-type="${escapeAttribute(recordType)}" data-record-id="${escapeAttribute(recordId)}">
-        <i class="fa-solid fa-thumbtack" aria-hidden="true"></i>
-    </button>`;
-}
-
-function renderLoomArchive(timeline, store) {
-    const isNarrator = loomArchive.view === 'narrator';
-    const closeButton = `<button type="button" class="remodel-notebook-close" data-remodel-timeline-action="toggle-archive">
-        <i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back to Scenes
-    </button>`;
-    const head = `<header class="remodel-notebook-head">
-        <div>
-            <span>Loom's Archive</span>
-            <strong>${escapeHtml(timeline.title)}</strong>
-        </div>
-        <p>${isNarrator
-        ? 'The Narrator\'s view: readable state and objectives only — no odds, no variables, no secrets.'
-        : 'The Loom\'s full memory of this Scene — what happened, the facts and characters it tracks, its secrets, and the numbers behind Goals and Variables.'}</p>
-    </header>`;
-
-    const scenes = listArchiveSceneDescriptors(timeline, store);
-    if (!scenes.length) {
-        return `<section class="remodel-notebook remodel-archive" aria-label="Loom's Archive">
-            ${closeButton}
-            ${head}
-            <div class="remodel-notebook-empty">
-                <i class="fa-solid fa-box-archive" aria-hidden="true"></i>
-                <p>This Timeline has no Scenes yet, so the Loom has no Archive.</p>
-            </div>
-        </section>`;
-    }
-
-    const activeSceneId = scenes.some((scene) => scene.id === loomArchive.sceneId)
-        ? loomArchive.sceneId
-        : (scenes.find((scene) => scene.id === timeline.activeSceneId)?.id || scenes[0].id);
-    const viewedScene = scenes.find((scene) => scene.id === activeSceneId);
-    const targetScene = scenes.find((scene) => scene.id === timeline.activeSceneId) || viewedScene;
-    const viewedContinuity = archiveGetContinuitySettings(timeline.id, activeSceneId);
-    const targetContinuity = archiveGetContinuitySettings(timeline.id, targetScene.id);
-    const viewedIsEarlier = viewedScene.orderIndex < targetScene.orderIndex;
-    const sourceExcluded = targetContinuity.excludedSceneIds.includes(activeSceneId);
-    const pinnedKeys = new Set(targetContinuity.pins.map((pin) => `${pin.sourceSceneId}:${pin.recordType}:${pin.recordId}`));
-    const recallAction = (recordType, recordId) => !isNarrator && viewedIsEarlier && viewedContinuity.shareForward && !sourceExcluded
-        ? renderArchiveRecallAction({
-            timelineId: timeline.id, targetSceneId: targetScene.id, sourceSceneId: activeSceneId, recordType, recordId,
-            pinned: pinnedKeys.has(`${activeSceneId}:${recordType}:${recordId}`), targetTitle: targetScene.title,
-        })
-        : '';
-
-    const events = archiveListEvents(timeline.id, activeSceneId);
-    const facts = archiveListSceneFacts(timeline.id, activeSceneId);
-    const chars = archiveListCharStates(timeline.id, activeSceneId);
-    const secrets = archiveListSecrets(timeline.id, activeSceneId);
-    const goals = getSceneGoals(activeSceneId, { includeResolved: true, states: ['active', 'background'] });
-    const variables = listVariableValues({ timelineId: timeline.id });
-
-    // Edit/delete correct the Loom's own memory — offered only in the Loom's
-    // view (the Narrator's view is a read-only preview of what it may see).
-    const editable = !isNarrator;
-    const scope = { timelineId: timeline.id, sceneId: activeSceneId };
-
-    // What happened — newest first. An owner may correct wording, but the
-    // event's ID, sequence, source message, and original timestamp are kept.
-    const eventItems = events.slice().reverse()
-        .map((event) => renderArchiveItem('', escapeHtml(event.summary || ''), {
-            recordId: `event:${event.id}`, editable, deletable: editable, editValue: String(event.summary || ''), extraAction: recallAction('event', event.id), ...scope,
-        }));
-    const factItems = facts.map((fact) => renderArchiveItem(fact.key, escapeHtml(String(fact.value)), {
-        recordId: `fact:${fact.key}`, editable, deletable: editable, editValue: String(fact.value), extraAction: recallAction('fact', fact.key), ...scope,
-    }));
-    const charItems = chars.flatMap((char) => Object.entries(char.facets || {}).map(([facet, value]) => {
-        const recordId = `char:${encodeURIComponent(char.charId)}:${encodeURIComponent(facet)}`;
-        return renderArchiveItem(`${char.charId} · ${facet}`, escapeHtml(String(value)), {
-            recordId, editable, deletable: editable, editValue: String(value), extraAction: recallAction('character', char.charId), ...scope,
-        });
-    }));
-    const goalItems = goals.map((goal) => renderArchiveItem(
-        '',
-        `<strong>${escapeHtml(goal.title || 'Untitled goal')}</strong>${goal.description ? ` — ${escapeHtml(goal.description)}` : ''}`,
-        // The odds are the Loom's alone; the Narrator sees an objective, not a bet.
-        { badge: isNarrator ? '' : `${Number(goal.successRate)}%`, recordId: `goal:${goal.id}`, deletable: editable, ...scope },
-    ));
-    const variableItems = variables.map((variable) => renderArchiveItem(
-        variable.name,
-        escapeHtml(String(variable.value)),
-        { recordId: `variable:${variable.id}`, deletable: editable, ...scope },
-    ));
-    const secretItems = secrets.map((secret) => renderArchiveItem(secret.key, escapeHtml(String(secret.value)), {
-        recordId: `secret:${secret.key}`, editable, deletable: editable, editValue: String(secret.value), ...scope,
-    }));
-
-    const sections = [
-        renderArchiveSection('What happened', 'fa-clock-rotate-left', eventItems, 'Nothing recorded yet.'),
-        renderArchiveSection('Scene', 'fa-map-pin', factItems, 'No scene facts yet.'),
-        renderArchiveSection('Characters', 'fa-users', charItems, 'No character states yet.'),
-        renderArchiveSection(isNarrator ? 'Objectives' : 'Goals', 'fa-bullseye', goalItems, 'No goals yet.'),
-        // Loom-only sections — the numbers and the hidden truths.
-        ...(isNarrator ? [] : [renderArchiveSection('Variables', 'fa-sliders', variableItems, 'No variables yet.')]),
-        ...(isNarrator ? [] : [renderArchiveSection('Secrets', 'fa-lock', secretItems, 'No secrets kept.', { tone: 'is-secret' })]),
-    ].join('');
-
-    const continuityControls = isNarrator ? '' : `<section class="remodel-archive-continuity" aria-label="Timeline continuity controls">
-        <div class="remodel-archive-continuity-copy">
-            <strong>Timeline continuity</strong>
-            <span>${viewedScene.id === targetScene.id
-                ? 'Control whether this Scene looks backward and whether later Scenes may recall it.'
-                : `Control whether ${targetScene.title} may automatically or explicitly recall this earlier Scene.`}</span>
-        </div>
-        <div class="remodel-archive-continuity-actions">
-            ${viewedScene.id === targetScene.id ? renderArchiveContinuityButton('Look into earlier scenes', 'fa-clock-rotate-left', viewedContinuity.readPrevious, 'archive-continuity-read', { timelineId: timeline.id, sceneId: activeSceneId }) : ''}
-            ${renderArchiveContinuityButton('Allow later recall', 'fa-share-nodes', viewedContinuity.shareForward, 'archive-continuity-share', { timelineId: timeline.id, sceneId: activeSceneId })}
-            ${viewedIsEarlier ? renderArchiveContinuityButton(`Use in ${targetScene.title}`, 'fa-link', !sourceExcluded, 'archive-continuity-exclude', { timelineId: timeline.id, sceneId: targetScene.id, sourceSceneId: activeSceneId }) : ''}
-        </div>
-        ${viewedIsEarlier && targetContinuity.pins.some((pin) => pin.sourceSceneId === activeSceneId)
-        ? `<p>${targetContinuity.pins.filter((pin) => pin.sourceSceneId === activeSceneId).length} item(s) explicitly recalled in ${escapeHtml(targetScene.title)}. Use the thumbtacks below to remove them.</p>` : ''}
-    </section>`;
-
-    return `<section class="remodel-notebook remodel-archive" aria-label="Loom's Archive">
-        ${closeButton}
-        ${head}
-        <div class="remodel-notebook-controls">
-            <label class="remodel-notebook-scene-picker">
-                <span>Scene</span>
-                <select data-remodel-timeline-field="archive-scene" data-timeline-id="${escapeAttribute(timeline.id)}">
-                    ${scenes.map((scene) => `<option value="${escapeAttribute(scene.id)}" ${scene.id === activeSceneId ? 'selected' : ''}>${escapeHtml(scene.title)} · ${scene.mode === 'story' ? 'Story' : 'Roleplay'}</option>`).join('')}
-                </select>
-            </label>
-            ${renderArchiveViewToggle()}
-            ${!isNarrator && viewedScene.mode === 'story' ? `<button type="button" class="remodel-archive-catchup-button" data-remodel-timeline-action="archive-catch-up" data-scene-id="${escapeAttribute(viewedScene.id)}"><i class="fa-solid fa-box-archive" aria-hidden="true"></i> Catch up Archive</button>` : ''}
-        </div>
-        ${continuityControls}
-        <div class="remodel-archive-sections">
-            ${sections}
-        </div>
-    </section>`;
 }
 
 function renderArcIndex(timeline, store, activeArc) {
@@ -4790,12 +4331,7 @@ function renderLorebooksWorkspace() {
                     <i class="fa-solid fa-sliders" aria-hidden="true"></i>
                     <span>World settings</span>
                 </button>
-                <button type="button" data-remodel-lorebooks-panel="world-sense" aria-expanded="false" title="World Sense retrieval, metadata and proposals">
-                    <i class="fa-solid fa-compass" aria-hidden="true"></i>
-                    <span>World Sense</span>
-                </button>
             </nav>
-            <div class="remodel-world-sense-host" data-remodel-world-sense-host hidden></div>
             <div id="${LEGACY_OUTLET_ID}" class="remodel-tavern-legacy-outlet remodel-lorebooks-outlet"></div>
         </section>
     `;
@@ -4804,13 +4340,13 @@ function renderLorebooksWorkspace() {
 function toggleLorebooksUtilityPanel(panelName) {
     const workspace = document.querySelector('.remodel-lorebooks-workspace');
 
-    if (!workspace || !['library', 'settings', 'world-sense'].includes(panelName)) {
+    if (!workspace || !['library', 'settings'].includes(panelName)) {
         return;
     }
 
-    const activeClass = panelName === 'library' ? 'is-library-open' : panelName === 'settings' ? 'is-settings-open' : 'is-world-sense-open';
+    const activeClass = panelName === 'library' ? 'is-library-open' : 'is-settings-open';
     const shouldOpen = !workspace.classList.contains(activeClass);
-    workspace.classList.remove('is-library-open', 'is-settings-open', 'is-world-sense-open');
+    workspace.classList.remove('is-library-open', 'is-settings-open');
 
     if (shouldOpen) {
         workspace.classList.add(activeClass);
@@ -4819,17 +4355,9 @@ function toggleLorebooksUtilityPanel(panelName) {
     workspace.querySelectorAll('[data-remodel-lorebooks-panel]').forEach((button) => {
         const buttonClass = button.dataset.remodelLorebooksPanel === 'library'
             ? 'is-library-open'
-            : button.dataset.remodelLorebooksPanel === 'settings' ? 'is-settings-open' : 'is-world-sense-open';
+            : 'is-settings-open';
         button.setAttribute('aria-expanded', String(workspace.classList.contains(buttonClass)));
     });
-    const host = workspace.querySelector('[data-remodel-world-sense-host]');
-    if (host instanceof HTMLElement) {
-        host.hidden = !workspace.classList.contains('is-world-sense-open');
-        if (!host.hidden) {
-            if (!host.querySelector('[data-remodel-world-sense]')) host.innerHTML = renderWorldSenseWorkspaceShell();
-            mountWorldSenseWorkspace(host.querySelector('[data-remodel-world-sense]'));
-        }
-    }
 }
 
 function syncLorebooksWorkspaceMeta(panel) {
@@ -6625,7 +6153,6 @@ async function openStoryDocScene(sceneId) {
     activeStoryDocId = scene.storyDocId;
     writeSceneMetadata(scene);
     enterStoryDocWorkspace();
-    resumeActiveStoryArchive(scene);
     await enterSceneViewport(scene);
 }
 
@@ -6649,21 +6176,7 @@ async function beginStoryDocScene(sceneId, avatars) {
     activeStoryDocId = doc.id;
     writeSceneMetadata(getScene(sceneId));
     enterStoryDocWorkspace();
-    resumeActiveStoryArchive(getScene(sceneId));
     await enterSceneViewport(getScene(sceneId));
-}
-
-function resumeActiveStoryArchive(scene = getActiveScene()) {
-    if (!scene || scene.mode !== 'story' || !scene.storyDocId) return;
-    if (scene.storyArchiveMode === 'manual') return;
-    void resumeStoryArchiveCaptures({
-        scene,
-        docId: scene.storyDocId,
-        onStateChange: (state) => {
-            if (getActiveScene()?.id === scene.id) setStorySaveState(state.label);
-            renderTimelinePanel();
-        },
-    });
 }
 
 // One-time, idempotent migration for Story scenes created before StoryDocs.
@@ -6755,9 +6268,7 @@ function getScenePromptChoice(scene = getActiveScene(), requestedMode = null) {
     const validSelection = selected?.mode === mode && selected?.apiType === apiType;
     const recipe = validSelection
         ? selected
-        : (mode === 'loom' && scene?.mode === 'story'
-            ? getStoryArchivePromptStudioRecipe()
-            : getDefaultPromptStudioRecipe(mode, apiType));
+        : getDefaultPromptStudioRecipe(mode, apiType);
     return {
         mode,
         apiType,
@@ -7045,7 +6556,7 @@ function renderStoryEditor(force = false) {
         avatar.style.backgroundImage = url ? `url('${url.replace(/'/g, "\\'")}')` : '';
         avatar.textContent = url ? '' : roleplayInitials(character?.name || 'Story');
     }
-    setStorySaveState(describeStoryArchiveCaptureState(doc.id).label);
+    setStorySaveState('Saved');
 }
 
 // Renders plain text (paragraphs separated by blank lines) as <p> elements,
@@ -8009,7 +7520,6 @@ async function generateStoryDocBeat(beatId) {
     if (!doc || !beat || !beat.instruction.trim()) return;
     const isRegeneration = Boolean(beat.generatedText);
     if (isRegeneration) {
-        await supersedeStoryBeatArchive({ scene: getActiveScene(), docId: activeStoryDocId, beatId });
         const removed = removeGeneratedBeatText(doc, beat);
         updateStoryDoc(activeStoryDocId, {
             body: removed.body,
@@ -8069,9 +7579,7 @@ function autosizeStoryBeatInput(input) {
 function setStorySaveState(label) {
     const el = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-save-state]');
     if (el) {
-        el.textContent = label === 'Saved' && activeStoryDocId
-            ? describeStoryArchiveCaptureState(activeStoryDocId).label
-            : label;
+        el.textContent = label;
     }
 }
 
@@ -8338,128 +7846,6 @@ function closeStoryToolPanel() {
     editor?.querySelectorAll('[data-remodel-storydoc-tool].is-active').forEach((button) => button.classList.remove('is-active'));
 }
 
-const STORY_ARCHIVE_CATCHUP_ID = 'remodel-story-archive-catchup';
-
-function flushStoryDocForArchive(docId) {
-    if (!docId || docId !== activeStoryDocId) return getStoryDoc(docId);
-    clearTimeout(storyEditorSaveTimer);
-    const prose = getRealStoryEditor()?.querySelector('[data-remodel-storydoc-prose]');
-    if (prose) updateStoryDoc(docId, readStoryEditorState(prose));
-    return getStoryDoc(docId);
-}
-
-function openStoryArchiveCatchUp(sceneId) {
-    document.getElementById(STORY_ARCHIVE_CATCHUP_ID)?.remove();
-    const scene = getScene(sceneId);
-    if (!scene || scene.mode !== 'story' || !scene.storyDocId) return;
-    const doc = flushStoryDocForArchive(scene.storyDocId);
-    const preview = previewStoryArchiveCatchUp(scene.storyDocId);
-    if (!doc || !preview) return;
-
-    const overlay = document.createElement('div');
-    overlay.id = STORY_ARCHIVE_CATCHUP_ID;
-    overlay.className = 'remodel-rp-picker-scrim';
-    overlay._remodelStoryArchiveCatchUp = { sceneId: scene.id, docId: doc.id, previewToken: preview.token, busy: false };
-    const count = preview.changes.length;
-    const workCount = count + preview.counts.retries;
-    const blockCount = preview.changes.reduce((total, change) => total + splitStoryArchiveAddition(change).length, 0);
-    overlay.innerHTML = `
-        <section class="remodel-story-archive-catchup" role="dialog" aria-modal="true" aria-labelledby="remodel-story-archive-catchup-title">
-            <header class="remodel-rp-picker-head">
-                <div>
-                    <div class="remodel-rp-picker-kicker">Shared Timeline Archive</div>
-                    <div class="remodel-rp-picker-title" id="remodel-story-archive-catchup-title">Catch up ${escapeHtml(scene.title || doc.title)}</div>
-                    <div class="remodel-rp-picker-hint">Review the exact manuscript changes before the Loom records them. This never rewrites the manuscript.</div>
-                </div>
-                <button type="button" class="remodel-rp-picker-x" data-remodel-story-archive-catchup-close aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
-            </header>
-            <div class="remodel-story-archive-catchup-summary">
-                <span><b>${preview.counts.additions}</b> addition${preview.counts.additions === 1 ? '' : 's'}</span>
-                <span><b>${preview.counts.edits}</b> edit${preview.counts.edits === 1 ? '' : 's'}</span>
-                <span><b>${preview.counts.deletions}</b> deletion${preview.counts.deletions === 1 ? '' : 's'}</span>
-                ${blockCount ? `<span><b>${blockCount}</b> Loom block${blockCount === 1 ? '' : 's'} · up to ${STORY_ARCHIVE_PASSAGE_MAX_WORDS.toLocaleString()} words each</span>` : ''}
-                ${preview.counts.retries ? `<span><b>${preview.counts.retries}</b> retry</span>` : ''}
-                <small>Manuscript revision ${preview.bodyRevision}</small>
-            </div>
-            <div class="remodel-story-archive-catchup-list">
-                ${count ? preview.changes.map(renderStoryArchiveCatchUpChange).join('') : preview.counts.retries ? '<div class="remodel-story-archive-catchup-empty"><i class="fa-solid fa-rotate"></i><strong>A previous Archive pass needs another attempt.</strong><span>Large passages are divided into bounded sections before retrying.</span></div>' : '<div class="remodel-story-archive-catchup-empty"><i class="fa-solid fa-circle-check"></i><strong>The Archive is caught up.</strong><span>No uncaptured additions, edits, or deletions were found.</span></div>'}
-            </div>
-            <footer class="remodel-story-archive-catchup-foot">
-                <p data-remodel-story-archive-catchup-status>${count ? `${count} change${count === 1 ? '' : 's'} will be sent as ${blockCount} closed Loom block${blockCount === 1 ? '' : 's'}.` : preview.counts.retries ? `${preview.counts.retries} failed capture ready to retry.` : 'Nothing will be sent.'}</p>
-                <div>
-                    <button type="button" data-remodel-story-archive-catchup-close>Cancel</button>
-                    <button type="button" class="is-primary" data-remodel-story-archive-catchup-apply ${workCount ? '' : 'disabled'}><i class="fa-solid fa-box-archive"></i> ${count ? 'Capture changes' : 'Retry catch-up'}</button>
-                </div>
-            </footer>
-        </section>`;
-    document.body.appendChild(overlay);
-    requestAnimationFrame(() => overlay.classList.add('remodel-rp-picker-in'));
-
-    overlay.addEventListener('click', (event) => {
-        const target = event.target instanceof Element ? event.target : null;
-        if (!target) return;
-        if (target === overlay || target.closest('[data-remodel-story-archive-catchup-close]')) {
-            closeStoryArchiveCatchUp();
-            return;
-        }
-        if (target.closest('[data-remodel-story-archive-catchup-apply]')) submitStoryArchiveCatchUp(overlay);
-    });
-}
-
-function renderStoryArchiveCatchUpChange(change, index) {
-    const label = change.type === 'addition' ? 'Addition' : change.type === 'edit' ? 'Edit' : 'Deletion';
-    const before = change.beforeText
-        ? `<div><span>Before</span><pre>${escapeHtml(change.beforeText)}</pre></div>` : '';
-    const after = change.afterText
-        ? `<div><span>After</span><pre>${escapeHtml(change.afterText)}</pre></div>` : '<div><span>After</span><pre class="is-empty">Deleted</pre></div>';
-    return `<article class="remodel-story-archive-catchup-change is-${change.type}">
-        <header><span>${index + 1}</span><strong>${label}</strong><small>Characters ${change.start}-${change.end}</small></header>
-        <div class="remodel-story-archive-catchup-diff">${before}${after}</div>
-    </article>`;
-}
-
-function closeStoryArchiveCatchUp() {
-    const overlay = document.getElementById(STORY_ARCHIVE_CATCHUP_ID);
-    if (!overlay || overlay._remodelStoryArchiveCatchUp?.busy) return;
-    overlay.classList.remove('remodel-rp-picker-in');
-    setTimeout(() => overlay.remove(), 200);
-}
-
-async function submitStoryArchiveCatchUp(overlay) {
-    const state = overlay?._remodelStoryArchiveCatchUp;
-    if (!state || state.busy) return;
-    const scene = getScene(state.sceneId);
-    if (!scene) return;
-    flushStoryDocForArchive(state.docId);
-    const result = captureStoryArchiveCatchUp({
-        scene,
-        docId: state.docId,
-        previewToken: state.previewToken,
-        onStateChange: (archiveState) => {
-            if (activeStoryDocId === state.docId) setStorySaveState(archiveState.label);
-            renderTimelinePanel();
-        },
-    });
-    if (result.stale) {
-        const status = overlay.querySelector('[data-remodel-story-archive-catchup-status]');
-        if (status) status.textContent = 'The manuscript changed while this preview was open. Refreshing the exact delta...';
-        setTimeout(() => openStoryArchiveCatchUp(state.sceneId), 350);
-        return;
-    }
-    state.busy = true;
-    const button = overlay.querySelector('[data-remodel-story-archive-catchup-apply]');
-    if (button instanceof HTMLButtonElement) {
-        button.disabled = true;
-        button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Archive syncing...';
-    }
-    if (activeStoryDocId === state.docId) setStorySaveState('Archive queued');
-    overlay._remodelStoryArchiveCatchUp.busy = false;
-    closeStoryArchiveCatchUp();
-    await result.completion;
-    renderTimelinePanel();
-    if (activeStoryDocId === state.docId) renderStoryEditor();
-}
-
 // --- Scene connections, Loom recipe and Archive timing ---------------------
 //
 // One dialog for how a Story Scene generates. These settings used to live in
@@ -8677,7 +8063,7 @@ async function openStoryToolPanel(tool, trigger = null) {
     const editor = getRealStoryEditor();
     if (tool === 'archive') {
         closeStoryToolPanel();
-        openStoryArchiveCatchUp(getActiveScene()?.id);
+        window.toastr?.info?.('The Loom Archive has moved to lorebooks.');
         return;
     }
     if (tool === 'loom') {
@@ -8838,26 +8224,6 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
     try {
         const chid = doc?.boundCharacterId == null ? null : Number(doc.boundCharacterId);
         const character = Number.isInteger(chid) ? ctx.characters?.[chid] : null;
-        const scene = getActiveScene();
-        let worldSense = null;
-        let worldSenseError = '';
-        if (scene?.mode === 'story') {
-            try {
-                worldSense = await (dryRun ? previewWorldSense : resolveWorldSense)(scene, buildStoryWorldSenseOptions({
-                    doc,
-                    mode,
-                    beat,
-                    cast: character ? [{
-                        label: character.name || '',
-                        description: character.description || '',
-                        personality: character.personality || '',
-                        scenario: character.scenario || '',
-                    }] : [],
-                }));
-            } catch (error) {
-                worldSenseError = `Story World Sense failed open: ${String(error?.message || error)}`;
-            }
-        }
         const wi = await resolveStoryWorldInfo({
             doc,
             mode,
@@ -8867,7 +8233,7 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
             // The Timeline this Scene belongs to may bind a lorebook of its own,
             // shared by every Scene under it.
             timelineLorebook: getActiveTimelineLorebook(),
-            forcedEntries: storyWorldSenseLoreSelection(worldSense).selected,
+            forcedEntries: [],
         });
         const macroOptions = wi.macroOptions;
         const resolve = (value) => ctx.substituteParams?.(String(value || ''), macroOptions) || String(value || '');
@@ -8890,8 +8256,7 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
             guidance,
         ].filter(Boolean).join('\n\n');
         const depthText = (wi.worldInfoDepth?.messages || []).map((message) => `[${message.role} · depth ${message.depth}]\n${message.content}`).join('\n');
-        const continuityRecall = formatStoryWorldSenseContinuity(worldSense);
-        const contextBlock = [continuityRecall, wi.worldInfoBefore, wi.worldInfoAfter, wi.worldInfoExamples, depthText].filter(Boolean).join('\n\n');
+        const contextBlock = [wi.worldInfoBefore, wi.worldInfoAfter, wi.worldInfoExamples, depthText].filter(Boolean).join('\n\n');
         return {
             systemPrompt,
             contextBlock,
@@ -8904,7 +8269,7 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
             authorGuidance: guidance,
             outlets: wi.outlets || {},
             activatedEntries: wi.activatedEntries || [],
-            diagnostics: [...(wi.diagnostics || []), ...(worldSenseError ? [worldSenseError] : [])],
+            diagnostics: [...(wi.diagnostics || [])],
             // False here: everything below is the resolver's own accounting of
             // what it did (an unbound character, a budget cut, a missing
             // lorebook) — information about how resolution went, not a sign the
@@ -8917,8 +8282,6 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
             budget: wi.budget || null,
             pendingState: wi.pendingState,
             macroOptions: wi.macroOptions || macroOptions,
-            worldSense,
-            continuityRecall,
         };
     } catch (err) {
         console.warn('Remodel Story: isolated context seam failed — generating without WI/card context.', err);
@@ -8948,8 +8311,6 @@ async function assembleStoryContext({ doc = getStoryDoc(activeStoryDocId), mode 
             budget: null,
             pendingState: doc?.worldInfoState,
             macroOptions,
-            worldSense: null,
-            continuityRecall: '',
         };
     }
 }
@@ -8969,7 +8330,6 @@ function buildStoryPromptSources(doc, assembled, { mode = 'continue', beat = '' 
         worldInfoDepth: assembled?.worldInfoDepth || { messages: [] },
         authorGuidance: assembled?.authorGuidance || '',
         priorText: [
-            assembled?.continuityRecall || '',
             doc?.priorText ? `=== PRIOR SCENE TEXT ===\n${doc.priorText}` : '',
         ].filter(Boolean).join('\n\n'),
         manuscript,
@@ -9178,31 +8538,8 @@ async function generateStory({ mode = 'continue', beat = '', beatId = null } = {
             storyStreamAbort = null;
         }
 
-        const inserted = beatId ? insertStoryBeatProse(beatId, prose) : appendStoryProse(prose);
+        if (beatId) insertStoryBeatProse(beatId, prose); else appendStoryProse(prose);
         updateStoryDoc(activeStoryDocId, { worldInfoState: advanceStoryWorldInfoState(assembled.pendingState) });
-        const scene = getActiveScene();
-        const captures = inserted && scene?.mode === 'story' && scene.storyArchiveMode !== 'manual'
-            ? createStoryArchiveCaptures(activeStoryDocId, {
-                origin: 'story-narrator',
-                text: inserted.text,
-                start: inserted.start,
-                end: inserted.end,
-                generationId: storyGenerationId,
-                beatId,
-            })
-            : [];
-        if (captures.length && scene) {
-            setStorySaveState(describeStoryArchiveCaptureState(activeStoryDocId).label);
-            void queueStoryArchiveCaptures({
-                scene,
-                docId: activeStoryDocId,
-                captureIds: captures.map((capture) => capture.id),
-                onStateChange: (state) => {
-                    if (getActiveScene()?.id === scene.id) setStorySaveState(state.label);
-                    renderTimelinePanel();
-                },
-            });
-        }
         renderStoryEditor(true);
         return true;
     } catch (err) {
@@ -9492,7 +8829,6 @@ function renderRoleplayComposer(root) {
                 <span>${directionUi.active ? 'Directed' : 'Free play'}</span>
             </button>
             ${directionUi.active ? `<small class="remodel-live-state" data-remodel-live-state>${escapeHtml(directionUi.state)}</small>` : ''}
-            ${directionUi.archive?.label ? `<button type="button" class="remodel-live-archive-status is-${escapeAttribute(directionUi.archive.status)}" data-remodel-live-archive-status ${directionUi.archive.repairAction === 'retry' ? 'data-remodel-rp-action="archive-retry"' : 'disabled'} title="${escapeAttribute(directionUi.archive.error?.message || directionUi.archive.label)}"><i class="fa-solid fa-box-archive" aria-hidden="true"></i> ${escapeHtml(directionUi.archive.label)}</button>` : ''}
             ${directionUi.active ? `<small class="remodel-live-progress" data-remodel-live-progress role="status" aria-live="polite"${directionUi.progress ? ` title="${escapeAttribute(formatLiveProgressDiagnostics(directionUi.progress))}"` : ' hidden'}><i class="fa-solid fa-circle-notch" aria-hidden="true"></i><span>${directionUi.progress ? escapeHtml(formatLiveProgress(directionUi.progress)) : ''}</span></small>` : ''}
             ${directionUi.performerLabel ? `<small>${escapeHtml(directionUi.performerLabel)}</small>` : ''}
             <em data-remodel-live-opening${directionUi.openingLabel ? '' : ' hidden'}><i class="fa-regular fa-lightbulb"></i> <span>${escapeHtml(directionUi.openingLabel || '')}</span></em>
@@ -9876,7 +9212,7 @@ async function openRoleplayPromptPreview() {
                 ${previewTab('narrator', 'Narrator', defaultTab)}
                 ${previewTab('loom', 'Loom', defaultTab)}
             </div>
-            ${previewPanel('narrator', defaultTab, `<div class="remodel-rp-preview-note">The Narrator Policy and prompt order are editable in Prompt Studio. <strong>{{loom.scene}}</strong>, <strong>{{loom.characters}}</strong> and <strong>{{loom.events}}</strong> resolve the current Narrator-visible Loom Archive at request time.</div>`)}
+            ${previewPanel('narrator', defaultTab, `<div class="remodel-rp-preview-note">The Narrator Policy and prompt order are editable in Prompt Studio.</div>`)}
             ${previewPanel('loom', defaultTab, '<div class="remodel-rp-preview-note">The private Narrator draft and reasoning do not exist until Narrator runs, so those two values are shown as explicit placeholders. Every other Loom recipe block is resolved from the current scene and composer draft.</div>')}
         </div>
     `;
@@ -9892,44 +9228,11 @@ async function openRoleplayPromptPreview() {
     try {
         const visibleComposer = getRealRoleplayRoot()?.querySelector('[data-remodel-rp-input]');
         const composerText = visibleComposer instanceof HTMLTextAreaElement ? visibleComposer.value : '';
-        let worldSense = null;
-        let worldSenseWarning = '';
-        if (directed && activeScene) {
-            try {
-                worldSense = await previewLiveDirectionLore(activeScene, composerText);
-            } catch (error) {
-                worldSenseWarning = `World Sense preview fell back to native keywords: ${String(error?.message || error)}`;
-            }
-        }
-        const archiveProjection = directed && activeScene
-            ? buildSceneArchiveProjection(activeScene.timelineId, activeScene.id, {
-                query: [composerText],
-                continuity: worldSense?.continuity || [],
-            })
-            : null;
-        const narratorGrounding = directed && activeScene
-            ? (args = {}) => buildNarratorArchivistSections(activeScene.timelineId, activeScene.id, {
-                events: args.events,
-                archiveProjection,
-                archiveQuery: [composerText],
-            })
-            : undefined;
-        const narratorRecall = directed && activeScene
-            ? (args = {}) => buildNarratorRecallSections(activeScene.timelineId, activeScene.id, {
-                scenes: args.scenes,
-                archiveProjection,
-            })
-            : undefined;
         const { generateData, warnings } = await runPromptPreviewDryRun('normal', {
             composerText,
-            narratorGrounding,
-            narratorRecall,
-            prevEvents: activeScene ? (args = {}) => renderPrevEvents(activeScene.timelineId, activeScene.id, { scenes: args.scenes }) : undefined,
             narratorNote: readRoleplayNarratorNote(),
-            worldSense,
             stripNativeNewChatBootstrap: true,
         });
-        if (worldSenseWarning) warnings.push(worldSenseWarning);
         const attachedGoalIntents = activeScene ? getStoryGoalComposerIntents(activeScene.id) : [];
         if (attachedGoalIntents.length) {
             warnings.push(`${attachedGoalIntents.length} attached Story Goal attempt${attachedGoalIntents.length === 1 ? '' : 's'} will be assessed by the Loom after the Narrator drafts; preview never rolls or mutates.`);
@@ -10315,7 +9618,6 @@ function refreshLiveDirectionChrome(run = directedTurnController.getRun()) {
     const flow = zone?.querySelector('[data-remodel-live-flow]');
     if (flow) {
         const ui = directedTurnController.getUiState(getActiveScene());
-        syncLiveArchiveStatus(flow, ui.archive);
         // The mode label is left alone on purpose: it names which mode the
         // Scene is IN ("Directed" / "Free play") and must not be overwritten
         // with the transient run state, which is what used to make it
@@ -10390,33 +9692,6 @@ function refreshLiveDirectionChrome(run = directedTurnController.getRun()) {
         removeRoleplayTypingIndicator();
         ensureLoomReviewIndicator(root, run?.phase);
     }
-}
-
-/** Keep the background worker badge live without rebuilding the Roleplay page. */
-function syncLiveArchiveStatus(flow, archive) {
-    let badge = flow?.querySelector('[data-remodel-live-archive-status]');
-    const label = String(archive?.label || '').trim();
-    if (!label) {
-        badge?.remove();
-        return;
-    }
-    if (!(badge instanceof HTMLButtonElement)) {
-        badge = document.createElement('button');
-        badge.type = 'button';
-        badge.dataset.remodelLiveArchiveStatus = '';
-        const progress = flow.querySelector('[data-remodel-live-progress]');
-        flow.insertBefore(badge, progress || null);
-    }
-    badge.className = `remodel-live-archive-status is-${String(archive.status || 'idle')}`;
-    badge.title = String(archive?.error?.message || label);
-    badge.disabled = archive?.repairAction !== 'retry';
-    if (archive?.repairAction === 'retry') badge.dataset.remodelRpAction = 'archive-retry';
-    else delete badge.dataset.remodelRpAction;
-    badge.replaceChildren();
-    const icon = document.createElement('i');
-    icon.className = 'fa-solid fa-box-archive';
-    icon.setAttribute('aria-hidden', 'true');
-    badge.append(icon, document.createTextNode(` ${label}`));
 }
 
 function formatLiveProgress(progress) {
@@ -10535,11 +9810,6 @@ function handleRoleplayAction(action) {
         }
         case 'connections': {
             openRoleplayConnectionPicker();
-            break;
-        }
-        case 'archive-retry': {
-            retryLiveDirectionArchive(getActiveScene());
-            renderTimelinePanel();
             break;
         }
         case 'add-cast': {
@@ -10934,7 +10204,6 @@ function bindRoleplayComposerEvents() {
         if (input instanceof HTMLTextAreaElement) {
             autosizeRoleplayInput(input);
             directedTurnController.interrupt(input.value);
-            prefetchLiveDirectionLore(getActiveScene(), input.value);
             return;
         }
 
@@ -11602,21 +10871,15 @@ function renderRoleplayScene() {
     // Written onto the native prompt rather than injected at a chat depth, so
     // the recipe's own ordering places it. See setRemodelNativePromptContent.
     setRemodelNativePromptContent('storyGoals', (args = {}) => formatStoryGoalsPrompt(activeRoleplayScene, { limit: args.limit }));
-    // Universal split-state macros. Each is a no-op unless the recipe actually
-    // uses it, so routing all of them here is safe. The self-contained ones
-    // resolve from the active scene; prev.events/loom.action need per-request
-    // context (a recall projection / the live action) and are filled at
-    // generation time, so they resolve empty here and are overwritten then.
+    // Surviving split-state macros (story.goals is routed above). Each is a
+    // no-op unless the recipe actually uses it, so routing them here is safe.
+    // loom.goals/loom.variables resolve from the active scene; loom.action needs
+    // the live action and is filled at generation time, so it resolves empty
+    // here and is overwritten then.
     const tl = activeRoleplayScene?.timelineId;
-    const sc = activeRoleplayScene?.id;
-    setRemodelNativePromptContent('loomScene', () => renderLoomScene(tl, sc));
-    setRemodelNativePromptContent('loomCharacters', () => renderLoomCharacters(tl, sc));
-    setRemodelNativePromptContent('loomEvents', (args = {}) => renderLoomEvents(tl, sc, { events: args.events }));
     setRemodelNativePromptContent('loomGoals', (args = {}) => renderLoomGoals(tl, { limit: args.limit, secret: args.secret }));
     setRemodelNativePromptContent('loomVariables', (args = {}) => renderLoomVariables(tl, { limit: args.limit }));
-    setRemodelNativePromptContent('loomSecrets', () => renderLoomSecrets(tl, sc));
     setRemodelNativePromptContent('loomAction', () => renderLoomAction(''));
-    setRemodelNativePromptContent('prevEvents', (args = {}) => renderPrevEvents(tl, sc, { scenes: args.scenes }));
     // Narrator Grounding is dynamic recipe content. Keep its persistent native
     // prompt object empty between requests; live generation and Preview resolve
     // the current Archive into it only while assembling their request.

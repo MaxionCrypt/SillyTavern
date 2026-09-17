@@ -4,7 +4,6 @@ import { getStringHash } from '../../../utils.js';
 import { WebLlmVectorProvider } from '../../vectors/webllm.js';
 import { listLoreEntries } from './variables-lore.js';
 import { getVariableValue, getVectorIndexState, listVariableValues, updateVectorIndexState } from './variables-store.js';
-import { getWorldSenseProfile } from './world-sense-store.js';
 
 const webllm = new WebLlmVectorProvider();
 const SUPPORTED_SOURCES = new Set([
@@ -152,7 +151,7 @@ function providerOptions(source, settings) {
     // Remodel's semantic consumers share one local model. Otherwise Variables
     // and World Sense would repeatedly dispose and reload different
     // feature-extraction pipelines during the same turn.
-    if (source === 'transformers') options.model = getWorldSenseProfile().modelId;
+    if (source === 'transformers') options.model = 'Xenova/all-MiniLM-L6-v2';
     else if (settings[modelKey]) options.model = settings[modelKey];
     if (source === 'extras') {
         const root = extension_settings;

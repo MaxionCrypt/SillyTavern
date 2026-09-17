@@ -1,10 +1,4 @@
 import { getContext } from '../../../st-context.js';
-import {
-    buildStoryArchiveCatchUpPreview,
-    hashStoryArchiveText,
-    rebaseStoryArchiveProvenance,
-    splitStoryArchiveAddition,
-} from './story-archive-provenance.js';
 
 // StoryDoc: the data model for the redesigned Story mode — a real, standalone
 // document, NOT a hidden chat. A story Scene in the timeline binds to a
@@ -16,7 +10,6 @@ import {
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'storyDocsV1';
 const STORE_VERSION = 6;
-const STORY_ARCHIVE_CAPTURE_STATUSES = Object.freeze(['pending', 'processing', 'applied', 'failed', 'superseded']);
 
 function getStore() {
     const context = getContext();
@@ -66,13 +59,6 @@ export function createStoryDoc({ title = 'New Story', boundCharacterId = null } 
         // The prose. Plain text (paragraphs separated by blank lines); the
         // editor renders it and writes edits straight back here.
         body: '',
-        // Monotonic manuscript revision used by Archive provenance. Formatting,
-        // guidance and other document metadata do not advance it.
-        bodyRevision: 0,
-        // Exact accepted manuscript spans waiting for, or already processed by,
-        // the shared Timeline Loom Archive. This is provenance and retry state,
-        // not a second Archive.
-        archiveCaptures: [],
         // Inline formatting, kept OUT of `body` on purpose: a list of
         // {start,end} character ranges over `body` carrying the styles the
         // Manuscript format bar applied (font/size/bold/italic/underline).
@@ -124,11 +110,7 @@ export function updateStoryDoc(docId, patch) {
         doc.guidance = patch.guidance;
     }
     if (typeof patch.body === 'string') {
-        if (doc.body !== patch.body) {
-            rebaseStoryArchiveProvenance(doc.archiveCaptures, doc.body, patch.body);
-            doc.body = patch.body;
-            doc.bodyRevision += 1;
-        }
+        doc.body = patch.body;
     }
     if (typeof patch.priorText === 'string') {
         doc.priorText = patch.priorText;
@@ -165,202 +147,6 @@ export function updateStoryDoc(docId, patch) {
     return doc;
 }
 
-/** Queue one exact accepted manuscript span for the shared Loom Archive. */
-export function createStoryArchiveCapture(docId, input = {}) {
-    const store = getStore();
-    const doc = store.docs[docId];
-    const changeType = ['addition', 'edit', 'deletion'].includes(input.changeType) ? input.changeType : 'addition';
-    const beforeText = String(input.beforeText || '');
-    const text = String(input.text ?? input.afterText ?? '').trim();
-    if (!doc || (!text && !beforeText)) return null;
-    const origin = input.origin === 'user' ? 'user' : 'story-narrator';
-    const generationId = String(input.generationId || '');
-    const beatId = input.beatId == null ? null : String(input.beatId);
-    const contentHash = hashText(`${changeType}\n${beforeText}\n${text}`);
-    const stableKey = String(input.stableKey || (generationId
-        ? `${origin}:${generationId}:${beatId || ''}`
-        : `${origin}:${doc.bodyRevision}:${contentHash}`));
-    const existing = doc.archiveCaptures.find((capture) => capture.stableKey === stableKey);
-    if (existing) return existing;
-
-    if (beatId) {
-        for (const capture of doc.archiveCaptures) {
-            // One accepted Narrator turn can legitimately become several
-            // bounded Archive captures. They share its generation id and must
-            // remain active together; a later generation for the same beat
-            // replaces the whole earlier set.
-            const belongsToThisGeneration = generationId && capture.generationId === generationId;
-            if (capture.beatId === beatId && capture.status !== 'superseded' && !belongsToThisGeneration) {
-                capture.status = 'superseded';
-                capture.supersededAt = now();
-                capture.updatedAt = capture.supersededAt;
-            }
-        }
-    }
-
-    const timestamp = now();
-    const start = Math.max(0, Math.min(doc.body.length, Number(input.start) || 0));
-    const end = Math.max(start, Math.min(doc.body.length, Number(input.end) || start + text.length));
-    const capture = {
-        id: createId('story-capture'),
-        stableKey,
-        origin,
-        text,
-        contentHash,
-        start,
-        end,
-        bodyRevision: doc.bodyRevision,
-        generationId,
-        beatId,
-        changeType,
-        beforeText,
-        supersedesCaptureIds: Array.isArray(input.supersedesCaptureIds) ? input.supersedesCaptureIds.map(String) : [],
-        sourceStatus: 'current',
-        currentText: '',
-        status: 'pending',
-        attempts: 0,
-        transactionId: null,
-        worldSenseReceiptId: null,
-        livingLorePacket: null,
-        timelineWebPacket: null,
-        webReceipt: null,
-        loreProposals: [],
-        loreProposalRejections: [],
-        loreProposalIds: [],
-        archiveFacts: [],
-        error: '',
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        appliedAt: null,
-        supersededAt: null,
-    };
-    doc.archiveCaptures.push(capture);
-    doc.updatedAt = timestamp;
-    saveStoryDocStore();
-    return capture;
-}
-
-/**
- * Create the Archive evidence records for one accepted manuscript change.
- * Additions are divided at natural boundaries into contiguous, bounded
- * blocks; edits and deletions remain one atomic before/after record.
- */
-export function createStoryArchiveCaptures(docId, input = {}) {
-    const changeType = ['addition', 'edit', 'deletion'].includes(input.changeType) ? input.changeType : 'addition';
-    if (changeType !== 'addition') {
-        const capture = createStoryArchiveCapture(docId, input);
-        return capture ? [capture] : [];
-    }
-    const text = String(input.text ?? input.afterText ?? '').trim();
-    if (!text) return [];
-    const start = Math.max(0, Number(input.start) || 0);
-    const parts = splitStoryArchiveAddition({
-        id: String(input.stableKey || input.generationId || `story-capture:${start}`),
-        type: 'addition',
-        start,
-        end: Math.max(start, Number(input.end) || start + text.length),
-        afterText: text,
-    });
-    if (parts.length <= 1) {
-        const capture = createStoryArchiveCapture(docId, input);
-        return capture ? [capture] : [];
-    }
-    const origin = input.origin === 'user' ? 'user' : 'story-narrator';
-    const baseStableKey = String(input.stableKey || (input.generationId
-        ? `${origin}:${input.generationId}:${input.beatId == null ? '' : input.beatId}`
-        : `${origin}:multipart:${start}:${text.length}`));
-    return parts.map((part) => createStoryArchiveCapture(docId, {
-        ...input,
-        text: part.afterText,
-        start: part.start,
-        end: part.end,
-        stableKey: `${baseStableKey}:part:${part.part}-of-${part.totalParts}`,
-    })).filter(Boolean);
-}
-
-export function previewStoryArchiveCatchUp(docId) {
-    const doc = getStoryDoc(docId);
-    return doc ? buildStoryArchiveCatchUpPreview(doc) : null;
-}
-
-export function supersedeStoryArchiveCaptures(docId, captureIds, supersededBy = null) {
-    const store = getStore();
-    const doc = store.docs[docId];
-    const ids = new Set((captureIds || []).map(String));
-    if (!doc || !ids.size) return [];
-    const timestamp = now();
-    const changed = [];
-    for (const capture of doc.archiveCaptures || []) {
-        if (!ids.has(capture.id) || capture.status === 'superseded') continue;
-        capture.status = 'superseded';
-        capture.supersededAt = timestamp;
-        capture.supersededBy = supersededBy == null ? null : String(supersededBy);
-        capture.updatedAt = timestamp;
-        changed.push(capture);
-    }
-    if (changed.length) {
-        doc.updatedAt = timestamp;
-        saveStoryDocStore();
-    }
-    return changed;
-}
-
-export function getStoryArchiveCapture(docId, captureId) {
-    return getStoryDoc(docId)?.archiveCaptures?.find((capture) => capture.id === String(captureId || '')) || null;
-}
-
-export function listStoryArchiveCaptures(docId, { statuses = null } = {}) {
-    const captures = getStoryDoc(docId)?.archiveCaptures || [];
-    const allowed = Array.isArray(statuses) ? new Set(statuses) : null;
-    return captures.filter((capture) => !allowed || allowed.has(capture.status));
-}
-
-export function updateStoryArchiveCapture(docId, captureId, patch = {}) {
-    const store = getStore();
-    const doc = store.docs[docId];
-    const capture = doc?.archiveCaptures?.find((item) => item.id === String(captureId || ''));
-    if (!capture) return null;
-    if (STORY_ARCHIVE_CAPTURE_STATUSES.includes(patch.status)) capture.status = patch.status;
-    if (Number.isFinite(Number(patch.attempts))) capture.attempts = Math.max(0, Math.floor(Number(patch.attempts)));
-    if ('transactionId' in patch) capture.transactionId = patch.transactionId == null ? null : String(patch.transactionId);
-    if ('worldSenseReceiptId' in patch) capture.worldSenseReceiptId = patch.worldSenseReceiptId == null ? null : String(patch.worldSenseReceiptId);
-    if ('livingLorePacket' in patch) capture.livingLorePacket = patch.livingLorePacket && typeof patch.livingLorePacket === 'object' ? structuredClone(patch.livingLorePacket) : null;
-    if ('timelineWebPacket' in patch) capture.timelineWebPacket = patch.timelineWebPacket && typeof patch.timelineWebPacket === 'object' ? structuredClone(patch.timelineWebPacket) : null;
-    if ('webReceipt' in patch) capture.webReceipt = patch.webReceipt && typeof patch.webReceipt === 'object' ? structuredClone(patch.webReceipt) : null;
-    if (Array.isArray(patch.loreProposals)) capture.loreProposals = structuredClone(patch.loreProposals);
-    if (Array.isArray(patch.loreProposalRejections)) capture.loreProposalRejections = structuredClone(patch.loreProposalRejections);
-    if (Array.isArray(patch.loreProposalIds)) capture.loreProposalIds = patch.loreProposalIds.map(String);
-    if (Array.isArray(patch.archiveFacts)) capture.archiveFacts = patch.archiveFacts.map(String).filter(Boolean);
-    if (typeof patch.error === 'string') capture.error = patch.error;
-    if ('appliedAt' in patch) capture.appliedAt = patch.appliedAt || null;
-    if ('supersededAt' in patch) capture.supersededAt = patch.supersededAt || null;
-    capture.updatedAt = now();
-    doc.updatedAt = capture.updatedAt;
-    saveStoryDocStore();
-    return capture;
-}
-
-export function supersedeStoryArchiveCapturesForBeat(docId, beatId) {
-    const store = getStore();
-    const doc = store.docs[docId];
-    const id = String(beatId || '');
-    if (!doc || !id) return [];
-    const timestamp = now();
-    const changed = [];
-    for (const capture of doc.archiveCaptures || []) {
-        if (capture.beatId !== id || capture.status === 'superseded') continue;
-        capture.status = 'superseded';
-        capture.supersededAt = timestamp;
-        capture.updatedAt = timestamp;
-        changed.push(capture);
-    }
-    if (changed.length) {
-        doc.updatedAt = timestamp;
-        saveStoryDocStore();
-    }
-    return changed;
-}
-
 export function deleteStoryDoc(docId) {
     const store = getStore();
     if (!store.docs[docId]) {
@@ -393,29 +179,6 @@ function normalizeStore(store) {
         doc.title ??= 'New Story';
         doc.guidance ??= '';
         doc.body ??= '';
-        doc.bodyRevision = Math.max(0, Math.floor(Number(doc.bodyRevision) || 0));
-        doc.archiveCaptures = Array.isArray(doc.archiveCaptures)
-            ? doc.archiveCaptures.map(normalizeArchiveCapture).filter(Boolean)
-            : [];
-        for (const capture of doc.archiveCaptures) {
-            if (capture.status === 'superseded' || capture.changeType === 'deletion') continue;
-            if (doc.body.slice(capture.start, capture.end) === capture.text) continue;
-            // V3 did not rebase capture offsets while the author edited. A
-            // unique surviving source span is safe to relocate during the V4
-            // migration; ambiguous or genuinely changed text stays dirty for
-            // the owner's catch-up preview instead of being guessed.
-            const first = capture.text ? doc.body.indexOf(capture.text) : -1;
-            const unique = first >= 0 && doc.body.indexOf(capture.text, first + 1) < 0;
-            if (unique) {
-                capture.start = first;
-                capture.end = first + capture.text.length;
-                capture.sourceStatus = 'current';
-                capture.currentText = '';
-            } else {
-                capture.sourceStatus = 'changed';
-                capture.currentText = doc.body.slice(capture.start, capture.end);
-            }
-        }
         doc.priorText ??= '';
         doc.priorSceneId = doc.priorSceneId == null ? null : String(doc.priorSceneId);
         doc.beats = Array.isArray(doc.beats) ? doc.beats.map(normalizeBeat).filter(Boolean) : [];
@@ -485,53 +248,6 @@ function normalizeBeat(value) {
         createdAt: value.createdAt || now(),
         updatedAt: value.updatedAt || now(),
     };
-}
-
-function normalizeArchiveCapture(value) {
-    if (!value || typeof value !== 'object' || !value.id
-        || (!String(value.text || '').trim() && !String(value.beforeText || '').trim())) return null;
-    const text = String(value.text).trim();
-    const start = Math.max(0, Math.floor(Number(value.start) || 0));
-    const end = Math.max(start, Math.floor(Number(value.end) || start + text.length));
-    const status = STORY_ARCHIVE_CAPTURE_STATUSES.includes(value.status) ? value.status : 'pending';
-    return {
-        id: String(value.id),
-        stableKey: String(value.stableKey || `${value.origin || 'story-narrator'}:${value.generationId || ''}:${hashText(text)}`),
-        origin: value.origin === 'user' ? 'user' : 'story-narrator',
-        text,
-        contentHash: String(value.contentHash || hashText(text)),
-        start,
-        end,
-        bodyRevision: Math.max(0, Math.floor(Number(value.bodyRevision) || 0)),
-        generationId: String(value.generationId || ''),
-        beatId: value.beatId == null ? null : String(value.beatId),
-        changeType: ['addition', 'edit', 'deletion'].includes(value.changeType) ? value.changeType : 'addition',
-        beforeText: String(value.beforeText || ''),
-        supersedesCaptureIds: Array.isArray(value.supersedesCaptureIds) ? value.supersedesCaptureIds.map(String) : [],
-        sourceStatus: value.sourceStatus === 'changed' ? 'changed' : 'current',
-        currentText: String(value.currentText || ''),
-        status,
-        attempts: Math.max(0, Math.floor(Number(value.attempts) || 0)),
-        transactionId: value.transactionId == null ? null : String(value.transactionId),
-        worldSenseReceiptId: value.worldSenseReceiptId == null ? null : String(value.worldSenseReceiptId),
-        livingLorePacket: value.livingLorePacket && typeof value.livingLorePacket === 'object' ? structuredClone(value.livingLorePacket) : null,
-        timelineWebPacket: value.timelineWebPacket && typeof value.timelineWebPacket === 'object' ? structuredClone(value.timelineWebPacket) : null,
-        webReceipt: value.webReceipt && typeof value.webReceipt === 'object' ? structuredClone(value.webReceipt) : null,
-        loreProposals: Array.isArray(value.loreProposals) ? structuredClone(value.loreProposals) : [],
-        loreProposalRejections: Array.isArray(value.loreProposalRejections) ? structuredClone(value.loreProposalRejections) : [],
-        loreProposalIds: Array.isArray(value.loreProposalIds) ? value.loreProposalIds.map(String) : [],
-        archiveFacts: Array.isArray(value.archiveFacts) ? value.archiveFacts.map(String).filter(Boolean) : [],
-        error: String(value.error || ''),
-        createdAt: value.createdAt || now(),
-        updatedAt: value.updatedAt || value.createdAt || now(),
-        appliedAt: value.appliedAt || null,
-        supersededAt: value.supersededAt || null,
-        supersededBy: value.supersededBy == null ? null : String(value.supersededBy),
-    };
-}
-
-function hashText(value) {
-    return hashStoryArchiveText(value);
 }
 
 function normalizeText(value, fallback) {

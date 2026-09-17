@@ -25,7 +25,6 @@ import {
     getActivePromptRecipe,
     getPromptRecipe,
     getPromptRecipes,
-    getStoryArchiveLoomRecipe as getStoredStoryArchiveLoomRecipe,
     initializePromptStudioStore,
     isPromptRecipeActive,
     setActivePromptRecipe,
@@ -222,10 +221,6 @@ export function getPromptStudioRecipe(recipeId) {
 
 export function getDefaultPromptStudioRecipe(mode, apiType) {
     return getActivePromptRecipe(mode, apiType);
-}
-
-export function getStoryArchivePromptStudioRecipe() {
-    return getStoredStoryArchiveLoomRecipe();
 }
 
 export function capturePromptStudioRuntimeSettings() {
@@ -1185,9 +1180,9 @@ function applyRecipeToNative(recipe) {
  * recipe names something core already knows how to fill.
  */
 const REMODEL_RENDERED_SOURCES = new Set([
-    'narratorGrounding', 'narratorRecall', 'narratorNote', 'storyGoals', 'nextAction',
+    'narratorNote', 'storyGoals', 'nextAction',
     // Universal split-state macros, rendered by Remodel when used in a roleplay recipe.
-    'loomAction', 'loomScene', 'loomCharacters', 'loomEvents', 'prevEvents', 'loomGoals', 'loomVariables', 'loomSecrets',
+    'loomAction', 'loomGoals', 'loomVariables',
 ]);
 
 /**
@@ -1318,7 +1313,7 @@ function applyRoleplayChatRecipe(recipe) {
     // are not part of the v14 recipe and keeping them around makes native
     // preset capture resurrect obsolete names and identifiers.
     oai_settings.prompts = oai_settings.prompts.filter((prompt) =>
-        !['remodel_loom_context', 'remodel_director_notes', 'remodel_narrator_grounding', 'remodel_narrator_time'].includes(prompt?.identifier)
+        !['remodel_loom_context', 'remodel_director_notes', 'remodel_narrator_grounding', 'remodel_narrator_recall', 'remodel_narrator_time', 'remodel_loom_scene', 'remodel_loom_characters', 'remodel_loom_events', 'remodel_loom_secrets', 'remodel_prev_events'].includes(prompt?.identifier)
         && !String(prompt?.identifier || '').startsWith('remodel-chat-history-')
         // A free-form recipe block is mirrored under this generated identifier.
         // It has no independent owner outside its recipe. Leaving one behind
@@ -1636,7 +1631,7 @@ function closeTemplatePicker() {
 }
 
 function getSourceDefinitions(recipe) {
-    // Every mode also sees the universal split-state macros (loom.scene/goals/…),
+    // Every mode also sees the universal split-state macros (loom.action/goals/variables),
     // so they can be dropped into any recipe. Mode-specific templates win a key
     // collision, so a legacy loom entry is never shadowed.
     const modeDefinitions = PROMPT_TEMPLATE_DEFINITIONS[recipe?.mode] || [];
@@ -1682,7 +1677,6 @@ function sourceDescription(recipe, key) {
         scenario: 'The Scenario field from the character card bound to the active Roleplay scene.',
         dialogueExamples: 'Example Dialogue from the bound character card, formatted by SillyTavern at generation time.',
         storyGoals: 'The active Scene’s public and private Goals, framed as pressures that the latest action may help, obstruct, or defeat.',
-        narratorGrounding: 'The current Narrator-visible Loom Archive and provisional open thread, resolved when the native Narrator request is assembled.',
         chatHistory: 'The token-budgeted messages from the active Roleplay conversation, including the newest user turn.',
         currentInput: 'The newest user message, carried through SillyTavern’s native Chat History marker.',
         generationNudge: 'The generation-specific quiet prompt or nudge supplied by SillyTavern for the current request.',
