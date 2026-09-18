@@ -37,8 +37,7 @@ import {
     substitute_find_regex,
 } from '../../regex/engine.js';
 import { getContext } from '../../../st-context.js';
-
-const MAX_SCAN_DEPTH = 1000;
+import { matchEntry, MAX_SCAN_DEPTH, clamp } from './world-info-scan.js';
 
 export function getStoryLorebookNames() {
     return Array.isArray(world_names) ? [...world_names] : [];
@@ -360,59 +359,6 @@ function buildGlobalScanData({ character, macroOptions }) {
     };
 }
 
-function matchEntry(entry, { corpus, recursionText, scanDepth, recursion, globalScanData, macroOptions }) {
-    if (entry.decorators?.includes('@@dont_activate')) return { active: false, score: 0 };
-    if (entry.decorators?.includes('@@activate') || entry.constant) return { active: true, score: Number.MAX_SAFE_INTEGER };
-    const depth = clamp(Number(entry.scanDepth ?? scanDepth) || 0, 0, MAX_SCAN_DEPTH);
-    if (depth <= 0) return { active: false, score: 0 };
-    const chunks = corpus.slice(0, depth);
-    if (recursion && recursionText.length) chunks.push(...recursionText);
-    if (entry.matchPersonaDescription && globalScanData.personaDescription) chunks.push(globalScanData.personaDescription);
-    if (entry.matchCharacterDescription && globalScanData.characterDescription) chunks.push(globalScanData.characterDescription);
-    if (entry.matchCharacterPersonality && globalScanData.characterPersonality) chunks.push(globalScanData.characterPersonality);
-    if (entry.matchCharacterDepthPrompt && globalScanData.characterDepthPrompt) chunks.push(globalScanData.characterDepthPrompt);
-    if (entry.matchScenario && globalScanData.scenario) chunks.push(globalScanData.scenario);
-    if (entry.matchCreatorNotes && globalScanData.creatorNotes) chunks.push(globalScanData.creatorNotes);
-    const haystack = chunks.join('\n');
-    const primary = Array.isArray(entry.key) ? entry.key.filter(Boolean) : [];
-    if (!primary.length) return { active: false, score: 0 };
-    const primaryMatches = primary.filter((key) => matchesKey(haystack, substituteParams(String(key), macroOptions), entry));
-    if (!primaryMatches.length) return { active: false, score: 0 };
-    const secondary = Array.isArray(entry.keysecondary) ? entry.keysecondary.filter(Boolean) : [];
-    if (!secondary.length) return { active: true, score: primaryMatches.length };
-    const secondaryMatches = secondary.filter((key) => matchesKey(haystack, substituteParams(String(key), macroOptions), entry));
-    const logic = Number(entry.selectiveLogic ?? 0);
-    const active = logic === 1
-        ? secondaryMatches.length !== secondary.length
-        : logic === 2
-            ? secondaryMatches.length === 0
-            : logic === 3
-                ? secondaryMatches.length === secondary.length
-                : secondaryMatches.length > 0;
-    const score = logic === 0 || logic === 3
-        ? primaryMatches.length + secondaryMatches.length
-        : primaryMatches.length;
-    return { active, score };
-}
-
-function matchesKey(haystack, needle, entry) {
-    if (!needle) return false;
-    const parsed = parseRegex(needle);
-    if (parsed) return parsed.test(haystack);
-    const caseSensitive = entry.caseSensitive ?? world_info_case_sensitive;
-    const source = caseSensitive ? haystack : haystack.toLowerCase();
-    const target = caseSensitive ? needle : needle.toLowerCase();
-    if (!(entry.matchWholeWords ?? world_info_match_whole_words)) return source.includes(target);
-    if (/\s/.test(target)) return source.includes(target);
-    return new RegExp(`(?:^|\\W)${escapeRegex(target)}(?:$|\\W)`, caseSensitive ? '' : 'i').test(haystack);
-}
-
-function parseRegex(value) {
-    const match = String(value).match(/^\/([\s\S]+)\/([dgimsuvy]*)$/);
-    if (!match) return null;
-    try { return new RegExp(match[1], match[2]); } catch { return null; }
-}
-
 function passesCharacterFilter(entry, characterId, character, context) {
     const filter = entry.characterFilter;
     if (!filter) return true;
@@ -649,9 +595,7 @@ function describeEntryDestination(entry) {
 
 function entryKey(entry) { return `${entry.world}.${entry.uid}`; }
 function sortEntries(a, b) { return (Number(b.order) || 0) - (Number(a.order) || 0); }
-function clamp(value, minimum, maximum) { return Math.min(maximum, Math.max(minimum, value)); }
 function unique(values) { return [...new Set((values || []).filter(Boolean))]; }
-function escapeRegex(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 function hashString(value) {
     let hash = 2166136261;
