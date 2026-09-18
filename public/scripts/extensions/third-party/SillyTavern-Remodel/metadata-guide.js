@@ -238,6 +238,7 @@ function lore() {
                 field('name', 'string', false, 'lore.create only: a short title for the new entry.'),
                 field('keys', 'array of strings', false, 'lore.create only: the exact trigger keywords the new entry answers to.'),
                 field('content', 'string', true, 'The full entry text after the change. Capped; longer content is truncated, not rejected.'),
+                field('secret', 'boolean', false, 'true hides the entry from the Narrator (Loom-only); false reveals a hidden entry. Omit to leave visibility unchanged.'),
             ]),
             note: `Up to ${MAX_LORE_OPS} ops per turn. Edit only an entry that is in the Selected Living Lore; to change one that is not, first name its key in loreKeywords to pull it in. A lore.edit whose book/uid is not in scope is refused.`,
         }),
