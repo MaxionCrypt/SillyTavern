@@ -339,17 +339,20 @@ export function readLoreOps(value) {
         if (!LORE_OP_NAMES.has(op)) continue;
         const args = entry.arguments && typeof entry.arguments === 'object' ? entry.arguments : entry;
         const content = String(args.content ?? '').slice(0, MAX_LORE_OP_CONTENT_CHARS);
+        // Optional visibility change: true hides, false reveals; anything else
+        // (null/absent) leaves the entry's secrecy untouched.
+        const secret = args.secret === true ? { secret: true } : args.secret === false ? { secret: false } : {};
         if (op === 'lore.edit') {
             const book = String(args.book ?? '').trim();
             const uid = String(args.uid ?? '').trim();
             if (!book || !uid || !content) continue;
-            out.push({ op, book, uid, content });
+            out.push({ op, book, uid, content, ...secret });
         } else {
             const name = String(args.name ?? '').trim();
             const keys = Array.isArray(args.keys) ? [...new Set(args.keys.map((k) => String(k ?? '').trim()).filter(Boolean))].slice(0, MAX_LORE_KEYWORDS) : [];
             const secondaryKeys = Array.isArray(args.secondaryKeys) ? [...new Set(args.secondaryKeys.map((k) => String(k ?? '').trim()).filter(Boolean))].slice(0, MAX_LORE_KEYWORDS) : [];
             if (!name || !keys.length || !content) continue;
-            out.push({ op, name, keys, secondaryKeys, content });
+            out.push({ op, name, keys, secondaryKeys, content, ...secret });
         }
         if (out.length >= MAX_LORE_OPS) break;
     }

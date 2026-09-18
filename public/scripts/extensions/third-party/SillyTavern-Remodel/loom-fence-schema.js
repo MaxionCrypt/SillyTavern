@@ -44,8 +44,8 @@ const GOAL_REQUEST_SHAPES = Object.freeze({
  *  timeline's bound book. Import needs no op — it is a keyword retrieval. */
 const LORE_OP_CAPABILITIES = Object.freeze(['lore.edit', 'lore.create']);
 const LORE_OP_SHAPES = Object.freeze({
-    'lore.edit': { required: ['book', 'uid', 'content'], optional: [] },
-    'lore.create': { required: ['name', 'keys', 'content'], optional: ['secondaryKeys'] },
+    'lore.edit': { required: ['book', 'uid', 'content'], optional: ['secret'] },
+    'lore.create': { required: ['name', 'keys', 'content'], optional: ['secondaryKeys', 'secret'] },
 });
 const LORE_ARG_PROPS = Object.freeze({
     book: { type: 'string', description: 'The lorebook the entry lives in (from a Selected Living Lore target).' },
@@ -54,6 +54,7 @@ const LORE_ARG_PROPS = Object.freeze({
     name: { type: 'string', description: 'A short title for the new entry.' },
     keys: { type: 'array', items: { type: 'string' }, description: 'Trigger keywords the new entry answers to.' },
     secondaryKeys: { type: 'array', items: { type: 'string' }, description: 'Extra keys that must also be present for the entry to trigger.' },
+    secret: { type: 'boolean', description: 'True hides the entry from the Narrator (Loom-only); false reveals a hidden entry. Null leaves its visibility unchanged.' },
 });
 
 /** Add 'null' to a JSON-schema type so an optional argument can be omitted as

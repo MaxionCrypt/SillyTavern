@@ -55,7 +55,10 @@ test('loreOps declares strict edit and create branches', () => {
     const caps = schema.properties.loreOps.items.anyOf.map((b) => b.properties.op.enum[0]).sort();
     expect(caps).toEqual(['lore.create', 'lore.edit']);
     const edit = schema.properties.loreOps.items.anyOf.find((b) => b.properties.op.enum[0] === 'lore.edit');
-    expect(edit.properties.arguments.required).toEqual(['book', 'uid', 'content']);
+    // Strict mode lists every property in `required`; the optional `secret` is
+    // present-but-nullable so a visibility change can be omitted as null.
+    expect(edit.properties.arguments.required).toEqual(['book', 'uid', 'content', 'secret']);
+    expect(edit.properties.arguments.properties.secret.type).toEqual(['boolean', 'null']);
 });
 
 test('only goal operations plus the two bookkeeping ops are permitted — no variable/scene/etc.', () => {

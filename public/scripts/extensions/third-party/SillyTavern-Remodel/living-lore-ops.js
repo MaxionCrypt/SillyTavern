@@ -10,6 +10,7 @@
 import { getContext } from '../../../st-context.js';
 import { listSceneEntryRefs, addEntryRefs } from './living-lore-cache-store.js';
 import { getScene, getTimelineStore } from './timeline-state.js';
+import { addSecretKeyword, removeSecretKeyword } from './living-lore-secret.js';
 
 const MAX_ENTRY_CHARS = 12000;
 
@@ -41,7 +42,7 @@ export async function applyLoreOps({ sceneId = '', timelineId = '', ops = [] } =
             const uid = String(op.uid ?? '').trim();
             if (!book || !uid) { refused.push({ op: 'lore.edit', reason: 'malformed' }); continue; }
             if (!cached.has(`${book}.${uid}`)) { refused.push({ op: 'lore.edit', book, uid, reason: 'not-in-cache' }); continue; }
-            plan(book, { kind: 'edit', book, uid, content: String(op.content ?? '').slice(0, MAX_ENTRY_CHARS) });
+            plan(book, { kind: 'edit', book, uid, content: String(op.content ?? '').slice(0, MAX_ENTRY_CHARS), secret: op.secret });
         } else if (op?.op === 'lore.create') {
             if (!timelineBook) { refused.push({ op: 'lore.create', reason: 'no-timeline-book' }); continue; }
             plan(timelineBook, {
@@ -50,6 +51,7 @@ export async function applyLoreOps({ sceneId = '', timelineId = '', ops = [] } =
                 keys: Array.isArray(op.keys) ? op.keys.map((k) => String(k)) : [],
                 secondaryKeys: Array.isArray(op.secondaryKeys) ? op.secondaryKeys.map((k) => String(k)) : [],
                 content: String(op.content ?? '').slice(0, MAX_ENTRY_CHARS),
+                secret: op.secret === true,
             });
         } else {
             refused.push({ op: String(op?.op ?? ''), reason: 'unknown-op' });
@@ -70,13 +72,19 @@ export async function applyLoreOps({ sceneId = '', timelineId = '', ops = [] } =
                 const entry = working.entries[item.uid];
                 if (!entry) { refused.push({ op: 'lore.edit', book: item.book, uid: item.uid, reason: 'entry-missing' }); continue; }
                 entry.content = item.content;
+                // Hide -> add the reserved keyword and disable so native activation
+                // skips it; reveal -> drop the keyword and re-enable. Leave both
+                // untouched when the op named no visibility change.
+                if (item.secret === true) { entry.key = addSecretKeyword(entry.key); entry.disable = true; }
+                else if (item.secret === false) { entry.key = removeSecretKeyword(entry.key); entry.disable = false; }
                 done.push({ op: 'lore.edit', book: item.book, uid: item.uid });
             } else {
                 const uid = firstFreeUid(working.entries);
                 working.entries[uid] = {
-                    uid, key: [...item.keys], keysecondary: [...item.secondaryKeys], comment: item.name,
+                    uid, key: item.secret ? addSecretKeyword(item.keys) : [...item.keys],
+                    keysecondary: [...item.secondaryKeys], comment: item.name,
                     content: item.content, constant: false, vectorized: false, selective: true, selectiveLogic: 0,
-                    order: 100, position: 0, disable: false, probability: 100, useProbability: true,
+                    order: 100, position: 0, disable: Boolean(item.secret), probability: 100, useProbability: true,
                 };
                 done.push({ op: 'lore.create', book: item.book, uid: String(uid), cacheRef: { book: item.book, uid: String(uid) } });
             }

@@ -57,3 +57,36 @@ test('lore.create is refused when the timeline has no bound book', async () => {
     expect(r.applied).toEqual([]);
     expect(r.refused[0]).toMatchObject({ op: 'lore.create', reason: 'no-timeline-book' });
 });
+
+test('lore.edit secret:true hides an entry (reserved keyword + disabled)', async () => {
+    const { sceneId, timelineId } = seed();
+    const books = withBook({ 1: { uid: 1, key: ['Rayse'], keysecondary: [], content: 'old', disable: false } });
+    addEntryRefs(sceneId, [{ book: 'TL', uid: '1' }]);
+    await applyLoreOps({ sceneId, timelineId, ops: [{ op: 'lore.edit', book: 'TL', uid: '1', content: 'now hidden', secret: true }] });
+    expect(books.TL.entries[1]).toMatchObject({ content: 'now hidden', key: ['Rayse', 'secret'], disable: true });
+});
+
+test('lore.edit secret:false reveals an entry (drops the keyword + enables)', async () => {
+    const { sceneId, timelineId } = seed();
+    const books = withBook({ 1: { uid: 1, key: ['Rayse', 'secret'], keysecondary: [], content: 'hidden', disable: true } });
+    addEntryRefs(sceneId, [{ book: 'TL', uid: '1' }]);
+    await applyLoreOps({ sceneId, timelineId, ops: [{ op: 'lore.edit', book: 'TL', uid: '1', content: 'now open', secret: false }] });
+    expect(books.TL.entries[1]).toMatchObject({ content: 'now open', key: ['Rayse'], disable: false });
+});
+
+test('lore.edit with no secret flag leaves visibility untouched', async () => {
+    const { sceneId, timelineId } = seed();
+    const books = withBook({ 1: { uid: 1, key: ['Rayse', 'secret'], keysecondary: [], content: 'hidden', disable: true } });
+    addEntryRefs(sceneId, [{ book: 'TL', uid: '1' }]);
+    await applyLoreOps({ sceneId, timelineId, ops: [{ op: 'lore.edit', book: 'TL', uid: '1', content: 'still hidden' }] });
+    expect(books.TL.entries[1]).toMatchObject({ content: 'still hidden', key: ['Rayse', 'secret'], disable: true });
+});
+
+test('lore.create secret:true makes a hidden entry that is still cached for the Loom', async () => {
+    const { sceneId, timelineId } = seed({ lorebookName: 'TL' });
+    const books = withBook({});
+    const r = await applyLoreOps({ sceneId, timelineId, ops: [{ op: 'lore.create', name: 'The Pact', keys: ['Pact'], content: 'buried', secret: true }] });
+    const uid = r.applied[0].uid;
+    expect(books.TL.entries[uid]).toMatchObject({ comment: 'The Pact', key: ['Pact', 'secret'], disable: true });
+    expect(listSceneEntryRefs(sceneId)).toContainEqual({ book: 'TL', uid: String(uid) });
+});
