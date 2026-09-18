@@ -27,6 +27,7 @@ import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources,
 import { formatLivingLorePacket } from './living-lore-proposals.js';
 import { activateKeywordGroups } from './living-lore-retrieval.js';
 import { unseenGroups, recordKeywordGroups, addEntryRefs } from './living-lore-cache-store.js';
+import { buildSceneLivingLorePacket } from './living-lore-cache-packet.js';
 import { describeBudgetWarning, describeGenerationBudget, describeIncompleteProse } from './generation-budget.js';
 import { createLoomTurnEnvelope } from './loom-turn.js';
 import { updateScene } from './timeline-state.js';
@@ -1296,7 +1297,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         narratorRef: scene.liveDirection?.narratorRef || null,
         persona,
         acceptedHistory: history,
-        livingLore: testAdapters?.livingLorePacket || null,
+        livingLore: testAdapters?.livingLorePacket || await buildSceneLivingLorePacket({ sceneId: scene?.id || '', timelineId: scene?.timelineId || '' }),
         // What the user cut into, in the performer's own words — the half that
         // reached them (already in acceptedHistory, ending exactly where the
         // reveal froze) and the half that did not. Null on an ordinary turn.
