@@ -25,6 +25,8 @@ import {
 } from './narrator-prompt.js';
 import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
 import { formatLivingLorePacket } from './living-lore-proposals.js';
+import { activateKeywordGroups } from './living-lore-retrieval.js';
+import { unseenGroups, recordKeywordGroups, addEntryRefs } from './living-lore-cache-store.js';
 import { describeBudgetWarning, describeGenerationBudget, describeIncompleteProse } from './generation-budget.js';
 import { createLoomTurnEnvelope } from './loom-turn.js';
 import { updateScene } from './timeline-state.js';
@@ -2392,6 +2394,21 @@ export async function runLoomReconciliation({
             });
         } catch {
             // A Debug viewer cannot be allowed to break reconciliation.
+        }
+    }
+    // Living Lore retrieval: each NEW keyword group the Loom named pulls its
+    // native World Info entries into this Scene's cache (groups scanned
+    // separately). Already-queried groups are skipped so a repeat costs nothing.
+    if (Array.isArray(loreKeywords) && loreKeywords.length && scene?.id) {
+        const fresh = unseenGroups(scene.id, loreKeywords);
+        if (fresh.length) {
+            try {
+                const refs = await activateKeywordGroups(fresh, { sceneId: scene.id, timelineId: scene.timelineId });
+                addEntryRefs(scene.id, refs);
+                recordKeywordGroups(scene.id, fresh);
+            } catch (error) {
+                journal('living-lore.retrieval.failed', { error: String(error?.message || error) }, { severity: 'warn' });
+            }
         }
     }
     if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections };
