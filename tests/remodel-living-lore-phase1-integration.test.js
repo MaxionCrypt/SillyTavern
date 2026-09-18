@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from '@jest/globals';
-import { initLiveDirection, setLiveDirectionTestAdapters, runLoomReconciliation, __buildLoomSnapshot } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
+import { initLiveDirection, setLiveDirectionTestAdapters, runLoomReconciliation, __buildLoomSnapshot, applyLoomLoreOps } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { __setExtensionSettings, __setContextOverrides } from './util/st-context-stub.js';
 import { __setWorldInfoState } from './util/world-info-stub.js';
 import { listSceneEntryRefs, getSceneLivingLore, addEntryRefs } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-cache-store.js';
@@ -66,4 +66,41 @@ test('an empty Scene cache produces no packet (macro renders nothing)', async ()
     const packet = await buildSceneLivingLorePacket({ sceneId: 'empty-scene', timelineId: 't1' });
     expect(packet).toBe(null);
     expect(formatLivingLorePacket(packet)).toBe('');
+});
+
+test('applyLoomLoreOps writes a cached-entry edit on commit', async () => {
+    const savedBooks = {};
+    __setContextOverrides({
+        async loadWorldInfo(name) { return name === 'TL' ? { entries: { 1: { uid: 1, key: ['Rayse'], keysecondary: [], content: 'old' } } } : null; },
+        async saveWorldInfo(name, data) { savedBooks[name] = data; },
+    });
+    addEntryRefs(scene.id, [{ book: 'TL', uid: '1' }]);
+    const run = { sceneId: scene.id, timelineId: scene.timelineId, directionId: 'd1', messageId: 0, envelope: { loreOps: [{ op: 'lore.edit', book: 'TL', uid: '1', content: 'edited' }] } };
+    await applyLoomLoreOps(run);
+    expect(savedBooks.TL.entries[1].content).toBe('edited');
+});
+
+test('applyLoomLoreOps applies at most once (loreOpsApplied guard)', async () => {
+    let saves = 0;
+    __setContextOverrides({
+        async loadWorldInfo() { return { entries: { 1: { uid: 1, key: ['Rayse'], keysecondary: [], content: 'old' } } }; },
+        async saveWorldInfo() { saves += 1; },
+    });
+    addEntryRefs(scene.id, [{ book: 'TL', uid: '1' }]);
+    const run = { sceneId: scene.id, timelineId: scene.timelineId, directionId: 'd1', messageId: 0, envelope: { loreOps: [{ op: 'lore.edit', book: 'TL', uid: '1', content: 'x' }] } };
+    await applyLoomLoreOps(run);
+    await applyLoomLoreOps(run);
+    expect(saves).toBe(1);
+});
+
+test('applyLoomLoreOps skips when the Scene changed (scene mismatch)', async () => {
+    const savedBooks = {};
+    __setContextOverrides({
+        async loadWorldInfo(name) { return { entries: { 1: { uid: 1, content: 'old' } } }; },
+        async saveWorldInfo(name, data) { savedBooks[name] = data; },
+    });
+    addEntryRefs(scene.id, [{ book: 'TL', uid: '1' }]);
+    const run = { sceneId: 'other-scene', timelineId: scene.timelineId, directionId: 'd1', messageId: 0, envelope: { loreOps: [{ op: 'lore.edit', book: 'TL', uid: '1', content: 'edited' }] } };
+    await applyLoomLoreOps(run);
+    expect(savedBooks.TL).toBeUndefined();
 });

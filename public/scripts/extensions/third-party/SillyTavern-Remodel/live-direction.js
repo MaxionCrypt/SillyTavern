@@ -28,6 +28,7 @@ import { formatLivingLorePacket } from './living-lore-proposals.js';
 import { activateKeywordGroups } from './living-lore-retrieval.js';
 import { unseenGroups, recordKeywordGroups, addEntryRefs } from './living-lore-cache-store.js';
 import { buildSceneLivingLorePacket } from './living-lore-cache-packet.js';
+import { applyLoreOps } from './living-lore-ops.js';
 import { describeBudgetWarning, describeGenerationBudget, describeIncompleteProse } from './generation-budget.js';
 import { createLoomTurnEnvelope } from './loom-turn.js';
 import { updateScene } from './timeline-state.js';
@@ -2095,6 +2096,7 @@ async function beginLoomVisibleStream(run, scene) {
     run.envelope.mechanics.pendingRequests = [...(result?.requests || [])];
     run.envelope.loreProposals = structuredClone(result?.loreProposals || []);
     run.envelope.loreProposalRejections = structuredClone(result?.loreProposalRejections || []);
+    run.envelope.loreOps = structuredClone(result?.loreOps || []);
     if (result?.flow) run.envelope.flow = result.flow;
     run.generationFinished = true;
     run.generationSettled = true;
@@ -2377,7 +2379,7 @@ export async function runLoomReconciliation({
     // did not advance — name the real cause here instead.
     await checkGenerationBudget({ text: raw, reasoning: '', label: 'The Loom pass', directionId: null });
     journalLoomReply(raw, 'loom-pass', scene?.id || null);
-    const { prose, swaps, requests, flow, loreProposals, loreProposalRejections, loreKeywords = [] } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
+    const { prose, swaps, requests, flow, loreProposals, loreProposalRejections, loreKeywords = [], loreOps = [] } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
     // Full-prose replies are the v12 contract. Preserve-and-patch remains a
     // compatibility fallback for owner-authored recipes using the old fence.
     const committedProse = prose || applySwaps(draft, swaps).prose;
@@ -2412,7 +2414,7 @@ export async function runLoomReconciliation({
             }
         }
     }
-    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections };
+    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections, loreOps };
     try {
         const result = executeDirectionRequests(requests, {
             scene: { id: scene.id, timelineId: scene.timelineId },
@@ -2422,10 +2424,10 @@ export async function runLoomReconciliation({
             authorizedGoalIds: [],
         });
         journal('loom', { requestCount: requests.length, ok: result.ok, patched: committedProse !== draft }, { summary: 'Loom reconciled and recorded the turn' });
-        return { committedProse, requests, result, flow, loreProposals, loreProposalRejections };
+        return { committedProse, requests, result, flow, loreProposals, loreProposalRejections, loreOps };
     } catch (error) {
         journal('loom.failed', { phase: 'apply', error: String(error?.message || error) }, { severity: 'warn' });
-        return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections };
+        return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections, loreOps };
     }
 }
 
@@ -2754,6 +2756,7 @@ async function interruptLiveDirection({ preserveForIntervention }) {
     // set by confidence would still let hidden evidence become canon.
     run.envelope.loreProposals = [];
     run.envelope.loreProposalRejections = [];
+    run.envelope.loreOps = [];
 
     // Loom mode: Stop CUTS OFF, it does not delete. The reveal lags the buffer
     // for pacing, so at the moment of a Stop most of what the model generated
@@ -2838,6 +2841,7 @@ async function persistFinalizedRunMessage(run, state) {
     // marker to preserve: only fiction the user actually read may change
     // stored state.
     applyPendingRequests(run);
+    await applyLoomLoreOps(run);
     await queueAcceptedLoreProposals(run, { phase: state });
     const interruption = describeRunInterruption(run);
     journal('finalize', {
@@ -2862,6 +2866,42 @@ async function persistFinalizedRunMessage(run, state) {
     await context.saveChat();
 }
 
+
+/**
+ * Apply the Loom's typed lore ops (edit/create) exactly once, on the committed
+ * turn — mirroring applyPendingRequests. Refused if the Scene changed; recovery
+ * does not pass through here, so creates never double-write.
+ */
+export async function applyLoomLoreOps(run) {
+    if (run.loreOpsApplied) return;
+    run.loreOpsApplied = true;
+    const ops = run?.envelope?.loreOps;
+    if (!Array.isArray(ops) || !ops.length) return;
+    const scene = hooks.getActiveScene();
+    if (!scene || scene.id !== run.sceneId) {
+        journal('living-lore.ops.skipped', {
+            directionId: run.directionId,
+            reason: 'the Scene changed before the response was accepted',
+        }, { correlationId: run.directionId, severity: 'warn' });
+        return;
+    }
+    try {
+        const result = await applyLoreOps({ sceneId: run.sceneId, timelineId: run.timelineId, ops });
+        journal('living-lore.ops', {
+            directionId: run.directionId, messageId: run.messageId,
+            applied: result.applied.length, refused: result.refused.length,
+            refusals: result.refused.map((item) => item.reason),
+        }, {
+            correlationId: run.directionId,
+            severity: result.refused.length ? 'warn' : 'info',
+            summary: `Living Lore applied ${result.applied.length} op(s); ${result.refused.length} refused`,
+        });
+    } catch (error) {
+        journal('living-lore.ops.failed', {
+            directionId: run.directionId, error: String(error?.message || error),
+        }, { correlationId: run.directionId, severity: 'warn' });
+    }
+}
 
 /**
  * Apply the direction's mechanical requests exactly once, now that some
@@ -3463,6 +3503,7 @@ function normalizeEnvelope(value, scene) {
         currentPlayerAction: String(value.currentPlayerAction || ''),
         livingLore: value.livingLore ? structuredClone(value.livingLore) : null,
         loreProposals: Array.isArray(value.loreProposals) ? structuredClone(value.loreProposals) : [],
+        loreOps: Array.isArray(value.loreOps) ? structuredClone(value.loreOps) : [],
         loreProposalRejections: Array.isArray(value.loreProposalRejections) ? structuredClone(value.loreProposalRejections) : [],
         sceneId: scene.id,
     };
