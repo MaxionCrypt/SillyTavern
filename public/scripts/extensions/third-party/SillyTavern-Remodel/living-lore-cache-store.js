@@ -8,6 +8,7 @@
 // time (a later phase), so an edit reflects immediately.
 
 import { getContext } from '../../../st-context.js';
+import { getScene, getTimelineStore } from './timeline-state.js';
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'livingLoreCacheV1';
@@ -121,4 +122,47 @@ export function addEntryRefs(sceneId, refs) {
 export function listSceneEntryRefs(sceneId) {
     const bucket = getSceneLivingLore(sceneId, { create: false });
     return bucket ? Object.values(bucket.entryRefs) : [];
+}
+
+/** A timeline's Scene ids in play order: arcs in arcIds order, then each arc's
+ *  sceneIds in order. The Scene arrays are the authoritative sequence (a user
+ *  reorder moves a Scene here), so "prior" means earlier in this walk. */
+export function orderedTimelineSceneIds(timelineId) {
+    const tid = String(timelineId ?? '').trim();
+    if (!tid) return [];
+    const store = getTimelineStore();
+    const timeline = store?.timelines?.[tid];
+    if (!timeline) return [];
+    const out = [];
+    for (const arcId of timeline.arcIds || []) {
+        for (const sceneId of store.arcs?.[arcId]?.sceneIds || []) out.push(String(sceneId));
+    }
+    return out;
+}
+
+/** The deduped union of keyword groups queried in Scenes BEFORE `sceneId` in its
+ *  timeline's play order — what earlier Scenes established, each distinct group
+ *  once (canonical: order- and duplicate-insensitive). A Scene absent from the
+ *  timeline ordering has no determinable predecessors, so it yields nothing. */
+export function listPriorSceneKeywordGroups({ sceneId = '', timelineId = '' } = {}) {
+    const id = String(sceneId ?? '').trim();
+    if (!id) return [];
+    const tid = String(timelineId ?? '').trim() || String(getScene(id)?.timelineId ?? '');
+    const order = orderedTimelineSceneIds(tid);
+    const index = order.indexOf(id);
+    if (index < 0) return [];
+    const store = getStore();
+    const seen = new Set();
+    const out = [];
+    for (const priorId of order.slice(0, index)) {
+        for (const group of store.scenes[priorId]?.keywordGroups || []) {
+            const canon = canonicalGroup(group);
+            if (!canon.length) continue;
+            const key = canon.join(GROUP_SEP);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(canon);
+        }
+    }
+    return out;
 }

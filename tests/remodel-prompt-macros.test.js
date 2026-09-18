@@ -42,6 +42,16 @@ test('standalone structural macros preserve the roles and order of their message
     ]);
 });
 
+test('the Loom prior-Scene macro resolves from the priorLore source', () => {
+    const compiled = compilePromptRecipe(
+        { id: 'loom-recipe', mode: 'loom', apiType: 'chat', blocks: [
+            { id: 'prior', kind: 'message', role: 'system', enabled: true, content: '{{loom.priorlore}}' },
+        ] },
+        { priorLore: 'Keywords earlier Scenes drew on:\n- Rayse' },
+    );
+    expect(compiled.messages).toEqual([{ role: 'system', content: 'Keywords earlier Scenes drew on:\n- Rayse' }]);
+});
+
 test('unknown SillyTavern macros remain available to the native macro engine', () => {
     const compiled = compilePromptRecipe(recipe([
         { id: 'one', kind: 'message', role: 'system', enabled: true, content: 'Speak as {{char}}.' },

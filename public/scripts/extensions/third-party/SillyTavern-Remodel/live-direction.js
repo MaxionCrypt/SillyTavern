@@ -27,7 +27,7 @@ import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources,
 import { formatLivingLorePacket } from './living-lore-proposals.js';
 import { activateKeywordGroups } from './living-lore-retrieval.js';
 import { unseenGroups, recordKeywordGroups, addEntryRefs } from './living-lore-cache-store.js';
-import { buildSceneLivingLorePacket } from './living-lore-cache-packet.js';
+import { buildSceneLivingLorePacket, renderPriorSceneKeywords } from './living-lore-cache-packet.js';
 import { applyLoreOps } from './living-lore-ops.js';
 import { describeBudgetWarning, describeGenerationBudget, describeIncompleteProse } from './generation-budget.js';
 import { createLoomTurnEnvelope } from './loom-turn.js';
@@ -2259,6 +2259,7 @@ function compileLoomRequest({ scene, snapshot, draft, draftReasoning = '' }) {
     sources.loomAction = renderLoomAction(playerAction);
     sources.loomGoals = (args = {}) => renderLoomGoals(scene.timelineId, { limit: args.limit, secret: args.secret });
     sources.loomVariables = (args = {}) => renderLoomVariables(scene.timelineId, { limit: args.limit });
+    sources.priorLore = renderPriorSceneKeywords({ sceneId: scene.id, timelineId: scene.timelineId });
     const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
     const compiled = compilePromptRecipe(recipe, sources, { trace: true });
     const usedFallback = !compiled.messages.length;

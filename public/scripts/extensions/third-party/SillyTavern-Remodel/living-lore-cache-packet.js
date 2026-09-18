@@ -8,7 +8,7 @@
 
 import { getContext } from '../../../st-context.js';
 import { getScene, getTimelineStore } from './timeline-state.js';
-import { listSceneEntryRefs } from './living-lore-cache-store.js';
+import { listSceneEntryRefs, listPriorSceneKeywordGroups } from './living-lore-cache-store.js';
 
 const MAX_ENTRIES = 40;
 const MAX_ENTRY_CHARS = 2000;
@@ -67,4 +67,23 @@ export async function buildSceneLivingLorePacket({ sceneId = '', timelineId = ''
         entries,
         bounds: { maxEntries: MAX_ENTRIES, maxEntryChars: MAX_ENTRY_CHARS, maxChars: MAX_CHARS, usedEntries: entries.length, usedChars },
     };
+}
+
+/** Pure render of prior-Scene keyword groups into a Loom prompt block. Each row
+ *  is one group the Loom can re-query. Empty string when there are none, so the
+ *  macro contributes nothing rather than an empty heading. */
+export function formatPriorSceneKeywords(groups) {
+    const rows = (Array.isArray(groups) ? groups : [])
+        .map((group) => (Array.isArray(group) ? group.map((word) => String(word ?? '').trim()).filter(Boolean) : []))
+        .filter((group) => group.length);
+    if (!rows.length) return '';
+    return [
+        'Keywords earlier Scenes in this timeline drew on. Name any of these groups in "loreKeywords" to pull that lore back into this Scene:',
+        ...rows.map((group) => `- ${group.join(', ')}`),
+    ].join('\n');
+}
+
+/** Query the deduped prior-Scene keyword groups for a Scene and render them. */
+export function renderPriorSceneKeywords({ sceneId = '', timelineId = '' } = {}) {
+    return formatPriorSceneKeywords(listPriorSceneKeywordGroups({ sceneId, timelineId }));
 }
