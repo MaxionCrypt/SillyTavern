@@ -26,7 +26,7 @@ import {
 import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
 import { formatLivingLorePacket } from './living-lore-proposals.js';
 import { activateKeywordGroups } from './living-lore-retrieval.js';
-import { unseenGroups, recordKeywordGroups, addEntryRefs } from './living-lore-cache-store.js';
+import { replaceSceneLivingLore } from './living-lore-cache-store.js';
 import { buildSceneLivingLorePacket, renderPriorSceneKeywords } from './living-lore-cache-packet.js';
 import { applyLoreOps } from './living-lore-ops.js';
 import { describeBudgetWarning, describeGenerationBudget, describeIncompleteProse } from './generation-budget.js';
@@ -2071,6 +2071,7 @@ async function beginLoomVisibleStream(run, scene) {
     run.rawBufferedText = String(result?.committedProse || draft);
     run.envelope.mechanics.pendingRequests = [...(result?.requests || [])];
     run.envelope.loreOps = structuredClone(result?.loreOps || []);
+    run.envelope.loreKeywords = structuredClone(result?.loreKeywords || []);
     if (result?.flow) run.envelope.flow = result.flow;
     run.generationFinished = true;
     run.generationSettled = true;
@@ -2358,22 +2359,10 @@ export async function runLoomReconciliation({
     // Full-prose replies are the v12 contract. Preserve-and-patch remains a
     // compatibility fallback for owner-authored recipes using the old fence.
     const committedProse = prose || applySwaps(draft, swaps).prose;
-    // Living Lore retrieval: each NEW keyword group the Loom named pulls its
-    // native World Info entries into this Scene's cache (groups scanned
-    // separately). Already-queried groups are skipped so a repeat costs nothing.
-    if (Array.isArray(loreKeywords) && loreKeywords.length && scene?.id) {
-        const fresh = unseenGroups(scene.id, loreKeywords);
-        if (fresh.length) {
-            try {
-                const refs = await activateKeywordGroups(fresh, { sceneId: scene.id, timelineId: scene.timelineId });
-                addEntryRefs(scene.id, refs);
-                recordKeywordGroups(scene.id, fresh);
-            } catch (error) {
-                journal('living-lore.retrieval.failed', { error: String(error?.message || error) }, { severity: 'warn' });
-            }
-        }
-    }
-    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow, loreOps };
+    // Living Lore import is applied on the committed turn (applyLoomKeywordImport),
+    // AFTER loreOps, so a same-turn edit/create lands before the working set is
+    // redefined. The keyword groups are carried on the envelope for that step.
+    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow, loreKeywords, loreOps };
     try {
         const result = executeDirectionRequests(requests, {
             scene: { id: scene.id, timelineId: scene.timelineId },
@@ -2383,10 +2372,10 @@ export async function runLoomReconciliation({
             authorizedGoalIds: [],
         });
         journal('loom', { requestCount: requests.length, ok: result.ok, patched: committedProse !== draft }, { summary: 'Loom reconciled and recorded the turn' });
-        return { committedProse, requests, result, flow, loreOps };
+        return { committedProse, requests, result, flow, loreKeywords, loreOps };
     } catch (error) {
         journal('loom.failed', { phase: 'apply', error: String(error?.message || error) }, { severity: 'warn' });
-        return { committedProse, requests, result: null, flow, loreOps };
+        return { committedProse, requests, result: null, flow, loreKeywords, loreOps };
     }
 }
 
@@ -2799,6 +2788,7 @@ async function persistFinalizedRunMessage(run, state) {
     // stored state.
     applyPendingRequests(run);
     await applyLoomLoreOps(run);
+    await applyLoomKeywordImport(run);
     const interruption = describeRunInterruption(run);
     journal('finalize', {
         directionId: run.directionId,
@@ -2854,6 +2844,40 @@ export async function applyLoomLoreOps(run) {
         });
     } catch (error) {
         journal('living-lore.ops.failed', {
+            directionId: run.directionId, error: String(error?.message || error),
+        }, { correlationId: run.directionId, severity: 'warn' });
+    }
+}
+
+/**
+ * Apply the Loom's Living Lore import exactly once, on the committed turn and
+ * AFTER its loreOps, so a same-turn edit/create lands before the working set is
+ * redefined. A NON-EMPTY loreKeywords wipes this Scene's cache and rebuilds it
+ * from exactly those groups (a fresh per-group native scan); an empty request
+ * keeps the current cache. Refused if the Scene changed, mirroring loreOps.
+ */
+export async function applyLoomKeywordImport(run) {
+    if (run.keywordImportApplied) return;
+    run.keywordImportApplied = true;
+    const groups = Array.isArray(run?.envelope?.loreKeywords) ? run.envelope.loreKeywords : [];
+    if (!groups.length) return; // no import this turn — leave the cache as it is
+    const scene = hooks.getActiveScene();
+    if (!scene || scene.id !== run.sceneId) {
+        journal('living-lore.import.skipped', {
+            directionId: run.directionId,
+            reason: 'the Scene changed before the response was accepted',
+        }, { correlationId: run.directionId, severity: 'warn' });
+        return;
+    }
+    try {
+        const refs = await activateKeywordGroups(groups, { sceneId: run.sceneId, timelineId: run.timelineId });
+        replaceSceneLivingLore(run.sceneId, { groups, refs });
+        journal('living-lore.import', {
+            directionId: run.directionId, messageId: run.messageId,
+            groups: groups.length, entries: refs.length,
+        }, { correlationId: run.directionId, summary: `Living Lore reimported ${refs.length} entr(y/ies) from ${groups.length} group(s)` });
+    } catch (error) {
+        journal('living-lore.import.failed', {
             directionId: run.directionId, error: String(error?.message || error),
         }, { correlationId: run.directionId, severity: 'warn' });
     }

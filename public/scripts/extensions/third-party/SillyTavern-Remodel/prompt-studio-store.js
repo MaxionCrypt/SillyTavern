@@ -12,7 +12,7 @@ const CURATED_NARRATOR_RECIPE_NAME = 'Narrator · Grounded';
 const ROLEPLAY_LOOM_LIVING_LORE_POLICY = [
     '## Living Lore — enabled',
     'Inspect Selected Living Lore when it is present. When accepted fiction changes one of those entries, rewrite it with a `lore.edit` op in the state fence `loreOps` array, naming its book and uid. When accepted fiction establishes a durable, reusable new subject no entry covers, add it with a `lore.create` op. Do not write lore directly in the prose and do not record fleeting detail.',
-    'You may only edit an entry that is in the Selected Living Lore. To reach one that is not, first name its key in `loreKeywords` to pull it in.',
+    'You may only edit an entry that is in the Selected Living Lore. To reach one that is not, name its key in `loreKeywords` to bring it into scope for a later turn. A non-empty `loreKeywords` REPLACES the whole working set with exactly those groups, so include everything the coming turns need; leave it empty to keep the current set.',
     'Leave `loreOps` empty when no durable lore change is warranted.',
 ].join('\n');
 

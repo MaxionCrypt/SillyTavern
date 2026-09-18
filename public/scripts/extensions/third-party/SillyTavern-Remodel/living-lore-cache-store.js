@@ -101,6 +101,36 @@ export function recordKeywordGroups(sceneId, groups) {
     if (changed) save();
 }
 
+/**
+ * Replace the whole Scene cache in one shot: the entry refs AND the queried
+ * keyword-group set become exactly what is passed. This is the import path —
+ * a fresh `loreKeywords` request wipes the previous working set and rebuilds it,
+ * rather than accumulating. Both fields move together, so `keywordGroups` always
+ * mirrors the current working set.
+ */
+export function replaceSceneLivingLore(sceneId, { groups = [], refs = [] } = {}) {
+    const bucket = getSceneLivingLore(sceneId, { create: true });
+    if (!bucket) return;
+    bucket.entryRefs = {};
+    for (const ref of Array.isArray(refs) ? refs : []) {
+        const book = String(ref?.book ?? ref?.world ?? '').trim();
+        const uid = String(ref?.uid ?? '').trim();
+        if (!book || !uid) continue;
+        bucket.entryRefs[`${book}.${uid}`] = { book, uid };
+    }
+    const seen = new Set();
+    bucket.keywordGroups = [];
+    for (const group of Array.isArray(groups) ? groups : []) {
+        const canon = canonicalGroup(group);
+        if (!canon.length) continue;
+        const key = canon.join(GROUP_SEP);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        bucket.keywordGroups.push(canon);
+    }
+    save();
+}
+
 /** Union {book, uid} refs into the Scene cache, keyed `${book}.${uid}`. */
 export function addEntryRefs(sceneId, refs) {
     const bucket = getSceneLivingLore(sceneId, { create: true });

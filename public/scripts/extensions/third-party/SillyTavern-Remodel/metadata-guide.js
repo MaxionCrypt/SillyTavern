@@ -247,7 +247,7 @@ function lore() {
             arguments: Object.freeze([
                 field('loreKeywords', 'array of keyword groups', false, `Up to ${MAX_LORE_KEYWORD_GROUPS} groups of up to ${MAX_LORE_KEYWORDS} keys each. Must be the exact key an entry answers to — "Queens" will not find "Queens Lake University". An entry needing several keys is pulled only when they are named together in one group.`),
             ]),
-            note: 'What you pull stays available for the scene. It is not a per-turn top-up.',
+            note: 'A non-empty loreKeywords REPLACES the scene\'s working set with exactly these groups; leave it empty to keep the current set. Include everything the coming turns need, not just what is new.',
         }),
     });
 }

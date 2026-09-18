@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from '@jest/globals';
-import { initLiveDirection, setLiveDirectionTestAdapters, runLoomReconciliation, __buildLoomSnapshot, applyLoomLoreOps } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
+import { initLiveDirection, setLiveDirectionTestAdapters, applyLoomLoreOps, applyLoomKeywordImport } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { __setExtensionSettings, __setContextOverrides } from './util/st-context-stub.js';
 import { __setWorldInfoState } from './util/world-info-stub.js';
 import { listSceneEntryRefs, getSceneLivingLore, addEntryRefs } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-cache-store.js';
@@ -8,9 +8,11 @@ import { formatLivingLorePacket } from '../public/scripts/extensions/third-party
 
 const scene = { id: 's1', timelineId: 't1' };
 const rayse = { uid: 1, world: 'TL', key: ['Rayse'], keysecondary: [], selective: false, selectiveLogic: 0, content: 'Rayse is a knight.', comment: 'Rayse', disable: false };
+const silvia = { uid: 2, world: 'TL', key: ['Silvia'], keysecondary: [], selective: false, selectiveLogic: 0, content: 'Silvia is a mage.', comment: 'Silvia', disable: false };
 
-function loomReply(fence) {
-    return ['```state', JSON.stringify(fence), '```'].join('\n');
+/** A commit-path run carrying just the Loom's keyword import for this Scene. */
+function importRun(groups) {
+    return { sceneId: scene.id, timelineId: scene.timelineId, directionId: 'd1', messageId: 0, envelope: { loreKeywords: groups } };
 }
 
 beforeEach(() => {
@@ -25,24 +27,40 @@ beforeEach(() => {
 });
 afterEach(() => setLiveDirectionTestAdapters(null));
 
-test('Loom keyword groups populate the Scene Living Lore cache', async () => {
+test('a Loom keyword import populates the Scene Living Lore cache', async () => {
     __setContextOverrides({ async getWorldInfoEntriesForBook(name) { return name === 'TL' ? [rayse] : []; } });
-    setLiveDirectionTestAdapters({ loomReconciliation: async () => loomReply({ requests: [], loreKeywords: [['Rayse']], flow: { continue: false } }) });
-    const snapshot = await __buildLoomSnapshot(scene);
-    await runLoomReconciliation({ scene, snapshot, draft: 'The draft stands.' });
+    await applyLoomKeywordImport(importRun([['Rayse']]));
     expect(listSceneEntryRefs(scene.id)).toEqual([{ book: 'TL', uid: '1' }]);
     expect(getSceneLivingLore(scene.id, { create: false }).keywordGroups).toEqual([['Rayse']]);
 });
 
-test('a group queried twice across turns loads its book only once', async () => {
-    let loadCount = 0;
-    __setContextOverrides({ async getWorldInfoEntriesForBook(name) { loadCount += 1; return name === 'TL' ? [rayse] : []; } });
-    setLiveDirectionTestAdapters({ loomReconciliation: async () => loomReply({ requests: [], loreKeywords: [['Rayse']], flow: { continue: false } }) });
-    const snapshot = await __buildLoomSnapshot(scene);
-    await runLoomReconciliation({ scene, snapshot, draft: 'The draft stands.' });
-    const first = loadCount;
-    await runLoomReconciliation({ scene, snapshot, draft: 'The draft stands.' });
-    expect(loadCount).toBe(first); // second turn: group already seen, no re-query
+test('a new non-empty import replaces the previous working set (wipe + rebuild)', async () => {
+    __setContextOverrides({ async getWorldInfoEntriesForBook(name) { return name === 'TL' ? [rayse, silvia] : []; } });
+    await applyLoomKeywordImport(importRun([['Rayse']]));
+    expect(listSceneEntryRefs(scene.id)).toEqual([{ book: 'TL', uid: '1' }]);
+    await applyLoomKeywordImport(importRun([['Silvia']]));         // wipes Rayse, pulls Silvia
+    expect(listSceneEntryRefs(scene.id)).toEqual([{ book: 'TL', uid: '2' }]);
+    expect(getSceneLivingLore(scene.id, { create: false }).keywordGroups).toEqual([['Silvia']]);
+});
+
+test('an empty import keeps the current cache untouched', async () => {
+    __setContextOverrides({ async getWorldInfoEntriesForBook(name) { return name === 'TL' ? [rayse] : []; } });
+    await applyLoomKeywordImport(importRun([['Rayse']]));
+    const before = listSceneEntryRefs(scene.id);
+    await applyLoomKeywordImport(importRun([]));                    // no import: no wipe
+    expect(listSceneEntryRefs(scene.id)).toEqual(before);
+});
+
+test('applyLoomKeywordImport applies at most once per run, and skips when the Scene changed', async () => {
+    __setContextOverrides({ async getWorldInfoEntriesForBook(name) { return name === 'TL' ? [rayse, silvia] : []; } });
+    const run = importRun([['Rayse']]);
+    await applyLoomKeywordImport(run);
+    run.envelope.loreKeywords = [['Silvia']];       // same run object, guard already set
+    await applyLoomKeywordImport(run);              // no-op: keywordImportApplied
+    expect(listSceneEntryRefs(scene.id)).toEqual([{ book: 'TL', uid: '1' }]);   // still Rayse
+
+    await applyLoomKeywordImport({ sceneId: 'other-scene', timelineId: scene.timelineId, directionId: 'd2', messageId: 1, envelope: { loreKeywords: [['Silvia']] } });
+    expect(listSceneEntryRefs(scene.id)).toEqual([{ book: 'TL', uid: '1' }]);   // scene mismatch: skipped
 });
 
 test('the Scene cache renders into a Living Lore packet through {{loom.lore}}', async () => {
@@ -53,11 +71,9 @@ test('the Scene cache renders into a Living Lore packet through {{loom.lore}}', 
     expect(formatLivingLorePacket(packet)).toContain('Rayse is a knight.');
 });
 
-test('round-trip: Loom groups -> cache -> packet renders the pulled entry', async () => {
+test('round-trip: Loom import -> cache -> packet renders the pulled entry', async () => {
     __setContextOverrides({ async getWorldInfoEntriesForBook(name) { return name === 'TL' ? [rayse] : []; } });
-    setLiveDirectionTestAdapters({ loomReconciliation: async () => loomReply({ requests: [], loreKeywords: [['Rayse']], flow: { continue: false } }) });
-    const snapshot = await __buildLoomSnapshot(scene);
-    await runLoomReconciliation({ scene, snapshot, draft: 'The draft stands.' });
+    await applyLoomKeywordImport(importRun([['Rayse']]));
     const packet = await buildSceneLivingLorePacket({ sceneId: scene.id, timelineId: scene.timelineId });
     expect(formatLivingLorePacket(packet)).toContain('Rayse is a knight.');
 });
