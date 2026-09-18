@@ -22,7 +22,7 @@
 
 import { getCapabilityDictionary, getMechanicsRequestSchema, REQUIRED_ARGUMENTS } from './mechanics-capabilities.js';
 import { MAX_INFORMATION_CHARS, MAX_INFORMATION_EVIDENCE, MAX_INFORMATION_KEYS } from './living-lore-intake.js';
-import { MAX_LORE_KEYWORDS } from './loom-reconciliation.js';
+import { MAX_LORE_KEYWORDS, MAX_LORE_KEYWORD_GROUPS } from './loom-reconciliation.js';
 import { buildProviderToolDefinitions, NARRATOR_MECHANIC_TOOLS } from './mechanics-gateway.js';
 
 export function buildMetadataGuide() {
@@ -59,8 +59,8 @@ function envelope() {
             '"requests":[{"id":"r1","capability":"goal.edit","arguments":{"goalRef":"Reach the lighthouse before dawn","successRate":23},"reason":"why, one line"}]'),
         key('loreProposals', 'array', 'Durable information reported for Living Lore.',
             '"loreProposals":[{"content":"...","name":"...","keys":["..."],"evidence":["..."]}]'),
-        key('loreKeywords', 'array', 'Replaces the working lore for this scene. Omit it to keep what is there.',
-            '"loreKeywords":["Queens Lake University","Marissa"]'),
+        key('loreKeywords', 'array', 'Keyword groups that pull more working lore for this scene. Omit it to keep what is there.',
+            '"loreKeywords":[["Queens Lake University"],["event","Marissa"]]'),
         key('flow', 'object', 'Whether the turn continues. Absent means neither.',
             '"flow":{"continue":false,"hardPause":false}'),
         key('swaps', 'array', 'Patch contract only, and only applied when the reply carries no prose.',
@@ -241,11 +241,11 @@ function lore() {
             note: 'Never send operation, target, book, uid, revision, entryType or section. Where information is filed is worked out from what it says.',
         }),
         keywords: Object.freeze({
-            example: JSON.stringify({ loreKeywords: ['Queens Lake University', 'Marissa'] }),
+            example: JSON.stringify({ loreKeywords: [['Queens Lake University'], ['event', 'Marissa']] }),
             arguments: Object.freeze([
-                field('loreKeywords', 'array of strings', false, `Up to ${MAX_LORE_KEYWORDS}. Must be the exact key an entry answers to — "Queens" will not find "Queens Lake University".`),
+                field('loreKeywords', 'array of keyword groups', false, `Up to ${MAX_LORE_KEYWORD_GROUPS} groups of up to ${MAX_LORE_KEYWORDS} keys each. Must be the exact key an entry answers to — "Queens" will not find "Queens Lake University". An entry needing several keys is pulled only when they are named together in one group.`),
             ]),
-            note: 'The result replaces the working lore and stays until replaced again. It is not a per-turn top-up.',
+            note: 'What you pull stays available for the scene. It is not a per-turn top-up.',
         }),
     });
 }

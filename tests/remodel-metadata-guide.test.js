@@ -154,7 +154,7 @@ describe('Remodel metadata guide', () => {
 
     test('the stated keyword ceiling is the ceiling that is enforced', () => {
         const stated = Number(buildMetadataGuide().lore.keywords.arguments[0].hint.match(/Up to (\d+)/)[1]);
-        expect(readLoreKeywords(Array.from({ length: stated + 3 }, (_, index) => `key-${index}`))).toHaveLength(stated);
+        expect(readLoreKeywords(Array.from({ length: stated + 3 }, (_, index) => [`key-${index}`]))).toHaveLength(stated);
     });
 
     // --- The Narrator side --------------------------------------------------

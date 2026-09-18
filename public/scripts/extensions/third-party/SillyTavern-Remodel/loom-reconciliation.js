@@ -300,14 +300,27 @@ export function readLoomProse(raw, { final = false } = {}) {
  * Keywords the Loom asked to retrieve on. Bounded: a request naming half the
  * book is not a request, it is pulling everything in wearing a different name.
  */
+export const MAX_LORE_KEYWORD_GROUPS = 8;
 export const MAX_LORE_KEYWORDS = 8;
 export const MAX_LORE_KEYWORD_CHARS = 120;
 
+// loreKeywords is a list of GROUPS: each group is an array of exact keys, and
+// an entry that needs several keys (a native selective entry) is only pulled
+// when they are named together in one group. Flat string arrays are no longer
+// valid — they collapse to nothing rather than silently becoming one group.
 export function readLoreKeywords(value) {
-    return [...new Set((Array.isArray(value) ? value : [])
-        .map((word) => String(word ?? '').trim())
-        .filter(Boolean)
-        .map((word) => word.slice(0, MAX_LORE_KEYWORD_CHARS)))].slice(0, MAX_LORE_KEYWORDS);
+    if (!Array.isArray(value)) return [];
+    const groups = [];
+    for (const group of value) {
+        if (!Array.isArray(group)) continue;
+        const keywords = [...new Set(group
+            .map((word) => String(word ?? '').trim())
+            .filter(Boolean)
+            .map((word) => word.slice(0, MAX_LORE_KEYWORD_CHARS)))].slice(0, MAX_LORE_KEYWORDS);
+        if (keywords.length) groups.push(keywords);
+        if (groups.length >= MAX_LORE_KEYWORD_GROUPS) break;
+    }
+    return groups;
 }
 
 export function parseLoomReply(raw, { livingLorePacket = null } = {}) {

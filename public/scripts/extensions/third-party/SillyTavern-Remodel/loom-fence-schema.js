@@ -120,8 +120,9 @@ export function getRoleplayLoomGoalSchema() {
                     },
                 },
                 loreKeywords: {
-                    type: 'array', maxItems: 8, items: { type: 'string' },
-                    description: 'Keywords to replace the working lore set for the turns that follow. Empty for no change.',
+                    type: 'array', maxItems: 8,
+                    description: 'Keyword GROUPS to pull working lore for the turns that follow. Each group is an array of the exact keys an entry answers to; an entry that needs several keys is found only when they are named together in one group. Empty for no change.',
+                    items: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string' } },
                 },
                 flow: {
                     type: 'object', additionalProperties: false, required: ['continue', 'hardPause'],

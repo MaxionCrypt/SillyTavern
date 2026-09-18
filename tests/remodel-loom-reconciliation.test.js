@@ -238,9 +238,9 @@ test('a patch whose find is not in the draft is skipped, leaving the draft intac
     expect(result.prose).toBe(draft);
 });
 
-test('the Loom can ask for a retrieval by naming keywords', () => {
-    const raw = ['```state', '{"requests":[],"loreProposals":[],"loreKeywords":["Queens Lake University","Marissa"]}', '```'].join('\n');
-    expect(parseLoomReply(raw).loreKeywords).toEqual(['Queens Lake University', 'Marissa']);
+test('the Loom can ask for a retrieval by naming keyword groups', () => {
+    const raw = ['```state', '{"requests":[],"loreProposals":[],"loreKeywords":[["Queens Lake University"],["event","Marissa"]]}', '```'].join('\n');
+    expect(parseLoomReply(raw).loreKeywords).toEqual([['Queens Lake University'], ['event', 'Marissa']]);
 });
 
 test('no request means the working set stands', () => {
@@ -248,12 +248,14 @@ test('no request means the working set stands', () => {
     expect(parseLoomReply(raw).loreKeywords).toEqual([]);
 });
 
-test('a keyword request is bounded, deduplicated and cleaned', () => {
+test('a keyword group is bounded, deduplicated and cleaned', () => {
     const many = Array.from({ length: 20 }, (_v, index) => `term-${index}`);
-    const raw = ['```state', JSON.stringify({ requests: [], loreProposals: [], loreKeywords: ['  Teo  ', 'Teo', '', null, ...many] }), '```'].join('\n');
-    const keywords = parseLoomReply(raw).loreKeywords;
-    // Trimmed, deduplicated, blanks dropped, and capped: a request naming half
-    // the book is not a request.
+    const raw = ['```state', JSON.stringify({ requests: [], loreProposals: [], loreKeywords: [['  Teo  ', 'Teo', '', null, ...many]] }), '```'].join('\n');
+    const groups = parseLoomReply(raw).loreKeywords;
+    // One group: trimmed, deduplicated, blanks dropped, and capped per group —
+    // a group naming half the book is not a request.
+    expect(groups).toHaveLength(1);
+    const keywords = groups[0];
     expect(keywords[0]).toBe('Teo');
     expect(keywords).toHaveLength(8);
     expect(new Set(keywords).size).toBe(8);

@@ -36,6 +36,13 @@ test('the whole schema is strict-mode valid', () => {
     expect(strictViolations(getRoleplayLoomGoalSchema().schema)).toEqual([]);
 });
 
+test('loreKeywords is an array of string-array groups', () => {
+    const kw = getRoleplayLoomGoalSchema().schema.properties.loreKeywords;
+    expect(kw.type).toBe('array');
+    expect(kw.items.type).toBe('array');
+    expect(kw.items.items.type).toBe('string');
+});
+
 test('the top-level fence carries exactly the five state-fence keys', () => {
     const schema = getRoleplayLoomGoalSchema().schema;
     expect(new Set(Object.keys(schema.properties)))
