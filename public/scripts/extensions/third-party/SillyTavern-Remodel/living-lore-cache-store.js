@@ -143,18 +143,26 @@ export function orderedTimelineSceneIds(timelineId) {
 /** The deduped union of keyword groups queried in Scenes BEFORE `sceneId` in its
  *  timeline's play order — what earlier Scenes established, each distinct group
  *  once (canonical: order- and duplicate-insensitive). A Scene absent from the
- *  timeline ordering has no determinable predecessors, so it yields nothing. */
-export function listPriorSceneKeywordGroups({ sceneId = '', timelineId = '' } = {}) {
+ *  timeline ordering has no determinable predecessors, so it yields nothing.
+ *
+ *  `scenes` bounds the lookback to that many of the NEAREST prior Scenes (the N
+ *  immediately before the current one). Only a positive integer limits; anything
+ *  else — omitted, 0, NaN, null, '' — means all prior Scenes, so a value that
+ *  coerces to 0 never silently blanks the macro. */
+export function listPriorSceneKeywordGroups({ sceneId = '', timelineId = '', scenes } = {}) {
     const id = String(sceneId ?? '').trim();
     if (!id) return [];
     const tid = String(timelineId ?? '').trim() || String(getScene(id)?.timelineId ?? '');
     const order = orderedTimelineSceneIds(tid);
     const index = order.indexOf(id);
     if (index < 0) return [];
+    let priorIds = order.slice(0, index);
+    const limit = Number(scenes);
+    if (Number.isFinite(limit) && limit >= 1) priorIds = priorIds.slice(-Math.floor(limit));
     const store = getStore();
     const seen = new Set();
     const out = [];
-    for (const priorId of order.slice(0, index)) {
+    for (const priorId of priorIds) {
         for (const group of store.scenes[priorId]?.keywordGroups || []) {
             const canon = canonicalGroup(group);
             if (!canon.length) continue;

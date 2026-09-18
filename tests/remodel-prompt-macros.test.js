@@ -52,6 +52,16 @@ test('the Loom prior-Scene macro resolves from the priorLore source', () => {
     expect(compiled.messages).toEqual([{ role: 'system', content: 'Keywords earlier Scenes drew on:\n- Rayse' }]);
 });
 
+test('the prior-Scene macro passes its scenes argument through to the source', () => {
+    const compiled = compilePromptRecipe(
+        { id: 'loom-recipe', mode: 'loom', apiType: 'chat', blocks: [
+            { id: 'prior', kind: 'message', role: 'system', enabled: true, content: '{{loom.priorlore scenes=2}}' },
+        ] },
+        { priorLore: (args) => `lookback=${args.scenes}` },
+    );
+    expect(compiled.messages).toEqual([{ role: 'system', content: 'lookback=2' }]);
+});
+
 test('unknown SillyTavern macros remain available to the native macro engine', () => {
     const compiled = compilePromptRecipe(recipe([
         { id: 'one', kind: 'message', role: 'system', enabled: true, content: 'Speak as {{char}}.' },

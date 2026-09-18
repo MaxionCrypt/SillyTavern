@@ -113,7 +113,10 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         // The split state macros (loom.scene/goals/…) live in UNIVERSAL_STATE_MACROS
         // and are appended to every mode by getSourceDefinitions.
         template('livingLore', 'Selected Living Lore', 'system', 'loom.lore', { description: 'The Timeline lore entries in scope for this scene, plus the loreOps/loreKeywords contract the Loom edits and pulls lore through.' }),
-        template('priorLore', 'Prior-Scene Keywords', 'system', 'loom.priorlore', { description: 'The deduped keyword groups earlier Scenes of this timeline pulled lore with, so the Loom can replay what they established. Empty on the first Scene.' }),
+        template('priorLore', 'Prior-Scene Keywords', 'system', 'loom.priorlore', {
+            description: 'The deduped keyword groups earlier Scenes of this timeline pulled lore with, so the Loom can replay what they established. Empty on the first Scene.',
+            arguments: 'scenes=N looks back only N Scenes (the nearest N before this one). Omit it to draw on every prior Scene.',
+        }),
         template('narratorDraft', 'Narrator Draft', 'user', 'narrator.draft', { description: 'The held Narrator prose being reconciled before it becomes visible.' }),
         template('narratorReasoning', 'Narrator Reasoning', 'user', 'narrator.reasoning', { description: 'The Narrator model\'s private reasoning for this draft, when the provider supplies it.' }),
     ]),

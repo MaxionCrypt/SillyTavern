@@ -41,6 +41,25 @@ test('a Scene sees only the groups queried in strictly earlier Scenes', () => {
     expect(listPriorSceneKeywordGroups({ sceneId: scenes[2].id, timelineId })).toEqual([['Rayse'], ['Silvia']]); // s0 + s1, not its own Teo
 });
 
+test('scenes=N bounds the lookback to the N nearest prior Scenes', () => {
+    recordKeywordGroups(scenes[0].id, [['Rayse']]);   // oldest prior
+    recordKeywordGroups(scenes[1].id, [['Silvia']]);  // nearest prior
+    // From s2, prior play order is [s0, s1].
+    expect(listPriorSceneKeywordGroups({ sceneId: scenes[2].id, timelineId, scenes: 1 })).toEqual([['Silvia']]);            // nearest one only
+    expect(listPriorSceneKeywordGroups({ sceneId: scenes[2].id, timelineId, scenes: 2 })).toEqual([['Rayse'], ['Silvia']]); // both
+    expect(listPriorSceneKeywordGroups({ sceneId: scenes[2].id, timelineId, scenes: 9 })).toEqual([['Rayse'], ['Silvia']]); // clamped to what exists
+    expect(listPriorSceneKeywordGroups({ sceneId: scenes[2].id, timelineId, scenes: 1.9 })).toEqual([['Silvia']]);          // floored to 1
+});
+
+test('a non-positive or non-numeric scenes value means all prior Scenes (no silent blanking)', () => {
+    recordKeywordGroups(scenes[0].id, [['Rayse']]);
+    recordKeywordGroups(scenes[1].id, [['Silvia']]);
+    const all = [['Rayse'], ['Silvia']];
+    for (const scenesArg of [undefined, 0, -1, NaN, null, '', []]) {
+        expect(listPriorSceneKeywordGroups({ sceneId: scenes[2].id, timelineId, scenes: scenesArg })).toEqual(all);
+    }
+});
+
 test('the current Scene never contributes its own groups', () => {
     recordKeywordGroups(scenes[1].id, [['SelfOnly']]);
     expect(listPriorSceneKeywordGroups({ sceneId: scenes[1].id, timelineId })).toEqual([]);
@@ -81,12 +100,16 @@ test('formatPriorSceneKeywords renders one row per group, or empty for none', ()
     expect(text.split('\n- ')).toHaveLength(3); // header + 2 rows
 });
 
-test('renderPriorSceneKeywords queries and renders in one step', () => {
+test('renderPriorSceneKeywords queries and renders in one step, honouring scenes', () => {
     recordKeywordGroups(scenes[0].id, [['Rayse']]);
     recordKeywordGroups(scenes[1].id, [['Silvia']]);
     const text = renderPriorSceneKeywords({ sceneId: scenes[2].id, timelineId });
     expect(text).toContain('- Rayse');
     expect(text).toContain('- Silvia');
+    // scenes=1 drops the oldest prior Scene from the render.
+    const nearest = renderPriorSceneKeywords({ sceneId: scenes[2].id, timelineId, scenes: 1 });
+    expect(nearest).toContain('- Silvia');
+    expect(nearest).not.toContain('- Rayse');
     // The first Scene has no predecessors, so its render is empty.
     expect(renderPriorSceneKeywords({ sceneId: scenes[0].id, timelineId })).toBe('');
 });

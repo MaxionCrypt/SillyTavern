@@ -83,7 +83,9 @@ export function formatPriorSceneKeywords(groups) {
     ].join('\n');
 }
 
-/** Query the deduped prior-Scene keyword groups for a Scene and render them. */
-export function renderPriorSceneKeywords({ sceneId = '', timelineId = '' } = {}) {
-    return formatPriorSceneKeywords(listPriorSceneKeywordGroups({ sceneId, timelineId }));
+/** Query the deduped prior-Scene keyword groups for a Scene and render them.
+ *  `scenes` bounds the lookback to that many nearest prior Scenes (see
+ *  listPriorSceneKeywordGroups); omitted means all. */
+export function renderPriorSceneKeywords({ sceneId = '', timelineId = '', scenes } = {}) {
+    return formatPriorSceneKeywords(listPriorSceneKeywordGroups({ sceneId, timelineId, scenes }));
 }
