@@ -43,7 +43,7 @@ test('Living Lore Archive re-reads only this Scene cached native refs', async ()
     });
 
     await expect(listSceneLivingLoreEntries(scene.id)).resolves.toEqual([
-        { book: 'T-book', uid: '4', title: 'Mara Vellane', tags: ['Mara'], secondaryTags: ['church'], content: 'At the church.', sceneIds: [scene.id] },
+        { book: 'T-book', uid: '4', title: 'Mara Vellane', tags: ['Mara'], secondaryTags: ['church'], content: 'At the church.', secret: false, sceneIds: [scene.id] },
     ]);
 });
 
@@ -65,9 +65,46 @@ test('Living Lore Archive is available from the Timeline and retains every Scene
     });
 
     await expect(listTimelineLivingLoreEntries(timeline.id)).resolves.toEqual([
-        { book: 'T-book', uid: '8', title: 'Bell', tags: ['bell'], secondaryTags: [], content: 'Present once.', sceneIds: [second.id] },
-        { book: 'T-book', uid: '4', title: 'Mara', tags: ['Mara'], secondaryTags: [], content: 'Present twice.', sceneIds: [first.id, second.id] },
+        { book: 'T-book', uid: '8', title: 'Bell', tags: ['bell'], secondaryTags: [], content: 'Present once.', secret: false, sceneIds: [second.id] },
+        { book: 'T-book', uid: '4', title: 'Mara', tags: ['Mara'], secondaryTags: [], content: 'Present twice.', secret: false, sceneIds: [first.id, second.id] },
     ]);
+});
+
+test('Living Lore Archive flags secret entries and keeps the reserved keyword out of the tags', async () => {
+    __setExtensionSettings({ remodel: {} });
+    const timeline = createTimeline('T');
+    const arc = createArc(timeline.id, 'A');
+    const scene = createScene(arc.id, 'roleplay', 'S');
+    addEntryRefs(scene.id, [{ book: 'T-book', uid: '4' }, { book: 'T-book', uid: '5' }]);
+    __setContextOverrides({
+        async getWorldInfoEntriesForBook() {
+            return [
+                { uid: 4, comment: 'The Pact', key: ['Pact', 'secret'], keysecondary: [], content: 'hidden', disable: true },
+                { uid: 5, comment: 'Mara', key: ['Mara'], keysecondary: [], content: 'open', disable: false },
+            ];
+        },
+    });
+    const entries = await listSceneLivingLoreEntries(scene.id);
+    const byUid = Object.fromEntries(entries.map((entry) => [entry.uid, entry]));
+    expect(byUid['4']).toMatchObject({ secret: true, tags: ['Pact'] });   // "secret" not shown as a tag
+    expect(byUid['5']).toMatchObject({ secret: false, tags: ['Mara'] });
+});
+
+test('Living Lore Archive edit preserves secrecy — never reveals a secret entry by accident', async () => {
+    __setExtensionSettings({ remodel: {} });
+    const timeline = createTimeline('T');
+    const arc = createArc(timeline.id, 'A');
+    const scene = createScene(arc.id, 'roleplay', 'S');
+    addEntryRefs(scene.id, [{ book: 'T-book', uid: '7' }]);
+    const books = { 'T-book': { entries: { 7: { uid: 7, comment: 'The Pact', key: ['Pact', 'secret'], keysecondary: [], content: 'before', disable: true } } } };
+    __setContextOverrides({
+        async loadWorldInfo(book) { return books[book]; },
+        async saveWorldInfo(book, data) { books[book] = data; },
+    });
+    const saved = await updateSceneLivingLoreEntry({ sceneId: scene.id, book: 'T-book', uid: '7', title: 'The Pact', tags: 'Pact, oath', content: 'after' });
+    expect(saved).toMatchObject({ ok: true, entry: { secret: true, tags: ['Pact', 'oath'] } });
+    // The reserved keyword and disabled state survive the human edit.
+    expect(books['T-book'].entries[7]).toMatchObject({ key: ['Pact', 'oath', 'secret'], disable: true, content: 'after' });
 });
 
 test('Living Lore Archive writes a title, tags, and content only to a cached native entry', async () => {

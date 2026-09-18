@@ -14111,6 +14111,22 @@ body.st-remodel-active .remodel-lore-archive-tags span {
 }
 body.st-remodel-active .remodel-lore-archive-tags.is-secondary span { color: rgba(215, 200, 0, .62); border-color: rgba(215, 200, 0, .15); }
 
+body.st-remodel-active .remodel-lore-secret-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    color: rgba(255, 196, 120, .92);
+    background: rgba(255, 176, 87, .1);
+    border: 1px solid rgba(255, 176, 87, .34);
+    border-radius: 3px;
+    font: 600 .58rem/1.2 var(--remodel-sans, sans-serif);
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+body.st-remodel-active .remodel-lore-secret-badge i { font-size: .62rem; }
+
 body.st-remodel-active .remodel-lore-archive-entry-body { padding: 0 4px 15px 27px; }
 body.st-remodel-active .remodel-lore-archive-entry-body > p {
     margin: 0;

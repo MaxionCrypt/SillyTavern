@@ -4220,6 +4220,7 @@ function renderLivingLoreArchiveEntry(entry) {
             <button type="button" class="remodel-lore-archive-entry-toggle" aria-expanded="${isExpanded ? 'true' : 'false'}" data-remodel-lore-archive-action="toggle-entry" ${actionAttributes}>
                 <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
                 <span class="remodel-lore-archive-entry-title">${escapeHtml(entry.title)}</span>
+                ${entry.secret ? '<span class="remodel-lore-secret-badge" title="Hidden from the Narrator"><i class="fa-solid fa-eye-slash" aria-hidden="true"></i> Secret</span>' : ''}
                 ${renderLivingLoreTags(entry.tags)}
                 ${renderLivingLoreTags(entry.secondaryTags, 'is-secondary')}
             </button>

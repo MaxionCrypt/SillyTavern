@@ -4,6 +4,7 @@
 
 import { getContext } from '../../../st-context.js';
 import { listSceneEntryRefs, orderedTimelineSceneIds } from './living-lore-cache-store.js';
+import { isSecretEntry, addSecretKeyword, removeSecretKeyword } from './living-lore-secret.js';
 
 const MAX_ENTRY_CHARS = 12_000;
 
@@ -119,9 +120,12 @@ async function listLivingLoreEntries(refs, sceneIdsByRef = new Map()) {
             book: ref.book,
             uid: String(ref.uid),
             title: String(entry.comment || (Array.isArray(entry.key) ? entry.key[0] : '') || `Entry ${ref.uid}`),
-            tags: normalizeLivingLoreTags(entry.key),
+            // The reserved `secret` keyword is a visibility marker, not a topic
+            // tag, so it drives the badge and is kept out of the tag chips.
+            tags: normalizeLivingLoreTags(removeSecretKeyword(entry.key)),
             secondaryTags: normalizeLivingLoreTags(entry.keysecondary),
             content: String(entry.content ?? ''),
+            secret: isSecretEntry(entry),
             sceneIds: sceneIdsByRef.get(refKey) || [],
         }];
     }).sort((left, right) => left.title.localeCompare(right.title, undefined, { sensitivity: 'base' }));
@@ -168,13 +172,18 @@ export async function updateSceneLivingLoreEntry({ sceneId = '', book = '', uid 
     const entry = working.entries?.[targetUid];
     if (!entry) return { ok: false, reason: 'entry-missing' };
     const resolvedTitle = String(title ?? '').trim() || String(entry.comment || entry.key?.[0] || `Entry ${targetUid}`);
+    // A human edit never toggles secrecy — the Loom owns that. So the reserved
+    // keyword is preserved across the edit (and stripped from any tags the user
+    // typed), and the entry's disabled state is left exactly as it was.
+    const wasSecret = isSecretEntry(entry);
+    const editedKeys = removeSecretKeyword(normalizeLivingLoreTags(tags));
     entry.comment = resolvedTitle;
-    entry.key = normalizeLivingLoreTags(tags);
+    entry.key = wasSecret ? addSecretKeyword(editedKeys) : editedKeys;
     entry.keysecondary = normalizeLivingLoreTags(secondaryTags);
     entry.content = String(content ?? '').slice(0, MAX_ENTRY_CHARS);
     try {
         await context.saveWorldInfo?.(targetBook, working, true);
-        return { ok: true, entry: { book: targetBook, uid: targetUid, title: resolvedTitle, tags: entry.key, secondaryTags: entry.keysecondary, content: entry.content } };
+        return { ok: true, entry: { book: targetBook, uid: targetUid, title: resolvedTitle, tags: normalizeLivingLoreTags(removeSecretKeyword(entry.key)), secondaryTags: entry.keysecondary, content: entry.content, secret: wasSecret } };
     } catch {
         try { await context.saveWorldInfo?.(targetBook, original, true); } catch { /* best-effort restore */ }
         return { ok: false, reason: 'save-failed' };
