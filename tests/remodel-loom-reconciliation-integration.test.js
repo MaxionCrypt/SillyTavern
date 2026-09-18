@@ -8,7 +8,6 @@ import {
 import { createVariableValue, getVariableValue, updateMechanicsProfile } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/variables-store.js';
 import { __setExtensionSettings } from './util/st-context-stub.js';
 import { __clearDebugEvents, __getDebugEvents } from './util/debug-console-stub.js';
-import { buildLivingLorePacket } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-proposals.js';
 
 const scene = { id: 'sc-ed', timelineId: 'tl-ed' };
 let trustId = '';
@@ -63,44 +62,4 @@ test('with final prose and no requests, runLoomReconciliation keeps the Loom ver
     const { committedProse, result } = await runLoomReconciliation({ scene, snapshot, draft: 'the draft stands' });
     expect(committedProse).toBe('Eli leans in and she meets him halfway.');
     expect(result).toBe(null);
-});
-
-test('the Loom receives selected lore and reports information rather than operations', async () => {
-    const livingLore = buildLivingLorePacket({
-        timelineId: scene.timelineId,
-        book: 'Timeline Book',
-        bookHash: 'hash-1',
-        entries: [{ book: 'Timeline Book', uid: '42', name: 'Marissa', keys: ['Marissa'], secondaryKeys: [], content: 'Current: Marissa is in the cafe.' }],
-        selected: [{ book: 'Timeline Book', uid: '42', reasons: [{ channel: 'action.primary' }] }],
-        metadata: [{ book: 'Timeline Book', uid: '42', revision: 7, entryType: 'entity' }],
-    });
-    // No operation, no target, no revision: the Loom says what is now true and
-    // Living Lore works out where it belongs.
-    const proposal = {
-        content: 'Marissa is in the archive.',
-        name: 'The archive',
-        keys: ['archive'],
-        evidence: 'Marissa crossed into the archive.',
-    };
-    let sentPrompt = '';
-    setLiveDirectionTestAdapters({
-        loomReconciliation: async ({ prompt }) => {
-            sentPrompt = prompt.map((message) => message.content).join('\n');
-            return `The draft stands.\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [proposal], flow: { continue: false } })}\n\`\`\``;
-        },
-    });
-    const snapshot = { ...await __buildLoomSnapshot(scene), livingLore };
-    const result = await runLoomReconciliation({ scene, snapshot, draft: 'The draft stands.' });
-
-    expect(sentPrompt).toContain('Selected Living Lore');
-    expect(sentPrompt).toContain('"revision": 7');
-    expect(sentPrompt).toContain('loreProposals');
-    // The instruction tells it not to choose a destination.
-    expect(sentPrompt).toContain('You do not choose where information is filed');
-    // Evidence is normalised to a list on the way in.
-    const parsed = { ...proposal, evidence: [proposal.evidence] };
-    expect(result.loreProposals).toEqual([parsed]);
-    expect(result.loreProposalRejections).toEqual([]);
-    const diagnostic = __getDebugEvents().find((entry) => entry.type === 'lore.proposals.parsed');
-    expect(diagnostic.detail.proposals).toEqual([parsed]);
 });

@@ -122,9 +122,9 @@ describe('Prompt Studio instruction templates', () => {
         }
     });
 
-    test('the lore templates carry the shapes intake and retrieval accept', () => {
+    test('the lore templates carry the shapes ops and retrieval accept', () => {
         const guide = buildMetadataGuide();
-        expect(getPromptInstructionTemplate('loom', 'chat', 'lore.report').content).toContain(guide.lore.proposal.example);
+        expect(getPromptInstructionTemplate('loom', 'chat', 'lore.ops').content).toContain(guide.lore.ops.example);
         expect(getPromptInstructionTemplate('loom', 'chat', 'lore.keywords').content).toContain(guide.lore.keywords.example);
     });
 

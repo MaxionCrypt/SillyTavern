@@ -78,7 +78,7 @@ test('parseLoomReply drops malformed swaps and defaults to none', () => {
     const { swaps, requests } = parseLoomReply(raw);
     expect(swaps).toEqual([{ find: 'ok', replace: 'y' }]);  // empty find and missing find dropped
     expect(requests).toEqual([]);
-    expect(parseLoomReply('No fence at all.')).toEqual({ prose: 'No fence at all.', swaps: [], requests: [], flow: null, loreProposals: [], loreProposalRejections: [], loreKeywords: [], loreOps: [] });
+    expect(parseLoomReply('No fence at all.')).toEqual({ prose: 'No fence at all.', swaps: [], requests: [], flow: null, loreKeywords: [], loreOps: [] });
 });
 
 test('readLoomProse exposes prose while withholding partial and complete state fences', () => {
@@ -105,7 +105,7 @@ test('a bare whole-reply Loom envelope is recovered but incidental prose JSON is
     expect(describeLoomReply(raw).fenceFormat).toBe('bare-json-recovered');
 
     const prose = 'The terminal displayed {"requests":[]} and went dark.';
-    expect(parseLoomReply(prose)).toEqual({ prose, swaps: [], requests: [], flow: null, loreProposals: [], loreProposalRejections: [], loreKeywords: [], loreOps: [] });
+    expect(parseLoomReply(prose)).toEqual({ prose, swaps: [], requests: [], flow: null, loreKeywords: [], loreOps: [] });
 });
 
 test('applySwaps patches only the named span and keeps the rest of the draft verbatim', () => {
@@ -239,18 +239,18 @@ test('a patch whose find is not in the draft is skipped, leaving the draft intac
 });
 
 test('the Loom can ask for a retrieval by naming keyword groups', () => {
-    const raw = ['```state', '{"requests":[],"loreProposals":[],"loreKeywords":[["Queens Lake University"],["event","Marissa"]]}', '```'].join('\n');
+    const raw = ['```state', '{"requests":[],"loreKeywords":[["Queens Lake University"],["event","Marissa"]]}', '```'].join('\n');
     expect(parseLoomReply(raw).loreKeywords).toEqual([['Queens Lake University'], ['event', 'Marissa']]);
 });
 
 test('no request means the working set stands', () => {
-    const raw = ['```state', '{"requests":[],"loreProposals":[]}', '```'].join('\n');
+    const raw = ['```state', '{"requests":[]}', '```'].join('\n');
     expect(parseLoomReply(raw).loreKeywords).toEqual([]);
 });
 
 test('a keyword group is bounded, deduplicated and cleaned', () => {
     const many = Array.from({ length: 20 }, (_v, index) => `term-${index}`);
-    const raw = ['```state', JSON.stringify({ requests: [], loreProposals: [], loreKeywords: [['  Teo  ', 'Teo', '', null, ...many]] }), '```'].join('\n');
+    const raw = ['```state', JSON.stringify({ requests: [], loreKeywords: [['  Teo  ', 'Teo', '', null, ...many]] }), '```'].join('\n');
     const groups = parseLoomReply(raw).loreKeywords;
     // One group: trimmed, deduplicated, blanks dropped, and capped per group —
     // a group naming half the book is not a request.
@@ -263,7 +263,7 @@ test('a keyword group is bounded, deduplicated and cleaned', () => {
 
 test('a malformed keyword request is ignored rather than throwing', () => {
     for (const bad of ['not-an-array', 42, {}, null]) {
-        const raw = ['```state', JSON.stringify({ requests: [], loreProposals: [], loreKeywords: bad }), '```'].join('\n');
+        const raw = ['```state', JSON.stringify({ requests: [], loreKeywords: bad }), '```'].join('\n');
         expect(parseLoomReply(raw).loreKeywords).toEqual([]);
     }
 });

@@ -21,8 +21,7 @@
 // Pure: data only, no DOM, no store, no network. The Debug Console renders it.
 
 import { getCapabilityDictionary, getMechanicsRequestSchema, REQUIRED_ARGUMENTS } from './mechanics-capabilities.js';
-import { MAX_INFORMATION_CHARS, MAX_INFORMATION_EVIDENCE, MAX_INFORMATION_KEYS } from './living-lore-intake.js';
-import { MAX_LORE_KEYWORDS, MAX_LORE_KEYWORD_GROUPS } from './loom-reconciliation.js';
+import { MAX_LORE_KEYWORDS, MAX_LORE_KEYWORD_GROUPS, MAX_LORE_OPS } from './loom-reconciliation.js';
 import { buildProviderToolDefinitions, NARRATOR_MECHANIC_TOOLS } from './mechanics-gateway.js';
 
 export function buildMetadataGuide() {
@@ -45,7 +44,7 @@ function fence() {
             '```state',
             '{"requests":[',
             '  {"id":"r1","capability":"goal.edit","arguments":{"goalRef":"Reach the lighthouse before dawn","successRate":23},"reason":"the accepted prose changed his odds"}',
-            '],"loreProposals":[],"flow":{"continue":false}}',
+            '],"loreKeywords":[],"loreOps":[],"flow":{"continue":false}}',
             '```',
         ].join('\n'),
     });
@@ -57,10 +56,10 @@ function envelope() {
     return Object.freeze([
         key('requests', 'array', 'Goal and Variable mechanics operations, one advertised capability each.',
             '"requests":[{"id":"r1","capability":"goal.edit","arguments":{"goalRef":"Reach the lighthouse before dawn","successRate":23},"reason":"why, one line"}]'),
-        key('loreProposals', 'array', 'Durable information reported for Living Lore.',
-            '"loreProposals":[{"content":"...","name":"...","keys":["..."],"evidence":["..."]}]'),
         key('loreKeywords', 'array', 'Keyword groups that pull more working lore for this scene. Omit it to keep what is there.',
             '"loreKeywords":[["Queens Lake University"],["event","Marissa"]]'),
+        key('loreOps', 'array', 'Typed edits/creations against Living Lore entries. Empty unless accepted fiction changed a scoped entry or established a new durable subject.',
+            '"loreOps":[{"id":"o1","op":"lore.edit","arguments":{"book":"TL","uid":"1","content":"..."},"reason":"why"}]'),
         key('flow', 'object', 'Whether the turn continues. Absent means neither.',
             '"flow":{"continue":false,"hardPause":false}'),
         key('swaps', 'array', 'Patch contract only, and only applied when the reply carries no prose.',
@@ -225,20 +224,22 @@ function allowedValues(property) {
 
 function lore() {
     return Object.freeze({
-        proposal: Object.freeze({
+        ops: Object.freeze({
             example: JSON.stringify({
-                content: 'The lighthouse at Queens Lake has run unmanned on a timer since the keeper died.',
-                name: 'Queens Lake Lighthouse',
-                keys: ['Queens Lake Lighthouse', 'the lighthouse'],
-                evidence: ['the light runs on a timer'],
+                loreOps: [
+                    { id: 'o1', op: 'lore.edit', arguments: { book: 'TL', uid: '1', content: 'The lighthouse has run unmanned on a timer since the keeper died.' }, reason: 'the keeper is confirmed dead' },
+                    { id: 'o2', op: 'lore.create', arguments: { name: 'Queens Lake Lighthouse', keys: ['Queens Lake Lighthouse', 'the lighthouse'], content: 'A coastal light north of the town, automated.' }, reason: 'a new durable place' },
+                ],
             }),
             arguments: Object.freeze([
-                field('content', 'string', true, `What is now durably true, in prose. Over ${MAX_INFORMATION_CHARS} characters the whole report is rejected, not truncated.`),
-                field('evidence', 'string | array of strings', true, `1 to ${MAX_INFORMATION_EVIDENCE} independently checkable excerpts from the accepted prose. Never join two quotations into one string.`),
-                field('name', 'string', false, 'Used only if this turns out to be its own subject; discarded if it is filed inside an entry that already exists.'),
-                field('keys', 'array of strings', false, `Up to ${MAX_INFORMATION_KEYS}. Same rule as name.`),
+                field('op', 'string', true, 'Either "lore.edit" (rewrite an entry already in the Selected Living Lore) or "lore.create" (add a new entry to the timeline book).'),
+                field('book', 'string', false, 'lore.edit only: the entry\'s book, exactly as the Selected Living Lore names it.'),
+                field('uid', 'string', false, 'lore.edit only: the entry\'s uid within that book.'),
+                field('name', 'string', false, 'lore.create only: a short title for the new entry.'),
+                field('keys', 'array of strings', false, 'lore.create only: the exact trigger keywords the new entry answers to.'),
+                field('content', 'string', true, 'The full entry text after the change. Capped; longer content is truncated, not rejected.'),
             ]),
-            note: 'Never send operation, target, book, uid, revision, entryType or section. Where information is filed is worked out from what it says.',
+            note: `Up to ${MAX_LORE_OPS} ops per turn. Edit only an entry that is in the Selected Living Lore; to change one that is not, first name its key in loreKeywords to pull it in. A lore.edit whose book/uid is not in scope is refused.`,
         }),
         keywords: Object.freeze({
             example: JSON.stringify({ loreKeywords: [['Queens Lake University'], ['event', 'Marissa']] }),

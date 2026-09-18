@@ -126,7 +126,7 @@ export function getRoleplayLoomGoalSchema() {
         strict: true,
         schema: {
             type: 'object', additionalProperties: false,
-            required: ['swaps', 'requests', 'loreProposals', 'loreKeywords', 'loreOps', 'flow'],
+            required: ['swaps', 'requests', 'loreKeywords', 'loreOps', 'flow'],
             properties: {
                 swaps: {
                     type: 'array', maxItems: 16,
@@ -143,19 +143,6 @@ export function getRoleplayLoomGoalSchema() {
                     type: 'array', maxItems: 32,
                     description: 'The batch of goal operations for this turn. Empty when nothing changed.',
                     items: { anyOf: ROLEPLAY_LOOM_GOAL_CAPABILITIES.map(requestBranch) },
-                },
-                loreProposals: {
-                    type: 'array', maxItems: 8,
-                    description: 'Durable lore to file. Empty unless a warranted change was found.',
-                    items: {
-                        type: 'object', additionalProperties: false, required: ['content', 'name', 'keys', 'evidence'],
-                        properties: {
-                            content: { type: 'string', minLength: 1, maxLength: 2000, description: 'The durable fact, in one entry.' },
-                            name: { type: 'string', description: 'A short title for the entry; empty for none.' },
-                            keys: { type: 'array', maxItems: 12, items: { type: 'string' }, description: 'Trigger keywords for this entry.' },
-                            evidence: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'string' }, description: 'The lines this fact is drawn from.' },
-                        },
-                    },
                 },
                 loreKeywords: {
                     type: 'array', maxItems: 8,

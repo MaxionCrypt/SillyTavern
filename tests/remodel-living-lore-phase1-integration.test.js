@@ -27,7 +27,7 @@ afterEach(() => setLiveDirectionTestAdapters(null));
 
 test('Loom keyword groups populate the Scene Living Lore cache', async () => {
     __setContextOverrides({ async getWorldInfoEntriesForBook(name) { return name === 'TL' ? [rayse] : []; } });
-    setLiveDirectionTestAdapters({ loomReconciliation: async () => loomReply({ requests: [], loreProposals: [], loreKeywords: [['Rayse']], flow: { continue: false } }) });
+    setLiveDirectionTestAdapters({ loomReconciliation: async () => loomReply({ requests: [], loreKeywords: [['Rayse']], flow: { continue: false } }) });
     const snapshot = await __buildLoomSnapshot(scene);
     await runLoomReconciliation({ scene, snapshot, draft: 'The draft stands.' });
     expect(listSceneEntryRefs(scene.id)).toEqual([{ book: 'TL', uid: '1' }]);
@@ -37,7 +37,7 @@ test('Loom keyword groups populate the Scene Living Lore cache', async () => {
 test('a group queried twice across turns loads its book only once', async () => {
     let loadCount = 0;
     __setContextOverrides({ async getWorldInfoEntriesForBook(name) { loadCount += 1; return name === 'TL' ? [rayse] : []; } });
-    setLiveDirectionTestAdapters({ loomReconciliation: async () => loomReply({ requests: [], loreProposals: [], loreKeywords: [['Rayse']], flow: { continue: false } }) });
+    setLiveDirectionTestAdapters({ loomReconciliation: async () => loomReply({ requests: [], loreKeywords: [['Rayse']], flow: { continue: false } }) });
     const snapshot = await __buildLoomSnapshot(scene);
     await runLoomReconciliation({ scene, snapshot, draft: 'The draft stands.' });
     const first = loadCount;
@@ -55,7 +55,7 @@ test('the Scene cache renders into a Living Lore packet through {{loom.lore}}', 
 
 test('round-trip: Loom groups -> cache -> packet renders the pulled entry', async () => {
     __setContextOverrides({ async getWorldInfoEntriesForBook(name) { return name === 'TL' ? [rayse] : []; } });
-    setLiveDirectionTestAdapters({ loomReconciliation: async () => loomReply({ requests: [], loreProposals: [], loreKeywords: [['Rayse']], flow: { continue: false } }) });
+    setLiveDirectionTestAdapters({ loomReconciliation: async () => loomReply({ requests: [], loreKeywords: [['Rayse']], flow: { continue: false } }) });
     const snapshot = await __buildLoomSnapshot(scene);
     await runLoomReconciliation({ scene, snapshot, draft: 'The draft stands.' });
     const packet = await buildSceneLivingLorePacket({ sceneId: scene.id, timelineId: scene.timelineId });

@@ -6,8 +6,7 @@ import {
     REQUIRED_ARGUMENTS,
     validateMechanicsRequest,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/mechanics-capabilities.js';
-import { MAX_INFORMATION_CHARS, readLoomInformation } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-intake.js';
-import { readLoreKeywords } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js';
+import { readLoreKeywords, readLoreOps } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js';
 import { buildProviderToolDefinitions, NARRATOR_MECHANIC_TOOLS } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/mechanics-gateway.js';
 
 const argumentSchema = () => getMechanicsRequestSchema().schema.properties.requests.items.properties.arguments.properties;
@@ -133,18 +132,12 @@ describe('Remodel metadata guide', () => {
 
     // --- Living Lore --------------------------------------------------------
 
-    test('the lore report example is a report intake accepts', () => {
-        const { accepted, rejected } = readLoomInformation([JSON.parse(buildMetadataGuide().lore.proposal.example)]);
-        expect(rejected).toEqual([]);
-        expect(accepted).toHaveLength(1);
-    });
-
-    test('the stated content limit is the limit that is enforced', () => {
-        const stated = Number(buildMetadataGuide().lore.proposal.arguments
-            .find((argument) => argument.key === 'content').hint.match(/Over (\d+) characters/)[1]);
-        expect(stated).toBe(MAX_INFORMATION_CHARS);
-        expect(readLoomInformation([{ content: 'a'.repeat(stated), evidence: ['x'] }]).accepted).toHaveLength(1);
-        expect(readLoomInformation([{ content: 'a'.repeat(stated + 1), evidence: ['x'] }]).rejected[0].code).toBe('content-too-long');
+    test('the lore ops example survives the loreOps reader as edit and create', () => {
+        const { loreOps } = JSON.parse(buildMetadataGuide().lore.ops.example);
+        expect(readLoreOps(loreOps)).toEqual([
+            { op: 'lore.edit', book: 'TL', uid: '1', content: 'The lighthouse has run unmanned on a timer since the keeper died.' },
+            { op: 'lore.create', name: 'Queens Lake Lighthouse', keys: ['Queens Lake Lighthouse', 'the lighthouse'], secondaryKeys: [], content: 'A coastal light north of the town, automated.' },
+        ]);
     });
 
     test('the keyword example survives the keyword reader unchanged', () => {

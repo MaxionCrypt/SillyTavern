@@ -800,17 +800,17 @@ function renderMetadataGuide() {
         ]),
     ))}
 
-            ${guideSection('Living Lore report', `
+            ${guideSection('Living Lore edits', `
                 ${guideTable(['Field', 'Arguments', 'Syntax'], [[
-        '<code>loreProposals[]</code>',
-        guideArguments(guide.lore.proposal.arguments),
-        `<code class="remodel-debug-guide-snippet">${escapeHtml(guide.lore.proposal.example)}</code>`,
+        '<code>loreOps[]</code>',
+        guideArguments(guide.lore.ops.arguments),
+        `<code class="remodel-debug-guide-snippet">${escapeHtml(guide.lore.ops.example)}</code>`,
     ], [
         '<code>loreKeywords</code>',
         guideArguments(guide.lore.keywords.arguments),
         `<code class="remodel-debug-guide-snippet">${escapeHtml(guide.lore.keywords.example)}</code>`,
     ]])}
-                <p class="remodel-debug-guide-note">${escapeHtml(guide.lore.proposal.note)} ${escapeHtml(guide.lore.keywords.note)}</p>`)}
+                <p class="remodel-debug-guide-note">${escapeHtml(guide.lore.ops.note)} ${escapeHtml(guide.lore.keywords.note)}</p>`)}
 
             ${guideSection('Narrator tool calls <em>not a fence — provider tool calls</em>', guideTable(
         ['Verb', 'Arguments', 'Syntax'],

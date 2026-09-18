@@ -11,8 +11,9 @@ const NARRATOR_RECALL_WARNING = 'This macro supplies only eligible earlier-Scene
 const CURATED_NARRATOR_RECIPE_NAME = 'Narrator · Grounded';
 const ROLEPLAY_LOOM_LIVING_LORE_POLICY = [
     '## Living Lore — enabled',
-    'Inspect Selected Living Lore when it is present. If this turn establishes a durable, reusable world fact, relationship, location, rule, or entity detail that belongs in the Timeline lorebook, return a precise `loreProposals` entry in the state fence. Do not write lore directly and do not propose fleeting prose detail.',
-    'Use empty arrays when no durable lore action is warranted.',
+    'Inspect Selected Living Lore when it is present. When accepted fiction changes one of those entries, rewrite it with a `lore.edit` op in the state fence `loreOps` array, naming its book and uid. When accepted fiction establishes a durable, reusable new subject no entry covers, add it with a `lore.create` op. Do not write lore directly in the prose and do not record fleeting detail.',
+    'You may only edit an entry that is in the Selected Living Lore. To reach one that is not, first name its key in `loreKeywords` to pull it in.',
+    'Leave `loreOps` empty when no durable lore change is warranted.',
 ].join('\n');
 
 // The operations manual, seeded as a plain editable block (not a computed
@@ -111,7 +112,7 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
     loom: Object.freeze([
         // The split state macros (loom.scene/goals/…) live in UNIVERSAL_STATE_MACROS
         // and are appended to every mode by getSourceDefinitions.
-        template('livingLore', 'Selected Living Lore', 'system', 'loom.lore', { description: 'The bounded, revisioned Timeline lore entries in scope, plus the proposal contract. Proposals do not write directly.' }),
+        template('livingLore', 'Selected Living Lore', 'system', 'loom.lore', { description: 'The Timeline lore entries in scope for this scene, plus the loreOps/loreKeywords contract the Loom edits and pulls lore through.' }),
         template('narratorDraft', 'Narrator Draft', 'user', 'narrator.draft', { description: 'The held Narrator prose being reconciled before it becomes visible.' }),
         template('narratorReasoning', 'Narrator Reasoning', 'user', 'narrator.reasoning', { description: 'The Narrator model\'s private reasoning for this draft, when the provider supplies it.' }),
     ]),
@@ -1056,15 +1057,6 @@ function migrateNarratorRecallSource(blocks) {
 
 function restoreRoleplayLivingLoreInstructions(blocks) {
     let changed = false;
-    for (const block of Array.isArray(blocks) ? blocks : []) {
-        const content = String(block.content || '');
-        const before = content;
-        const restored = content.replace('{"requests":[],"loreKeywords":[],"flow":{"continue":false}}', '{"requests":[],"loreProposals":[],"loreKeywords":[],"flow":{"continue":false}}');
-        if (restored !== before) {
-            block.content = restored;
-            changed = true;
-        }
-    }
     if (!Array.isArray(blocks) || blocks.some((block) => String(block.content || '') === ROLEPLAY_LOOM_LIVING_LORE_POLICY)) return changed;
     const contractIndex = blocks.findIndex((block) => /```state|"requests"\s*:/i.test(String(block.content || '')));
     blocks.splice(contractIndex >= 0 ? contractIndex : blocks.length, 0, createPromptBlock({

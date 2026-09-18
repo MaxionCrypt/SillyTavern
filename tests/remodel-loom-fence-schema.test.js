@@ -43,10 +43,10 @@ test('loreKeywords is an array of string-array groups', () => {
     expect(kw.items.items.type).toBe('string');
 });
 
-test('the top-level fence carries exactly the six state-fence keys', () => {
+test('the top-level fence carries exactly the five state-fence keys', () => {
     const schema = getRoleplayLoomGoalSchema().schema;
     expect(new Set(Object.keys(schema.properties)))
-        .toEqual(new Set(['swaps', 'requests', 'loreProposals', 'loreKeywords', 'loreOps', 'flow']));
+        .toEqual(new Set(['swaps', 'requests', 'loreKeywords', 'loreOps', 'flow']));
 });
 
 test('loreOps declares strict edit and create branches', () => {
@@ -115,9 +115,8 @@ test('a bare-JSON reply shaped by the schema round-trips through parseLoomReply'
             { id: 'r1', capability: 'goal.edit', arguments: { goalRef: 'Escape the compound', successRate: 40 }, reason: 'the guard doubled back' },
             { id: 'r2', capability: 'event.record', arguments: { summary: 'Aiden reached the courtyard' }, reason: 'it happened' },
         ],
-        loreProposals: [],
-        lorePromotionDecisions: [],
         loreKeywords: [],
+        loreOps: [],
         flow: { continue: false, hardPause: false },
     });
     const parsed = parseLoomReply(reply);

@@ -255,8 +255,8 @@ test('v31 restores Living Lore routing and fence fields to Crown Roleplay Loom',
 
     expect(store.version).toBe(34);
     expect(blocks).toContain('{{loom.lore}}');
-    expect(blocks).toContain('"loreProposals":[]');
     expect(blocks).toContain('## Living Lore — enabled');
+    expect(blocks).toContain('loreOps');
 });
 
 
@@ -373,9 +373,9 @@ test('v22 gives the untouched Patch Loom a durable lore check and preserves auth
     expect(store.version).toBe(34);
     expect(patchContents).toContain(LOOM_POLICY_PATCH);
     expect(patchContents).toContain(LOOM_OUTPUT_CONTRACT_PATCH);
-    expect(LOOM_POLICY_PATCH).toMatch(/STEP 3 - Durable Lore Check/);
-    expect(LOOM_POLICY_PATCH).toMatch(/Most turns may correctly return no proposals/);
-    expect(LOOM_OUTPUT_CONTRACT_PATCH).toContain('"loreProposals":[]');
+    expect(LOOM_POLICY_PATCH).toMatch(/STEP 3 - Living Lore/);
+    expect(LOOM_POLICY_PATCH).toMatch(/leave loreOps empty then/);
+    expect(LOOM_OUTPUT_CONTRACT_PATCH).toContain('"loreOps":[]');
     expect(authoredContents).toContain('my durable lore policy');
     expect(authoredContents).toContain('my private output contract');
 });
@@ -457,7 +457,7 @@ test('the Loom output contract no longer carries the dissolved World Sense promo
     expect(LOOM_OUTPUT_CONTRACT_PATCH).not.toContain('When promotion candidates are present');
     expect(LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION).not.toContain('lorePromotionDecisions');
     expect(LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION).not.toContain('When promotion candidates are present');
-    expect(LOOM_OUTPUT_CONTRACT_PATCH).toContain('Always include the top-level loreProposals array');
+    expect(LOOM_OUTPUT_CONTRACT_PATCH).toContain('Always include the top-level loreOps array');
 });
 
 test('v26 retains the mechanics block without injecting a hidden Continue instruction', () => {

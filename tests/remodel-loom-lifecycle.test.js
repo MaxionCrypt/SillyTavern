@@ -19,13 +19,8 @@ import {
     rerunDirectedRoleplayFromUserMessage,
     previewLoomPrompt,
     runLoomReconciliation,
-    DIRECTION_PROTOCOL,
 } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js';
 import { directedTurnController } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/legacy-directed-turn-adapter.js';
-import { listLivingLoreWrites } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
-import { withdrawLivingLoreWrites } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-withdrawal.js';
-import { upsertLivingLoreMetadata } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-store.js';
-import { buildLivingLorePacket } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-proposals.js';
 import { __setContextOverrides, __setExtensionSettings, __getChat, __emit, __onEvent } from './util/st-context-stub.js';
 import { __setOnlineStatus } from './util/script-stub.js';
 import { __clearDebugEvents } from './util/debug-console-stub.js';
@@ -43,28 +38,7 @@ const scene = {
 };
 const cast = [{ ref: { kind: 'character', id: 'char-narrator', label: 'Wren' }, label: 'Wren', characterId: 0 }];
 const RESPONSE = 'Wren steps between them. The blade catches her forearm.';
-const LORE_BOOK = 'Lifecycle Lore';
 let nativeLore;
-
-function livingLorePacket() {
-    return buildLivingLorePacket({
-        timelineId: scene.timelineId,
-        book: LORE_BOOK,
-        bookHash: 'lifecycle-hash',
-        entries: [{ book: LORE_BOOK, uid: '42', name: 'Wren', keys: ['Wren'], secondaryKeys: [], content: 'Current\nWren watches the gate.' }],
-        selected: [{ book: LORE_BOOK, uid: '42', reasons: [{ channel: 'history.primary' }] }],
-        metadata: [{ book: LORE_BOOK, uid: '42', revision: 1, entryType: 'entity' }],
-    });
-}
-
-function loreProposal(id, value, evidence = 'Wren steps between them.') {
-    return { content: value, name: id, keys: [id], evidence };
-}
-
-/** Everything currently written in the lorebook, as one string. */
-function loreText() {
-    return Object.values(nativeLore.entries).map((entry) => String(entry.content || '')).join(' ');
-}
 
 async function speak() {
     const chat = __getChat();
@@ -90,7 +64,6 @@ beforeEach(() => {
         async loadWorldInfo() { return structuredClone(nativeLore); },
         async saveWorldInfo(_book, data) { nativeLore = structuredClone(data); },
     });
-    upsertLivingLoreMetadata(scene.timelineId, { book: LORE_BOOK, uid: 42 }, { entryType: 'entity', revision: 1 });
     __setOnlineStatus('connected');
     initLiveDirection({
         getActiveScene: () => scene,
@@ -271,55 +244,6 @@ test('a Loom turn commits the Narrator draft and waits for the user', async () =
     expect(__getChat().at(-1).mes).toBe(RESPONSE);
 });
 
-test('a completed turn files its evidence-backed lore exactly once', async () => {
-    const proposal = loreProposal('wren-moved', 'Wren stands between the fighters.');
-    setLiveDirectionTestAdapters({
-        generatePerformer: speak,
-        livingLorePacket: livingLorePacket(),
-        loomReconciliation: async () => `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [proposal], flow: { continue: false } })}\n\`\`\``,
-    });
-
-    await requestNextDirection(scene, { deliveryMode: 'legacy' });
-    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
-    const writes = listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' });
-    expect(writes).toHaveLength(1);
-    expect(writes[0]).toMatchObject({ content: proposal.content });
-    expect(loreText()).toContain('Wren stands between the fighters.');
-    expect(__getChat().at(-1).swipe_info[0].extra.remodelDirection.directionId).toBe(writes[0].directionId);
-
-    // Recovering the same turn must not file it a second time: the lorebook is
-    // the ledger, so the information is already there.
-    await __emit('CHAT_LOADED');
-    expect(await until(() => listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' }).length === 1)).toBe(true);
-    expect(loreText().split('Wren stands between the fighters.')).toHaveLength(2);
-});
-
-test('Retry takes the superseded lore back out and files the retake once', async () => {
-    let take = 0;
-    setLiveDirectionTestAdapters({
-        generatePerformer: speak,
-        livingLorePacket: livingLorePacket(),
-        loomReconciliation: async () => {
-            take += 1;
-            const proposal = loreProposal(`take-${take}`, take === 1 ? 'First take.' : 'Second take.');
-            return `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [proposal], flow: { continue: false } })}\n\`\`\``;
-        },
-    });
-
-    await requestNextDirection(scene, { deliveryMode: 'legacy' });
-    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
-    await regenerateLastDirectedResponse(scene, { deliveryMode: 'legacy' });
-    expect(await until(() => take === 2 && getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
-
-    // The discarded take is gone from the lore, not merely superseded beside it.
-    expect(loreText()).not.toContain('First take.');
-    expect(loreText()).toContain('Second take.');
-    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'withdrawn' })).toHaveLength(1);
-    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toEqual([
-        expect.objectContaining({ content: 'Second take.' }),
-    ]);
-});
-
 test('Retry preserves the completed response until its replacement connection is ready', async () => {
     scene.generationProfileIds = { narrator: 'slow-route', loom: 'slow-route' };
     await requestNextDirection(scene, { deliveryMode: 'legacy' });
@@ -351,11 +275,9 @@ test('editing the latest user message rewinds its response and reruns without du
     const stopUpdated = __onEvent('MESSAGE_UPDATED', (messageId) => editedEvents.push(['updated', messageId]));
     setLiveDirectionTestAdapters({
         generatePerformer: speak,
-        livingLorePacket: livingLorePacket(),
         loomReconciliation: async () => {
             take += 1;
-            const proposal = loreProposal(`edit-take-${take}`, take === 1 ? 'Old action state.' : 'Edited action state.');
-            return `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [proposal], flow: { continue: false } })}\n\`\`\``;
+            return `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], flow: { continue: false } })}\n\`\`\``;
         },
     });
 
@@ -378,12 +300,6 @@ test('editing the latest user message rewinds its response and reruns without du
     expect(chat.filter((message) => message.is_user)).toHaveLength(1);
     expect(chat[1]).toMatchObject({ is_user: false, mes: RESPONSE });
     expect(editedEvents).toEqual([['edited', 0], ['updated', 0]]);
-    // The rewound take's lore is removed; only the rerun's remains.
-    expect(loreText()).not.toContain('Old action state.');
-    expect(loreText()).toContain('Edited action state.');
-    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toEqual([
-        expect.objectContaining({ content: 'Edited action state.' }),
-    ]);
     stopEdited();
     stopUpdated();
 });
@@ -399,73 +315,6 @@ test('only the newest user-authored message is eligible for edit-and-rerun', () 
     expect(isLatestUserMessage(1, chat)).toBe(false);
     expect(isLatestUserMessage(2, chat)).toBe(true);
     expect(isLatestUserMessage(3, chat)).toBe(false);
-});
-
-test('switching native swipes withdraws the superseded lore and files only the selected set', async () => {
-    const first = loreProposal('swipe-one', 'First swipe state.');
-    setLiveDirectionTestAdapters({
-        generatePerformer: speak,
-        livingLorePacket: livingLorePacket(),
-        loomReconciliation: async () => `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [first], flow: { continue: false } })}\n\`\`\``,
-    });
-    await requestNextDirection(scene, { deliveryMode: 'legacy' });
-    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
-
-    const message = __getChat().at(-1);
-    const firstSaved = structuredClone(message.extra.remodelDirection);
-    const secondSaved = structuredClone(firstSaved);
-    secondSaved.directionId = 'direction-second-swipe';
-    secondSaved.acceptedText = RESPONSE;
-    secondSaved.loreProposalIds = [];
-    secondSaved.envelope.loreProposals = [loreProposal('swipe-two', 'Second swipe state.')];
-    message.extra.remodelDirection = secondSaved;
-    await __emit('MESSAGE_SWIPED', __getChat().length - 1);
-
-    // The swiped-away take is taken out of the lore, not left beside it.
-    expect(await until(() => loreText().includes('Second swipe state.') && !loreText().includes('First swipe state.'))).toBe(true);
-
-    message.extra.remodelDirection = firstSaved;
-    await __emit('MESSAGE_SWIPED', __getChat().length - 1);
-    expect(await until(() => loreText().includes('First swipe state.') && !loreText().includes('Second swipe state.'))).toBe(true);
-    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toHaveLength(1);
-});
-
-test('reload recovery files only lore evidenced by the prefix saved before a crash', async () => {
-    const directionId = 'direction-crash-prefix';
-    const accepted = 'Wren reaches the gate.';
-    const envelope = {
-        protocol: DIRECTION_PROTOCOL,
-        directionId,
-        sceneId: scene.id,
-        flow: { continueAfter: false, hardPauseAfter: true },
-        mechanics: { pendingRequests: [] },
-        livingLore: livingLorePacket(),
-        loreProposals: [
-            loreProposal('crash-accepted', 'Wren is at the gate.', accepted),
-            loreProposal('crash-hidden', 'The gate has opened.', 'The gate opens.'),
-        ],
-    };
-    __getChat().push({
-        name: 'Wren', is_user: false, mes: accepted, extra: { remodelDirection: {
-            protocol: DIRECTION_PROTOCOL,
-            directionId,
-            sceneId: scene.id,
-            timelineId: scene.timelineId,
-            state: 'speaking',
-            acceptedText: accepted,
-            performerRef: cast[0].ref,
-            envelope,
-            checkpointTransactionIds: [],
-            loreProposalIds: [],
-        } },
-    });
-
-    await __emit('CHAT_LOADED');
-    expect(await until(() => listLivingLoreWrites({ timelineId: scene.timelineId }).length === 1)).toBe(true);
-    expect(listLivingLoreWrites({ timelineId: scene.timelineId })).toEqual([
-        expect.objectContaining({ content: 'Wren is at the gate.' }),
-    ]);
-    expect(__getChat()[0].mes).toBe(accepted);
 });
 
 test('Narrator recall carries no pacing directive and request-scoped sources clear after assembly', async () => {
@@ -604,7 +453,7 @@ test('an unfinished private Narrator draft is retried before the Loom can canoni
         },
         loomReconciliation: async () => {
             loomCalls++;
-            return `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [], flow: { continue: false } })}\n\`\`\``;
+            return `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], flow: { continue: false } })}\n\`\`\``;
         },
     });
 
@@ -638,7 +487,7 @@ test('visible reasoning or echoed commands are retried before the Loom sees them
         },
         loomReconciliation: async () => {
             loomCalls++;
-            return `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [], flow: { continue: false } })}\n\`\`\``;
+            return `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], flow: { continue: false } })}\n\`\`\``;
         },
     });
 
@@ -663,7 +512,7 @@ test('Loom preview and the real reconciliation share the exact recipe compiler',
     setLiveDirectionTestAdapters({
         loomReconciliation: async ({ prompt }) => {
             sentPrompt = prompt;
-            return `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [], flow: { continue: false } })}\n\`\`\``;
+            return `${RESPONSE}\n\n\`\`\`state\n${JSON.stringify({ requests: [], flow: { continue: false } })}\n\`\`\``;
         },
     });
 
@@ -687,11 +536,10 @@ test('an intervention stores only the visible Loom prefix and never the private 
     let pushTail = () => {};
     setLiveDirectionTestAdapters({
         generatePerformer: speak,
-        livingLorePacket: livingLorePacket(),
         loomReconciliation: ({ onChunk, signal }) => new Promise((resolve) => {
             onChunk(visible);
             pushTail = () => onChunk(full);
-            signal.addEventListener('abort', () => resolve(`${full}\n\n\`\`\`state\n${JSON.stringify({ requests: [], loreProposals: [loreProposal('hidden-tail', 'The alarm is sounding.', 'presses it')], flow: { continue: false } })}\n\`\`\``), { once: true });
+            signal.addEventListener('abort', () => resolve(`${full}\n\n\`\`\`state\n${JSON.stringify({ requests: [], flow: { continue: false } })}\n\`\`\``), { once: true });
         }),
     });
 
@@ -706,9 +554,6 @@ test('an intervention stores only the visible Loom prefix and never the private 
     expect(__getChat().at(-1).mes).toBe(visible);
     expect(__getChat().at(-1).mes).not.toContain('presses it');
     expect(__getChat().at(-1).mes).not.toBe(RESPONSE);
-    // The buffered tail's lore never appeared in the fiction the reader saw, so
-    // nothing from it is filed.
-    expect(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })).toEqual([]);
 });
 
 

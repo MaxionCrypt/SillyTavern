@@ -23,6 +23,6 @@ test('readLoreOps drops unknown ops and malformed edits/creates', () => {
 });
 
 test('parseLoomReply surfaces loreOps from the fence', () => {
-    const raw = ['```state', JSON.stringify({ requests: [], loreProposals: [], loreOps: [{ id: 'o1', op: 'lore.edit', arguments: { book: 'TL', uid: '1', content: 'edited' }, reason: 'r' }], flow: { continue: false } }), '```'].join('\n');
+    const raw = ['```state', JSON.stringify({ requests: [], loreOps: [{ id: 'o1', op: 'lore.edit', arguments: { book: 'TL', uid: '1', content: 'edited' }, reason: 'r' }], flow: { continue: false } }), '```'].join('\n');
     expect(parseLoomReply(raw).loreOps).toEqual([{ op: 'lore.edit', book: 'TL', uid: '1', content: 'edited' }]);
 });

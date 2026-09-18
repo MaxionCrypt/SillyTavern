@@ -150,19 +150,19 @@ function describeArgument(argument) {
 
 function loreTemplates(guide) {
     return [
-        instruction('lore.report', 'Living Lore report', 'lore', 'system',
-            'How to report durable information, and what evidence it has to cite.', [
-                'When accepted fiction establishes something durable, report it in a top-level "loreProposals" array.',
+        instruction('lore.ops', 'Living Lore edits', 'lore', 'system',
+            'How to edit a scoped entry or create a new one through typed loreOps.', [
+                'When accepted fiction changes a Selected Living Lore entry, rewrite it with a "lore.edit" op in a top-level "loreOps" array. When it establishes a durable new subject, add a "lore.create" op.',
                 '',
-                ...guide.lore.proposal.arguments.map(describeArgument),
+                ...guide.lore.ops.arguments.map(describeArgument),
                 '',
-                guide.lore.proposal.note,
+                guide.lore.ops.note,
                 '',
-                'One report is one piece of information. Split unrelated facts into separate entries.',
-                'Use "loreProposals":[] when the fiction established nothing durable.',
+                'One op is one change. Split unrelated changes into separate ops.',
+                'Use "loreOps":[] when the fiction changed nothing durable.',
                 '',
                 'Shape:',
-                guide.lore.proposal.example,
+                guide.lore.ops.example,
             ].join('\n')),
         instruction('lore.keywords', 'Retrieval keywords', 'lore', 'system',
             'How to replace the working lore when the scene has moved on.', [

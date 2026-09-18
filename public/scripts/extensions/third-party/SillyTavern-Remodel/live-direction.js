@@ -39,9 +39,6 @@ import {
     describeDirectionProgress,
     settleDirectionProgress,
 } from './direction-progress.js';
-import { applyLoomLoreReports } from './living-lore-intake-runtime.js';
-import { withdrawLivingLoreWrites } from './living-lore-withdrawal.js';
-import { listLivingLoreWrites } from './living-lore-store.js';
 import { applyNarratorRetryPolicy } from './narrator-retry-policy.js';
 import { applyNarratorReasoningPolicy } from './narrator-reasoning-policy.js';
 import { describeNarratorOutput } from './narrator-output-contract.js';
@@ -394,11 +391,8 @@ export function initLiveDirection(options = {}) {
     context.eventSource.on(context.eventTypes.GENERATION_ENDED, finish);
     context.eventSource.on(context.eventTypes.GENERATION_STOPPED, finish);
     const recover = () => setTimeout(recoverLiveDirectionMessages, 0);
-    const reconcileLore = () => setTimeout(() => reconcileCurrentChatLoreProposals(), 0);
     context.eventSource.on(context.eventTypes.CHAT_LOADED, recover);
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, recover);
-    context.eventSource.on(context.eventTypes.MESSAGE_SWIPED, reconcileLore);
-    context.eventSource.on(context.eventTypes.MESSAGE_DELETED, reconcileLore);
     recoverLiveDirectionMessages();
 }
 
@@ -837,15 +831,7 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     } catch (error) {
         return directionFailure(error, { operation: 'regenerate', scene, deliveryMode });
     }
-    // A background catch-up may still be creating suggestions for this take.
-    // Join it before invalidating, otherwise it can land after the invalidation
-    // and resurrect lore based on fiction Retry is about to remove.
     await waitForArchiveCatchup(scene.id);
-    await withdrawLivingLoreWrites({
-        timelineId: scene.timelineId,
-        directionIds: [saved.directionId],
-        reason: 'retry-superseded-generation',
-    });
     const transactionIds = [...(saved.checkpointTransactionIds || [])].reverse();
     const transactions = listMechanicsTransactions({ timelineId: scene.timelineId, sceneId: scene.id });
     for (const id of transactionIds) {
@@ -883,11 +869,10 @@ export function isLatestUserMessage(messageId, chat = getContext().chat || []) {
 /**
  * Replace the newest user action and re-run everything causally downstream.
  *
- * This is intentionally not a cosmetic message edit. Narration, Archive and
- * mechanics transactions, and pending Living Lore proposals after the action
- * all describe the old wording. Rewind them together, persist the replacement
- * user line, then start a user-priority direction pass without posting that
- * line a second time.
+ * This is intentionally not a cosmetic message edit. Narration and the
+ * mechanics transactions after the action all describe the old wording. Rewind
+ * them together, persist the replacement user line, then start a user-priority
+ * direction pass without posting that line a second time.
  */
 export async function rerunDirectedRoleplayFromUserMessage({
     scene = hooks.getActiveScene(), messageId, text, deliveryMode = 'canonical',
@@ -909,14 +894,6 @@ export async function rerunDirectedRoleplayFromUserMessage({
     const savedDirections = supersededMessages
         .map((message) => message?.extra?.remodelDirection)
         .filter((saved) => saved && (!saved.sceneId || saved.sceneId === scene.id));
-    const directionIds = [...new Set(savedDirections.map((saved) => saved.directionId).filter(Boolean))];
-    if (directionIds.length) {
-        await withdrawLivingLoreWrites({
-            timelineId: scene.timelineId,
-            directionIds,
-            reason: 'edited-user-message-superseded-generation',
-        });
-    }
 
     const transactions = listMechanicsTransactions({ timelineId: scene.timelineId, sceneId: scene.id });
     const transactionById = new Map(transactions.map((transaction) => [transaction.id, transaction]));
@@ -952,7 +929,7 @@ export async function rerunDirectedRoleplayFromUserMessage({
     journal('user-edit.rerun', {
         messageId: id,
         removedMessages: supersededMessages.length,
-        supersededDirectionIds: directionIds,
+        supersededDirectionIds: [...new Set(savedDirections.map((saved) => saved.directionId).filter(Boolean))],
         rolledBackTransactionIds: rolledBack,
         actionLength: action.length,
     }, { severity: 'warn', summary: 'Edited the latest user action and rewound its consequences' });
@@ -1465,7 +1442,6 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         state: 'Speaking',
         openingLabel: '',
         checkpointTransactionIds: [],
-        loreProposalIds: [],
         generationFinished: false,
         generationSettled: false,
         interrupted: false,
@@ -2094,8 +2070,6 @@ async function beginLoomVisibleStream(run, scene) {
     // canonical buffer and one interruption offset.
     run.rawBufferedText = String(result?.committedProse || draft);
     run.envelope.mechanics.pendingRequests = [...(result?.requests || [])];
-    run.envelope.loreProposals = structuredClone(result?.loreProposals || []);
-    run.envelope.loreProposalRejections = structuredClone(result?.loreProposalRejections || []);
     run.envelope.loreOps = structuredClone(result?.loreOps || []);
     if (result?.flow) run.envelope.flow = result.flow;
     run.generationFinished = true;
@@ -2379,26 +2353,10 @@ export async function runLoomReconciliation({
     // did not advance — name the real cause here instead.
     await checkGenerationBudget({ text: raw, reasoning: '', label: 'The Loom pass', directionId: null });
     journalLoomReply(raw, 'loom-pass', scene?.id || null);
-    const { prose, swaps, requests, flow, loreProposals, loreProposalRejections, loreKeywords = [], loreOps = [] } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
+    const { prose, swaps, requests, flow, loreKeywords = [], loreOps = [] } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
     // Full-prose replies are the v12 contract. Preserve-and-patch remains a
     // compatibility fallback for owner-authored recipes using the old fence.
     const committedProse = prose || applySwaps(draft, swaps).prose;
-    if (loreProposals.length || loreProposalRejections.length) {
-        try {
-            recordDebugEvent('living-lore', 'lore.proposals.parsed', {
-                proposals: loreProposals,
-                rejections: loreProposalRejections,
-                book: snapshot?.livingLore?.book || '',
-                bookHash: snapshot?.livingLore?.bookHash || '',
-            }, {
-                severity: loreProposalRejections.length ? 'warn' : 'info',
-                correlationId: directionInFlight?.id || activeRun?.directionId || null,
-                summary: `Loom proposed ${loreProposals.length} typed lore change${loreProposals.length === 1 ? '' : 's'}; ${loreProposalRejections.length} rejected`,
-            });
-        } catch {
-            // A Debug viewer cannot be allowed to break reconciliation.
-        }
-    }
     // Living Lore retrieval: each NEW keyword group the Loom named pulls its
     // native World Info entries into this Scene's cache (groups scanned
     // separately). Already-queried groups are skipped so a repeat costs nothing.
@@ -2414,7 +2372,7 @@ export async function runLoomReconciliation({
             }
         }
     }
-    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections, loreOps };
+    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow, loreOps };
     try {
         const result = executeDirectionRequests(requests, {
             scene: { id: scene.id, timelineId: scene.timelineId },
@@ -2424,10 +2382,10 @@ export async function runLoomReconciliation({
             authorizedGoalIds: [],
         });
         journal('loom', { requestCount: requests.length, ok: result.ok, patched: committedProse !== draft }, { summary: 'Loom reconciled and recorded the turn' });
-        return { committedProse, requests, result, flow, loreProposals, loreProposalRejections, loreOps };
+        return { committedProse, requests, result, flow, loreOps };
     } catch (error) {
         journal('loom.failed', { phase: 'apply', error: String(error?.message || error) }, { severity: 'warn' });
-        return { committedProse, requests, result: null, flow, loreProposals, loreProposalRejections, loreOps };
+        return { committedProse, requests, result: null, flow, loreOps };
     }
 }
 
@@ -2754,8 +2712,6 @@ async function interruptLiveDirection({ preserveForIntervention }) {
     // These proposals were authored against the completed hidden tail. The
     // accepted-prefix catch-up below must derive a fresh set; filtering the old
     // set by confidence would still let hidden evidence become canon.
-    run.envelope.loreProposals = [];
-    run.envelope.loreProposalRejections = [];
     run.envelope.loreOps = [];
 
     // Loom mode: Stop CUTS OFF, it does not delete. The reveal lags the buffer
@@ -2842,7 +2798,6 @@ async function persistFinalizedRunMessage(run, state) {
     // stored state.
     applyPendingRequests(run);
     await applyLoomLoreOps(run);
-    await queueAcceptedLoreProposals(run, { phase: state });
     const interruption = describeRunInterruption(run);
     journal('finalize', {
         directionId: run.directionId,
@@ -2949,65 +2904,6 @@ function applyPendingRequests(run) {
     }
 }
 
-/**
- * Turn detached Loom proposals into persistent suggestions only after their
- * evidence has become visible fiction (or a committed Archive delta). The
- * queue owns validation; in opt-in Auto-safe mode it may ask the same atomic
- * mutation engine to apply the narrow admitted subset.
- */
-async function queueAcceptedLoreProposals(run, { proposals = null, phase = 'complete', reactivate = false } = {}) {
-    const packet = run?.envelope?.livingLore;
-    const candidates = Array.isArray(proposals) ? proposals : run?.envelope?.loreProposals;
-    if (!packet?.book || !Array.isArray(candidates) || !candidates.length || !acceptedProse(run)) return { ok: true, applied: [], rejected: [] };
-    try {
-        // Lore intake now runs on prose evidence alone — the Archive that used
-        // to supply recordedAt and corroborating facts is dissolved.
-        const result = await applyLoomLoreReports({
-            timelineId: run.timelineId,
-            book: packet.book,
-            records: candidates,
-            recordedAt: new Date().toISOString(),
-            acceptedProse: acceptedProse(run),
-            archiveFacts: [],
-            source: { directionId: run.directionId, sceneId: run.sceneId, messageId: run.messageId },
-        });
-        if (result.rejected.length) {
-            run.checkpointDiagnostics = [
-                ...(run.checkpointDiagnostics || []),
-                ...result.rejected.map((item) => `Living Lore report refused: ${item.code}.`),
-            ];
-        }
-        journal('lore.intake.lifecycle', {
-            directionId: run.directionId,
-            messageId: run.messageId,
-            phase,
-            reactivate,
-            reported: candidates.length,
-            appended: result.appended,
-            created: result.created,
-            placements: result.applied.map((item) => ({ decision: item.decision, name: item.name, score: item.score })),
-            rejected: result.rejected.map((item) => ({ index: item.index, code: item.code })),
-        }, {
-            correlationId: run.directionId,
-            severity: result.rejected.length ? 'warn' : 'info',
-            summary: `Living Lore filed ${result.applied.length}/${candidates.length} report(s): ${result.appended} appended, ${result.created} created`,
-        });
-        run.loreProposalIds = [...new Set([
-            ...(run.loreProposalIds || []),
-            ...result.applied.map((item) => item.writeId).filter(Boolean),
-        ])];
-        return result;
-    } catch (error) {
-        journal('lore.intake.lifecycle.failed', {
-            directionId: run.directionId,
-            messageId: run.messageId,
-            phase,
-            error: String(error?.message || error),
-        }, { correlationId: run.directionId, severity: 'warn' });
-        return { ok: false, applied: [], rejected: [{ code: 'intake-failed' }] };
-    }
-}
-
 /** Record what a Loom-shaped reply actually contained, for diagnostics. */
 function journalLoomReply(raw, phase, sceneId, directionId = null) {
     try {
@@ -3092,7 +2988,6 @@ async function recoverLiveDirectionMessages() {
         changed = true;
     }
     if (changed) await context.saveChat();
-    await reconcileCurrentChatLoreProposals();
     const scene = hooks.getActiveScene();
     if (recovered && scene?.id === recovered.metadata.sceneId && isDirectedLiveScene(scene)) {
         const performer = resolvePerformer(recovered.metadata.performerRef, scene);
@@ -3110,7 +3005,6 @@ async function recoverLiveDirectionMessages() {
                 lastBreathOffset: String(recovered.metadata.acceptedText || '').length,
                 holdReason: 'hard', state: 'Waiting for you', openingLabel: '',
                 checkpointTransactionIds: [...(recovered.metadata.checkpointTransactionIds || [])],
-                loreProposalIds: [...(recovered.metadata.loreProposalIds || [])],
                 variableRefs: new Map(Object.entries(recovered.metadata.variableRefs || {})),
                 goalRefs: new Map(Object.entries(recovered.metadata.goalRefs || {})),
                 addressBook: recovered.metadata.addressBook || { entries: [], duplicates: [] },
@@ -3170,64 +3064,6 @@ export function setLiveDirectionMechanics(scene, implementation) {
 /** Explicit, idempotent recovery seam for the directed-turn controller. */
 export function recoverLiveDirection() {
     return recoverLiveDirectionMessages();
-}
-
-/**
- * Reconcile the current native swipe selection with the Suggest queue. This is
- * also the reload recovery path: a crash after message save but before queue
- * persistence replays the same direction/proposal identity without duplicates.
- */
-async function reconcileCurrentChatLoreProposals() {
-    const scene = hooks.getActiveScene();
-    if (!scene?.id || !scene.timelineId) return;
-    const context = getContext();
-    const currentDirections = new Set();
-    let messageChanged = false;
-    for (const [messageId, message] of (context.chat || []).entries()) {
-        const saved = message?.extra?.remodelDirection;
-        if (!saved || message.is_user || saved.sceneId !== scene.id) continue;
-        const directionId = String(saved.directionId || '').trim();
-        if (!directionId) continue;
-        currentDirections.add(directionId);
-        const proposals = saved.envelope?.loreProposals;
-        const packet = saved.envelope?.livingLore;
-        if (!packet?.book || !Array.isArray(proposals) || !proposals.length) continue;
-        const recoveryRun = {
-            directionId,
-            sceneId: scene.id,
-            timelineId: saved.timelineId || scene.timelineId,
-            messageId,
-            envelope: saved.envelope,
-            acceptedVisibleText: sanitizeDirectionText(saved.acceptedText ?? message.mes ?? ''),
-            rawBufferedText: sanitizeDirectionText(saved.acceptedText ?? message.mes ?? ''),
-            rawOffset: String(saved.acceptedText ?? message.mes ?? '').length,
-            loreProposalIds: [...(saved.loreProposalIds || [])],
-            checkpointDiagnostics: [],
-        };
-        // eslint-disable-next-line no-await-in-loop
-        await queueAcceptedLoreProposals(recoveryRun, { proposals, phase: 'reload-or-swipe-recovery', reactivate: true });
-        if (!sameStrings(saved.loreProposalIds, recoveryRun.loreProposalIds)) {
-            saved.loreProposalIds = [...recoveryRun.loreProposalIds];
-            saved.updatedAt = new Date().toISOString();
-            writeDirectionMetadata(message, saved);
-            messageChanged = true;
-        }
-    }
-
-    // From what intake actually wrote, not from the retired proposal store,
-    // which is always empty and made this a silent no-op.
-    const superseded = [...new Set(listLivingLoreWrites({ timelineId: scene.timelineId, status: 'written' })
-        .filter((record) => String(record.sceneId) === String(scene.id))
-        .map((record) => String(record.directionId || ''))
-        .filter((directionId) => directionId && !currentDirections.has(directionId)))];
-    if (superseded.length) {
-        await withdrawLivingLoreWrites({
-            timelineId: scene.timelineId,
-            directionIds: superseded,
-            reason: 'message-deleted-or-swipe-superseded',
-        });
-    }
-    if (messageChanged) await context.saveChat();
 }
 
 /**
@@ -3296,7 +3132,6 @@ function serializeRun(run, state) {
         performerRef: run.performer.ref,
         ...stored,
         checkpointTransactionIds: [...run.checkpointTransactionIds],
-        loreProposalIds: [...(run.loreProposalIds || [])],
         pendingRequestsApplied: Boolean(run.pendingRequestsApplied),
         interrupted: Boolean(run.interrupted),
         // A provider-truncated turn must not read back as a clean one: Retry
@@ -3502,9 +3337,7 @@ function normalizeEnvelope(value, scene) {
         mechanicsSnapshot: value.mechanicsSnapshot ? structuredClone(value.mechanicsSnapshot) : null,
         currentPlayerAction: String(value.currentPlayerAction || ''),
         livingLore: value.livingLore ? structuredClone(value.livingLore) : null,
-        loreProposals: Array.isArray(value.loreProposals) ? structuredClone(value.loreProposals) : [],
         loreOps: Array.isArray(value.loreOps) ? structuredClone(value.loreOps) : [],
-        loreProposalRejections: Array.isArray(value.loreProposalRejections) ? structuredClone(value.loreProposalRejections) : [],
         sceneId: scene.id,
     };
 }
