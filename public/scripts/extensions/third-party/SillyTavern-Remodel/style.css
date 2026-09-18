@@ -37,7 +37,7 @@
 .remodel-goal-detail-actions button.is-danger[data-confirming] { color: #ffd7d2; background: rgba(191,97,106,.28); }
 
 .remodel-goal-edit-form { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
-.remodel-goal-edit-form label { display: flex; flex-direction: column; gap: 4px; color: rgba(238,235,245,.55); font: 400 10px/1.2 Georgia,serif; letter-spacing: .14em; text-transform: uppercase; }
+.remodel-goal-edit-form label { display: flex; flex-direction: column; gap: 4px; color: rgba(238,235,245,.55); font: 400 10px/1.2 Georgia,serif; letter-spacing: .14em; text-transform: none; }
 .remodel-goal-edit-form input, .remodel-goal-edit-form textarea, .remodel-goal-edit-form select { width: 100%; padding: 9px; color: #eeeaf4; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.14); font-size: 13px; text-transform: none; letter-spacing: 0; }
 .remodel-goal-edit-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .remodel-goal-edit-actions button { padding: 8px 16px; color: #dfd936; background: rgba(8,7,13,.72); border: 1px solid rgba(218,207,0,.45); border-radius: 999px; cursor: pointer; }
@@ -51,7 +51,7 @@
 .remodel-goal-relate-form button { padding: 6px 14px; color: #dfd936; background: rgba(8,7,13,.72); border: 1px solid rgba(218,207,0,.45); border-radius: 999px; cursor: pointer; }
 
 .remodel-goal-unlinked { position: absolute; left: 50%; bottom: 82px; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: min(560px,calc(100% - 40px)); }
-.remodel-goal-unlinked > span { flex-basis: 100%; text-align: center; color: rgba(238,235,245,.42); font: 400 10px/1.4 Georgia,serif; letter-spacing: .16em; text-transform: uppercase; }
+.remodel-goal-unlinked > span { flex-basis: 100%; text-align: center; color: rgba(238,235,245,.42); font: 400 10px/1.4 Georgia,serif; letter-spacing: .16em; text-transform: none; }
 .remodel-goal-unlinked button { padding: 5px 12px; color: rgba(238,235,245,.78); background: rgba(8,7,13,.62); border: 1px dashed rgba(218,207,0,.35); border-radius: 999px; font-size: 12px; cursor: pointer; }
 .remodel-goal-unlinked button:hover { border-style: solid; border-color: rgba(235,219,35,.7); color: #dfd936; }
 .remodel-goal-create-form > button[type="submit"] { padding: 10px; color: #09080d; background: #c9be00; }
@@ -934,7 +934,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-label {
   font-family: var(--remodel-serif) !important;
   font-size: 9px !important;
   letter-spacing: 0.22em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   color: var(--tarot-gold) !important;
   margin-bottom: 12px !important;
   opacity: 0.85 !important;
@@ -1402,7 +1402,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-narrator {
 body.remodel-roleplay-workspace-active .remodel-rp-narrator .remodel-rp-name {
   font-size: 10px !important;
   letter-spacing: 0.24em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   color: rgba(238, 235, 245, 0.34) !important;
 }
 body.remodel-roleplay-workspace-active .remodel-rp-narrator .remodel-rp-bubble {
@@ -1450,7 +1450,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-direction-section summary {
   cursor:pointer !important;
   font-size:.56rem !important;
   letter-spacing:.13em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-direction-section summary b {
@@ -1523,7 +1523,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-direction-trace summary {
   cursor:pointer !important;
   font-size:.56rem !important;
   letter-spacing:.12em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-direction-trace > p {
@@ -1552,7 +1552,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-direction-trace li span {
   color:rgba(215,200,0,.48) !important;
   font-size:.5rem !important;
   letter-spacing:.1em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 /* --- Composer zone: turn bar + action row + input --- */
@@ -1611,7 +1611,7 @@ body.remodel-roleplay-workspace-active .remodel-live-mode {
   height:18px !important;
   padding:0 8px !important;
   font-size:8px !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
   letter-spacing:.11em !important;
 }
 body.remodel-roleplay-workspace-active .remodel-live-mode i { color:rgba(215,200,0,.92) !important; }
@@ -1639,7 +1639,7 @@ body.remodel-roleplay-workspace-active .remodel-live-archive-status {
   font:600 7px/1 var(--remodel-serif) !important;
   letter-spacing:.08em;
   padding:0 !important;
-  text-transform:uppercase;
+  text-transform: none;
 }
 body.remodel-roleplay-workspace-active .remodel-live-archive-status.is-failed {
   color:#ffaaa0 !important;
@@ -1696,7 +1696,7 @@ body.remodel-roleplay-workspace-active .remodel-live-flow-actions button {
   color:rgba(244,238,206,.92) !important;
   font:11px/1 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.12em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
   cursor:pointer !important;
   transition:border-color .16s ease,color .16s ease,background .16s ease !important;
 }
@@ -1743,7 +1743,7 @@ body.remodel-roleplay-workspace-active .remodel-live-pacing {
   color:rgba(235,229,202,.72) !important;
   font:10px/1.2 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.12em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 body.remodel-roleplay-workspace-active .remodel-live-pacing select {
   width:auto !important;
@@ -1785,7 +1785,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-msg.remodel-rp-interrupted .r
   color:rgba(215,200,0,.42) !important;
   font:7px/1 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.12em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 body.remodel-roleplay-workspace-active .remodel-direction-failure {
   position:absolute !important;
@@ -1841,7 +1841,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-goals-pill {
   font-family: var(--remodel-serif, Georgia, serif) !important;
   font-size: 10px !important;
   letter-spacing: 0.18em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   cursor: pointer !important;
   transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease !important;
 }
@@ -2092,7 +2092,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   font-family: var(--remodel-serif, Georgia) !important;
   line-height: 1 !important;
   letter-spacing: 0.14em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   cursor: pointer !important;
 }
 #remodel-rp-preview-modal .remodel-rp-preview-tabs button { padding: 7px 18px !important; font-size: 11px !important; }
@@ -2128,7 +2128,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   cursor: pointer !important;
   font: 600 10px/1.2 var(--remodel-manuscript-font, Georgia) !important;
   letter-spacing: 0.12em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 
 #remodel-prompt-studio-preview-modal .remodel-story-resolver-report pre,
@@ -2196,7 +2196,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   color: rgba(238, 235, 245, 0.5) !important;
   font: 10px/1.4 var(--remodel-serif, Georgia) !important;
   letter-spacing: 0.1em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 #remodel-rp-preview-modal .remodel-rp-preview-summary strong,
 #remodel-story-preview-modal .remodel-rp-preview-summary strong { color: #f2db42 !important; font-weight: 400 !important; }
@@ -2332,7 +2332,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-chip:hover {
   color: #f2db42 !important;
   font: 11px/1.3 var(--remodel-serif, Georgia) !important;
   letter-spacing: 0.12em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 #remodel-rp-preview-modal .remodel-rp-preview-merge.is-unsent .remodel-rp-preview-merge-index,
 #remodel-story-preview-modal .remodel-rp-preview-merge.is-unsent .remodel-rp-preview-merge-index {
@@ -2437,7 +2437,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-as-av {
   font-family: var(--remodel-serif) !important;
 }
 body.remodel-roleplay-workspace-active .remodel-rp-as-txt { font-size: 11px !important; line-height: 1.2 !important; text-align: left !important; }
-body.remodel-roleplay-workspace-active .remodel-rp-as-k { color: rgba(238, 235, 245, 0.34) !important; display: block !important; font-size: 9px !important; letter-spacing: 0.1em !important; text-transform: uppercase !important; }
+body.remodel-roleplay-workspace-active .remodel-rp-as-k { color: rgba(238, 235, 245, 0.34) !important; display: block !important; font-size: 9px !important; letter-spacing: 0.1em !important; text-transform: none !important; }
 body.remodel-roleplay-workspace-active .remodel-rp-as-v { color: var(--tarot-gold-bright) !important; font-family: var(--remodel-serif) !important; }
 
 body.remodel-roleplay-workspace-active .remodel-rp-input {
@@ -2628,7 +2628,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-panel-title {
   font-family: var(--remodel-serif) !important;
   font-size: 13px !important;
   letter-spacing: 0.08em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   color: var(--tarot-gold-bright) !important;
   display: inline-flex !important;
   align-items: center !important;
@@ -2852,7 +2852,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-dice-formula {
 }
 body.remodel-roleplay-workspace-active .remodel-rp-dice-mode {
   font-size: 10.5px !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   letter-spacing: 0.06em !important;
   color: var(--nord-aurora-yellow, #ebcb8b) !important;
 }
@@ -3299,7 +3299,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
   color: rgba(198, 164, 74, 0.78) !important;
   font: 700 9px/1 var(--remodel-serif, Georgia) !important;
   letter-spacing: 0.24em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 #remodel-rp-narrator-picker .remodel-rp-picker-title { font-size: 25px !important; letter-spacing: 0.025em !important; }
 #remodel-rp-narrator-picker .remodel-rp-picker-hint {
@@ -3325,7 +3325,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
   color: rgba(244, 231, 196, 0.9) !important;
   font: 600 11px/1.2 var(--remodel-serif, Georgia) !important;
   letter-spacing: 0.12em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 #remodel-rp-narrator-picker .remodel-rp-generation-routes-hint,
 #remodel-rp-narrator-picker .remodel-rp-generation-route-note {
@@ -3341,7 +3341,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
   color: rgba(238, 235, 245, 0.72) !important;
   font: 600 10px/1.2 var(--remodel-serif, Georgia) !important;
   letter-spacing: 0.08em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 #remodel-rp-narrator-picker .remodel-rp-generation-route-label i { width: 15px !important; color: rgba(198, 164, 74, 0.72) !important; }
 #remodel-rp-narrator-picker .remodel-rp-generation-route select {
@@ -3382,7 +3382,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
   color: rgba(198, 164, 74, 0.78) !important;
   font: 700 9px/1 var(--remodel-serif, Georgia) !important;
   letter-spacing: 0.24em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 #remodel-rp-connection-picker .remodel-rp-picker-title { font-size: 25px !important; letter-spacing: 0.025em !important; }
 #remodel-rp-connection-picker .remodel-rp-picker-hint {
@@ -3405,7 +3405,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
   color: rgba(244, 231, 196, 0.9) !important;
   font: 600 11px/1.2 var(--remodel-serif, Georgia) !important;
   letter-spacing: 0.12em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 #remodel-rp-connection-picker :is(.remodel-rp-generation-routes-hint,.remodel-rp-generation-route-note) {
   color: rgba(238, 235, 245, 0.4) !important;
@@ -3417,7 +3417,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
   color: rgba(238, 235, 245, 0.72) !important;
   font: 600 10px/1.2 var(--remodel-serif, Georgia) !important;
   letter-spacing: 0.08em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 #remodel-rp-connection-picker .remodel-rp-generation-route-label i { width: 15px !important; color: rgba(198, 164, 74, 0.72) !important; }
 #remodel-rp-connection-picker .remodel-rp-generation-route select {
@@ -3498,7 +3498,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
   color: rgba(238, 235, 245, 0.34) !important;
   font: 10px/1 var(--remodel-serif, Georgia) !important;
   letter-spacing: 0.16em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 #remodel-rp-narrator-picker .remodel-rp-picker-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
@@ -3544,7 +3544,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-member.remodel-rp-cast-d
   color: rgba(238, 235, 245, 0.35) !important;
   font: 8px/1 var(--remodel-serif, Georgia) !important;
   letter-spacing: 0.17em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 #remodel-rp-narrator-picker .remodel-rp-picker-check {
   position: static !important;
@@ -3601,7 +3601,7 @@ body.st-remodel-active .remodel-guided-prompt-text {
   color: var(--tarot-gold-bright) !important;
   font-size: 16px !important;
   letter-spacing: 0.02em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-guided-prompt-hint {
@@ -4140,7 +4140,7 @@ body.st-remodel-active .remodel-timeline-header h3 {
   font-weight: 600 !important;
   font-size: 1.3rem !important;
   letter-spacing: 0.08em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   color: var(--tarot-gold-bright) !important;
 }
 
@@ -4149,7 +4149,7 @@ body.st-remodel-active .remodel-timeline-kicker {
   font-family: var(--remodel-serif) !important;
   font-size: 0.66rem !important;
   letter-spacing: 0.2em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-icon-button,
@@ -4306,7 +4306,7 @@ body.st-remodel-active .remodel-timeline-card-title {
   font-weight: 600 !important;
   font-size: 0.8rem !important;
   letter-spacing: 0.14em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   color: var(--tarot-gold-bright) !important;
   white-space: nowrap !important;
   overflow: hidden !important;
@@ -4318,7 +4318,7 @@ body.st-remodel-active .remodel-timeline-card-meta {
   color: rgba(244, 231, 196, 0.58) !important;
   font-size: 0.64rem !important;
   letter-spacing: 0.1em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 
 /* Corner filigree (SVG data-URI), mirrored into each corner. */
@@ -4532,7 +4532,7 @@ body.st-remodel-active .remodel-floating-card-name {
   font-size: 1.35rem !important;
   font-weight: 600 !important;
   letter-spacing: 0.06em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   text-align: center !important;
   padding: 2px !important;
 }
@@ -4790,7 +4790,7 @@ body.st-remodel-active .remodel-field-label {
   color: rgba(244, 231, 196, 0.42) !important;
   font-family: var(--remodel-serif) !important;
   letter-spacing: 0.12em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   transition: top 0.18s ease, transform 0.18s ease, font-size 0.18s ease, letter-spacing 0.18s ease, opacity 0.18s ease !important;
 }
 
@@ -4815,7 +4815,7 @@ body.st-remodel-active .remodel-bigcard-title {
   font-weight: 700 !important;
   font-size: clamp(1.15rem, 1.8vw, 1.5rem) !important;
   letter-spacing: 0.06em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   color: rgba(255, 255, 255, 0.97) !important;
 }
 
@@ -4940,7 +4940,7 @@ body.st-remodel-active .remodel-arc-col-title {
   font-weight: 600 !important;
   font-size: 0.9rem !important;
   letter-spacing: 0.1em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   color: rgba(244, 231, 196, 0.86) !important;
 }
 
@@ -4956,7 +4956,7 @@ body.st-remodel-active .remodel-arc-col-actions .remodel-text-button {
   font-family: var(--remodel-serif) !important;
   font-size: 0.72rem !important;
   letter-spacing: 0.08em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   color: rgba(244, 231, 196, 0.6) !important;
 }
 
@@ -4991,7 +4991,7 @@ body.st-remodel-active .remodel-arc-col-add-label {
   font-family: var(--remodel-serif) !important;
   font-size: 0.7rem !important;
   letter-spacing: 0.14em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   color: rgba(244, 231, 196, 0.55) !important;
 }
 
@@ -5245,7 +5245,7 @@ body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.remodel-
   font-weight: 700 !important;
   letter-spacing: 0.08em !important;
   line-height: 1 !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   border-bottom: 1px solid rgba(198, 164, 74, 0.34) !important;
 }
 
@@ -5361,7 +5361,7 @@ body.st-remodel-active .remodel-tavern-header h1 {
   font-weight: 700 !important;
   letter-spacing: 0.06em !important;
   line-height: 0.98 !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   text-shadow: 0 2px 18px rgba(0, 0, 0, 0.5) !important;
 }
 
@@ -5423,7 +5423,7 @@ body.st-remodel-active .remodel-tavern-tab {
   font-weight: 600 !important;
   font-size: 0.76rem !important;
   letter-spacing: 0.14em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   cursor: pointer !important;
   transition: color 0.16s ease, background-color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease !important;
 }
@@ -5510,7 +5510,7 @@ body.st-remodel-active .remodel-tavern-adopted-panel h5,
 body.st-remodel-active .remodel-tavern-adopted-panel .standoutHeader {
   font-family: var(--remodel-serif) !important;
   letter-spacing: 0.08em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   color: var(--tarot-gold-bright) !important;
   border-bottom: 1px solid var(--tarot-gold-soft) !important;
   padding-bottom: 6px !important;
@@ -5762,7 +5762,7 @@ body.st-remodel-active #user_avatar_block .ch_name {
   font-family: var(--remodel-serif) !important;
   font-size: 0.78rem !important;
   letter-spacing: 0.06em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   color: rgba(244, 231, 196, 0.92) !important;
 }
 
@@ -5886,7 +5886,7 @@ body.st-remodel-active .remodel-characters-favorites-label {
   font-size: 0.6rem !important;
   font-weight: 600 !important;
   letter-spacing: 0.18em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-characters-favorites-row {
@@ -5967,7 +5967,7 @@ body.st-remodel-active .remodel-characters-sort span {
   letter-spacing: 0.18em !important;
   line-height: 1 !important;
   text-align: center !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-characters-search input,
@@ -6114,7 +6114,7 @@ body.st-remodel-active .remodel-character-name {
   font-weight: 700 !important;
   letter-spacing: 0.08em !important;
   line-height: 1.2 !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
   text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85), 0 0 22px rgba(0, 0, 0, 0.55) !important;
@@ -6138,7 +6138,7 @@ body.st-remodel-active .remodel-character-meta {
   font-weight: 600 !important;
   letter-spacing: 0.14em !important;
   line-height: 1.1 !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   text-shadow: 0 1px 8px rgba(0, 0, 0, 0.8) !important;
 }
 
@@ -6150,7 +6150,7 @@ body.st-remodel-active .remodel-characters-empty {
   color: rgba(245, 240, 225, 0.5) !important;
   font-family: var(--remodel-serif) !important;
   letter-spacing: 0.12em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
 }
 
 /* ==========================================
@@ -6272,18 +6272,18 @@ body.remodel-storydoc-active .remodel-storydoc-kicker,
 body.remodel-storydoc-active .remodel-storydoc-author small {
   color:rgba(212,190,33,.72) !important;
   font:9px/1.2 var(--remodel-serif,Georgia) !important;
-  letter-spacing:.18em !important; text-transform:uppercase !important;
+  letter-spacing:.18em !important; text-transform: none !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-title {
   width:min(420px,50vw) !important; padding:0 !important; border:0 !important; outline:0 !important;
   background:transparent !important; color:#f2eee4 !important;
   font:20px/1.25 var(--remodel-serif,Georgia) !important;
-  letter-spacing:.04em !important; text-transform:uppercase !important;
+  letter-spacing:.04em !important; text-transform: none !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-author { display:flex !important; align-items:center !important; gap:8px !important; }
 body.remodel-storydoc-active .remodel-storydoc-author > span:last-child { display:flex !important; flex-direction:column !important; }
 body.remodel-storydoc-active .remodel-storydoc-author strong {
-  color:#eee9dc !important; font:11px/1.3 var(--remodel-serif,Georgia) !important; text-transform:uppercase !important;
+  color:#eee9dc !important; font:11px/1.3 var(--remodel-serif,Georgia) !important; text-transform: none !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-avatar {
   width:34px !important; height:34px !important;
@@ -6330,7 +6330,7 @@ body.remodel-storydoc-active .remodel-storydoc-page-rule.is-stuck {
 body.remodel-storydoc-active .remodel-storydoc-rule-label {
   flex:0 0 auto !important;
   font:9px/1 var(--remodel-serif,Georgia) !important;
-  letter-spacing:.2em !important; text-transform:uppercase !important;
+  letter-spacing:.2em !important; text-transform: none !important;
   text-shadow:0 0 5px rgba(215,200,0,.48),0 0 12px rgba(215,200,0,.18) !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-rule-line {
@@ -6404,7 +6404,7 @@ body.remodel-storydoc-active .remodel-storydoc-format-scope {
   flex:0 0 auto !important; margin-right:2px !important;
   color:rgba(240,234,214,.42) !important;
   font:8px/1 var(--remodel-serif,Georgia) !important;
-  letter-spacing:.14em !important; text-transform:uppercase !important; white-space:nowrap !important;
+  letter-spacing:.14em !important; text-transform: none !important; white-space:nowrap !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-page-rule.is-selection-scoped .remodel-storydoc-format-scope {
   color:rgba(242,219,66,.8) !important;
@@ -6461,7 +6461,7 @@ body.remodel-storydoc-active .remodel-storydoc-add-beat-line {
 body.remodel-storydoc-active .remodel-storydoc-add-beat-tag {
   font:9px/1.2 var(--remodel-serif,Georgia) !important;
   letter-spacing:.14em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
   opacity:0 !important;
   transform:translateX(-6px) !important;
   text-shadow:0 0 5px rgba(215,200,0,.68),0 0 13px rgba(215,200,0,.3) !important;
@@ -6512,7 +6512,7 @@ body.remodel-storydoc-active .remodel-storydoc-add-beat-marker:is(:hover,:focus-
   color:rgba(215,200,0,.66) !important;
   font:8px/1.15 var(--remodel-serif,Georgia) !important;
   letter-spacing:.12em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 .remodel-scene-prompt-choice-copy strong {
   overflow:hidden !important;
@@ -6546,12 +6546,12 @@ body.remodel-storydoc-active .remodel-storydoc-beat-card {
 body.remodel-storydoc-active .remodel-storydoc-beat-card header {
   display:flex !important; justify-content:space-between !important; align-items:center !important;
   margin-bottom:8px !important; color:rgba(212,190,33,.72) !important;
-  font:9px/1.2 var(--remodel-serif,Georgia) !important; letter-spacing:.12em !important; text-transform:uppercase !important;
+  font:9px/1.2 var(--remodel-serif,Georgia) !important; letter-spacing:.12em !important; text-transform: none !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-beat-card header button,
 body.remodel-storydoc-active .remodel-storydoc-beat-regenerate {
   border:0 !important; background:transparent !important; color:rgba(212,190,33,.7) !important;
-  font:9px/1.2 var(--remodel-serif,Georgia) !important; text-transform:uppercase !important; cursor:pointer !important;
+  font:9px/1.2 var(--remodel-serif,Georgia) !important; text-transform: none !important; cursor:pointer !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-beat-editor {
   display:grid !important; grid-template-columns:minmax(0,1fr) 44px !important; gap:9px !important;
@@ -6584,7 +6584,7 @@ body.remodel-storydoc-active .remodel-storydoc-stream header {
   display:flex !important; align-items:center !important; gap:7px !important;
   margin-bottom:8px !important;
   color:rgba(232,222,90,.76) !important;
-  font-size:.56rem !important; letter-spacing:.14em !important; text-transform:uppercase !important;
+  font-size:.56rem !important; letter-spacing:.14em !important; text-transform: none !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-stream-dots {
   display:inline-flex !important; gap:3px !important;
@@ -6612,7 +6612,7 @@ body.remodel-storydoc-active .remodel-storydoc-stream-reasoning summary {
   display:flex !important; align-items:center !important; gap:6px !important;
   padding:8px 0 5px !important; cursor:pointer !important;
   color:rgba(232,222,90,.66) !important;
-  font-size:.54rem !important; letter-spacing:.13em !important; text-transform:uppercase !important;
+  font-size:.54rem !important; letter-spacing:.13em !important; text-transform: none !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-stream-reasoning pre {
   max-height:200px !important; margin:0 !important; padding:8px 10px !important;
@@ -6722,7 +6722,7 @@ body.remodel-storydoc-active .remodel-storydoc-panel-head {
 }
 body.remodel-storydoc-active .remodel-storydoc-panel-head h3 {
   margin:5px 0 0 !important; color:#f1ecdf !important;
-  font:18px/1.2 var(--remodel-serif,Georgia) !important; text-transform:uppercase !important;
+  font:18px/1.2 var(--remodel-serif,Georgia) !important; text-transform: none !important;
 }
 body.remodel-storydoc-active .remodel-storydoc-panel-head button {
   width:30px !important; height:30px !important; border:1px solid rgba(212,190,33,.42) !important;
@@ -6758,7 +6758,7 @@ body.remodel-storydoc-active .remodel-storydoc-check input {
 }
 #remodel-story-archive-catchup .remodel-story-archive-catchup-summary > span {
   padding:6px 9px !important; border:1px solid rgba(212,190,33,.2) !important; color:rgba(238,233,220,.7) !important;
-  font:10px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.08em !important;
+  font:10px/1.2 system-ui,sans-serif !important; text-transform: none !important; letter-spacing:.08em !important;
 }
 #remodel-story-archive-catchup .remodel-story-archive-catchup-summary b { color:#d7c800 !important; }
 #remodel-story-archive-catchup .remodel-story-archive-catchup-summary small { margin-left:auto !important; color:rgba(238,233,220,.42) !important; }
@@ -6770,7 +6770,7 @@ body.remodel-storydoc-active .remodel-storydoc-check input {
 }
 #remodel-story-archive-catchup .remodel-story-archive-catchup-change > header {
   display:flex !important; align-items:center !important; gap:9px !important; padding:9px 12px !important; border-bottom:1px solid rgba(212,190,33,.12) !important;
-  font:10px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.08em !important;
+  font:10px/1.2 system-ui,sans-serif !important; text-transform: none !important; letter-spacing:.08em !important;
 }
 #remodel-story-archive-catchup .remodel-story-archive-catchup-change > header > span {
   display:grid !important; place-items:center !important; width:20px !important; height:20px !important; border:1px solid rgba(212,190,33,.35) !important; color:#d7c800 !important;
@@ -6779,7 +6779,7 @@ body.remodel-storydoc-active .remodel-storydoc-check input {
 #remodel-story-archive-catchup .remodel-story-archive-catchup-diff { display:grid !important; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)) !important; }
 #remodel-story-archive-catchup .remodel-story-archive-catchup-diff > div { min-width:0 !important; padding:12px !important; }
 #remodel-story-archive-catchup .remodel-story-archive-catchup-diff > div + div { border-left:1px solid rgba(212,190,33,.12) !important; }
-#remodel-story-archive-catchup .remodel-story-archive-catchup-diff span { color:rgba(238,233,220,.45) !important; font:9px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.12em !important; }
+#remodel-story-archive-catchup .remodel-story-archive-catchup-diff span { color:rgba(238,233,220,.45) !important; font:9px/1.2 system-ui,sans-serif !important; text-transform: none !important; letter-spacing:.12em !important; }
 #remodel-story-archive-catchup .remodel-story-archive-catchup-diff pre {
   max-height:220px !important; margin:7px 0 0 !important; overflow:auto !important; white-space:pre-wrap !important; overflow-wrap:anywhere !important;
   color:#eee9dc !important; font:13px/1.55 var(--remodel-manuscript-font,Georgia) !important;
@@ -6802,7 +6802,7 @@ body.remodel-storydoc-active .remodel-storydoc-check input {
 #remodel-story-archive-catchup .remodel-story-archive-catchup-foot button,
 body.st-remodel-active .remodel-archive-catchup-button {
   padding:9px 13px !important; border:1px solid rgba(212,190,33,.3) !important; background:rgba(212,190,33,.045) !important;
-  color:#eee9dc !important; cursor:pointer !important; font:10px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.07em !important;
+  color:#eee9dc !important; cursor:pointer !important; font:10px/1.2 system-ui,sans-serif !important; text-transform: none !important; letter-spacing:.07em !important;
 }
 #remodel-story-archive-catchup .remodel-story-archive-catchup-foot button.is-primary { background:#d7c800 !important; color:#0b0b0d !important; }
 #remodel-story-archive-catchup .remodel-story-archive-catchup-foot button[disabled] { opacity:.35 !important; cursor:not-allowed !important; }
@@ -6827,7 +6827,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
 #remodel-story-scene-connections.remodel-rp-picker-in .remodel-story-scene-connections { transform:translateY(0) !important; }
 #remodel-story-scene-connections .remodel-rp-picker-kicker {
   margin-bottom:6px !important; color:rgba(215,200,0,.62) !important;
-  font:9px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.18em !important;
+  font:9px/1.2 system-ui,sans-serif !important; text-transform: none !important; letter-spacing:.18em !important;
 }
 #remodel-story-scene-connections .remodel-story-scene-connections-summary {
   display:flex !important; align-items:center !important; gap:9px !important; padding:13px 22px !important;
@@ -6841,7 +6841,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
 }
 #remodel-story-scene-connections .remodel-story-scene-connections-summary b {
   flex:0 0 auto !important; color:#d7c800 !important; font-weight:400 !important;
-  text-transform:uppercase !important; letter-spacing:.08em !important;
+  text-transform: none !important; letter-spacing:.08em !important;
 }
 #remodel-story-scene-connections .remodel-story-scene-connections-summary > span.is-unset {
   border-color:rgba(205,94,94,.4) !important; color:rgba(232,126,126,.8) !important;
@@ -6881,7 +6881,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
 }
 #remodel-story-scene-connections .remodel-story-scene-connections-field {
   display:grid !important; gap:6px !important; min-width:0 !important; color:rgba(238,233,220,.5) !important;
-  font:9px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.12em !important;
+  font:9px/1.2 system-ui,sans-serif !important; text-transform: none !important; letter-spacing:.12em !important;
 }
 #remodel-story-scene-connections select {
   width:100% !important; box-sizing:border-box !important; padding:9px 10px !important; border-radius:0 !important;
@@ -6909,7 +6909,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
 #remodel-story-scene-connections .remodel-story-scene-connections-foot button {
   padding:9px 13px !important; border:1px solid rgba(212,190,33,.3) !important; background:#d7c800 !important;
   color:#0b0b0d !important; cursor:pointer !important;
-  font:10px/1.2 system-ui,sans-serif !important; text-transform:uppercase !important; letter-spacing:.07em !important;
+  font:10px/1.2 system-ui,sans-serif !important; text-transform: none !important; letter-spacing:.07em !important;
 }
 
 @media (max-width:700px) {
@@ -6946,7 +6946,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   color:var(--prompt-gold);
   font:9px/1.2 var(--remodel-serif,Georgia);
   letter-spacing:.22em;
-  text-transform:uppercase;
+  text-transform: none;
   text-shadow:0 0 9px rgba(215,200,0,.35);
 }
 .remodel-prompt-library {
@@ -6970,7 +6970,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   color:#f4efe1;
   font:22px/1.1 var(--remodel-serif,Georgia);
   letter-spacing:.04em;
-  text-transform:uppercase;
+  text-transform: none;
 }
 .remodel-prompt-icon-button,
 .remodel-prompt-editor-actions button,
@@ -7052,7 +7052,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   color:rgba(215,200,0,.62);
   font-size:9px;
   letter-spacing:.18em;
-  text-transform:uppercase;
+  text-transform: none;
 }
 #remodel-prompt-template-picker .remodel-prompt-template-search {
   flex:0 0 auto;
@@ -7084,7 +7084,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   font:10px/1.2 system-ui,sans-serif;
   font-weight:400;
   letter-spacing:.14em;
-  text-transform:uppercase;
+  text-transform: none;
 }
 #remodel-prompt-template-picker .remodel-prompt-template-group h4 small {
   color:rgba(240,236,223,.34);
@@ -7150,7 +7150,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   font-size:9px;
   font-style:normal;
   letter-spacing:.1em;
-  text-transform:uppercase;
+  text-transform: none;
 }
 #remodel-prompt-template-picker .remodel-prompt-template-empty {
   padding:40px 0;
@@ -7177,7 +7177,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
 .remodel-prompt-macro-entry > summary::before { content:"\25B8"; flex:none; color:var(--prompt-gold); font-size:9px; line-height:1.4; transition:transform .12s ease; }
 .remodel-prompt-macro-entry[open] > summary::before { transform:rotate(90deg); }
 .remodel-prompt-macro-entry > summary small { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.remodel-prompt-macro-entry > summary em { margin-left:auto; flex:none; padding:0 4px; border:1px solid rgba(215,200,0,.28); border-radius:3px; color:var(--prompt-gold); font:8px/1.5 var(--remodel-sans,system-ui); font-style:normal; letter-spacing:.06em; text-transform:uppercase; }
+.remodel-prompt-macro-entry > summary em { margin-left:auto; flex:none; padding:0 4px; border:1px solid rgba(215,200,0,.28); border-radius:3px; color:var(--prompt-gold); font:8px/1.5 var(--remodel-sans,system-ui); font-style:normal; letter-spacing:.06em; text-transform: none; }
 .remodel-prompt-macro-entry > p { margin:0; color:#918b7d; font:9px/1.4 var(--remodel-sans,system-ui); }
 .remodel-prompt-macro-entry > p strong { color:#c9c2ae; font-weight:600; }
 .remodel-prompt-macro-entry > button { align-self:flex-start; margin-top:2px; padding:3px 7px; border:1px solid rgba(215,200,0,.28); border-radius:3px; background:rgba(215,200,0,.08); color:#d7c800; cursor:pointer; font:9px/1.4 var(--remodel-sans,system-ui); white-space:nowrap; }
@@ -7197,7 +7197,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   color:rgba(238,235,245,.42);
   font:9px/1.2 var(--remodel-serif,Georgia);
   letter-spacing:.16em;
-  text-transform:uppercase;
+  text-transform: none;
 }
 .remodel-prompt-filter-group {
   display:flex;
@@ -7213,7 +7213,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   color:rgba(238,235,245,.62);
   font:10px/1 var(--remodel-serif,Georgia);
   letter-spacing:.1em;
-  text-transform:uppercase;
+  text-transform: none;
   cursor:pointer;
   transition:border-color .16s ease,background .16s ease,color .16s ease,box-shadow .16s ease;
 }
@@ -7368,7 +7368,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   border-radius:2px;
   font:10px/1 system-ui,sans-serif;
   letter-spacing:.06em;
-  text-transform:uppercase;
+  text-transform: none;
 }
 .remodel-prompt-editor-actions button:disabled,
 .remodel-prompt-add-row button:disabled,
@@ -7458,7 +7458,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   color:#dfd8c8!important;
   font:9px/1 system-ui,sans-serif;
   letter-spacing:.1em;
-  text-transform:uppercase;
+  text-transform: none;
 }
 .remodel-prompt-block-kind {
   min-width:0;
@@ -7467,7 +7467,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   font:9px/1 system-ui,sans-serif;
   letter-spacing:.08em;
   text-overflow:ellipsis;
-  text-transform:uppercase;
+  text-transform: none;
   white-space:nowrap;
 }
 .remodel-prompt-block-actions { display:flex; gap:3px; margin-left:auto; }
@@ -7554,7 +7554,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   color:#b5a900;
   font-size:9px;
   letter-spacing:.08em;
-  text-transform:uppercase;
+  text-transform: none;
 }
 .remodel-prompt-source-card button {
   position:absolute;
@@ -7566,7 +7566,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   color:#aaa300;
   font-size:8px;
   letter-spacing:.08em;
-  text-transform:uppercase;
+  text-transform: none;
   cursor:pointer;
 }
 .remodel-prompt-source-card button:hover { border-color:#d7c800; color:#fff36a; }
@@ -7593,7 +7593,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   color:#8d8992;
   font-size:9px;
   letter-spacing:.08em;
-  text-transform:uppercase;
+  text-transform: none;
 }
 .remodel-prompt-block-setting input {
   width:72px;
@@ -7621,7 +7621,7 @@ body.st-remodel-active .remodel-archive-catchup-button { display:inline-flex !im
   color:#77747e;
   font-size:8px;
   letter-spacing:.12em;
-  text-transform:uppercase;
+  text-transform: none;
 }
 .remodel-prompt-add-row select,
 .remodel-prompt-transport-grid input,
@@ -7917,7 +7917,7 @@ body.st-remodel-active #PersonaManagement > .flex-container:first-child > .flex-
   padding:7px 10px !important;
   border-radius:2px !important;
   font-size:.67rem !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active #persona-management-block {
@@ -7949,7 +7949,7 @@ body.st-remodel-active #PersonaManagement .persona_management_left_column::befor
   color:rgba(244,239,225,.96) !important;
   font:1.2rem/1.1 var(--remodel-serif) !important;
   letter-spacing:.055em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
   text-shadow:0 2px 12px rgba(0,0,0,.5) !important;
 }
 
@@ -8036,7 +8036,7 @@ body.st-remodel-active #user_avatar_block .avatar_upload::after {
   content:"Import persona" !important;
   font:.58rem/1.2 var(--remodel-serif) !important;
   letter-spacing:.12em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active #user_avatar_block .avatar_upload:hover {
@@ -8529,7 +8529,7 @@ body.st-remodel-active #WorldInfo > .flex-container.alignitemscenter.gap10px h3:
   font-size:.56rem !important;
   letter-spacing:.22em !important;
   line-height:1 !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active #WI_panel_pin_div {
@@ -8674,7 +8674,7 @@ body.st-remodel-active #WorldInfo #wiTopBlock .range-block-title {
   font-family:var(--remodel-serif) !important;
   font-size:.62rem !important;
   letter-spacing:.13em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active #WIMultiSelector .select2-container,
@@ -8801,7 +8801,7 @@ body.st-remodel-active #WorldInfo #world_popup_delete::after {
   font-weight:600 !important;
   letter-spacing:.08em !important;
   line-height:1 !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active #WorldInfo #world_popup_delete {
@@ -8853,7 +8853,7 @@ body.st-remodel-active #WorldInfo #world_popup_new {
     font-weight:600 !important;
     letter-spacing:.07em !important;
     line-height:1 !important;
-    text-transform:uppercase !important;
+    text-transform: none !important;
   }
 
   body.st-remodel-active #WorldInfo #world_popup_new::after { content:"New entry" !important; }
@@ -8904,7 +8904,7 @@ body.st-remodel-active #WorldInfo #world_popup_entries_list::before {
   font-family:var(--remodel-serif) !important;
   font-size:.6rem !important;
   letter-spacing:.16em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active #WorldInfo .world_entry {
@@ -9216,7 +9216,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-scene-kicker {
   color:rgba(212,190,33,.72) !important;
   font:9px/1.2 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.18em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-scene-title {
@@ -9228,7 +9228,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-scene-title {
   font-weight:400 !important;
   letter-spacing:.04em !important;
   text-overflow:ellipsis !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
   white-space:nowrap !important;
 }
 
@@ -9250,7 +9250,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-cast-toggle {
   cursor:pointer !important;
   font:8px/1 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.15em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-cast-toggle-copy {
@@ -9340,7 +9340,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-performer-plaque {
   color:rgba(195,222,246,.74) !important;
   font:7px/1.1 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.08em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.remodel-roleplay-workspace-active #remodel-roleplay-root .remodel-rp-cast::-webkit-scrollbar {
@@ -9595,7 +9595,7 @@ body.remodel-roleplay-workspace-active .remodel-goal-detail-name {
   color:#fdfaf2 !important;
   font:600 clamp(26px,3.2vw,40px)/1.05 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.02em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
   text-wrap:balance !important;
 }
 
@@ -9638,7 +9638,7 @@ body.remodel-roleplay-workspace-active .remodel-goal-detail-label {
   color:#f2ecdd !important;
   font:600 12px/1.2 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.14em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-goal-detail-value {
@@ -9662,7 +9662,7 @@ body.remodel-roleplay-workspace-active .remodel-goal-deck-head h2 {
   font:clamp(20px,2.4vw,32px)/1.05 var(--remodel-serif,Georgia,serif) !important;
   font-weight:400 !important;
   letter-spacing:.04em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-goal-deck-head p {
@@ -9677,7 +9677,7 @@ body.remodel-roleplay-workspace-active .remodel-goal-kicker {
   color:rgba(215,200,0,.75) !important;
   font:8px/1 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.2em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-goal-back {
@@ -9693,7 +9693,7 @@ body.remodel-roleplay-workspace-active .remodel-goal-back {
   color:rgba(233,224,183,.82) !important;
   font:9px/1 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.16em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
   cursor:pointer !important;
 }
 
@@ -9849,7 +9849,7 @@ body.remodel-roleplay-workspace-active .remodel-goal-card-holder {
   color:rgba(240,234,216,.72) !important;
   font:8px/1.2 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.1em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
   text-overflow:ellipsis !important;
   white-space:nowrap !important;
 }
@@ -9995,7 +9995,7 @@ body.st-remodel-active .remodel-route-toolbar-meta span {
   color:rgba(244,231,196,.55) !important;
   font:600 .64rem/1 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.14em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-route-toolbar-meta span + span::before {
@@ -10046,14 +10046,14 @@ body.st-remodel-active .remodel-route-breadcrumb span {
   color:rgba(215,200,0,.58) !important;
   font:600 .53rem/1 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.2em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-route-breadcrumb strong {
   color:rgba(245,238,218,.86) !important;
   font:600 .72rem/1.25 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.11em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-route-layout {
@@ -10150,7 +10150,7 @@ body.st-remodel-active .remodel-route-cover-plate strong {
   font:700 .74rem/1.25 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.1em !important;
   text-overflow:ellipsis !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
   white-space:nowrap !important;
 }
 
@@ -10158,7 +10158,7 @@ body.st-remodel-active .remodel-route-cover-plate small {
   color:rgba(215,200,0,.68) !important;
   font:600 .52rem/1 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.1em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-route-cover-empty {
@@ -10173,7 +10173,7 @@ body.st-remodel-active .remodel-route-cover-empty {
 }
 
 body.st-remodel-active .remodel-route-cover-empty i { font-size:1.35rem !important; }
-body.st-remodel-active .remodel-route-cover-empty small { font:.58rem var(--remodel-serif,Georgia,serif) !important; letter-spacing:.14em !important; text-transform:uppercase !important; }
+body.st-remodel-active .remodel-route-cover-empty small { font:.58rem var(--remodel-serif,Georgia,serif) !important; letter-spacing:.14em !important; text-transform: none !important; }
 
 body.st-remodel-active .remodel-route-main {
   display:flex !important;
@@ -10199,7 +10199,7 @@ body.st-remodel-active .remodel-route-scenes-head span {
   color:rgba(215,200,0,.64) !important;
   font:600 .56rem/1.2 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.2em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-route-title,
@@ -10219,7 +10219,7 @@ body.st-remodel-active .remodel-route-title:focus {
   color:#f4eddd !important;
   font:700 clamp(1.7rem,3vw,3rem)/1.05 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.045em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-route-description-field { display:block !important; max-width:1050px !important; }
@@ -10301,7 +10301,7 @@ body.st-remodel-active .remodel-lorebook-picker h3 {
   font:18px/1.15 var(--remodel-serif,Georgia,serif) !important;
   font-weight:400 !important;
   letter-spacing:.04em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-lorebook-picker p {
@@ -10346,7 +10346,7 @@ body.st-remodel-active .remodel-route-arc-head {
 }
 
 body.st-remodel-active .remodel-route-arc-heading { min-width:0 !important; flex:1 1 auto !important; }
-body.st-remodel-active .remodel-route-arc-number { display:block !important; color:rgba(215,200,0,.64) !important; font:600 .56rem var(--remodel-serif,Georgia,serif) !important; letter-spacing:.18em !important; text-transform:uppercase !important; }
+body.st-remodel-active .remodel-route-arc-number { display:block !important; color:rgba(215,200,0,.64) !important; font:600 .56rem var(--remodel-serif,Georgia,serif) !important; letter-spacing:.18em !important; text-transform: none !important; }
 
 body.st-remodel-active .remodel-route-arc-title,
 body.st-remodel-active #top-settings-holder > .drawer > .drawer-content.openDrawer .remodel-route-arc-title,
@@ -10364,7 +10364,7 @@ body.st-remodel-active #top-settings-holder > .drawer > #remodel-timeline-panel.
   color:#f2ead8 !important;
   font:600 clamp(1.15rem,2vw,1.7rem)/1.15 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.08em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-route-arc-actions { display:flex !important; align-items:center !important; justify-content:flex-end !important; gap:6px !important; flex-wrap:wrap !important; }
@@ -10385,7 +10385,7 @@ body.st-remodel-active .remodel-route-empty-arc > button {
   color:rgba(245,238,213,.7) !important;
   font:600 .58rem var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.09em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-route-arc-actions button:hover,
@@ -10417,7 +10417,7 @@ body.st-remodel-active .remodel-route-scenes-head {
 }
 
 body.st-remodel-active .remodel-route-scenes-head > div { display:flex !important; align-items:baseline !important; gap:10px !important; }
-body.st-remodel-active .remodel-route-scenes-head strong { color:rgba(245,238,213,.72) !important; font:600 .64rem var(--remodel-serif,Georgia,serif) !important; letter-spacing:.1em !important; text-transform:uppercase !important; }
+body.st-remodel-active .remodel-route-scenes-head strong { color:rgba(245,238,213,.72) !important; font:600 .64rem var(--remodel-serif,Georgia,serif) !important; letter-spacing:.1em !important; text-transform: none !important; }
 body.st-remodel-active .remodel-route-scenes-head small { color:rgba(255,255,255,.37) !important; font-size:.64rem !important; }
 
 body.st-remodel-active .remodel-route-scenes {
@@ -10484,7 +10484,7 @@ body.st-remodel-active .remodel-route-scene-title {
   color:rgba(250,245,232,.9) !important;
   font:600 .86rem/1.3 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.055em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-route-scene.is-active .remodel-route-scene-title { color:#fff8dc !important; text-shadow:0 0 10px rgba(215,200,0,.1) !important; }
@@ -10563,7 +10563,7 @@ body.st-remodel-active .remodel-route-empty-arc p { margin:0 !important; font:it
 body.st-remodel-active .remodel-route-scenes-empty > div { display:flex !important; gap:7px !important; }
 
 body.st-remodel-active .remodel-route-empty-arc { border:1px solid rgba(215,200,0,.16) !important; background:rgba(7,7,11,.3) !important; }
-body.st-remodel-active .remodel-route-empty-arc h2 { margin:4px 0 5px !important; color:#eee7d9 !important; font:600 1.35rem var(--remodel-serif,Georgia,serif) !important; text-transform:uppercase !important; }
+body.st-remodel-active .remodel-route-empty-arc h2 { margin:4px 0 5px !important; color:#eee7d9 !important; font:600 1.35rem var(--remodel-serif,Georgia,serif) !important; text-transform: none !important; }
 body.st-remodel-active .remodel-route-empty-symbol { display:grid !important; place-items:center !important; width:48px !important; height:48px !important; border:1px solid rgba(215,200,0,.28) !important; border-radius:50% !important; color:rgba(215,200,0,.64) !important; }
 
 @media (max-width:980px) {
@@ -10652,7 +10652,7 @@ body.st-remodel-active .remodel-lorebooks-current span {
   font-family:var(--remodel-serif) !important;
   font-size:.52rem !important;
   letter-spacing:.16em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-lorebooks-current strong {
@@ -10692,7 +10692,7 @@ body.st-remodel-active .remodel-lorebooks-dock button {
   font-family:var(--remodel-serif) !important;
   font-size:.55rem !important;
   letter-spacing:.08em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
   cursor:pointer !important;
   transition:border-color .15s ease,color .15s ease,background .15s ease,box-shadow .15s ease !important;
 }
@@ -10788,7 +10788,7 @@ body.st-remodel-active .remodel-world-sense-review header span {
   color: var(--ws-muted);
   font-size: 0.72rem;
   letter-spacing: 0.12em;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 body.st-remodel-active .remodel-world-sense-head h2 {
@@ -10816,7 +10816,7 @@ body.st-remodel-active .remodel-world-sense-meta-row label {
   gap: 6px;
   font-size: 0.72rem;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 body.st-remodel-active .remodel-world-sense select,
@@ -11229,7 +11229,7 @@ body.st-remodel-active .remodel-world-sense-cultivation header span {
   color: var(--remodel-accent, #d5df36);
   font-size: 0.68rem;
   letter-spacing: 0.12em;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 body.st-remodel-active .remodel-world-sense-seed-locks small,
@@ -11825,7 +11825,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-command-stack small {
   color:rgba(215,200,0,.62) !important;
   font:7px/1 var(--remodel-serif,Georgia,serif) !important;
   letter-spacing:.1em !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
 }
 
 body.remodel-roleplay-workspace-active .remodel-rp-command-stack strong {
@@ -12166,7 +12166,7 @@ body.st-remodel-active .remodel-route-arc-index-name {
   overflow:hidden !important;
   pointer-events:none !important;
   text-overflow:ellipsis !important;
-  text-transform:uppercase !important;
+  text-transform: none !important;
   transform:translate(6px,-50%) !important;
   transition:opacity .14s ease,transform .14s ease !important;
   white-space:nowrap !important;
@@ -12280,7 +12280,7 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     color: #bbb200;
     font: 600 9px/1.2 var(--mainFontFamily);
     letter-spacing: .2em;
-    text-transform: uppercase;
+    text-transform: none;
 }
 
 .remodel-debug-header h2 {
@@ -12363,7 +12363,7 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     cursor: pointer;
     color: #c8c4b9;
     letter-spacing: .08em;
-    text-transform: uppercase;
+    text-transform: none;
 }
 
 .remodel-debug-mechanics > summary b {
@@ -12449,7 +12449,7 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     font-size: 10px;
     font-weight: 400;
     letter-spacing: .14em;
-    text-transform: uppercase;
+    text-transform: none;
 }
 
 .remodel-debug-guide-section > h4 em {
@@ -12466,7 +12466,7 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     font-size: 10px;
     font-weight: 400;
     letter-spacing: .1em;
-    text-transform: uppercase;
+    text-transform: none;
 }
 
 .remodel-debug-guide h5 small {
@@ -12542,7 +12542,7 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     font-weight: 400;
     letter-spacing: .1em;
     text-align: left;
-    text-transform: uppercase;
+    text-transform: none;
 }
 
 .remodel-debug-guide-table td {
@@ -12759,7 +12759,7 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     font-size: 8px;
     letter-spacing: .05em;
 }
-.remodel-debug-category { color: #c1b900; text-transform: uppercase; letter-spacing: .06em; }
+.remodel-debug-category { color: #c1b900; text-transform: none; letter-spacing: .06em; }
 .remodel-debug-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .remodel-debug-detail {
@@ -12775,7 +12775,7 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     border-bottom: 1px solid rgba(201, 190, 0, .22);
 }
 
-.remodel-debug-detail-heading span { color: #c1b900; font: 9px Consolas, monospace; text-transform: uppercase; }
+.remodel-debug-detail-heading span { color: #c1b900; font: 9px Consolas, monospace; text-transform: none; }
 .remodel-debug-detail-heading strong { color: #f0ede5; font: 12px Consolas, monospace; }
 .remodel-debug-detail-heading time { grid-column: 1 / -1; color: #716e68; font: 10px Consolas, monospace; }
 
@@ -12812,7 +12812,7 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
 
 .remodel-debug-transcript-message > header b {
     color: #d7ce32;
-    text-transform: uppercase;
+    text-transform: none;
     letter-spacing: .09em;
 }
 
@@ -12836,7 +12836,7 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     color: #bdb8aa;
     cursor: pointer;
     font: 10px/1.2 Consolas, monospace;
-    text-transform: uppercase;
+    text-transform: none;
     letter-spacing: .06em;
 }
 
@@ -12906,7 +12906,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-meta::
 body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-name {
   font: 9px/1 var(--remodel-serif, Georgia) !important;
   letter-spacing: 0.2em !important;
-  text-transform: uppercase !important;
+  text-transform: none !important;
   color: rgba(242, 219, 66, 0.7) !important;
 }
 /* Deliberately NOT --remodel-manuscript-font: that variable belongs to the
@@ -12979,7 +12979,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-typing
     border-bottom: 1px solid transparent;
     font: 600 9px/1.2 system-ui, sans-serif;
     letter-spacing: .1em;
-    text-transform: uppercase;
+    text-transform: none;
     cursor: pointer;
 }
 
@@ -13026,7 +13026,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-typing
 .remodel-varstate-card button:focus-visible { color: #e9df53; background: rgba(255, 255, 255, .08); outline: 0; }
 
 .remodel-varstate-group { display: grid; gap: 6px; }
-.remodel-varstate-group h4 { margin: 6px 0 0; color: rgba(242, 219, 66, .72); font: 600 9px/1.3 system-ui, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
+.remodel-varstate-group h4 { margin: 6px 0 0; color: rgba(242, 219, 66, .72); font: 600 9px/1.3 system-ui, sans-serif; letter-spacing: .14em; text-transform: none; }
 .remodel-varstate-group.is-unresolved h4 { color: #ff9b9e; }
 
 .remodel-varstate-diag { display: grid; gap: 3px; padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, .07); background: rgba(11, 9, 17, .55); }
@@ -13061,7 +13061,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-typing
 /* The editor. Two columns where there is room, one on a rail. */
 .remodel-varedit { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 12px; min-width: 0; }
 .remodel-varedit .is-wide { grid-column: 1 / -1; }
-.remodel-varedit label { display: grid; gap: 4px; min-width: 0; color: rgba(231, 227, 240, .6); font: 600 9px/1.3 system-ui, sans-serif; letter-spacing: .11em; text-transform: uppercase; }
+.remodel-varedit label { display: grid; gap: 4px; min-width: 0; color: rgba(231, 227, 240, .6); font: 600 9px/1.3 system-ui, sans-serif; letter-spacing: .11em; text-transform: none; }
 .remodel-varedit input,
 .remodel-varedit select,
 .remodel-varedit textarea {
@@ -13078,7 +13078,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-typing
 }
 
 .remodel-varedit fieldset { grid-column: 1 / -1; margin: 0; padding: 9px 11px; border: 1px solid rgba(201, 190, 0, .2); border-radius: 7px; }
-.remodel-varedit legend { padding: 0 6px; color: rgba(242, 219, 66, .78); font: 700 9px/1.3 system-ui, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
+.remodel-varedit legend { padding: 0 6px; color: rgba(242, 219, 66, .78); font: 700 9px/1.3 system-ui, sans-serif; letter-spacing: .14em; text-transform: none; }
 .remodel-varedit-note { margin: 7px 0 0; color: rgba(231, 227, 240, .4); font-size: 10px; line-height: 1.4; }
 .remodel-varedit-note code { color: rgba(242, 219, 66, .75); }
 /* "N attached" is a status readout, not another line of body copy — it is the
@@ -13100,7 +13100,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-typing
     font-size: 11px;
 }
 
-.remodel-varedit-chip em { color: rgba(242, 219, 66, .6); font-size: 9px; font-style: normal; text-transform: uppercase; letter-spacing: .06em; }
+.remodel-varedit-chip em { color: rgba(242, 219, 66, .6); font-size: 9px; font-style: normal; text-transform: none; letter-spacing: .06em; }
 .remodel-varedit-chip.is-unresolved { color: #ff9b9e; border-color: rgba(191, 97, 106, .5); background: rgba(191, 97, 106, .1); }
 .remodel-varedit-chip button,
 .remodel-varedit-chip-add { color: inherit; background: none; border: none; cursor: pointer; padding: 0 2px; font-size: 13px; line-height: 1; }
@@ -13132,7 +13132,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-typing
 
 /* Inside a native Lorebook entry. */
 .remodel-varlink { display: grid; gap: 8px; width: 100%; min-width: 0; margin-top: 10px; padding: 11px 12px; border: 1px solid rgba(201, 190, 0, .22); border-radius: 8px; background: rgba(11, 9, 17, .4); }
-.remodel-varlink-title { margin: 0; color: rgba(242, 219, 66, .75); font: 600 9px/1.3 system-ui, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
+.remodel-varlink-title { margin: 0; color: rgba(242, 219, 66, .75); font: 600 9px/1.3 system-ui, sans-serif; letter-spacing: .14em; text-transform: none; }
 .remodel-varlink-title i { margin-right: 5px; }
 .remodel-varlink-empty { margin: 0; color: rgba(235, 232, 244, .42); font-size: 11px; font-style: italic; }
 
@@ -13196,7 +13196,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-typing
     color: rgba(242, 219, 66, .72);
     font: 600 9px/1.3 system-ui, sans-serif;
     letter-spacing: .14em;
-    text-transform: uppercase;
+    text-transform: none;
 }
 
 .remodel-codex-list .remodel-varstate-card { cursor: pointer; }
@@ -13431,7 +13431,7 @@ body.st-remodel-active .remodel-archive .remodel-notebook-close {
     box-shadow: none !important;
     font: 600 .7rem/1 var(--remodel-serif, Georgia, serif) !important;
     letter-spacing: .08em !important;
-    text-transform: uppercase !important;
+    text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-archive .remodel-notebook-close:hover,
@@ -13460,7 +13460,7 @@ body.st-remodel-active .remodel-archive .remodel-notebook-head span {
     color: rgba(215, 200, 0, .64) !important;
     font: 700 .58rem/1 var(--remodel-serif, Georgia, serif) !important;
     letter-spacing: .22em !important;
-    text-transform: uppercase !important;
+    text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-archive .remodel-notebook-head strong {
@@ -13496,7 +13496,7 @@ body.st-remodel-active .remodel-archive .remodel-notebook-scene-picker > span {
     color: rgba(237, 231, 211, .52) !important;
     font: 700 .55rem/1 var(--remodel-sans, sans-serif) !important;
     letter-spacing: .18em !important;
-    text-transform: uppercase !important;
+    text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-archive .remodel-notebook-scene-picker select {
@@ -13561,7 +13561,7 @@ body.st-remodel-active .remodel-archive-continuity-copy strong {
     color: rgba(244, 238, 216, .88) !important;
     font: 650 .7rem/1.2 var(--remodel-serif, Georgia, serif) !important;
     letter-spacing: .08em !important;
-    text-transform: uppercase !important;
+    text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-archive-continuity-copy span,
@@ -13604,7 +13604,7 @@ body.st-remodel-active .remodel-archive-continuity-state {
     border-radius: 999px !important;
     font-size: .52rem !important;
     letter-spacing: .08em !important;
-    text-transform: uppercase !important;
+    text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-archive-continuity-button.is-active,
@@ -13657,7 +13657,7 @@ body.st-remodel-active .remodel-archive-section-head {
     border-bottom: 1px solid rgba(235, 228, 205, .09) !important;
     font: 650 .66rem/1 var(--remodel-serif, Georgia, serif) !important;
     letter-spacing: .11em !important;
-    text-transform: uppercase !important;
+    text-transform: none !important;
 }
 
 body.st-remodel-active .remodel-archive-section-head > i {
@@ -13869,7 +13869,7 @@ body.st-remodel-active .remodel-world-sense-refusals li em {
   font-style: normal;
   font-size: 0.68rem;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
+  text-transform: none;
   opacity: 0.72;
 }
 
@@ -13954,7 +13954,7 @@ body.st-remodel-active .remodel-world-sense-connections {
 
 body.st-remodel-active .remodel-world-sense-connections > span {
   color: var(--ws-muted);
-  text-transform: uppercase;
+  text-transform: none;
   font-size: 0.72em;
   letter-spacing: 0.08em;
 }
@@ -13984,3 +13984,211 @@ body.st-remodel-active .remodel-world-sense-connections li em {
 }
 
 body.st-remodel-active .remodel-world-sense-connections li small { color: var(--ws-muted); font-size: 0.8em; }
+
+/* Living Lore Archive: native lore entries, arranged as a quiet working list. */
+body.st-remodel-active .remodel-lore-archive {
+    width: min(1060px, 100%);
+    min-height: 100%;
+    margin: 0 auto;
+    color: rgba(242, 238, 226, .92);
+}
+
+body.st-remodel-active .remodel-lore-archive-head {
+    display: grid;
+    grid-template-columns: minmax(200px, .75fr) minmax(320px, 1.25fr);
+    align-items: end;
+    gap: 28px;
+    padding: 3px 2px 22px;
+    border-bottom: 1px solid rgba(215, 200, 0, .26);
+}
+
+body.st-remodel-active .remodel-lore-archive-kicker {
+    margin: 0 0 7px;
+    color: rgba(215, 200, 0, .74);
+    font: 700 .58rem/1 var(--remodel-serif, Georgia, serif);
+    letter-spacing: .22em;
+    text-transform: none;
+}
+
+body.st-remodel-active .remodel-lore-archive h2 {
+    margin: 0;
+    color: #f3eedc;
+    font: 500 clamp(1.35rem, 2vw, 2rem)/1.1 var(--remodel-serif, Georgia, serif);
+    letter-spacing: .015em;
+}
+
+body.st-remodel-active .remodel-lore-archive-head p:not(.remodel-lore-archive-kicker),
+body.st-remodel-active .remodel-lore-archive-empty-state > p:last-child {
+    margin: 7px 0 0;
+    color: rgba(229, 225, 214, .6);
+    font: 400 .8rem/1.5 var(--remodel-sans, sans-serif);
+}
+
+body.st-remodel-active .remodel-lore-archive-search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 42px;
+    padding: 0 13px;
+    color: rgba(215, 200, 0, .68);
+    background: rgba(11, 11, 17, .76);
+    border: 1px solid rgba(234, 226, 199, .18);
+    border-radius: 6px;
+}
+
+body.st-remodel-active .remodel-lore-archive-search:focus-within {
+    border-color: rgba(215, 200, 0, .62);
+    box-shadow: 0 0 0 2px rgba(215, 200, 0, .08);
+}
+
+body.st-remodel-active .remodel-lore-archive-search input {
+    width: 100%;
+    min-width: 0;
+    color: rgba(246, 242, 229, .94);
+    background: transparent;
+    border: 0;
+    outline: 0;
+    box-shadow: none;
+    font: 400 .86rem/1.2 var(--remodel-sans, sans-serif);
+}
+
+body.st-remodel-active .remodel-lore-archive-list { padding-top: 22px; }
+body.st-remodel-active .remodel-lore-archive-group + .remodel-lore-archive-group { margin-top: 27px; }
+
+body.st-remodel-active .remodel-lore-archive-group > header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 0 2px 8px;
+    color: rgba(215, 200, 0, .72);
+    border-bottom: 1px solid rgba(234, 226, 199, .12);
+    font: 700 .58rem/1 var(--remodel-serif, Georgia, serif);
+    letter-spacing: .17em;
+    text-transform: none;
+}
+
+body.st-remodel-active .remodel-lore-archive-group > header span { overflow-wrap: anywhere; }
+body.st-remodel-active .remodel-lore-archive-group > header small { color: rgba(235, 231, 219, .42); font: 600 .68rem/1 var(--remodel-sans, sans-serif); }
+
+body.st-remodel-active .remodel-lore-archive-entry { border-bottom: 1px solid rgba(234, 226, 199, .1); }
+
+body.st-remodel-active .remodel-lore-archive-entry-toggle {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr);
+    width: 100%;
+    gap: 6px 10px;
+    padding: 13px 3px;
+    color: inherit;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+body.st-remodel-active .remodel-lore-archive-entry-toggle:hover,
+body.st-remodel-active .remodel-lore-archive-entry-toggle:focus-visible { background: rgba(215, 200, 0, .045); }
+body.st-remodel-active .remodel-lore-archive-entry-toggle > i { grid-row: 1 / span 2; align-self: center; color: rgba(215, 200, 0, .57); font-size: .63rem; transition: transform .16s ease; }
+body.st-remodel-active .remodel-lore-archive-entry.is-expanded .remodel-lore-archive-entry-toggle > i { transform: rotate(90deg); }
+
+body.st-remodel-active .remodel-lore-archive-entry-title {
+    min-width: 0;
+    color: rgba(247, 243, 231, .94);
+    font: 500 .96rem/1.3 var(--remodel-serif, Georgia, serif);
+    overflow-wrap: anywhere;
+}
+
+body.st-remodel-active .remodel-lore-archive-tags { display: flex; flex-wrap: wrap; gap: 4px 6px; grid-column: 2; }
+body.st-remodel-active .remodel-lore-archive-tags span {
+    padding: 2px 6px;
+    color: rgba(229, 225, 214, .63);
+    background: rgba(234, 226, 199, .06);
+    border: 1px solid rgba(234, 226, 199, .1);
+    border-radius: 3px;
+    font: 600 .58rem/1.2 var(--remodel-sans, sans-serif);
+    letter-spacing: .04em;
+}
+body.st-remodel-active .remodel-lore-archive-tags.is-secondary span { color: rgba(215, 200, 0, .62); border-color: rgba(215, 200, 0, .15); }
+
+body.st-remodel-active .remodel-lore-archive-entry-body { padding: 0 4px 15px 27px; }
+body.st-remodel-active .remodel-lore-archive-entry-body > p {
+    margin: 0;
+    color: rgba(234, 231, 221, .75);
+    font: 400 .86rem/1.6 var(--remodel-sans, sans-serif);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+body.st-remodel-active .remodel-lore-archive-entry-body em { color: rgba(234, 231, 221, .47); }
+
+body.st-remodel-active .remodel-lore-archive-entry-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 12px;
+}
+body.st-remodel-active .remodel-lore-archive-entry-footer small { color: rgba(234, 231, 221, .43); font-size: .68rem; overflow-wrap: anywhere; }
+
+body.st-remodel-active .remodel-lore-archive :is(.remodel-lore-archive-entry-footer button, .remodel-lore-archive-editor-actions button) {
+    min-height: 28px;
+    padding: 0 10px;
+    color: rgba(215, 200, 0, .88);
+    background: rgba(215, 200, 0, .055);
+    border: 1px solid rgba(215, 200, 0, .28);
+    border-radius: 4px;
+    box-shadow: none;
+    font: 700 .62rem/1 var(--remodel-sans, sans-serif);
+    letter-spacing: .06em;
+    text-transform: none;
+}
+body.st-remodel-active .remodel-lore-archive :is(.remodel-lore-archive-entry-footer button, .remodel-lore-archive-editor-actions button):hover,
+body.st-remodel-active .remodel-lore-archive :is(.remodel-lore-archive-entry-footer button, .remodel-lore-archive-editor-actions button):focus-visible { background: rgba(215, 200, 0, .13); }
+body.st-remodel-active .remodel-lore-archive .remodel-lore-archive-editor-actions button.is-quiet { color: rgba(234, 231, 221, .62); background: transparent; border-color: rgba(234, 226, 199, .18); }
+
+body.st-remodel-active .remodel-lore-archive-editor {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 11px 13px;
+    padding: 0 4px 17px 27px;
+}
+body.st-remodel-active .remodel-lore-archive-editor label {
+    display: grid;
+    gap: 5px;
+    color: rgba(215, 200, 0, .68);
+    font: 700 .57rem/1 var(--remodel-sans, sans-serif);
+    letter-spacing: .1em;
+    text-transform: none;
+}
+body.st-remodel-active .remodel-lore-archive-editor label:nth-of-type(3),
+body.st-remodel-active .remodel-lore-archive-editor label:nth-of-type(4),
+body.st-remodel-active .remodel-lore-archive-editor-actions { grid-column: 1 / -1; }
+body.st-remodel-active .remodel-lore-archive-editor :is(input, textarea) {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 9px;
+    color: rgba(246, 242, 229, .94);
+    background: rgba(7, 7, 12, .74);
+    border: 1px solid rgba(234, 226, 199, .19);
+    border-radius: 4px;
+    box-shadow: none;
+    font: 400 .82rem/1.45 var(--remodel-sans, sans-serif);
+    letter-spacing: normal;
+    text-transform: none;
+}
+body.st-remodel-active .remodel-lore-archive-editor textarea { resize: vertical; }
+body.st-remodel-active .remodel-lore-archive-editor :is(input, textarea):focus { border-color: rgba(215, 200, 0, .58); outline: 0; }
+body.st-remodel-active .remodel-lore-archive-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 2px; }
+
+body.st-remodel-active .remodel-lore-archive-message { margin: 8px 2px; color: rgba(229, 225, 214, .6); font: 400 .85rem/1.55 var(--remodel-sans, sans-serif); }
+body.st-remodel-active .remodel-lore-archive-message.is-error { color: #f1a0a3; }
+body.st-remodel-active .remodel-lore-archive-empty-state { max-width: 650px; padding-top: 7vh; }
+
+@media (max-width: 680px) {
+    body.st-remodel-active .remodel-lore-archive-head { grid-template-columns: 1fr; gap: 18px; }
+    body.st-remodel-active .remodel-lore-archive-editor { grid-template-columns: 1fr; padding-left: 18px; }
+    body.st-remodel-active .remodel-lore-archive-editor label:nth-of-type(3),
+    body.st-remodel-active .remodel-lore-archive-editor label:nth-of-type(4),
+    body.st-remodel-active .remodel-lore-archive-editor-actions { grid-column: auto; }
+    body.st-remodel-active .remodel-lore-archive-entry-body { padding-left: 18px; }
+}

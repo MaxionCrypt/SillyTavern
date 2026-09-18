@@ -161,6 +161,12 @@ import {
 } from './session-state.js';
 import { loadUiLocation, saveUiLocation } from './ui-location-store.js';
 import { resolveGenerationRoute } from './generation-route.js';
+import {
+    filterLivingLoreEntries,
+    groupLivingLoreEntries,
+    listTimelineLivingLoreEntries,
+    updateSceneLivingLoreEntry,
+} from './living-lore-archive.js';
 
 import { resolveChatLorebook } from './chat-lorebook.js';
 // world-info.js's METADATA_KEY. Named locally rather than imported so this
@@ -182,6 +188,16 @@ let liveProgressRefreshTimer = null;
 // file (storyGenerating, timelineChromeStages, etc.).
 const loomArchive = {
     open: false,
+    query: '',
+    entries: [],
+    timelineId: '',
+    loading: false,
+    error: '',
+    expandedKey: '',
+    editingKey: '',
+    refreshId: 0,
+    searchFocused: false,
+    searchCursor: 0,
 };
 
 let restoredUiScroll = null;
@@ -259,7 +275,19 @@ async function restoreSavedNativeScene(location) {
 }
 
 function resetLoomArchiveView() {
-    loomArchive.open = false;
+    Object.assign(loomArchive, {
+        open: false,
+        query: '',
+        entries: [],
+        timelineId: '',
+        loading: false,
+        error: '',
+        expandedKey: '',
+        editingKey: '',
+        refreshId: loomArchive.refreshId + 1,
+        searchFocused: false,
+        searchCursor: 0,
+    });
 }
 
 const TIMELINE_SCROLL_RESISTANCE = 160;
@@ -638,6 +666,17 @@ function bindTimelineEvents(drawer) {
             return;
         }
 
+        const loreArchiveAction = event.target instanceof Element
+            ? event.target.closest('[data-remodel-lore-archive-action]')
+            : null;
+
+        if (loreArchiveAction) {
+            event.preventDefault();
+            event.stopPropagation();
+            await handleLoomArchiveAction(loreArchiveAction);
+            return;
+        }
+
         const actionElement = event.target instanceof Element
             ? event.target.closest('[data-remodel-timeline-action]')
             : null;
@@ -661,6 +700,16 @@ function bindTimelineEvents(drawer) {
 
     drawer.addEventListener('input', (event) => {
         if (event.target instanceof Element && handleDebugConsoleInput(event.target)) return;
+        const archiveSearch = event.target instanceof Element
+            ? event.target.closest('[data-remodel-lore-archive-search]')
+            : null;
+        if (archiveSearch instanceof HTMLInputElement) {
+            loomArchive.query = archiveSearch.value;
+            loomArchive.searchFocused = true;
+            loomArchive.searchCursor = archiveSearch.selectionStart ?? archiveSearch.value.length;
+            queueRender();
+            return;
+        }
         const field = event.target instanceof Element
             ? event.target.closest('[data-remodel-character-field]')
             : null;
@@ -705,6 +754,13 @@ function bindTimelineEvents(drawer) {
     });
 
     drawer.addEventListener('focusout', (event) => {
+        const archiveSearch = event.target instanceof Element
+            ? event.target.closest('[data-remodel-lore-archive-search]')
+            : null;
+        if (archiveSearch) {
+            loomArchive.searchFocused = false;
+            return;
+        }
         const input = event.target instanceof Element
             ? event.target.closest('.remodel-scene-rename-input')
             : null;
@@ -3190,6 +3246,87 @@ async function chooseTimelineLorebook(timelineId) {
     updateTimeline(timelineId, { lorebookName: select.value || null });
 }
 
+function loomArchiveEntryKey(book, uid) {
+    return `${String(book)}\u0000${String(uid)}`;
+}
+
+async function refreshLoomArchive(timelineId = getSessionState().focusedTimelineId) {
+    const targetTimelineId = String(timelineId || '').trim();
+    const refreshId = loomArchive.refreshId + 1;
+    loomArchive.refreshId = refreshId;
+    loomArchive.timelineId = targetTimelineId;
+    loomArchive.error = '';
+    loomArchive.entries = [];
+    loomArchive.loading = Boolean(targetTimelineId);
+    queueRender();
+    if (!targetTimelineId) return;
+    try {
+        const entries = await listTimelineLivingLoreEntries(targetTimelineId);
+        if (loomArchive.refreshId !== refreshId) return;
+        loomArchive.entries = entries;
+    } catch (error) {
+        if (loomArchive.refreshId !== refreshId) return;
+        loomArchive.error = error instanceof Error ? error.message : 'Could not read Living Lore.';
+    } finally {
+        if (loomArchive.refreshId === refreshId) {
+            loomArchive.loading = false;
+            queueRender();
+        }
+    }
+}
+
+async function handleLoomArchiveAction(element) {
+    const action = element.dataset.remodelLoreArchiveAction;
+    const key = loomArchiveEntryKey(element.dataset.loreBook, element.dataset.loreUid);
+    if (action === 'toggle-entry') {
+        const closing = loomArchive.expandedKey === key;
+        loomArchive.expandedKey = closing ? '' : key;
+        loomArchive.editingKey = '';
+        queueRender();
+        return;
+    }
+    if (action === 'edit-entry') {
+        loomArchive.editingKey = key;
+        loomArchive.expandedKey = key;
+        queueRender();
+        return;
+    }
+    if (action === 'cancel-edit') {
+        loomArchive.editingKey = '';
+        queueRender();
+        return;
+    }
+    if (action !== 'save-entry') return;
+
+    const entryElement = element.closest('[data-remodel-lore-entry]');
+    const readField = (name) => entryElement?.querySelector(`[data-remodel-lore-entry-field="${name}"]`);
+    const title = readField('title')?.value ?? '';
+    const tags = readField('tags')?.value ?? '';
+    const secondaryTags = readField('secondary-tags')?.value ?? '';
+    const content = readField('content')?.value ?? '';
+    element.disabled = true;
+    const saved = await updateSceneLivingLoreEntry({
+        sceneId: element.dataset.loreSceneId,
+        book: element.dataset.loreBook,
+        uid: element.dataset.loreUid,
+        title,
+        tags,
+        secondaryTags,
+        content,
+    });
+    if (!saved.ok) {
+        element.disabled = false;
+        loomArchive.error = saved.reason === 'not-in-cache'
+            ? 'That entry is no longer active for this Scene.'
+            : 'The Living Lore entry could not be saved.';
+        queueRender();
+        return;
+    }
+    loomArchive.editingKey = '';
+    loomArchive.expandedKey = key;
+    await refreshLoomArchive();
+}
+
 async function handleAction(element) {
     const action = element.dataset.remodelTimelineAction;
     const { createModalDraft, focusedTimelineId } = getSessionState();
@@ -3253,6 +3390,7 @@ async function handleAction(element) {
             break;
         case 'toggle-archive':
             loomArchive.open = !loomArchive.open;
+            if (loomArchive.open) void refreshLoomArchive(element.dataset.timelineId);
             break;
         case 'create-arc': {
             const title = askForTitle('Arc title?', 'New Arc');
@@ -3533,6 +3671,24 @@ function renderTimelinePanel() {
         }, { passive: true });
     }
     body.innerHTML = renderActiveWorkspace(store);
+
+    // The Archive view is intentionally not persisted with its entries: those
+    // are live native lorebook records. Re-read when a restored Archive opens
+    // or the user changes the Timeline underneath it.
+    if (loomArchive.open && focusedTimelineId !== loomArchive.timelineId && !loomArchive.loading) {
+        void refreshLoomArchive(focusedTimelineId);
+    }
+
+    if (loomArchive.open && loomArchive.searchFocused) {
+        const search = body.querySelector('[data-remodel-lore-archive-search]');
+        if (search instanceof HTMLInputElement) {
+            requestAnimationFrame(() => {
+                search.focus();
+                const cursor = Math.min(loomArchive.searchCursor, search.value.length);
+                search.setSelectionRange(cursor, cursor);
+            });
+        }
+    }
 
     if (restoredUiScroll?.key === uiLocationScrollKey()) {
         const top = restoredUiScroll.top;
@@ -3998,6 +4154,79 @@ function renderFloatingField({ value, label, fieldName, dataAttr = '', multiline
     `;
 }
 
+function renderLivingLoreTags(tags, className = '') {
+    const list = Array.isArray(tags) ? tags : [];
+    if (!list.length) return '';
+    return `<span class="remodel-lore-archive-tags ${className}">${list.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</span>`;
+}
+
+function renderLivingLoreArchive(timeline) {
+    const entries = filterLivingLoreEntries(loomArchive.entries, loomArchive.query);
+    const groups = groupLivingLoreEntries(entries);
+    const content = loomArchive.loading
+        ? '<p class="remodel-lore-archive-message">Reading Living Lore…</p>'
+        : loomArchive.error
+            ? `<p class="remodel-lore-archive-message is-error">${escapeHtml(loomArchive.error)}</p>`
+            : !entries.length && loomArchive.query
+                ? '<p class="remodel-lore-archive-message">No active entries match that title or tag.</p>'
+                : !entries.length
+                    ? '<p class="remodel-lore-archive-message">No Living Lore has been activated in this Timeline yet.</p>'
+                    : groups.map((group) => `
+                        <section class="remodel-lore-archive-group">
+                            <header><span>${escapeHtml(group.label)}</span><small>${group.entries.length}</small></header>
+                            ${group.entries.map(renderLivingLoreArchiveEntry).join('')}
+                        </section>`).join('');
+    return `
+        <section class="remodel-lore-archive">
+            <header class="remodel-lore-archive-head">
+                <div>
+                    <p class="remodel-lore-archive-kicker">Living Lore</p>
+                    <h2>${escapeHtml(timeline.title || 'Untitled Timeline')}</h2>
+                    <p>${loomArchive.loading ? 'Reading active native lore…' : `${loomArchive.entries.length} active entr${loomArchive.entries.length === 1 ? 'y' : 'ies'} across this Timeline`}</p>
+                </div>
+                <label class="remodel-lore-archive-search">
+                    <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+                    <input type="search" value="${escapeAttribute(loomArchive.query)}" placeholder="Search entry title or tags…" aria-label="Search Living Lore" data-remodel-lore-archive-search>
+                </label>
+            </header>
+            <div class="remodel-lore-archive-list">${content}</div>
+        </section>`;
+}
+
+function renderLivingLoreArchiveEntry(entry) {
+    const key = loomArchiveEntryKey(entry.book, entry.uid);
+    const isExpanded = loomArchive.expandedKey === key;
+    const isEditing = loomArchive.editingKey === key;
+    const sourceSceneId = entry.sceneIds?.[0] || '';
+    const sourceSceneNames = (entry.sceneIds || []).map((sceneId) => getScene(sceneId)?.title || 'Deleted Scene');
+    const actionAttributes = `data-lore-book="${escapeAttribute(entry.book)}" data-lore-uid="${escapeAttribute(entry.uid)}" data-lore-scene-id="${escapeAttribute(sourceSceneId)}"`;
+    const body = !isExpanded ? '' : isEditing ? `
+        <div class="remodel-lore-archive-editor">
+            <label>Title<input type="text" value="${escapeAttribute(entry.title)}" data-remodel-lore-entry-field="title"></label>
+            <label>Tags<input type="text" value="${escapeAttribute(entry.tags.join(', '))}" placeholder="Comma-separated" data-remodel-lore-entry-field="tags"></label>
+            <label>Secondary tags<input type="text" value="${escapeAttribute(entry.secondaryTags.join(', '))}" placeholder="Comma-separated" data-remodel-lore-entry-field="secondary-tags"></label>
+            <label>Content<textarea rows="8" data-remodel-lore-entry-field="content">${escapeHtml(entry.content)}</textarea></label>
+            <div class="remodel-lore-archive-editor-actions">
+                <button type="button" data-remodel-lore-archive-action="save-entry" ${actionAttributes}>Save changes</button>
+                <button type="button" class="is-quiet" data-remodel-lore-archive-action="cancel-edit" ${actionAttributes}>Cancel</button>
+            </div>
+        </div>` : `
+        <div class="remodel-lore-archive-entry-body">
+            <p>${escapeHtml(entry.content) || '<em>This entry has no content yet.</em>'}</p>
+            <div class="remodel-lore-archive-entry-footer"><small>${escapeHtml(entry.book)} · ${escapeHtml(sourceSceneNames.join(', '))}</small><button type="button" data-remodel-lore-archive-action="edit-entry" ${actionAttributes}>Edit</button></div>
+        </div>`;
+    return `
+        <article class="remodel-lore-archive-entry ${isExpanded ? 'is-expanded' : ''}" data-remodel-lore-entry ${actionAttributes}>
+            <button type="button" class="remodel-lore-archive-entry-toggle" aria-expanded="${isExpanded ? 'true' : 'false'}" data-remodel-lore-archive-action="toggle-entry" ${actionAttributes}>
+                <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
+                <span class="remodel-lore-archive-entry-title">${escapeHtml(entry.title)}</span>
+                ${renderLivingLoreTags(entry.tags)}
+                ${renderLivingLoreTags(entry.secondaryTags, 'is-secondary')}
+            </button>
+            ${body}
+        </article>`;
+}
+
 function renderTimelineFocus(timeline, store) {
     const hasImage = Boolean(timeline.thumbnail);
     const rootStyle = `--card-hue: ${hashHue(timeline.id)};${hasImage ? ` --card-image: url('${escapeAttribute(timeline.thumbnail)}');` : ''}`;
@@ -4064,7 +4293,7 @@ function renderTimelineFocus(timeline, store) {
                     </button>
                 </div>
             </header>
-            ${getSessionState().codexOpen ? `<div class="remodel-route-layout is-codex">${renderVariableCodex()}</div>` : loomArchive.open ? `<div class="remodel-route-layout is-archive"><div class="remodel-loom-archive-empty">The Loom Archive has moved to lorebooks.</div></div>` : `
+            ${getSessionState().codexOpen ? `<div class="remodel-route-layout is-codex">${renderVariableCodex()}</div>` : loomArchive.open ? `<div class="remodel-route-layout is-archive">${renderLivingLoreArchive(timeline)}</div>` : `
             <div class="remodel-route-layout">
                 <aside class="remodel-route-side">
                     <label class="remodel-timeline-card remodel-route-cover-card" title="Change timeline cover">
