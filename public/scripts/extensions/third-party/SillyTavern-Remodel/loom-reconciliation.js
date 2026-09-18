@@ -199,7 +199,7 @@ function readLoomEnvelope(text) {
 function isLoomEnvelope(value) {
     return value && typeof value === 'object' && !Array.isArray(value)
         && (Array.isArray(value.requests) || Array.isArray(value.swaps) || Array.isArray(value.loreProposals)
-            || Array.isArray(value.lorePromotionDecisions)
+            || Array.isArray(value.loreOps) || Array.isArray(value.lorePromotionDecisions)
             || (value.flow && typeof value.flow === 'object' && !Array.isArray(value.flow)));
 }
 
@@ -323,6 +323,40 @@ export function readLoreKeywords(value) {
     return groups;
 }
 
+export const MAX_LORE_OPS = 16;
+const MAX_LORE_OP_CONTENT_CHARS = 12000;
+const LORE_OP_NAMES = new Set(['lore.edit', 'lore.create']);
+
+// Typed lore operations: lore.edit (rewrite a cached entry) and lore.create (a
+// new entry). Reads args off the fence's nested `arguments` object (or a flat
+// op, for lenient recovery), normalizes to a flat op, and drops anything
+// malformed or of an unknown kind.
+export function readLoreOps(value) {
+    if (!Array.isArray(value)) return [];
+    const out = [];
+    for (const entry of value) {
+        if (!entry || typeof entry !== 'object') continue;
+        const op = String(entry.op ?? '').trim();
+        if (!LORE_OP_NAMES.has(op)) continue;
+        const args = entry.arguments && typeof entry.arguments === 'object' ? entry.arguments : entry;
+        const content = String(args.content ?? '').slice(0, MAX_LORE_OP_CONTENT_CHARS);
+        if (op === 'lore.edit') {
+            const book = String(args.book ?? '').trim();
+            const uid = String(args.uid ?? '').trim();
+            if (!book || !uid || !content) continue;
+            out.push({ op, book, uid, content });
+        } else {
+            const name = String(args.name ?? '').trim();
+            const keys = Array.isArray(args.keys) ? [...new Set(args.keys.map((k) => String(k ?? '').trim()).filter(Boolean))].slice(0, MAX_LORE_KEYWORDS) : [];
+            const secondaryKeys = Array.isArray(args.secondaryKeys) ? [...new Set(args.secondaryKeys.map((k) => String(k ?? '').trim()).filter(Boolean))].slice(0, MAX_LORE_KEYWORDS) : [];
+            if (!name || !keys.length || !content) continue;
+            out.push({ op, name, keys, secondaryKeys, content });
+        }
+        if (out.length >= MAX_LORE_OPS) break;
+    }
+    return out;
+}
+
 export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
     const text = String(raw ?? '');
     const prose = readLoomProse(text, { final: true });
@@ -332,6 +366,7 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
     let flow = null;
     let loreProposals = [];
     let loreKeywords = [];
+    let loreOps = [];
     let loreProposalRejections = [];
     if (envelope.parsed) {
         try {
@@ -342,6 +377,7 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
             // name an entry, so there is nothing to check it against.
             const proposals = readLoomInformation(parsed?.loreProposals);
             loreKeywords = readLoreKeywords(parsed?.loreKeywords);
+            loreOps = readLoreOps(parsed?.loreOps);
             loreProposals = proposals.accepted;
             loreProposalRejections = proposals.rejected;
             if (parsed?.flow && typeof parsed.flow === 'object') {
@@ -358,7 +394,7 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
         } catch { swaps = []; requests = []; flow = null; loreProposals = []; loreProposalRejections = []; }
     }
     return {
-        prose, swaps, requests, flow, loreProposals, loreProposalRejections, loreKeywords,
+        prose, swaps, requests, flow, loreProposals, loreProposalRejections, loreKeywords, loreOps,
     };
 }
 

@@ -78,7 +78,7 @@ test('parseLoomReply drops malformed swaps and defaults to none', () => {
     const { swaps, requests } = parseLoomReply(raw);
     expect(swaps).toEqual([{ find: 'ok', replace: 'y' }]);  // empty find and missing find dropped
     expect(requests).toEqual([]);
-    expect(parseLoomReply('No fence at all.')).toEqual({ prose: 'No fence at all.', swaps: [], requests: [], flow: null, loreProposals: [], loreProposalRejections: [], loreKeywords: [] });
+    expect(parseLoomReply('No fence at all.')).toEqual({ prose: 'No fence at all.', swaps: [], requests: [], flow: null, loreProposals: [], loreProposalRejections: [], loreKeywords: [], loreOps: [] });
 });
 
 test('readLoomProse exposes prose while withholding partial and complete state fences', () => {
@@ -105,7 +105,7 @@ test('a bare whole-reply Loom envelope is recovered but incidental prose JSON is
     expect(describeLoomReply(raw).fenceFormat).toBe('bare-json-recovered');
 
     const prose = 'The terminal displayed {"requests":[]} and went dark.';
-    expect(parseLoomReply(prose)).toEqual({ prose, swaps: [], requests: [], flow: null, loreProposals: [], loreProposalRejections: [], loreKeywords: [] });
+    expect(parseLoomReply(prose)).toEqual({ prose, swaps: [], requests: [], flow: null, loreProposals: [], loreProposalRejections: [], loreKeywords: [], loreOps: [] });
 });
 
 test('applySwaps patches only the named span and keeps the rest of the draft verbatim', () => {
