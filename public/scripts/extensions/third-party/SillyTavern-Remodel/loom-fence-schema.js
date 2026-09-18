@@ -39,6 +39,23 @@ const GOAL_REQUEST_SHAPES = Object.freeze({
     'goal.relate': { required: ['fromGoalRef', 'toGoalRef', 'type'], optional: [] },
 });
 
+/** Per capability: the typed lore operations the Loom may emit. lore.edit
+ *  rewrites a cached entry's content; lore.create adds a new entry to the
+ *  timeline's bound book. Import needs no op — it is a keyword retrieval. */
+const LORE_OP_CAPABILITIES = Object.freeze(['lore.edit', 'lore.create']);
+const LORE_OP_SHAPES = Object.freeze({
+    'lore.edit': { required: ['book', 'uid', 'content'], optional: [] },
+    'lore.create': { required: ['name', 'keys', 'content'], optional: ['secondaryKeys'] },
+});
+const LORE_ARG_PROPS = Object.freeze({
+    book: { type: 'string', description: 'The lorebook the entry lives in (from a Selected Living Lore target).' },
+    uid: { type: 'string', description: 'The entry id within that book (from a Selected Living Lore target).' },
+    content: { type: 'string', description: 'The full new content for the entry.' },
+    name: { type: 'string', description: 'A short title for the new entry.' },
+    keys: { type: 'array', items: { type: 'string' }, description: 'Trigger keywords the new entry answers to.' },
+    secondaryKeys: { type: 'array', items: { type: 'string' }, description: 'Extra keys that must also be present for the entry to trigger.' },
+});
+
 /** Add 'null' to a JSON-schema type so an optional argument can be omitted as
  *  null. Enums also gain a null member, since strict mode reads type and enum
  *  together. */
@@ -82,13 +99,34 @@ export function getRoleplayLoomGoalSchema() {
         };
     };
 
+    const loreOpBranch = (capability) => {
+        const { required, optional } = LORE_OP_SHAPES[capability];
+        const properties = {};
+        for (const key of required) properties[key] = LORE_ARG_PROPS[key];
+        for (const key of optional) properties[key] = nullable(LORE_ARG_PROPS[key]);
+        return {
+            type: 'object', additionalProperties: false,
+            required: ['id', 'op', 'arguments', 'reason'],
+            properties: {
+                id: idDescriptor,
+                op: { type: 'string', enum: [capability], description: `Always "${capability}" for this op.` },
+                arguments: {
+                    type: 'object', additionalProperties: false,
+                    required: [...required, ...optional],
+                    properties,
+                },
+                reason: reasonDescriptor,
+            },
+        };
+    };
+
     return {
         name: 'remodel_roleplay_loom_goal',
         description: "The Roleplay Loom's state fence: swaps, goal requests, lore, and flow. Goal requests are provider-enforced.",
         strict: true,
         schema: {
             type: 'object', additionalProperties: false,
-            required: ['swaps', 'requests', 'loreProposals', 'loreKeywords', 'flow'],
+            required: ['swaps', 'requests', 'loreProposals', 'loreKeywords', 'loreOps', 'flow'],
             properties: {
                 swaps: {
                     type: 'array', maxItems: 16,
@@ -123,6 +161,11 @@ export function getRoleplayLoomGoalSchema() {
                     type: 'array', maxItems: 8,
                     description: 'Keyword GROUPS to pull working lore for the turns that follow. Each group is an array of the exact keys an entry answers to; an entry that needs several keys is found only when they are named together in one group. Empty for no change.',
                     items: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'string' } },
+                },
+                loreOps: {
+                    type: 'array', maxItems: 16,
+                    description: 'Typed lore edits/creations for this turn. Edit an entry only when it is in the Selected Living Lore; create a new entry in the timeline book. Empty when nothing changed.',
+                    items: { anyOf: LORE_OP_CAPABILITIES.map(loreOpBranch) },
                 },
                 flow: {
                     type: 'object', additionalProperties: false, required: ['continue', 'hardPause'],

@@ -43,10 +43,19 @@ test('loreKeywords is an array of string-array groups', () => {
     expect(kw.items.items.type).toBe('string');
 });
 
-test('the top-level fence carries exactly the five state-fence keys', () => {
+test('the top-level fence carries exactly the six state-fence keys', () => {
     const schema = getRoleplayLoomGoalSchema().schema;
     expect(new Set(Object.keys(schema.properties)))
-        .toEqual(new Set(['swaps', 'requests', 'loreProposals', 'loreKeywords', 'flow']));
+        .toEqual(new Set(['swaps', 'requests', 'loreProposals', 'loreKeywords', 'loreOps', 'flow']));
+});
+
+test('loreOps declares strict edit and create branches', () => {
+    const schema = getRoleplayLoomGoalSchema().schema;
+    expect(schema.required).toContain('loreOps');
+    const caps = schema.properties.loreOps.items.anyOf.map((b) => b.properties.op.enum[0]).sort();
+    expect(caps).toEqual(['lore.create', 'lore.edit']);
+    const edit = schema.properties.loreOps.items.anyOf.find((b) => b.properties.op.enum[0] === 'lore.edit');
+    expect(edit.properties.arguments.required).toEqual(['book', 'uid', 'content']);
 });
 
 test('only goal operations plus the two bookkeeping ops are permitted — no variable/scene/etc.', () => {
