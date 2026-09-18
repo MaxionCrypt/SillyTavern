@@ -9,6 +9,7 @@
 import { getContext } from '../../../st-context.js';
 import { getScene, getTimelineStore } from './timeline-state.js';
 import { listSceneEntryRefs, listPriorSceneKeywordGroups } from './living-lore-cache-store.js';
+import { isSecretEntry } from './living-lore-secret.js';
 
 const MAX_ENTRIES = 40;
 const MAX_ENTRY_CHARS = 2000;
@@ -54,6 +55,7 @@ export async function buildSceneLivingLorePacket({ sceneId = '', timelineId = ''
             keys: Array.isArray(entry.key) ? [...entry.key] : [],
             secondaryKeys: Array.isArray(entry.keysecondary) ? [...entry.keysecondary] : [],
             content,
+            secret: isSecretEntry(entry),
             selectedBecause: ['loom-keywords'],
         });
     }

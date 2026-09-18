@@ -12,6 +12,7 @@ import { getContext } from '../../../st-context.js';
 import { selected_world_info } from '../../../world-info.js';
 import { getScene, getTimelineStore } from './timeline-state.js';
 import { matchEntry, MAX_SCAN_DEPTH } from './world-info-scan.js';
+import { isSecretEntry } from './living-lore-secret.js';
 
 /** The book set a keyword query scans: active World Info (global + chat +
  *  character) unioned with the timeline's bound lorebook. Deduped. */
@@ -51,7 +52,9 @@ export async function activateKeywordGroups(groups, { sceneId = '', timelineId =
         const corpus = [group.join('\n')];
         for (const [book, entries] of byBook) {
             for (const item of Array.isArray(entries) ? entries : []) {
-                if (item.disable === true) continue;
+                // A secret entry is disabled so native activation skips it for
+                // the Narrator; the Loom's own retrieval still pulls it in.
+                if (item.disable === true && !isSecretEntry(item)) continue;
                 const uid = String(item.uid);
                 const key = `${book}.${uid}`;
                 if (out.has(key)) continue;
