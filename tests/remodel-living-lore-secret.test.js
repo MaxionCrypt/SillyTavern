@@ -5,7 +5,11 @@
 import { test, expect, beforeEach } from '@jest/globals';
 import { __setExtensionSettings, __setContextOverrides } from './util/st-context-stub.js';
 import { __setWorldInfoState } from './util/world-info-stub.js';
-import { SECRET_KEYWORD, isSecretEntry, addSecretKeyword, removeSecretKeyword } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-secret.js';
+import {
+    SECRET_KEYWORD, GOAL_KEYWORD, VARIABLE_KEYWORD, RESERVED_LIVING_LORE_KEYWORDS,
+    isReservedLivingLoreKeyword, isSecretEntry, isGoalEntry, isVariableEntry,
+    addSecretKeyword, removeSecretKeyword,
+} from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-secret.js';
 import { activateKeywordGroups } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-retrieval.js';
 import { addEntryRefs } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-cache-store.js';
 import { buildSceneLivingLorePacket } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-cache-packet.js';
@@ -30,6 +34,37 @@ test('addSecretKeyword adds once; removeSecretKeyword strips every casing', () =
     expect(addSecretKeyword(['Rayse', 'secret'])).toEqual(['Rayse', 'secret']); // idempotent
     expect(removeSecretKeyword(['Rayse', 'SECRET', 'secret'])).toEqual(['Rayse']);
     expect(removeSecretKeyword(['Rayse'])).toEqual(['Rayse']);
+});
+
+test('goal and variable are reserved markers recognised like secret, no behaviour of their own', () => {
+    // The dissolution leaves Goals and Variables as ordinary Living Lore entries
+    // wearing a reserved marker keyword.
+    expect(GOAL_KEYWORD).toBe('goal');
+    expect(VARIABLE_KEYWORD).toBe('variable');
+    expect([...RESERVED_LIVING_LORE_KEYWORDS].sort()).toEqual(['goal', 'secret', 'variable']);
+
+    expect(isGoalEntry({ key: ['Escape the compound', 'GOAL'] })).toBe(true);
+    expect(isGoalEntry({ key: [' goal '] })).toBe(true);
+    expect(isGoalEntry({ key: ['Escape the compound'] })).toBe(false);
+    expect(isGoalEntry(null)).toBe(false);
+
+    expect(isVariableEntry({ key: ["Aiden's Nerve", 'Variable'] })).toBe(true);
+    expect(isVariableEntry({ key: ["Aiden's Nerve"] })).toBe(false);
+    expect(isVariableEntry({})).toBe(false);
+
+    // The markers are distinct: a goal entry is not a variable entry or secret.
+    const goal = { key: ['Escape the compound', 'goal'] };
+    expect(isVariableEntry(goal)).toBe(false);
+    expect(isSecretEntry(goal)).toBe(false);
+});
+
+test('isReservedLivingLoreKeyword recognises every reserved marker, case-insensitively', () => {
+    for (const reserved of ['secret', 'GOAL', ' Variable ']) {
+        expect(isReservedLivingLoreKeyword(reserved)).toBe(true);
+    }
+    expect(isReservedLivingLoreKeyword('Rayse')).toBe(false);
+    expect(isReservedLivingLoreKeyword('')).toBe(false);
+    expect(isReservedLivingLoreKeyword(null)).toBe(false);
 });
 
 test('retrieval pulls a disabled SECRET entry but not a plainly disabled one', async () => {
