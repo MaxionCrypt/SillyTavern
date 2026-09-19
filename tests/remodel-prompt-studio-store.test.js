@@ -169,7 +169,7 @@ test('v13 stores migrate old hidden grounding into an editable recipe policy and
 
     const store = initializePromptStudioStore();
     const recipe = store.recipes.rp;
-    expect(store.version).toBe(34);
+    expect(store.version).toBe(35);
     expect(recipe.blocks.some((block) => block.content === '{{loom.context}}')).toBe(false);
     expect(recipe.blocks).toEqual(expect.arrayContaining([
         expect.objectContaining({ content: NARRATOR_POLICY_DEFAULT, locked: false }),
@@ -227,7 +227,7 @@ test('v30 adds Next Action immediately after Chat History once', () => {
     } } });
 
     const store = initializePromptStudioStore();
-    expect(store.version).toBe(34);
+    expect(store.version).toBe(35);
     expect(store.recipes.rp.blocks.map((block) => block.content)).toEqual([
         '{{chat.history}}', '{{next.action}}', 'Write next.',
     ]);
@@ -253,7 +253,7 @@ test('v31 restores Living Lore routing and fence fields to Crown Roleplay Loom',
     const store = initializePromptStudioStore();
     const blocks = store.recipes['loom-rp'].blocks.map((block) => block.content).join('\n');
 
-    expect(store.version).toBe(34);
+    expect(store.version).toBe(35);
     expect(blocks).toContain('{{loom.lore}}');
     expect(blocks).toContain('## Living Lore — enabled');
     expect(blocks).toContain('loreOps');
@@ -283,7 +283,7 @@ test('v15 seeds the patch Loom recipe, activates it, and leaves the existing one
     });
     const store = initializePromptStudioStore();
 
-    expect(store.version).toBe(34);
+    expect(store.version).toBe(35);
     // The user's recipe is untouched and still selectable.
     expect(store.recipes.mine).toBeTruthy();
     expect(store.recipes.mine.blocks[0].content).toBe('my own carefully edited policy');
@@ -335,7 +335,7 @@ test('a retired rewrite recipe is left owner-authored, not force-converted or cr
     __setExtensionSettings({ remodel: { promptStudioV1: { version: 17, recipeIds: ['edited', 'legacy'], recipes, active: { loom: { chat: 'legacy' } } } } });
 
     const store = initializePromptStudioStore();
-    expect(store.version).toBe(34);
+    expect(store.version).toBe(35);
     expect(store.recipes.legacy.blocks[0].content).toBe(legacyRewrite);
     expect(store.recipes.edited.blocks[0].content).toBe('my own policy');
 });
@@ -370,7 +370,7 @@ test('v22 gives the untouched Patch Loom a durable lore check and preserves auth
     const store = initializePromptStudioStore();
     const patchContents = store.recipes.patch.blocks.map((block) => block.content);
     const authoredContents = store.recipes.mine.blocks.map((block) => block.content);
-    expect(store.version).toBe(34);
+    expect(store.version).toBe(35);
     expect(patchContents).toContain(LOOM_POLICY_PATCH);
     expect(patchContents).toContain(LOOM_OUTPUT_CONTRACT_PATCH);
     expect(LOOM_POLICY_PATCH).toMatch(/STEP 3 - Living Lore/);
@@ -393,7 +393,7 @@ test('v19 adds the editable selected-lore macro without changing authored Loom t
 
     const store = initializePromptStudioStore();
     const contents = store.recipes.mine.blocks.map((block) => block.content);
-    expect(store.version).toBe(34);
+    expect(store.version).toBe(35);
     expect(contents).toContain('my authored policy');
     expect(contents).toContain('{{loom.lore}}');
     expect(contents.indexOf('{{loom.lore}}')).toBeLessThan(contents.indexOf('{{narrator.draft}}'));
@@ -412,7 +412,7 @@ test('v23 adds the current player action macro without changing authored Loom po
 
     const store = initializePromptStudioStore();
     const contents = store.recipes.mine.blocks.map((block) => block.content);
-    expect(store.version).toBe(34);
+    expect(store.version).toBe(35);
     expect(contents).toContain('my authored policy');
     // v23 adds the player-action source; v32 renames it to loom.action.
     expect(contents).toContain('{{loom.action}}');
@@ -445,7 +445,7 @@ test('v24 rescues a Patch Loom stranded on the pre-promotion contract', async ()
     const store = initializePromptStudioStore();
     const patchContents = store.recipes.patch.blocks.map((block) => block.content);
 
-    expect(store.version).toBe(34);
+    expect(store.version).toBe(35);
     expect(patchContents).toContain(LOOM_OUTPUT_CONTRACT_PATCH);
     expect(patchContents).not.toContain(LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION);
     expect(store.recipes.mine.blocks.map((block) => block.content)).toContain('my private output contract');
@@ -460,7 +460,7 @@ test('the Loom output contract no longer carries the dissolved World Sense promo
     expect(LOOM_OUTPUT_CONTRACT_PATCH).toContain('Always include the top-level loreOps array');
 });
 
-test('v26 retains the mechanics block without injecting a hidden Continue instruction', () => {
+test('a v24 Roleplay recipe is never seeded a dissolved Narrator mechanics block', () => {
     __setExtensionSettings({ remodel: { promptStudioV1: {
         version: 24,
         recipeIds: ['rp'],
@@ -474,13 +474,14 @@ test('v26 retains the mechanics block without injecting a hidden Continue instru
     const store = initializePromptStudioStore();
     const contents = store.recipes.rp.blocks.map((block) => block.content);
 
-    expect(store.version).toBe(34);
+    expect(store.version).toBe(35);
     expect(contents.some((content) => content.includes('{{narrator.continue'))).toBe(false);
-    expect(contents.some((content) => content.includes('{{narrator.mechanics'))).toBe(true);
+    // Goals/Variables are dissolved: the Narrator mechanics block is never seeded.
+    expect(contents.some((content) => content.includes('{{narrator.mechanics'))).toBe(false);
     expect(contents).toContain('my authored note');
 });
 
-test('v26 does not duplicate blocks a recipe already has', () => {
+test('a persisted Narrator mechanics block is stripped, leaving Continue untouched', () => {
     __setExtensionSettings({ remodel: { promptStudioV1: {
         version: 24,
         recipeIds: ['rp'],
@@ -492,8 +493,8 @@ test('v26 does not duplicate blocks a recipe already has', () => {
     } } });
 
     const contents = initializePromptStudioStore().recipes.rp.blocks.map((block) => block.content);
-    expect(contents.filter((content) => content.includes('{{narrator.continue'))).toHaveLength(1);
-    expect(contents.filter((content) => content.includes('{{narrator.mechanics'))).toHaveLength(1);
+    // The dissolved mechanics block is gone; the authored Continue block survives.
+    expect(contents.filter((content) => content.includes('{{narrator.mechanics'))).toHaveLength(0);
     expect(contents).toContain('{{narrator.continue text="mine"}}');
 });
 
@@ -521,12 +522,12 @@ test('v32 retires the bundled Loom boards into split state macros', () => {
     expect(joined).not.toContain('{{loom.scene}}');
     expect(joined).not.toContain('{{loom.characters}}');
     expect(joined).not.toContain('{{loom.events}}');
-    // loom.mechanics expanded into goals (with secrets, for the Loom) +
-    // variables + the operations manual
-    expect(contents).toContain('{{loom.goals secret=true}}');
-    expect(contents).toContain('{{loom.variables}}');
-    expect(joined).toContain('Operations — what you may change');
+    // loom.mechanics is dropped entirely — Goals/Variables are folded into Living
+    // Lore, so no goal/variable macro or operations manual survives.
     expect(joined).not.toContain('{{loom.mechanics}}');
+    expect(joined).not.toContain('{{loom.goals');
+    expect(joined).not.toContain('{{loom.variables}}');
+    expect(joined).not.toContain('Operations — what you may change');
     // loom.lifecycle dropped entirely
     expect(joined).not.toContain('{{loom.lifecycle}}');
     // authored text and ordering preserved
@@ -568,14 +569,16 @@ test('v33 retires the Narrator-specific state macros for the universal split one
     expect(joined).not.toContain('{{loom.characters}}');
     expect(joined).not.toContain('{{loom.events}}');
     expect(joined).not.toContain('{{narrator.grounding}}');
-    // story.goals → a "pressures" framing block + loom.goals (secrets hidden for the Narrator)
-    expect(joined).toContain('pressures on the scene, never protected outcomes');
-    expect(contents).toContain('{{loom.goals}}');
+    // story.goals is dropped entirely — Goals are folded into Living Lore, not a
+    // macro, so neither the macro nor its old "pressures" framing survives.
     expect(joined).not.toContain('{{story.goals}}');
-    expect(joined).not.toContain('{{loom.goals secret=true}}');
+    expect(joined).not.toContain('{{loom.goals');
+    expect(joined).not.toContain('pressures on the scene, never protected outcomes');
     // narrator.recall (earlier-Scene Archive recall) is dropped entirely
     expect(joined).not.toContain('{{prev.events');
     expect(joined).not.toContain('{{narrator.recall');
+    // the surviving Chat History block is kept
+    expect(joined).toContain('{{chat.history}}');
 });
 
 test('a retired narratorGrounding source block normalizes to empty now the Archive split macros are dissolved', () => {

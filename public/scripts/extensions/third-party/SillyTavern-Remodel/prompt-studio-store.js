@@ -3,7 +3,7 @@ import { isSupersededLoomPatchContract, isSupersededLoomPatchPolicy, LOOM_OUTPUT
 
 const SETTINGS_NAMESPACE = 'remodel';
 const SETTINGS_KEY = 'promptStudioV1';
-const STORE_VERSION = 34;
+const STORE_VERSION = 35;
 
 export const NARRATOR_POLICY_DEFAULT = 'Continue the scene forward from the most recent message. Everything listed under "What has happened" is already written on the page — never restate, rewrite, summarise, or replay it. Advance the story: write only what happens next. Output only the story prose itself: never restate, repeat, quote, or acknowledge these notes, your instructions, or your role — begin directly with the narration.';
 const NARRATOR_POLICY_WARNING = 'This policy prevents instruction echo and old-prose rewrites. Changing or disabling it can make the Narrator repeat its prompt or replay prior events.';
@@ -16,32 +16,10 @@ const ROLEPLAY_LOOM_LIVING_LORE_POLICY = [
     'Leave `loreOps` empty when no durable lore change is warranted.',
 ].join('\n');
 
-// The operations manual, seeded as a plain editable block (not a computed
-// macro). Since goal requests are now provider-enforced by the fence schema,
-// this no longer teaches argument syntax — it carries what a schema cannot: WHEN
-// to use each operation and how to judge a Goal's Success Rate. Edit or remove
-// it like any other block.
-export const LOOM_OPERATIONS_MANUAL = [
-    '## Operations — what you may change, and when',
-    'Request changes in the state fence; code validates and applies them. Never roll dice or change a value yourself.',
-    '- goal.create — a new outcome someone is actively working toward. Give it a title, a condition it is measured against, at least one holder, and a starting Success Rate.',
-    '- goal.edit — change a Goal: its Success Rate, status, title, condition, or visibility. A turn that materially helped or obstructed a Goal should move its rate here even when no roll occurred.',
-    '- goal.reach — one decisive attempt against a Goal. Code freezes the inputs and rolls a d100; a hit achieves it, a miss changes nothing on its own.',
-    '- goal.relate — link two Goals as sympathetic (progress helps) or antagonistic (progress hurts).',
-    '- goal.delete — remove a Goal that should not exist at all. Prefer goal.edit with a terminal status when it simply ended.',
-    '',
-    "## Rating a Goal",
-    "Every active Goal's Success Rate is the chance its holder still has of achieving it from where the fiction has reached. These are reference points, not a list to choose from — state the number that fits:",
-    '  5 nearly impossible · 15 extreme · 30 difficult · 50 uncertain · 70 favourable · 85 strongly favoured · 95 nearly assured',
-    'Rates hold between 5 and 95: a Goal already certain or already lost is a status, not a roll. A small pressure is a few points, a meaningful turn is nearer seven, and a decisive reversal is twenty or more. A reach returns a result you must respect — narrate the hit or miss you were given, never the one you wanted.',
-].join('\n');
-
-// The "pressures, not guarantees" framing that used to be baked into the
-// story.goals render. Now a plain editable block seeded next to loom.goals in a
-// Narrator recipe, so the framing is yours to tune while the macro stays data.
-export const GOALS_PRESSURE_FRAMING = [
-    'Goals describe outcomes their holders are trying to achieve. They are pressures on the scene, never protected outcomes or instructions to preserve. The latest action may help, obstruct, redirect, or defeat them; narrate those consequences honestly.',
-].join('\n');
+// Goals and Variables are dissolved into Living Lore (reserved-keyword entries),
+// so the operations manual and the "pressures, not guarantees" framing block are
+// gone. What the Loom needs to know about durable canon now rides on the Living
+// Lore policy (ROLEPLAY_LOOM_LIVING_LORE_POLICY) and the loreOps contract.
 
 export const PROMPT_MODES = ['story', 'roleplay', 'loom'];
 export const PROMPT_API_TYPES = ['chat', 'text'];
@@ -49,13 +27,11 @@ export const PROMPT_ROLES = ['system', 'instruction', 'user', 'assistant'];
 
 // Split, single-purpose state macros, available in EVERY recipe (getSourceDefinitions
 // appends this set to whatever mode is being edited). The Loom Archive is
-// dissolved, so only the surviving live-state slices remain: the player action,
-// Goals, and Variables. Native identifiers let them mirror into a roleplay
-// recipe's native prompt. loom.goals secret=true must not go in a player-facing recipe.
+// dissolved and Goals/Variables folded into Living Lore, so only the current
+// player action remains as a universal live-state slice. Its native identifier
+// lets it mirror into a roleplay recipe's native prompt.
 export const UNIVERSAL_STATE_MACROS = Object.freeze([
     template('loomAction', 'Player Action', 'user', 'loom.action', { nativeIdentifier: 'remodel_loom_action', description: 'The current player-authored speech or attempted action. It is authoritative over conflicting inference in the Narrator draft.' }),
-    template('loomGoals', 'Goals', 'system', 'loom.goals', { nativeIdentifier: 'remodel_loom_goals', description: 'Open Goals with Success Rate, holders, and condition. Secret Goals are hidden unless secret=true.', arguments: 'limit=N keeps the newest N Goals; secret=true also shows secret Goals (Loom recipe only).' }),
-    template('loomVariables', 'Variables', 'system', 'loom.variables', { nativeIdentifier: 'remodel_loom_variables', description: 'Every Variable with its current value and meaning.', arguments: 'limit=N keeps the newest N Variables.' }),
 ]);
 
 export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
@@ -79,10 +55,11 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         template('scenario', 'Scenario', 'system', 'scene.scenario', { nativeIdentifier: 'scenario' }),
         template('worldInfoAfter', 'World Info (after)', 'system', 'world.info.after', { nativeIdentifier: 'worldInfoAfter' }),
         template('dialogueExamples', 'Dialogue Examples', 'user', 'character.examples', { nativeIdentifier: 'dialogueExamples' }),
-        // story.goals / narrator.grounding / narrator.recall are retired: the
-        // Narrator now uses the surviving universal macros (loom.goals with its
-        // framing block, plus loom.action). Scene facts, character states and
-        // events are gone with the dissolved Loom Archive. See migrateRoleplayStateMacros.
+        // story.goals / narrator.grounding / narrator.recall are retired, and
+        // Goals/Variables are dissolved into Living Lore. The Narrator now uses
+        // only the surviving universal macro (loom.action); scene facts, character
+        // states and events went with the dissolved Loom Archive. See
+        // migrateRoleplayStateMacros.
         template('narratorNote', 'Narrator Note', 'system', 'narrator.note', {
             nativeIdentifier: 'remodel_narrator_note',
             description: 'Your per-scene Narrator Note. It is empty until you write one in the roleplay rail.',
@@ -98,15 +75,6 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         // exposing it as an alias preserves that real marker boundary.
         template('currentInput', 'Current Input (via history)', 'user', 'chat.input', { nativeIdentifier: 'chatHistory', structured: true }),
         template('generationNudge', 'Generation Nudge', 'instruction', 'generation.nudge', { nativeIdentifier: 'quietPrompt' }),
-        // Declares which mechanics verbs the Narrator is offered this turn. The
-        // list is yours: an empty or removed block advertises nothing, and the
-        // Narrator is then never told the verbs exist.
-        template('mechanicsTools', 'Narrator Mechanics', 'user', 'narrator.mechanics', {
-            nativeIdentifier: 'remodel_narrator_mechanics',
-            content: '{{narrator.mechanics tools="goal.attempt,goal.adjust,variable.adjust,mechanic.check"}}',
-            description: 'Offers the Narrator bounded mechanics it may request mid-turn. Code freezes inputs, rolls, and applies exactly once.',
-            arguments: 'tools="a,b,c" advertises only those verbs. Remove the block to advertise none.',
-        }),
         template('nativeContext', 'Native Roleplay Context', 'system', 'roleplay.native', { textOnly: true }),
     ]),
     loom: Object.freeze([
@@ -140,11 +108,8 @@ const nativeMarkerToSource = Object.freeze({
     dialogueExamples: 'dialogueExamples',
     chatHistory: 'chatHistory',
     remodel_next_action: 'nextAction',
-    remodel_story_goals: 'storyGoals',
     remodel_narrator_note: 'narratorNote',
     remodel_loom_action: 'loomAction',
-    remodel_loom_goals: 'loomGoals',
-    remodel_loom_variables: 'loomVariables',
     quietPrompt: 'generationNudge',
 });
 
@@ -309,16 +274,15 @@ export function createBlocksFromNativeChat(prompts, promptOrder) {
  * WHY THIS IS EXPORTED: a native re-sync (prompt-studio.js's
  * captureNativeSettingsFor) replaces a roleplay/chat recipe's blocks wholesale
  * from `oai_settings`, and every Chat Completion preset authored before Remodel
- * existed lacks Remodel's continuity and Story Goal markers in its
- * prompt order. Without this, loading such a preset silently strips both
- * blocks out of an already-migrated recipe. Without the continuity bridge, a
- * scene can generate prose without the Archive grounding it depends on.
+ * existed lacks Remodel's anti-echo policy in its prompt order. Without this,
+ * loading such a preset silently strips that block out of an already-migrated
+ * recipe.
  *
- * Both helpers are no-ops when the block is already present, so applying this
- * to blocks that already carry them changes nothing.
+ * The helper is a no-op when the block is already present, so applying this to
+ * blocks that already carry it changes nothing.
  */
 export function withRemodelSources(blocks) {
-    return withNarratorRecipeSources(withStoryGoalsSource(blocks));
+    return withNarratorRecipeSources(blocks);
 }
 
 function getNamespace() {
@@ -449,11 +413,8 @@ function patchLoomBlocks() {
     return [
         createPromptBlock({ kind: 'message', role: 'system', content: LOOM_POLICY_PATCH }),
         createPromptBlockFromTemplate('loom', 'loomAction'),
-        createPromptBlock({ kind: 'message', role: 'system', content: '{{loom.goals secret=true}}', nativeIdentifier: 'remodel_loom_goals' }),
-        createPromptBlockFromTemplate('loom', 'loomVariables'),
         createPromptBlockFromTemplate('loom', 'livingLore'),
         createPromptBlockFromTemplate('loom', 'priorLore'),
-        createPromptBlock({ kind: 'message', role: 'system', content: LOOM_OPERATIONS_MANUAL }),
         createPromptBlockFromTemplate('loom', 'narratorDraft'),
         createPromptBlockFromTemplate('loom', 'narratorReasoning'),
         createPromptBlock({
@@ -484,7 +445,6 @@ function defaultBlocksFor(mode, apiType) {
         createPromptBlockFromTemplate('roleplay', 'dialogueExamples'),
         createPromptBlockFromTemplate('roleplay', 'chatHistory'),
         createPromptBlockFromTemplate('roleplay', 'nextAction'),
-        createPromptBlockFromTemplate('roleplay', 'mechanicsTools'),
         createPromptBlockFromTemplate('roleplay', 'generationNudge'),
     ]);
 }
@@ -570,7 +530,6 @@ function normalizeStore(store, seed) {
                     changed = true;
                 }
             }
-            if (previousVersion < 3 && ensureStoryGoalsSource(recipe.blocks)) changed = true;
             if (previousVersion < 30 && ensureNextActionSource(recipe.blocks)) changed = true;
         }
         if (previousVersion < 11) {
@@ -736,17 +695,6 @@ function normalizeStore(store, seed) {
         }
     }
 
-    // v26 offered a seeded autonomous-Continue instruction alongside the
-    // mechanics block. The instruction has since been retired: Continue is a
-    // request boundary, not a hidden authored prompt.
-    if (previousVersion < 26) {
-        for (const id of store.recipeIds) {
-            const recipe = store.recipes[id];
-            if (recipe?.mode !== 'roleplay') continue;
-            if (ensureMechanicsToolsSource(recipe.blocks)) changed = true;
-        }
-    }
-
     // v28 replaces duplicate current-Scene grounding with earlier-Scene
     // recall. Living Lore remains recipe-owned and is never disabled here.
     if (previousVersion < 28) {
@@ -828,27 +776,23 @@ function normalizeStore(store, seed) {
 
     // v34: the Loom Archive is dissolved. Strip the split archive macros that
     // v32/v33 produced -- they no longer resolve, so a persisted block would emit
-    // the literal token. Goals, Variables and the player action survive.
+    // the literal token. The player action survives.
     if (previousVersion < 34) {
         for (const id of store.recipeIds) {
             if (stripDeadArchiveMacros(store.recipes[id])) changed = true;
         }
     }
-    return changed;
-}
 
-function ensureStoryGoalsSource(blocks) {
-    // Now seeds the universal loom.goals plus its editable "pressures" framing.
-    // Idempotent against the legacy story.goals too, so it never duplicates a
-    // recipe the v33 migration will convert.
-    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*(story\.goals|loom\.goals)\b/i.test(block.content || ''))) return false;
-    const historyIndex = blocks.findIndex((block) => /{{chat\.(history|input)\b/i.test(block.content || ''));
-    const at = historyIndex >= 0 ? historyIndex : blocks.length;
-    blocks.splice(at, 0,
-        createPromptBlock({ kind: 'message', role: 'system', content: GOALS_PRESSURE_FRAMING }),
-        createPromptBlockFromTemplate('roleplay', 'loomGoals'),
-    );
-    return true;
+    // v35: Goals and Variables are dissolved into Living Lore (reserved-keyword
+    // entries). Strip their macros, the Narrator mechanics tool block, and the
+    // seeded operations-manual and "pressures" framing blocks from every recipe;
+    // they no longer resolve or apply. loom.action and loom.lore survive.
+    if (previousVersion < 35) {
+        for (const id of store.recipeIds) {
+            if (stripDissolvedMechanicsBlocks(store.recipes[id])) changed = true;
+        }
+    }
+    return changed;
 }
 
 function ensureLivingLoreSource(blocks) {
@@ -867,15 +811,6 @@ function retireDefaultContinueDirective(blocks) {
     return true;
 }
 
-/** Give a Roleplay recipe the Narrator Mechanics block, after Continue. */
-function ensureMechanicsToolsSource(blocks) {
-    if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*narrator\.mechanics\b/i.test(block.content || ''))) return false;
-    const source = createPromptBlockFromTemplate('roleplay', 'mechanicsTools');
-    const continueIndex = blocks.findIndex((block) => /\{\{\s*narrator\.continue\b/i.test(block.content || ''));
-    blocks.splice(continueIndex >= 0 ? continueIndex + 1 : blocks.length, 0, source);
-    return true;
-}
-
 function ensurePlayerActionSource(blocks) {
     // Now seeds loom.action; idempotent against the legacy player.action too.
     if (!Array.isArray(blocks) || blocks.some((block) => /\{\{\s*(player\.action|loom\.action)\b/i.test(block.content || ''))) return false;
@@ -883,11 +818,6 @@ function ensurePlayerActionSource(blocks) {
     const draftIndex = blocks.findIndex((block) => /\{\{\s*narrator\.draft\b/i.test(block.content || ''));
     blocks.splice(draftIndex >= 0 ? draftIndex : blocks.length, 0, source);
     return true;
-}
-
-function withStoryGoalsSource(blocks) {
-    ensureStoryGoalsSource(blocks);
-    return blocks;
 }
 
 /** Keep this turn's action independently placeable from the prior transcript. */
@@ -921,27 +851,28 @@ function rewriteLoomBoardTokens(content) {
     return String(content || '')
         .replace(/\{\{\s*player\.action\b[^{}]*\}\}/gi, '{{loom.action}}')
         .replace(/\{\{\s*loom\.archive\b[^{}]*\}\}/gi, '')
-        .replace(/\{\{\s*loom\.mechanics\b[^{}]*\}\}/gi, '{{loom.goals secret=true}}\n\n{{loom.variables}}')
+        .replace(/\{\{\s*loom\.mechanics\b[^{}]*\}\}/gi, '')
         .replace(/\{\{\s*loom\.lifecycle\b[^{}]*\}\}/gi, '');
 }
 
 /**
  * v32: retire a Loom recipe's bundled boards for the split state macros.
  *   player.action   → loom.action
- *   loom.archive    → loom.scene + loom.characters + loom.events
- *   loom.mechanics  → loom.goals + loom.variables + operations manual block
- *   loom.lifecycle  → dropped (folded into loom.goals / loom.variables)
- * A block that is exactly one dead macro is expanded into separate template
- * blocks (nicer to edit); a block that merely CONTAINS one — an authored block
- * with surrounding text or other macros — is rewritten token-by-token so nothing
- * around it is lost. Every other block and the ordering are untouched.
+ *   loom.archive    → dropped (the Loom Archive is dissolved)
+ *   loom.mechanics  → dropped (Goals/Variables folded into Living Lore)
+ *   loom.lifecycle  → dropped
+ * A block that is exactly player.action is expanded into a loom.action template
+ * block (nicer to edit); the dissolved boards are dropped. A block that merely
+ * CONTAINS one — an authored block with surrounding text or other macros — is
+ * rewritten token-by-token so nothing around it is lost. Every other block and
+ * the ordering are untouched.
  */
 function migrateLoomStateBoards(recipe) {
     if (recipe?.mode !== 'loom' || !Array.isArray(recipe.blocks)) return false;
     const EXPANSIONS = {
         'player.action': ['loomAction'],
         'loom.archive': [],
-        'loom.mechanics': ['loomGoals', 'loomVariables'],
+        'loom.mechanics': [],
         'loom.lifecycle': [],
     };
     let changed = false;
@@ -954,14 +885,7 @@ function migrateLoomStateBoards(recipe) {
                 const created = createPromptBlockFromTemplate('loom', key);
                 if (!created) continue;
                 created.enabled = block.enabled !== false;
-                // The Loom recipe is trusted, so its Goals board includes secrets.
-                if (key === 'loomGoals') created.content = '{{loom.goals secret=true}}';
                 next.push(created);
-            }
-            // The operations manual is a plain block, not a template, so it
-            // rides along where the mechanics board used to sit.
-            if (macro === 'loom.mechanics') {
-                next.push(createPromptBlock({ kind: 'message', role: 'system', content: LOOM_OPERATIONS_MANUAL, enabled: block.enabled !== false }));
             }
             continue;
         }
@@ -977,13 +901,11 @@ function migrateLoomStateBoards(recipe) {
 }
 
 /**
- * v33: retire the Narrator-specific state macros for the universal split ones.
- *   narrator.grounding → loom.scene + loom.characters + loom.events
- *   story.goals        → a "pressures, not guarantees" framing block + loom.goals
- *   narrator.recall    → prev.events (keeping any scenes=N argument)
- * Whole-macro blocks expand into separate blocks; a macro inside an authored
- * block is rewritten in place, and the goals framing is only auto-added for a
- * whole-macro story.goals block (an authored block keeps its own framing).
+ * v33: retire the Narrator-specific state macros. The Loom Archive is dissolved
+ * and Goals/Variables are folded into Living Lore, so narrator.grounding,
+ * narrator.recall and story.goals are all dropped outright. A whole-macro block
+ * is removed; the same macro inside an authored block is stripped in place so the
+ * surrounding text survives.
  */
 function migrateRoleplayStateMacros(recipe) {
     if (recipe?.mode !== 'roleplay' || !Array.isArray(recipe.blocks)) return false;
@@ -991,23 +913,14 @@ function migrateRoleplayStateMacros(recipe) {
     const next = [];
     for (const block of recipe.blocks) {
         const macro = soleBlockMacro(block.content);
-        // The Loom Archive is dissolved: grounding and earlier-Scene recall are
-        // dropped outright. Goals survive as the framing block plus loom.goals.
-        if (macro === 'narrator.grounding' || macro === 'narrator.recall') {
+        if (macro === 'narrator.grounding' || macro === 'narrator.recall' || macro === 'story.goals') {
             changed = true;
             continue;
         }
-        if (macro === 'story.goals') {
-            changed = true;
-            next.push(createPromptBlock({ kind: 'message', role: 'system', content: GOALS_PRESSURE_FRAMING, enabled: block.enabled !== false }));
-            const goals = createPromptBlockFromTemplate('roleplay', 'loomGoals');
-            if (goals) { goals.enabled = block.enabled !== false; next.push(goals); }
-            continue;
-        }
-        // Mixed authored block: drop the dead archive macros, keep story.goals.
+        // Mixed authored block: strip the dissolved macros in place.
         const rewritten = String(block.content || '')
             .replace(/\{\{\s*narrator\.grounding\b[^{}]*\}\}/gi, '')
-            .replace(/\{\{\s*story\.goals\b[^{}]*\}\}/gi, '{{loom.goals}}')
+            .replace(/\{\{\s*story\.goals\b[^{}]*\}\}/gi, '')
             .replace(/\{\{\s*narrator\.recall\b[^{}]*\}\}/gi, '');
         if (rewritten !== String(block.content || '')) {
             block.content = rewritten.replace(/\n{3,}/g, '\n\n').trim();
@@ -1039,6 +952,40 @@ function stripDeadArchiveMacros(recipe) {
         if (rewritten !== content) {
             block.content = rewritten.replace(/\n{3,}/g, '\n\n').trim();
             if (/^remodel_(loom_scene|loom_characters|loom_events|loom_secrets|prev_events|narrator_grounding|narrator_recall)$/.test(block.nativeIdentifier || '')) block.nativeIdentifier = '';
+            changed = true;
+        }
+        next.push(block);
+    }
+    if (changed) recipe.blocks = next;
+    return changed;
+}
+
+/**
+ * v35: Goals and Variables are dissolved into Living Lore. Strip their macros
+ * (loom.goals, loom.variables, story.goals), the Narrator mechanics tool block
+ * (narrator.mechanics), and the two seeded prose blocks — the operations manual
+ * and the "pressures, not guarantees" goals framing. A block that is exactly one
+ * dead macro, or is one of those seeded prose blocks (matched by a distinctive
+ * line so an owner-edited copy is still caught), is dropped; a dead macro inside
+ * an authored block is removed in place. loom.action and loom.lore survive.
+ */
+function stripDissolvedMechanicsBlocks(recipe) {
+    if (!recipe || !Array.isArray(recipe.blocks)) return false;
+    const dead = ['loom.goals', 'loom.variables', 'story.goals', 'narrator.mechanics'];
+    let changed = false;
+    const next = [];
+    for (const block of recipe.blocks) {
+        const content = String(block.content || '');
+        if (dead.includes(soleBlockMacro(content))) { changed = true; continue; }
+        if (/^##\s*Operations — what you may change/.test(content.trim())
+            || /pressures on the scene, never protected outcomes/.test(content)) {
+            changed = true;
+            continue;
+        }
+        const rewritten = content.replace(/\{\{\s*(loom\.goals|loom\.variables|story\.goals|narrator\.mechanics)\b[^{}]*\}\}/gi, '');
+        if (rewritten !== content) {
+            block.content = rewritten.replace(/\n{3,}/g, '\n\n').trim();
+            if (/^remodel_(loom_goals|loom_variables|story_goals|narrator_mechanics)$/.test(block.nativeIdentifier || '')) block.nativeIdentifier = '';
             changed = true;
         }
         next.push(block);
@@ -1150,14 +1097,14 @@ function normalizeBlocks(value, mode, apiType) {
     return blocks;
 }
 
-// Retired source keys. The Loom Archive is dissolved, so the old grounding and
-// recall sources drop to nothing; only storyGoals still maps to a live macro.
+// Retired source keys. The Loom Archive is dissolved and Goals/Variables are
+// folded into Living Lore, so every one of these old sources drops to nothing.
 const RETIRED_SOURCE_MACROS = Object.freeze({
     directorNotes: '',
     loomContext: '',
     narratorGrounding: '',
     narratorRecall: '',
-    storyGoals: '{{loom.goals}}',
+    storyGoals: '',
 });
 
 function sourceBlockToMacroMessage(mode, value) {

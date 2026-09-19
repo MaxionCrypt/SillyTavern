@@ -1,6 +1,4 @@
 import { getContext } from '../../../st-context.js';
-import { detachStoryGoalsFromScene, deleteStoryGoalsForTimeline } from './story-goals-store.js';
-import { deleteVariablesForTimeline } from './variables-store.js';
 import { clearRetrievalRecall } from './retrieval-recall.js';
 
 export const CHAT_METADATA_KEY = 'remodelScene';
@@ -115,15 +113,12 @@ export function deleteTimeline(timelineId) {
 
         for (const sceneId of arc?.sceneIds || []) {
             delete store.scenes[sceneId];
-            detachStoryGoalsFromScene(sceneId);
         }
 
         delete store.arcs[arcId];
     }
 
     delete store.timelines[timelineId];
-    deleteStoryGoalsForTimeline(timelineId);
-    deleteVariablesForTimeline(timelineId);
     clearRetrievalRecall(timelineId);
     store.timelineIds = store.timelineIds.filter((id) => id !== timelineId);
     store.activeTimelineId = store.activeTimelineId === timelineId ? store.timelineIds[0] || null : store.activeTimelineId;
@@ -181,7 +176,6 @@ export function deleteArc(arcId) {
 
     for (const sceneId of arc.sceneIds) {
         delete store.scenes[sceneId];
-        detachStoryGoalsFromScene(sceneId);
     }
 
     delete store.arcs[arcId];
@@ -278,7 +272,6 @@ export function deleteScene(sceneId) {
     }
 
     delete store.scenes[sceneId];
-    detachStoryGoalsFromScene(sceneId);
     arc.sceneIds = arc.sceneIds.filter((id) => id !== sceneId);
     timeline.activeSceneId = timeline.activeSceneId === sceneId ? arc.sceneIds[0] || null : timeline.activeSceneId;
     arc.updatedAt = now();
