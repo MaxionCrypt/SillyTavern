@@ -14289,3 +14289,74 @@ body.st-remodel-active.remodel-roleplay-workspace-active.remodel-scene-lore-open
     --remodel-left-edge: calc(var(--rail-width, 60px) + 384px);
     --remodel-chat-width: calc(100vw - var(--rail-width, 60px) - 384px);
 }
+
+/* ===== Living Lore constellation — the Loom Archive keyword mesh + card detail. ===== */
+body.st-remodel-active .remodel-lore-archive.is-constellation { display: flex; flex-direction: column; height: 100%; min-height: 520px; }
+body.st-remodel-active .remodel-lore-constellation-wrap {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr);
+    gap: 20px;
+    padding-top: 20px;
+}
+body.st-remodel-active .remodel-lore-constellation {
+    position: relative;
+    min-height: 460px;
+    border: 1px solid rgba(215, 200, 0, .18);
+    border-radius: 14px;
+    overflow: hidden;
+    background:
+        radial-gradient(120% 90% at 28% 18%, rgba(215, 200, 0, .06), transparent 60%),
+        radial-gradient(100% 100% at 82% 88%, rgba(126, 96, 210, .06), transparent 62%),
+        rgba(8, 8, 12, .55);
+}
+body.st-remodel-active .remodel-lore-constellation-svg { width: 100%; height: 100%; display: block; }
+
+body.st-remodel-active .remodel-lore-edge { fill: none; stroke: rgba(215, 200, 0, .2); stroke-width: 1.4; stroke-linecap: round; transition: stroke .16s ease, stroke-width .16s ease; }
+body.st-remodel-active .remodel-lore-edge.is-active { stroke: rgba(226, 211, 66, .82); stroke-width: 2.4; filter: drop-shadow(0 0 4px rgba(215, 200, 0, .5)); }
+body.st-remodel-active .remodel-lore-edge.is-dim { stroke: rgba(215, 200, 0, .07); }
+
+body.st-remodel-active .remodel-lore-node { cursor: pointer; }
+body.st-remodel-active .remodel-lore-node-halo { fill: rgba(215, 200, 0, .05); transition: fill .16s ease; }
+body.st-remodel-active .remodel-lore-node-dot { fill: rgba(24, 22, 14, .95); stroke: rgba(215, 200, 0, .55); stroke-width: 1.6; transition: fill .16s ease, stroke .16s ease; }
+body.st-remodel-active .remodel-lore-node-label { fill: rgba(240, 236, 222, .8); font: 500 13px/1 var(--remodel-serif, Georgia, serif); pointer-events: none; paint-order: stroke; stroke: rgba(6, 6, 10, .85); stroke-width: 3px; }
+body.st-remodel-active .remodel-lore-node:hover .remodel-lore-node-dot,
+body.st-remodel-active .remodel-lore-node:focus-visible .remodel-lore-node-dot { fill: rgba(60, 54, 24, .95); stroke: rgba(226, 211, 66, .92); }
+body.st-remodel-active .remodel-lore-node:hover .remodel-lore-node-halo { fill: rgba(215, 200, 0, .14); }
+body.st-remodel-active .remodel-lore-node.is-selected .remodel-lore-node-dot { fill: rgba(215, 200, 0, .92); stroke: rgba(242, 230, 128, 1); filter: drop-shadow(0 0 6px rgba(215, 200, 0, .6)); }
+body.st-remodel-active .remodel-lore-node.is-selected .remodel-lore-node-halo { fill: rgba(215, 200, 0, .18); }
+body.st-remodel-active .remodel-lore-node.is-selected .remodel-lore-node-label { fill: #f6efce; }
+body.st-remodel-active .remodel-lore-node.is-neighbour .remodel-lore-node-dot { stroke: rgba(226, 211, 66, .85); }
+body.st-remodel-active .remodel-lore-node.is-dim { opacity: .32; }
+
+body.st-remodel-active .remodel-lore-detail { display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow-y: auto; padding: 4px 4px 20px; }
+body.st-remodel-active .remodel-lore-detail-empty { margin: auto; text-align: center; color: rgba(229, 225, 214, .5); padding: 24px; }
+body.st-remodel-active .remodel-lore-detail-empty i { display: block; margin-bottom: 12px; font-size: 1.8rem; color: rgba(215, 200, 0, .35); }
+body.st-remodel-active .remodel-lore-detail-empty p { margin: 0; font: 400 .95rem/1.5 var(--remodel-sans, sans-serif); }
+body.st-remodel-active .remodel-lore-detail-head { display: flex; align-items: center; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid rgba(215, 200, 0, .18); }
+body.st-remodel-active .remodel-lore-detail-head h3 { margin: 2px 0 0; color: #f3eedc; font: 500 1.25rem/1.1 var(--remodel-serif, Georgia, serif); }
+body.st-remodel-active .remodel-lore-detail-count { margin-left: auto; color: rgba(235, 231, 219, .5); font: 600 .72rem/1 var(--remodel-sans, sans-serif); }
+body.st-remodel-active .remodel-lore-detail-back {
+    appearance: none; flex: 0 0 auto; width: 30px; height: 30px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: rgba(215, 200, 0, .85); background: rgba(215, 200, 0, .06);
+    border: 1px solid rgba(215, 200, 0, .28); border-radius: 6px; cursor: pointer;
+}
+body.st-remodel-active .remodel-lore-detail-back:hover { background: rgba(215, 200, 0, .13); }
+
+body.st-remodel-active .remodel-lore-card-deck { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 14px; align-content: start; }
+body.st-remodel-active .remodel-lore-card { width: 100% !important; min-width: 0 !important; margin: 0 !important; cursor: pointer; }
+body.st-remodel-active .remodel-lore-card .remodel-timeline-card-meta {
+    overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+body.st-remodel-active .remodel-lore-card-secret { position: absolute; top: 8px; right: 8px; z-index: 3; color: rgba(255, 196, 120, .95); font-size: .8rem; }
+
+body.st-remodel-active .remodel-lore-detail-view { display: flex; flex-direction: column; gap: 12px; }
+body.st-remodel-active .remodel-lore-detail-tags { display: flex; flex-wrap: wrap; gap: 5px 6px; }
+body.st-remodel-active .remodel-lore-detail-content { margin: 0; color: rgba(234, 231, 221, .82); font: 400 .96rem/1.6 var(--remodel-sans, sans-serif); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@media (max-width: 900px) {
+    body.st-remodel-active .remodel-lore-constellation-wrap { grid-template-columns: 1fr; }
+    body.st-remodel-active .remodel-lore-constellation { min-height: 320px; }
+}

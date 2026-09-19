@@ -144,6 +144,7 @@ import {
     listTimelineLivingLoreEntries,
     updateSceneLivingLoreEntry,
 } from './living-lore-archive.js';
+import { buildLivingLoreGraph, layoutLivingLoreGraph } from './living-lore-graph.js';
 
 import { resolveChatLorebook } from './chat-lorebook.js';
 // world-info.js's METADATA_KEY. Named locally rather than imported so this
@@ -172,6 +173,8 @@ const loomArchive = {
     error: '',
     expandedKey: '',
     editingKey: '',
+    selectedKeyword: '',
+    detailEntryKey: '',
     refreshId: 0,
     searchFocused: false,
     searchCursor: 0,
@@ -259,6 +262,8 @@ function resetLoomArchiveView() {
         error: '',
         expandedKey: '',
         editingKey: '',
+        selectedKeyword: '',
+        detailEntryKey: '',
         refreshId: loomArchive.refreshId + 1,
         searchFocused: false,
         searchCursor: 0,
@@ -3215,6 +3220,26 @@ async function refreshLoomArchive(timelineId = getSessionState().focusedTimeline
 async function handleLoomArchiveAction(element) {
     const action = element.dataset.remodelLoreArchiveAction;
     const key = loomArchiveEntryKey(element.dataset.loreBook, element.dataset.loreUid);
+    if (action === 'select-keyword') {
+        const keyword = element.dataset.loreKeyword || '';
+        loomArchive.selectedKeyword = loomArchive.selectedKeyword === keyword ? '' : keyword;
+        loomArchive.detailEntryKey = '';
+        loomArchive.editingKey = '';
+        queueRender();
+        return;
+    }
+    if (action === 'select-entry-card') {
+        loomArchive.detailEntryKey = key;
+        loomArchive.editingKey = '';
+        queueRender();
+        return;
+    }
+    if (action === 'back-to-deck') {
+        loomArchive.detailEntryKey = '';
+        loomArchive.editingKey = '';
+        queueRender();
+        return;
+    }
     if (action === 'toggle-entry') {
         const closing = loomArchive.expandedKey === key;
         loomArchive.expandedKey = closing ? '' : key;
@@ -4289,35 +4314,134 @@ function renderLivingLoreTags(tags, className = '') {
 
 function renderLivingLoreArchive(timeline) {
     const entries = filterLivingLoreEntries(loomArchive.entries, loomArchive.query);
-    const groups = groupLivingLoreEntries(entries);
-    const content = loomArchive.loading
+    const graph = buildLivingLoreGraph(entries);
+    const body = loomArchive.loading
         ? '<p class="remodel-lore-archive-message">Reading Living Lore…</p>'
         : loomArchive.error
             ? `<p class="remodel-lore-archive-message is-error">${escapeHtml(loomArchive.error)}</p>`
-            : !entries.length && loomArchive.query
-                ? '<p class="remodel-lore-archive-message">No active entries match that title or tag.</p>'
-                : !entries.length
-                    ? '<p class="remodel-lore-archive-message">No Living Lore has been activated in this Timeline yet.</p>'
-                    : groups.map((group) => `
-                        <section class="remodel-lore-archive-group">
-                            <header><span>${escapeHtml(group.label)}</span><small>${group.entries.length}</small></header>
-                            ${group.entries.map(renderLivingLoreArchiveEntry).join('')}
-                        </section>`).join('');
+            : !loomArchive.entries.length
+                ? '<p class="remodel-lore-archive-message">No Living Lore has been activated in this Timeline yet.</p>'
+                : `
+                    <div class="remodel-lore-constellation-wrap">
+                        <div class="remodel-lore-constellation" data-remodel-lore-constellation>${renderLoreConstellation(graph)}</div>
+                        <aside class="remodel-lore-detail">${renderLoreDetail(graph, entries)}</aside>
+                    </div>`;
+    const keywordCount = graph.nodes.length;
     return `
-        <section class="remodel-lore-archive">
+        <section class="remodel-lore-archive is-constellation">
             <header class="remodel-lore-archive-head">
                 <div>
                     <p class="remodel-lore-archive-kicker">Living Lore</p>
                     <h2>${escapeHtml(timeline.title || 'Untitled Timeline')}</h2>
-                    <p>${loomArchive.loading ? 'Reading active native lore…' : `${loomArchive.entries.length} active entr${loomArchive.entries.length === 1 ? 'y' : 'ies'} across this Timeline`}</p>
+                    <p>${loomArchive.loading ? 'Reading active native lore…' : `${loomArchive.entries.length} active entr${loomArchive.entries.length === 1 ? 'y' : 'ies'} · ${keywordCount} keyword${keywordCount === 1 ? '' : 's'}`}</p>
                 </div>
                 <label class="remodel-lore-archive-search">
                     <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
                     <input type="search" value="${escapeAttribute(loomArchive.query)}" placeholder="Search entry title or tags…" aria-label="Search Living Lore" data-remodel-lore-archive-search>
                 </label>
             </header>
-            <div class="remodel-lore-archive-list">${content}</div>
+            ${body}
         </section>`;
+}
+
+function renderLoreConstellation(graph) {
+    if (!graph.nodes.length) {
+        return `<p class="remodel-lore-archive-message">${loomArchive.query ? 'No active entries match that title or tag.' : 'No keywords to map yet.'}</p>`;
+    }
+    const W = 1000;
+    const H = 680;
+    const layout = layoutLivingLoreGraph(graph, { width: W, height: H });
+    const selected = loomArchive.selectedKeyword;
+    const neighbours = new Set();
+    if (selected) {
+        for (const edge of layout.edges) {
+            if (edge.a === selected) neighbours.add(edge.b);
+            if (edge.b === selected) neighbours.add(edge.a);
+        }
+    }
+    const edges = layout.edges.map((edge) => {
+        const cls = selected ? (edge.a === selected || edge.b === selected ? ' is-active' : ' is-dim') : '';
+        return `<path class="remodel-lore-edge${cls}" d="M ${edge.x1.toFixed(1)} ${edge.y1.toFixed(1)} Q ${edge.cx.toFixed(1)} ${edge.cy.toFixed(1)} ${edge.x2.toFixed(1)} ${edge.y2.toFixed(1)}"></path>`;
+    }).join('');
+    const nodes = layout.nodes.map((node) => {
+        const state = node.keyword === selected ? ' is-selected'
+            : selected && neighbours.has(node.keyword) ? ' is-neighbour'
+                : selected ? ' is-dim' : '';
+        return `<g class="remodel-lore-node${state}" data-remodel-lore-archive-action="select-keyword" data-lore-keyword="${escapeAttribute(node.keyword)}" tabindex="0" role="button" aria-label="Keyword ${escapeAttribute(node.keyword)}">
+            <circle class="remodel-lore-node-halo" cx="${node.x.toFixed(1)}" cy="${node.y.toFixed(1)}" r="${(node.r + 7).toFixed(1)}"></circle>
+            <circle class="remodel-lore-node-dot" cx="${node.x.toFixed(1)}" cy="${node.y.toFixed(1)}" r="${node.r.toFixed(1)}"></circle>
+            <text class="remodel-lore-node-label" x="${node.x.toFixed(1)}" y="${(node.y + node.r + 15).toFixed(1)}" text-anchor="middle">${escapeHtml(node.keyword)}</text>
+        </g>`;
+    }).join('');
+    return `<svg class="remodel-lore-constellation-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Keyword constellation">
+        <g class="remodel-lore-edges">${edges}</g>
+        <g class="remodel-lore-nodes">${nodes}</g>
+    </svg>`;
+}
+
+function renderLoreDetail(graph, entries) {
+    const byId = new Map(entries.map((entry) => [loomArchiveEntryKey(entry.book, entry.uid), entry]));
+    if (loomArchive.detailEntryKey && byId.has(loomArchive.detailEntryKey)) {
+        return renderLoreEntryDetail(byId.get(loomArchive.detailEntryKey));
+    }
+    const keyword = loomArchive.selectedKeyword;
+    if (!keyword) {
+        return '<div class="remodel-lore-detail-empty"><i class="fa-solid fa-diagram-project" aria-hidden="true"></i><p>Pick a keyword in the constellation to reveal the entries it calls.</p></div>';
+    }
+    const cards = (graph.entriesByKeyword[keyword] || []).map((id) => byId.get(id)).filter(Boolean);
+    if (!cards.length) {
+        return `<div class="remodel-lore-detail-empty"><p>No active entry uses “${escapeHtml(keyword)}”.</p></div>`;
+    }
+    return `
+        <div class="remodel-lore-detail-head">
+            <div><p class="remodel-lore-archive-kicker">Called by</p><h3>${escapeHtml(keyword)}</h3></div>
+            <span class="remodel-lore-detail-count">${cards.length} entr${cards.length === 1 ? 'y' : 'ies'}</span>
+        </div>
+        <div class="remodel-lore-card-deck">${cards.map(renderLoreEntryCard).join('')}</div>`;
+}
+
+function renderLoreEntryCard(entry) {
+    const keys = (entry.tags || []).join(' · ');
+    return `
+        <button type="button" class="remodel-timeline-card remodel-lore-card" data-remodel-lore-archive-action="select-entry-card" data-lore-book="${escapeAttribute(entry.book)}" data-lore-uid="${escapeAttribute(entry.uid)}" data-lore-scene-id="${escapeAttribute(entry.sceneIds?.[0] || '')}" style="--card-hue: ${hashHue(String(entry.title || entry.uid))}">
+            ${renderCardFlourishes()}
+            <div class="remodel-timeline-card-frame">
+                <div class="remodel-timeline-card-art"></div>
+                ${entry.secret ? '<span class="remodel-lore-card-secret" title="Hidden from the Narrator"><i class="fa-solid fa-eye-slash" aria-hidden="true"></i></span>' : ''}
+                <div class="remodel-timeline-card-plate">
+                    <div class="remodel-timeline-card-title">${escapeHtml(entry.title)}</div>
+                    <div class="remodel-timeline-card-meta">${escapeHtml(keys) || 'No keys'}</div>
+                </div>
+            </div>
+        </button>`;
+}
+
+function renderLoreEntryDetail(entry) {
+    const key = loomArchiveEntryKey(entry.book, entry.uid);
+    const isEditing = loomArchive.editingKey === key;
+    const attrs = `data-lore-book="${escapeAttribute(entry.book)}" data-lore-uid="${escapeAttribute(entry.uid)}" data-lore-scene-id="${escapeAttribute(entry.sceneIds?.[0] || '')}"`;
+    const inner = isEditing ? `
+        <div class="remodel-lore-archive-editor" data-remodel-lore-entry ${attrs}>
+            <label>Title<input type="text" value="${escapeAttribute(entry.title)}" data-remodel-lore-entry-field="title"></label>
+            <label>Tags<input type="text" value="${escapeAttribute((entry.tags || []).join(', '))}" placeholder="Comma-separated" data-remodel-lore-entry-field="tags"></label>
+            <label>Secondary tags<input type="text" value="${escapeAttribute((entry.secondaryTags || []).join(', '))}" placeholder="Comma-separated" data-remodel-lore-entry-field="secondary-tags"></label>
+            <label>Content<textarea rows="10" data-remodel-lore-entry-field="content">${escapeHtml(entry.content)}</textarea></label>
+            <div class="remodel-lore-archive-editor-actions">
+                <button type="button" class="remodel-lore-archive-icon-button" title="Save changes" aria-label="Save changes" data-remodel-lore-archive-action="save-entry" ${attrs}><i class="fa-solid fa-check" aria-hidden="true"></i></button>
+                <button type="button" class="remodel-lore-archive-icon-button is-quiet" title="Cancel" aria-label="Cancel" data-remodel-lore-archive-action="cancel-edit" ${attrs}><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+            </div>
+        </div>` : `
+        <div class="remodel-lore-detail-view" data-remodel-lore-entry ${attrs}>
+            <div class="remodel-lore-detail-tags">${renderLivingLoreTags(entry.tags)}${renderLivingLoreTags(entry.secondaryTags, 'is-secondary')}</div>
+            <p class="remodel-lore-detail-content">${escapeHtml(entry.content) || '<em>This entry has no content yet.</em>'}</p>
+            <div class="remodel-lore-archive-entry-footer"><button type="button" class="remodel-lore-archive-icon-button" title="Edit entry" aria-label="Edit entry" data-remodel-lore-archive-action="edit-entry" ${attrs}><i class="fa-solid fa-pen" aria-hidden="true"></i></button><small>${escapeHtml(entry.book)}</small></div>
+        </div>`;
+    return `
+        <div class="remodel-lore-detail-head">
+            <button type="button" class="remodel-lore-detail-back" data-remodel-lore-archive-action="back-to-deck" title="Back to cards" aria-label="Back to cards"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i></button>
+            <div><p class="remodel-lore-archive-kicker">Entry</p><h3>${escapeHtml(entry.title)}${entry.secret ? ' <span class="remodel-lore-secret-badge"><i class="fa-solid fa-eye-slash" aria-hidden="true"></i> Secret</span>' : ''}</h3></div>
+        </div>
+        ${inner}`;
 }
 
 function renderLivingLoreArchiveEntry(entry) {
