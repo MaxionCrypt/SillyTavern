@@ -298,7 +298,7 @@ export function readLoomProse(raw, { final = false } = {}) {
     if (!match && final && readLoomEnvelope(text).parsed) prose = '';
     // A patch-contract response contains no visible prose. Withhold leading
     // JSON while it streams so a provider's altered fence cannot flash its
-    // internal requests into the manuscript before the final parse recovers it.
+    // internal state into the manuscript before the final parse recovers it.
     if (!match && !final && /^\s*(?:```(?:json)?\s*(?:\n|$)|\{)/i.test(text)) prose = '';
     if (!match && !final) {
         const partialFence = prose.match(/\n?`{1,3}(?:s(?:t(?:a(?:t(?:e)?)?)?)?)?$/i);
@@ -311,12 +311,12 @@ export function readLoomProse(raw, { final = false } = {}) {
 
 /**
  * Parse the Loom's reply: the complete final prose, followed by a single
- * ```state fence whose JSON carries the mechanics requests to execute and
- * the flow decision. The returned prose is what the caller commits.
+ * ```state fence whose JSON carries the swaps, lore keywords, lore ops, and
+ * flow decision to apply. The returned prose is what the caller commits.
  * Owner-authored recipes still on the older preserve-and-patch contract instead
  * return swaps (find/replace spans against the draft); those apply only when
  * the model returned no prose at all. A missing or malformed fence is not an
- * error: no prose changes, no requests.
+ * error: no prose changes, no swaps, no lore ops.
  *
  * @param {string} raw
  * @returns {{ prose: string, swaps: {find: string, replace: string}[], flow: {continueAfter: boolean, hardPauseAfter: boolean}|null, loreKeywords: string[][], loreOps: object[] }}
@@ -422,7 +422,7 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
  * WHY THIS EXISTS: an Archive that does not advance looks identical from the
  * outside no matter which of three things went wrong — the model emitted no
  * state fence at all, it emitted one whose JSON does not parse, or it emitted
- * valid requests naming capabilities the Archive filter drops. Each needs a
+ * valid ops the Archive filter drops. Each needs a
  * different fix, and `archive.catchup.empty` distinguishes none of them.
  *
  * Deliberately a SUMMARY rather than the raw reply: the prose is already the

@@ -507,8 +507,8 @@ export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = 
     try {
         if (activeRun?.acceptedComplete) {
             // Canonical delivery owns its complete save transaction. Sending
-            // that row through the legacy finalizer here would apply Loom
-            // mechanics and archive settlement a second time on the next
+            // that row through the legacy finalizer here would re-apply its
+            // Living Lore ops and keyword import a second time on the next
             // user turn.
             if (activeRun.deliveryMode !== 'canonical') {
                 await finalizeRunMessage(activeRun, { state: 'complete' });
@@ -770,14 +770,13 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     const message = context.chat[messageId];
     const saved = message?.extra?.remodelDirection;
     if (!saved || message.is_user) return false;
-    // Every other acceptance path checks this — applyPendingRequests refuses
-    // when `scene.id !== run.sceneId`. Without it here, regenerate undoes
-    // another Scene's transactions, re-attaches that Scene's advertised
-    // address book, and hands it to generateDirectedPerformer, which stamps
-    // the CURRENT Scene's id onto the result. A cross-Timeline replay fails
-    // closed on requireVariable/requireGoal, but a same-Timeline replay into a
-    // different Scene would succeed against a set this Scene never advertised.
-    // Nothing structurally prevents two Scenes resolving to the same chat.
+    // Guarded as every acceptance path is — reject when `scene.id !==
+    // run.sceneId`. Without it here, regenerate undoes another Scene's
+    // transactions, re-attaches that Scene's advertised address book, and
+    // hands it to generateDirectedPerformer, which stamps the CURRENT Scene's
+    // id onto the result. A same-Timeline replay into a different Scene would
+    // succeed against a set this Scene never advertised. Nothing structurally
+    // prevents two Scenes resolving to the same chat.
     if (saved.sceneId && saved.sceneId !== scene.id) {
         journal('regenerate.rejected', {
             reason: 'the saved direction belongs to a different Scene',
@@ -810,10 +809,8 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
     activeRun = null;
     await context.deleteMessage(messageId);
     // Re-run the turn fresh: the Narrator drafts again and the Loom reconciles.
-    // Undoing the transaction above already rolled back this turn's Archive
-    // events and mechanics atomically, so the retake starts clean. It reuses the
-    // same turn number rather than allocating a new one (a retake, not a new
-    // turn).
+    // It reuses the same turn number rather than allocating a new one (a
+    // retake, not a new turn).
     const savedTurn = toTurnNumber(saved.envelope?.notebookTurn);
     return requestNextDirection(scene, { notebookTurn: savedTurn, deliveryMode });
 }
@@ -835,10 +832,10 @@ export function isLatestUserMessage(messageId, chat = getContext().chat || []) {
 /**
  * Replace the newest user action and re-run everything causally downstream.
  *
- * This is intentionally not a cosmetic message edit. Narration and the
- * mechanics transactions after the action all describe the old wording. Rewind
- * them together, persist the replacement user line, then start a user-priority
- * direction pass without posting that line a second time.
+ * This is intentionally not a cosmetic message edit. The narration after the
+ * action all describes the old wording. Rewind it, persist the replacement
+ * user line, then start a user-priority direction pass without posting that
+ * line a second time.
  */
 export async function rerunDirectedRoleplayFromUserMessage({
     scene = hooks.getActiveScene(), messageId, text, deliveryMode = 'canonical',
@@ -954,8 +951,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // so the Loom sees it exactly once, under CURRENT ACTION
         // (direction-sources.js's describeSnapshot), not once there and once
         // more inside STORY SO FAR. `action` stays the single source handed to
-        // the World Info scan and buildMechanicalSnapshot just below, so
-        // neither scores it twice either.
+        // the World Info scan just below, so it is not scored twice either.
         //
         // Once this runs there is no undoing it on a later failure in this
         // same pass: nothing downstream removes the message, so it stays in
@@ -1122,8 +1118,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     // response is. Dropping the tail there would strip the WRONG message: the
     // action would stay in acceptedHistory (so the Loom reads it twice —
     // once here, once as CURRENT ACTION), the orphaned response would be
-    // hidden from the Loom entirely, and resolveVariableContext below
-    // would score the action's text twice. Filtering by the object itself
+    // hidden from the Loom entirely. Filtering by the object itself
     // finds the right entry regardless of what else has been appended since.
     //
     // Computing `id` against this filtered length rather than against
@@ -1183,13 +1178,6 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         lore = { warning: String(error?.message || error) };
     }
     const activatedEntries = [...(lore.allActivatedEntries || [])];
-    // Preview never rolls or mutates and never carries authorized Goal ids —
-    // but retrieval (resolveVariableContext) scores against action/history/
-    // activatedEntries, so it still gets the real ones: the same `action`
-    // this function was called with (the composer draft when there is one —
-    // see previewLoomPrompt), and the same history/activatedEntries just
-    // computed above. Only the write-adjacent authority (authorizedGoalIds)
-    // is withheld; the retrieval inputs are identical to a real pass's.
     return {
         scene: { id: scene.id, timelineId: scene.timelineId, title: scene.title },
         currentAction: action,
@@ -1219,11 +1207,10 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
  *
  * `Number.isFinite(Number(value))` is NOT this test: `Number(null)` is 0 and
  * passes it, which silently files a whole pass under turn 0. This codebase has
- * now been bitten by that exact coercion three times — `clampNumber` in
- * variables-store.js, `coerceSettingValue` in prompt-studio-store.js, and here
- * — so it gets one answer that every caller shares. Turn 0 is rejected on
- * purpose: `appendLoomEntries` uses it as its own "unknown" fallback, and
- * real turns start at 1.
+ * been bitten by that exact coercion more than once — `coerceSettingValue` in
+ * prompt-studio-store.js, and here — so it gets one answer that every caller
+ * shares. Turn 0 is rejected on purpose: `appendLoomEntries` uses it as its
+ * own "unknown" fallback, and real turns start at 1.
  */
 function toTurnNumber(value) {
     if (value === null || value === undefined || value === '') return null;
@@ -1568,9 +1555,6 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
             // getPacing, not a captured value: setLiveDirectionPacing mutates
             // activeRun.pacing, and this run IS activeRun, so a mid-turn switch
             // reaches the reveal already in flight.
-            // mechanics is null unless this Scene selected the rebuilt gateway,
-            // and a null dependency leaves the transport on its legacy
-            // single-request path.
             : createNativeNarratorTransport({
                 pacing: run.pacing,
                 getPacing: () => run.pacing,
@@ -1681,11 +1665,9 @@ function createCanonicalMessageStore({ context, run, performer, scene }) {
 }
 
 /**
- * The Archive worker owns the roleplay Loom request. Once its Archive commit
- * succeeds, consume its separate Living Lore reply exactly once and attach it
- * to the canonical message that earned it. This is intentionally post-commit:
- * unsupported or interrupted prose must never gain a lore write merely because
- * a model suggested one.
+ * Reflect a canonical delivery event into the run's visible state: a held
+ * stream shows "Held while you write", a resumed one returns to "Speaking".
+ * A no-op unless this run is still the active one.
  */
 function reflectCanonicalDeliveryEvent(run, event) {
     if (activeRun !== run) return;
@@ -2063,12 +2045,11 @@ export async function previewLoomPrompt(scene, { action = '', draft = '', draftR
 }
 
 /**
- * Loom mode — reconcile the Narrator's DRAFT: build
- * the Loom prompt (draft + reasoning + readable narrative state + the
- * mechanical board WITH numbers), transport it, parse the committed prose +
- * state fence, and execute the requests against the address book. Returns the
+ * Loom mode — reconcile the Narrator's DRAFT: build the Loom prompt (draft +
+ * reasoning + readable narrative state), transport it, and parse the committed
+ * prose + state fence (swaps / loreKeywords / loreOps / flow). Returns the
  * committed prose to post. Never throws — a failure falls back to the draft
- * unchanged. Dice inside goal.reach are code-rolled by the mechanics layer.
+ * unchanged.
  */
 export async function runLoomReconciliation({
     scene, snapshot, draft, draftReasoning = '', token = null, onChunk = null, deferRequests = false, loomProfileId = '',
@@ -2121,8 +2102,8 @@ export async function runLoomReconciliation({
     });
     // The Loom must reproduce the whole turn AND close a state fence on the
     // same ceiling as the draft, so it runs out sooner. A truncated Loom reply
-    // loses the fence entirely, which surfaces only as an Archive that quietly
-    // did not advance — name the real cause here instead.
+    // loses the fence entirely, so its lore and flow updates silently fail to
+    // apply — name the real cause here instead.
     await checkGenerationBudget({ text: raw, reasoning: '', label: 'The Loom pass', directionId: null });
     journalLoomReply(raw, 'loom-pass', scene?.id || null);
     const { prose, swaps, flow, loreKeywords = [], loreOps = [] } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
@@ -2567,7 +2548,7 @@ async function persistFinalizedRunMessage(run, state) {
 
 /**
  * Apply the Loom's typed lore ops (edit/create) exactly once, on the committed
- * turn — mirroring applyPendingRequests. Refused if the Scene changed; recovery
+ * turn. Refused if the Scene changed; recovery
  * does not pass through here, so creates never double-write.
  */
 export async function applyLoomLoreOps(run) {
@@ -3024,10 +3005,6 @@ function normalizeRef(value) {
  * `notebookTurn`. The envelope carries the pointer, not a second copy — a copy
  * on every saved message would be the authoritative-looking inert duplicate
  * this file has already been bitten by twice.
- *
- * `mechanics.pendingRequests` also accepts an envelope this function already
- * produced, since its own output moves `requests` there — that is the
- * regenerate path re-normalizing a saved envelope.
  */
 function normalizeEnvelope(value, scene) {
     if (!value || value.protocol !== DIRECTION_PROTOCOL) throw new Error(`Direction protocol must be ${DIRECTION_PROTOCOL}.`);

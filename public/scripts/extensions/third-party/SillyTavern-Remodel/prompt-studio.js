@@ -478,15 +478,12 @@ function withPromptTrace(compiled, traceEntries, wanted) {
  * Two spellings, one mechanism, because they are the same idea reached from
  * two directions. Story recipes fill outlets from World Info; a Loom
  * recipe fills them with the parts of its contract that the PARSER depends on
- * — the notebook tags, the state fence, the capability list.
+ * — the notebook tags and the state fence.
  *
  * Those parts have to expand at compile time rather than being pasted into a
  * recipe once. A pasted copy is a snapshot of what the code required on the
- * day it was pasted, and the moment a capability gains a required argument
- * that copy is silently wrong — which is precisely the defect this codebase
- * just spent three sessions on, where `validateArguments` demanded `valueType`
- * and the prompt had never heard of it. A macro cannot drift from the code
- * that renders it.
+ * day it was pasted, and the moment the contract's required shape changes that
+ * copy is silently wrong. A macro cannot drift from the code that renders it.
  */
 function resolvePromptOutlets(content, outlets) {
     return String(content || '').replace(/{{outlet::(.+?)}}/gi, (_, name) => {
@@ -1559,12 +1556,12 @@ const TEMPLATE_PICKER_ID = 'remodel-prompt-template-picker';
 /**
  * A card menu rather than a dropdown.
  *
- * Thirty entries in a `<select>` is a list you scroll blind: the option text is
- * all a native dropdown can show, so every operation reads as its bare name and
+ * A long list in a `<select>` is one you scroll blind: the option text is
+ * all a native dropdown can show, so every template reads as its bare name and
  * you pick by memory. A card can carry what the template is for and the first
  * line of what it writes, which is the difference between choosing and guessing.
- * Filtering is here for the same reason — with one template per operation, the
- * fastest way to `goal.reach` is to type it.
+ * Filtering is here for the same reason — the fastest way to a specific
+ * template is to type its name.
  */
 function openTemplatePicker(recipe) {
     closeTemplatePicker();
@@ -1631,8 +1628,8 @@ function closeTemplatePicker() {
 }
 
 function getSourceDefinitions(recipe) {
-    // Every mode also sees the universal split-state macros (loom.action/goals/variables),
-    // so they can be dropped into any recipe. Mode-specific templates win a key
+    // Every mode also sees the universal state macros (loom.action), so they
+    // can be dropped into any recipe. Mode-specific templates win a key
     // collision, so a legacy loom entry is never shadowed.
     const modeDefinitions = PROMPT_TEMPLATE_DEFINITIONS[recipe?.mode] || [];
     const modeKeys = new Set(modeDefinitions.map((item) => item.key));

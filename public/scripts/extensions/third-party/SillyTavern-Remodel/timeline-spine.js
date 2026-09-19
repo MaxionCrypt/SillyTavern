@@ -4860,7 +4860,7 @@ async function openScene(sceneId) {
  * A Connection Profile is the route and sampling configuration for a Roleplay
  * Narrator. Its saved SillyTavern preset may replace the native Prompt Manager
  * while it activates, so immediately restore the selected Scene recipe before
- * any request-scoped Archive or Goals content is written into that structure.
+ * any request-scoped Archive content is written into that structure.
  *
  * Prompt wording and placement are therefore owned by Prompt Studio, not by a
  * model profile's copied prompt stack.
@@ -10971,12 +10971,12 @@ function ensureRoleplayPanels() {
 // for the hamburger/wand relocation — so exactly one prior-text body lives in
 // the DOM at a time, and refreshPriorTextPanel()/handlers stay unchanged.
 /**
- * The Timeline State panel on the roleplay rail.
+ * The roleplay-rail Prior Scene Text panel.
  *
- * Unlike Prior Scene Text this does not relocate a shared DOM node between the
- * two rails: its view state lives in variables-ui.js, not in the markup, so both
- * rails can render the same body independently and stay in agreement. Nothing to
- * move means nothing to orphan when a workspace tears down.
+ * It relocates the one shared .remodel-priortext-body into this panel's outlet
+ * while roleplay is active (origin tracked via getOriginalPanelHomes so it can
+ * be returned to the story rail), so exactly one prior-text body ever lives in
+ * the DOM and the same handlers drive it on whichever rail hosts it.
  */
 function ensureRoleplayPriorTextPanel() {
     if (!isRealRoleplayWorkspaceActive()) {

@@ -12349,8 +12349,9 @@ body.st-remodel-active .remodel-tavern-viewport.is-timeline-focus .remodel-taver
     color: #ffc070;
 }
 
-/* Mechanics profile — the switch that decides whether the Loom may change
-   stored facts. Collapsed while disabled so it stays out of the way. */
+/* Mechanics profile — a now-inert panel, kept only so saved values aren't
+   discarded; it once decided whether the Loom may change stored facts.
+   Collapsed while disabled so it stays out of the way. */
 .remodel-debug-mechanics {
     padding: 8px 24px;
     border-bottom: 1px solid rgba(255, 255, 255, .07);
@@ -12955,7 +12956,7 @@ body.remodel-roleplay-workspace-active .remodel-rp-manuscript .remodel-rp-typing
 }
 
 /* =====================================================================
-   VARIABLES — the authoring surface (variables-ui.js)
+   VARIABLES — the authoring surface
 
    One editor rendered in two places: the Timeline State panel on either
    scene rail, and inside an expanded Lorebook entry. The rules are shared

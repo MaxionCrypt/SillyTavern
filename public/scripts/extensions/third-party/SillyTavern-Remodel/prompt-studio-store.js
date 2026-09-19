@@ -78,8 +78,8 @@ export const PROMPT_TEMPLATE_DEFINITIONS = Object.freeze({
         template('nativeContext', 'Native Roleplay Context', 'system', 'roleplay.native', { textOnly: true }),
     ]),
     loom: Object.freeze([
-        // The split state macros (loom.scene/goals/…) live in UNIVERSAL_STATE_MACROS
-        // and are appended to every mode by getSourceDefinitions.
+        // The split state macro (loom.action) lives in UNIVERSAL_STATE_MACROS
+        // and is appended to every mode by getSourceDefinitions.
         template('livingLore', 'Selected Living Lore', 'system', 'loom.lore', { description: 'The Timeline lore entries in scope for this scene, plus the loreOps/loreKeywords contract the Loom edits and pulls lore through.' }),
         template('priorLore', 'Prior-Scene Keywords', 'system', 'loom.priorlore', {
             description: 'The deduped keyword groups earlier Scenes of this timeline pulled lore with, so the Loom can replay what they established. Empty on the first Scene.',
@@ -458,7 +458,7 @@ function blocksFromNativeChat(prompts, promptOrder) {
         const sourceKey = nativeMarkerToSource[entry.identifier];
         if (RETIRED_SOURCE_MACROS[sourceKey]) {
             // A native prompt-order still carrying a retired Remodel marker maps
-            // to the split macros, not a dead {{native.prompt}} block.
+            // to its RETIRED_SOURCE_MACROS replacement, not a dead {{native.prompt}} block.
             return createPromptBlock({
                 kind: 'message',
                 role: prompt.role || sourceRole('roleplay', sourceKey) || 'system',
@@ -948,7 +948,7 @@ function migrateRoleplayStateMacros(recipe) {
 /**
  * v34: strip the split archive macros the dissolved Loom Archive left behind.
  * A block that is exactly one dead macro is dropped; a macro inside an authored
- * block is removed in place. loom.action / loom.goals / loom.variables survive.
+ * block is removed in place. loom.action survives; loom.goals / loom.variables are stripped later, at v35.
  */
 function stripDeadArchiveMacros(recipe) {
     if (!recipe || !Array.isArray(recipe.blocks)) return false;
@@ -1027,7 +1027,7 @@ function restoreRoleplayLivingLoreInstructions(blocks) {
     return true;
 }
 
-/** Seed one editable anti-echo/append-only policy before the Archive macro. */
+/** Seed one editable anti-echo/append-only policy. */
 function ensureNarratorPolicy(blocks) {
     if (!Array.isArray(blocks) || blocks.some((block) => block.content === NARRATOR_POLICY_DEFAULT)) return false;
     const recallIndex = blocks.findIndex((block) => /\{\{\s*(narrator\.recall|prev\.events)\b/i.test(block.content || ''));
@@ -1186,9 +1186,8 @@ function coerceSettingValue(rawValue, spec) {
         // finite: Number(null), Number('') and Number([]) are all 0, a
         // finite number, so a finite-only check reads "nothing was saved" as
         // "the value zero" and clamps it up to `min` instead of falling back
-        // to `default`. This exact bug already bit `clampNumber` in
-        // variables-store.js; fixed there the same way — test presence, then
-        // coerce.
+        // to `default`. This exact clamp bug has been fixed here before the
+        // same way — test presence, then coerce.
         let num = hasUsableNumber(rawValue) ? Number(rawValue) : Number(spec.default);
         if (typeof spec.min === 'number') num = Math.max(spec.min, num);
         if (typeof spec.max === 'number') num = Math.min(spec.max, num);

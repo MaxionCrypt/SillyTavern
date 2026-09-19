@@ -8,9 +8,8 @@
 //
 // A template should be the part you cannot look up: the exact wording that
 // teaches a model to emit a shape code will actually accept. So these are the
-// state fence, one instruction per operation, and the Living Lore contracts —
-// each carrying its required arguments, its allowed values, and a request line
-// that runs.
+// state fence and the Living Lore contracts — each carrying its required
+// arguments, its allowed values, and an example line that runs.
 //
 // GENERATED from metadata-guide.js, which reads the schema the provider is sent
 // and the table validateArguments throws against. Writing these by hand would
@@ -37,8 +36,7 @@ const GROUP_LABELS = Object.freeze({
  * a template cannot be talked into showing it.
  *
  * What is true, and worth knowing rather than enforcing: a fence emitted by a
- * Story prose recipe is parsed by nothing and lands in the manuscript, and the
- * Narrator verbs reach the engine only over Chat Completion.
+ * Story prose recipe is parsed by nothing and lands in the manuscript.
  *
  * @param {string} mode kept for call-site symmetry; every mode gets everything
  * @param {string} apiType same
@@ -52,9 +50,8 @@ export function getPromptInstructionTemplates(mode, apiType = 'chat') {
 }
 
 /**
- * Ordered by GROUP_LABELS, which is the order the Loom works in — Archive
- * first, then the consequences — rather than the order the capability
- * dictionary happens to declare its entries.
+ * Ordered by GROUP_LABELS — the output contract first, then Living Lore —
+ * rather than by the order the templates happen to arrive in.
  */
 function byGroup(templates) {
     const order = Object.keys(GROUP_LABELS);
@@ -92,7 +89,7 @@ function contractTemplates(guide) {
     ];
 }
 
-// --- One per operation ------------------------------------------------------
+// --- Describing arguments ---------------------------------------------------
 
 function describeArgument(argument) {
     const shape = argument.values.length ? argument.values.join(' | ') : argument.type;
@@ -160,7 +157,7 @@ export function filterTemplates(templates, query) {
 /**
  * The one line on a card that shows what the model ends up writing, rather than
  * the prose explaining it. The LONGEST shape-looking line, not the first: a
- * fence template opens on `{"requests":[`, which identifies nothing.
+ * fence template opens on `{"swaps":[`, which identifies nothing.
  */
 export function templatePreview(template) {
     const lines = String(template?.content || '').split('\n').map((line) => line.trim()).filter(Boolean);
