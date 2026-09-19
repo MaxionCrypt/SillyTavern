@@ -14360,3 +14360,6 @@ body.st-remodel-active .remodel-lore-detail-content { margin: 0; color: rgba(234
     body.st-remodel-active .remodel-lore-constellation-wrap { grid-template-columns: 1fr; }
     body.st-remodel-active .remodel-lore-constellation { min-height: 320px; }
 }
+
+/* Blank Loom Archive canvas — the design space, cleared for layout planning. */
+body.st-remodel-active .remodel-lore-archive.is-blank { min-height: 66vh; }

@@ -4312,36 +4312,12 @@ function renderLivingLoreTags(tags, className = '') {
     return `<span class="remodel-lore-archive-tags ${className}">${list.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</span>`;
 }
 
-function renderLivingLoreArchive(timeline) {
-    const entries = filterLivingLoreEntries(loomArchive.entries, loomArchive.query);
-    const graph = buildLivingLoreGraph(entries);
-    const body = loomArchive.loading
-        ? '<p class="remodel-lore-archive-message">Reading Living Lore…</p>'
-        : loomArchive.error
-            ? `<p class="remodel-lore-archive-message is-error">${escapeHtml(loomArchive.error)}</p>`
-            : !loomArchive.entries.length
-                ? '<p class="remodel-lore-archive-message">No Living Lore has been activated in this Timeline yet.</p>'
-                : `
-                    <div class="remodel-lore-constellation-wrap">
-                        <div class="remodel-lore-constellation" data-remodel-lore-constellation>${renderLoreConstellation(graph)}</div>
-                        <aside class="remodel-lore-detail">${renderLoreDetail(graph, entries)}</aside>
-                    </div>`;
-    const keywordCount = graph.nodes.length;
-    return `
-        <section class="remodel-lore-archive is-constellation">
-            <header class="remodel-lore-archive-head">
-                <div>
-                    <p class="remodel-lore-archive-kicker">Living Lore</p>
-                    <h2>${escapeHtml(timeline.title || 'Untitled Timeline')}</h2>
-                    <p>${loomArchive.loading ? 'Reading active native lore…' : `${loomArchive.entries.length} active entr${loomArchive.entries.length === 1 ? 'y' : 'ies'} · ${keywordCount} keyword${keywordCount === 1 ? '' : 's'}`}</p>
-                </div>
-                <label class="remodel-lore-archive-search">
-                    <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
-                    <input type="search" value="${escapeAttribute(loomArchive.query)}" placeholder="Search entry title or tags…" aria-label="Search Living Lore" data-remodel-lore-archive-search>
-                </label>
-            </header>
-            ${body}
-        </section>`;
+function renderLivingLoreArchive() {
+    // Intentionally blank. The Loom Archive layout is being designed from a clean
+    // slate: the left sidebar, top bar and timeline toolbar stay; everything in
+    // this content region is cleared so the exact design space is visible. The
+    // constellation/detail/card builders below are kept for the rebuild.
+    return '<section class="remodel-lore-archive is-blank" aria-label="Living Lore"></section>';
 }
 
 function renderLoreConstellation(graph) {
