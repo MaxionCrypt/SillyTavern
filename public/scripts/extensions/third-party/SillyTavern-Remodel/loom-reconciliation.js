@@ -38,14 +38,30 @@ function policyFingerprint(value) {
 }
 
 export function isSupersededLoomPatchPolicy(value) {
-    return SUPERSEDED_PATCH_POLICY_FINGERPRINTS.has(policyFingerprint(value));
+    return value === LOOM_POLICY_PATCH_PRE_DISSOLUTION
+        || SUPERSEDED_PATCH_POLICY_FINGERPRINTS.has(policyFingerprint(value));
 }
 
-export const LOOM_POLICY_PATCH = `You are the Loom: the final continuity editor and mechanical referee. You receive the Narrator's draft before anything becomes visible. The draft is already canonical - do NOT rewrite or reproduce it.
+/** The Loom policy that shipped while Goals were a bespoke request system, with a
+ * STEP 1 - Consequences that drove goal.edit/goal.reach/goal.create. Frozen as a
+ * literal so the Goals & Variables dissolution can re-seed a store that still
+ * carries it; deriving it from the current policy would rot the moment that is
+ * edited again. */
+export const LOOM_POLICY_PATCH_PRE_DISSOLUTION = `You are the Loom: the final continuity editor and mechanical referee. You receive the Narrator's draft before anything becomes visible. The draft is already canonical - do NOT rewrite or reproduce it.
 
 STEP 1 - Consequences. Goals describe outcomes their holders are trying to achieve, never outcomes the story must protect. Ask what materially changed because this turn happened. A Goal's description guides measurement but is not an exhaustive whitelist: if new fiction reveals that its condition is incomplete, refine the description with goal.edit rather than declaring the action irrelevant. When the fiction helps or obstructs an open Goal, use goal.edit to set its Success Rate to the holder's new chance of achieving it, even when no roll is needed. Small pressure may move it a few points; a meaningful reversal should move it substantially. Close a Goal with goal.edit when it becomes achieved, abandoned, or impossible. Use goal.create only when the fiction establishes a meaningful unresolved outcome worth tracking, never merely because a named character lacks one. Use goal.reach only for a decisive attempt whose outcome is genuinely uncertain; routine or already-established consequences need no roll. Code rolls the dice, never you.
 STEP 2 - Patch. If, and ONLY if, continuity or an authorized roll contradicts the draft, name the exact span to replace. Quote the draft verbatim in "find". Most turns need no patch at all.
 STEP 3 - Living Lore. The Selected Living Lore is the set of entries in scope this scene. If accepted fiction changed a fact in one of them, rewrite that entry with a lore.edit op naming its book and uid. If the fiction established a meaningfully reusable new subject that no entry yet covers - a person, place, group, institution, stable relationship, discovered rule, persistent condition, or durable open thread - add it with a lore.create op. You may only edit an entry that is in the Selected Living Lore; to change one that is not, first name its key in loreKeywords to pull it in. Do not record transient actions, momentary moods or positions, scene summaries, or decorative details. Most turns change nothing - leave loreOps empty then.`;
+
+// The current PATCH policy. Goals and Variables are dissolved into Living Lore,
+// so the Loom is a continuity editor and lore-keeper: it patches the draft when
+// continuity demands it and curates durable canon through loreOps. There is no
+// goal mechanics step — a Goal is just a Living Lore entry tagged `goal`, edited
+// with lore.edit like any other entry.
+export const LOOM_POLICY_PATCH = `You are the Loom: the final continuity editor and lore-keeper. You receive the Narrator's draft before anything becomes visible. The draft is already canonical - do NOT rewrite or reproduce it.
+
+STEP 1 - Patch. If, and ONLY if, continuity contradicts the draft, name the exact span to replace. Quote the draft verbatim in "find". Most turns need no patch at all.
+STEP 2 - Living Lore. The Selected Living Lore is the set of entries in scope this scene. If accepted fiction changed a fact in one of them, rewrite that entry with a lore.edit op naming its book and uid. If the fiction established a meaningfully reusable new subject that no entry yet covers - a person, place, group, institution, stable relationship, discovered rule, persistent condition, or durable open thread - add it with a lore.create op. You may only edit an entry that is in the Selected Living Lore; to change one that is not, first name its key in loreKeywords to pull it in. Do not record transient actions, momentary moods or positions, scene summaries, or decorative details. Most turns change nothing - leave loreOps empty then.`;
 
 const LOOM_OUTPUT_CONTRACT_PATCH_V21 = `Output NOTHING except one state fence. Do not restate the prose.
 \`\`\`state
@@ -80,17 +96,34 @@ export function isSupersededLoomPatchContract(value) {
     return value === LOOM_OUTPUT_CONTRACT_PATCH_V21
         || value === LOOM_OUTPUT_CONTRACT_PATCH_PRE_LORE
         || value === LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION
+        || value === LOOM_OUTPUT_CONTRACT_PATCH_PRE_DISSOLUTION
         // The compact v15 contract persisted in stores seeded before the
         // expanded goal examples were introduced.
         || policyFingerprint(value) === '397:3fa9c0d4';
 }
 
-export const LOOM_OUTPUT_CONTRACT_PATCH = `Output NOTHING except one state fence. Do not restate the prose.
+/** The output contract that shipped while the fence still carried a mechanics
+ * `requests` array. Frozen so the Goals & Variables dissolution can re-seed a
+ * store that still carries it. */
+export const LOOM_OUTPUT_CONTRACT_PATCH_PRE_DISSOLUTION = `Output NOTHING except one state fence. Do not restate the prose.
 \`\`\`state
 {"swaps":[],"requests":[{"id":"r1","capability":"goal.edit","arguments":{"goalRef":"the exact Goal name","successRate":23},"reason":"how this turn changed its holder's position"}],"loreKeywords":[],"loreOps":[],"flow":{"continue":false}}
 \`\`\`
 
 Every request is its own object. Close one with } and open the next with {, exactly as above. Never repeat "id" inside a single object.
+
+Always include the top-level loreOps array. Leave it empty unless accepted fiction changed a Selected Living Lore entry (a lore.edit op naming its book and uid) or established a new durable subject (a lore.create op giving name, keys, and content).
+
+Each swap is {"find":"exact text from the draft","replace":"what it becomes"}. A find that is not present verbatim in the draft is discarded, so copy it exactly.`;
+
+// The current output contract. The fence's mechanics `requests` array is gone;
+// what remains is swaps, loreKeywords, loreOps, and flow.
+export const LOOM_OUTPUT_CONTRACT_PATCH = `Output NOTHING except one state fence. Do not restate the prose.
+\`\`\`state
+{"swaps":[],"loreKeywords":[],"loreOps":[],"flow":{"continue":false}}
+\`\`\`
+
+Every loreOps op is its own object. Close one with } and open the next with {, exactly as above. Never repeat "id" inside a single object.
 
 Always include the top-level loreOps array. Leave it empty unless accepted fiction changed a Selected Living Lore entry (a lore.edit op naming its book and uid) or established a new durable subject (a lore.create op giving name, keys, and content).
 

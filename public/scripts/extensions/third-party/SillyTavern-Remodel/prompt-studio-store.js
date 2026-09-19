@@ -786,10 +786,20 @@ function normalizeStore(store, seed) {
     // v35: Goals and Variables are dissolved into Living Lore (reserved-keyword
     // entries). Strip their macros, the Narrator mechanics tool block, and the
     // seeded operations-manual and "pressures" framing blocks from every recipe;
-    // they no longer resolve or apply. loom.action and loom.lore survive.
+    // they no longer resolve or apply. Re-seed a Loom recipe still on the
+    // pre-dissolution policy/contract (which described goal mechanics and a
+    // `requests` fence the schema now rejects) to the current text; authored
+    // policy is left untouched. loom.action and loom.lore survive.
     if (previousVersion < 35) {
         for (const id of store.recipeIds) {
-            if (stripDissolvedMechanicsBlocks(store.recipes[id])) changed = true;
+            const recipe = store.recipes[id];
+            if (!recipe) continue;
+            if (stripDissolvedMechanicsBlocks(recipe)) changed = true;
+            if (recipe.mode !== 'loom') continue;
+            for (const block of recipe.blocks || []) {
+                if (isSupersededLoomPatchPolicy(block.content)) { block.content = LOOM_POLICY_PATCH; changed = true; continue; }
+                if (isSupersededLoomPatchContract(block.content)) { block.content = LOOM_OUTPUT_CONTRACT_PATCH; changed = true; }
+            }
         }
     }
     return changed;

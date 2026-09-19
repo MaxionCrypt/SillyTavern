@@ -310,17 +310,22 @@ test('v15 does not seed a second patch recipe on a store that already has one', 
 });
 
 
-test('v18 policy treats every Goal as a consequential outcome', async () => {
+test('the Loom policy is a continuity editor and lore-keeper, with no goal mechanics', async () => {
     const { LOOM_POLICY_PATCH } = await import('../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js');
-    expect(LOOM_POLICY_PATCH).toMatch(/goal\.create/);
-    expect(LOOM_POLICY_PATCH).toMatch(/what materially changed/i);
-    expect(LOOM_POLICY_PATCH).toMatch(/helps or obstructs/i);
-    expect(LOOM_POLICY_PATCH).toMatch(/success rate/i);
-    expect(LOOM_POLICY_PATCH).toMatch(/even when no roll/i);
-    expect(LOOM_POLICY_PATCH).not.toMatch(/standing want/i);
-    expect(LOOM_POLICY_PATCH).toMatch(/impossible/);
-    expect(LOOM_POLICY_PATCH).toMatch(/abandoned/);
-    expect(LOOM_POLICY_PATCH).toMatch(/goal\.edit/);
+    // Goals/Variables are dissolved into Living Lore, so no goal-mechanics step
+    // and no dice survive in the policy.
+    expect(LOOM_POLICY_PATCH).not.toMatch(/goal\.create/);
+    expect(LOOM_POLICY_PATCH).not.toMatch(/goal\.edit/);
+    expect(LOOM_POLICY_PATCH).not.toMatch(/goal\.reach/);
+    expect(LOOM_POLICY_PATCH).not.toMatch(/success rate/i);
+    expect(LOOM_POLICY_PATCH).not.toMatch(/roll/i);
+    // It still owns continuity patching and Living Lore curation.
+    expect(LOOM_POLICY_PATCH).toMatch(/do NOT rewrite or reproduce it/);
+    expect(LOOM_POLICY_PATCH).toMatch(/STEP 1 - Patch/);
+    expect(LOOM_POLICY_PATCH).toMatch(/STEP 2 - Living Lore/);
+    expect(LOOM_POLICY_PATCH).toMatch(/lore\.edit/);
+    expect(LOOM_POLICY_PATCH).toMatch(/lore\.create/);
+    expect(LOOM_POLICY_PATCH).toMatch(/leave loreOps empty then/);
 });
 
 test('a retired rewrite recipe is left owner-authored, not force-converted or crashed', async () => {
@@ -373,7 +378,7 @@ test('v22 gives the untouched Patch Loom a durable lore check and preserves auth
     expect(store.version).toBe(35);
     expect(patchContents).toContain(LOOM_POLICY_PATCH);
     expect(patchContents).toContain(LOOM_OUTPUT_CONTRACT_PATCH);
-    expect(LOOM_POLICY_PATCH).toMatch(/STEP 3 - Living Lore/);
+    expect(LOOM_POLICY_PATCH).toMatch(/STEP 2 - Living Lore/);
     expect(LOOM_POLICY_PATCH).toMatch(/leave loreOps empty then/);
     expect(LOOM_OUTPUT_CONTRACT_PATCH).toContain('"loreOps":[]');
     expect(authoredContents).toContain('my durable lore policy');
@@ -449,6 +454,43 @@ test('v24 rescues a Patch Loom stranded on the pre-promotion contract', async ()
     expect(patchContents).toContain(LOOM_OUTPUT_CONTRACT_PATCH);
     expect(patchContents).not.toContain(LOOM_OUTPUT_CONTRACT_PATCH_PRE_PROMOTION);
     expect(store.recipes.mine.blocks.map((block) => block.content)).toContain('my private output contract');
+});
+
+test('v35 re-seeds a Loom recipe stranded on the pre-dissolution policy and contract', async () => {
+    const {
+        LOOM_POLICY_PATCH, LOOM_OUTPUT_CONTRACT_PATCH,
+        LOOM_POLICY_PATCH_PRE_DISSOLUTION, LOOM_OUTPUT_CONTRACT_PATCH_PRE_DISSOLUTION,
+    } = await import('../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js');
+    __setExtensionSettings({ remodel: { promptStudioV1: {
+        version: 34,
+        recipeIds: ['patch', 'mine'],
+        recipes: {
+            patch: {
+                id: 'patch', name: 'Loom (fast)', mode: 'loom', apiType: 'chat',
+                blocks: [
+                    { id: 'policy', kind: 'message', role: 'system', content: LOOM_POLICY_PATCH_PRE_DISSOLUTION, enabled: true },
+                    { id: 'contract', kind: 'message', role: 'system', content: LOOM_OUTPUT_CONTRACT_PATCH_PRE_DISSOLUTION, enabled: true },
+                ],
+            },
+            mine: {
+                id: 'mine', name: 'My Loom', mode: 'loom', apiType: 'chat',
+                blocks: [{ id: 'p', kind: 'message', role: 'system', content: 'my authored policy', enabled: true }],
+            },
+        },
+        active: { loom: { chat: 'patch' } },
+    } } });
+
+    const store = initializePromptStudioStore();
+    const patchContents = store.recipes.patch.blocks.map((block) => block.content);
+
+    expect(store.version).toBe(35);
+    // The stale goal-mechanics policy and the requests-carrying contract are gone.
+    expect(patchContents).toContain(LOOM_POLICY_PATCH);
+    expect(patchContents).toContain(LOOM_OUTPUT_CONTRACT_PATCH);
+    expect(patchContents).not.toContain(LOOM_POLICY_PATCH_PRE_DISSOLUTION);
+    expect(patchContents).not.toContain(LOOM_OUTPUT_CONTRACT_PATCH_PRE_DISSOLUTION);
+    // An owner-authored policy is left exactly as written.
+    expect(store.recipes.mine.blocks.map((block) => block.content)).toContain('my authored policy');
 });
 
 test('the Loom output contract no longer carries the dissolved World Sense promotion receipt', async () => {
