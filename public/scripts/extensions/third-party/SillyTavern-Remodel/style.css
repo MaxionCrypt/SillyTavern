@@ -14231,13 +14231,13 @@ body.st-remodel-active .remodel-scene-lore-panel {
     width: 380px;
     max-width: 90vw;
     height: calc(100vh - var(--topBarBlockSize, 40px));
-    z-index: 40;
+    z-index: 9000;
     display: flex;
     flex-direction: column;
     color: rgba(242, 238, 226, .92);
-    background: rgba(11, 11, 13, .96);
+    background: #0c0c11;
     border-right: 1px solid rgba(215, 200, 0, .3);
-    box-shadow: 18px 0 42px rgba(0, 0, 0, .5);
+    box-shadow: 18px 0 46px rgba(0, 0, 0, .62);
     transform: translateX(-100%);
     transition: transform .22s ease;
 }
