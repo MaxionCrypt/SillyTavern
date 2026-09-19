@@ -36,7 +36,7 @@ test('routes every lifecycle action through the supplied implementation unchange
     const implementation = makeImplementation();
     const controller = createDirectedTurnController(implementation);
     const scene = { id: 'scene-1' };
-    const start = { scene, text: 'Hello', authorizedGoalIds: ['goal-1'] };
+    const start = { scene, text: 'Hello' };
     const edit = { scene, messageId: 4, text: 'Changed' };
 
     await expect(controller.start(start)).resolves.toBe('started');

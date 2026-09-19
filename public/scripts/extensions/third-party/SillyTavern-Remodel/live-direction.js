@@ -478,7 +478,7 @@ export function setNextPerformerOverride(ref) {
     performerOverride = ref ? normalizeRef(ref) : null;
 }
 
-export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = [], deliveryMode = 'canonical' } = {}) {
+export async function submitDirectedRoleplay({ scene, text, deliveryMode = 'canonical' } = {}) {
     if (!isDirectedLiveScene(scene)) return false;
     const action = String(text || '');
     if (!action.trim()) return false;
@@ -518,7 +518,7 @@ export async function submitDirectedRoleplay({ scene, text, authorizedGoalIds = 
         } else if (activeRun) {
             await interruptLiveDirection({ preserveForIntervention: true });
         }
-        return await beginDirection({ scene, action, insertUser: true, authorizedGoalIds, autonomousSequence: 0, deliveryMode });
+        return await beginDirection({ scene, action, insertUser: true, autonomousSequence: 0, deliveryMode });
     } finally {
         if (pendingSubmission === submissionKey) pendingSubmission = null;
     }
@@ -893,14 +893,14 @@ export async function rerunDirectedRoleplayFromUserMessage({
     });
 }
 
-async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [], autonomousSequence = 0, notebookTurn = null, postedMessage = null, deliveryMode = 'canonical', continueRecipeId = null } = {}) {
+async function beginDirection({ scene, action, insertUser, autonomousSequence = 0, notebookTurn = null, postedMessage = null, deliveryMode = 'canonical', continueRecipeId = null } = {}) {
     // Checked before the Loom call, not after: the Loom costs a real
     // request and ~17s, and there is no point spending either when the
     // performer that follows it cannot speak.
     const blocked = !scene ? 'No active Scene.' : describeNativeGenerationBlock();
     if (blocked) {
         journal('blocked', { reason: blocked }, { severity: 'warn' });
-        return directionFailure(new Error(blocked), { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage, deliveryMode, continueRecipeId });
+        return directionFailure(new Error(blocked), { scene, action, insertUser, autonomousSequence, postedMessage, deliveryMode, continueRecipeId });
     }
     // Last line of defence. Every caller checks the lock, but they are all async
     // and a caller that awaited something in between could still arrive here
@@ -932,7 +932,6 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         // actual message object, never logged whole (see the comment below).
         alreadyPosted: Boolean(postedMessage),
         autonomousSequence,
-        authorizedGoalIds,
         actionLength: String(action || '').length,
     }, { correlationId: token.id, summary: insertUser ? 'direction.begin (user)' : 'direction.begin (autonomous)' });
     try {
@@ -983,7 +982,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
         }
         if (token.aborted) return abandonPass(token, 'insert-user');
         advancePassStage(token, 'lore');
-        const snapshot = await buildDirectionSnapshot(scene, action, authorizedGoalIds, {
+        const snapshot = await buildDirectionSnapshot(scene, action, {
             excludeFromHistory: postedMessage,
             currentPlayerAction: insertUser ? action : '',
         });
@@ -1066,7 +1065,7 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             }, { correlationId: token.id, severity: 'warn', summary: 'direction.failed: suppressed, the empty-response retry owns this turn' });
             return false;
         }
-        return directionFailure(error, { scene, action, insertUser, authorizedGoalIds, autonomousSequence, postedMessage, deliveryMode, continueRecipeId });
+        return directionFailure(error, { scene, action, insertUser, autonomousSequence, postedMessage, deliveryMode, continueRecipeId });
     } finally {
         // A take that never reached the performer produced nothing — no
         // message, no state change — so its entries must not bind the turn
@@ -1098,7 +1097,7 @@ function abandonPass(token, stage) {
     return false;
 }
 
-async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { preview = false, excludeFromHistory = null, currentPlayerAction = '' } = {}) {
+async function buildDirectionSnapshot(scene, action, { preview = false, excludeFromHistory = null, currentPlayerAction = '' } = {}) {
     const context = getContext();
     const cast = hooks.getCast() || [];
     const persona = hooks.getPersona() || null;
@@ -2036,7 +2035,7 @@ export async function previewLoomPrompt(scene, { action = '', draft = '', draftR
         || '[PREVIEW PLACEHOLDER: the completed private Narrator draft will be inserted here before the Loom request is sent.]';
     const previewReasoning = String(draftReasoning || '').trim()
         || '[PREVIEW PLACEHOLDER: private Narrator reasoning will be inserted here when the selected model provides it.]';
-    const snapshot = await buildDirectionSnapshot(scene, previewAction, [], { preview: true, currentPlayerAction: previewAction });
+    const snapshot = await buildDirectionSnapshot(scene, previewAction, { preview: true, currentPlayerAction: previewAction });
     return {
         ...compileLoomRequest({ scene, snapshot, draft: previewDraft, draftReasoning: previewReasoning }),
         snapshot,
@@ -2755,57 +2754,7 @@ export function recoverLiveDirection() {
     return recoverLiveDirectionMessages();
 }
 
-/**
- * Split an envelope into the part that stores and the authorization that
- * travels beside it.
- *
- * The two Maps stringify to `{}` — which reads like data and is not — so a
- * record that kept them inline would come back resolving no names at all and
- * every surviving request would be rejected as never advertised. That is
- * fail-safe and still wrong: the user already read the fiction those requests
- * earned.
- *
- * One function because there are now three places that persist an envelope
- * (a run's message metadata, a standing direction, and regenerate reading one
- * back), and the cost of them disagreeing is silent loss of authorization.
- */
-function splitEnvelopeForStorage(source) {
-    const { variableRefs, goalRefs, addressBook, authorizedGoalIds, ...envelope } = source || {};
-    return {
-        envelope,
-        variableRefs: Object.fromEntries(variableRefs || []),
-        goalRefs: Object.fromEntries(goalRefs || []),
-        addressBook: addressBook || { entries: [], duplicates: [] },
-        // The user's attached Goal attempts. Without these a request applied
-        // after recovery loses its authority and is deferred to the pending
-        // queue instead of applying.
-        authorizedGoalIds: [...(authorizedGoalIds || [])],
-    };
-}
-
-/** The inverse: a stored record back into an envelope that can be spoken. */
-function hydrateSavedEnvelope(saved, scene) {
-    const envelope = normalizeEnvelope(saved?.envelope, scene);
-    envelope.variableRefs = new Map(Object.entries(saved?.variableRefs || {}));
-    envelope.goalRefs = new Map(Object.entries(saved?.goalRefs || {}));
-    envelope.addressBook = saved?.addressBook || { entries: [], duplicates: [] };
-    envelope.authorizedGoalIds = [...(saved?.authorizedGoalIds || [])];
-    return envelope;
-}
-
 function serializeRun(run, state) {
-    // beginDirection attaches the pass's runtime state to the envelope; none
-    // of it belongs in the saved copy. The two Maps stringify to `{}`, which
-    // reads like data and is not, and addressBook/authorizedGoalIds are
-    // written once at the top level below — storing them twice per message
-    // made the inert copy look like the authoritative one.
-    // The run's own refs, not the envelope's: beginDirection copies them onto
-    // both, and the run's are the ones every acceptance path reads.
-    const stored = splitEnvelopeForStorage({
-        ...(run.envelope || {}),
-        variableRefs: run.variableRefs, goalRefs: run.goalRefs,
-        addressBook: run.addressBook, authorizedGoalIds: run.authorizedGoalIds,
-    });
     return {
         protocol: DIRECTION_PROTOCOL,
         directionId: run.directionId,
@@ -2819,7 +2768,7 @@ function serializeRun(run, state) {
         reasoning: String(run?.reasoning || ''),
         revealOffset: run.rawOffset,
         performerRef: run.performer.ref,
-        ...stored,
+        envelope: run.envelope || {},
         interrupted: Boolean(run.interrupted),
         // A provider-truncated turn must not read back as a clean one: Retry
         // and reload-recovery both reconstruct from this record.

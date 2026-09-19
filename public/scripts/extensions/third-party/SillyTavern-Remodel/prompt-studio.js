@@ -1177,9 +1177,9 @@ function applyRecipeToNative(recipe) {
  * recipe names something core already knows how to fill.
  */
 const REMODEL_RENDERED_SOURCES = new Set([
-    'narratorNote', 'storyGoals', 'nextAction',
-    // Universal split-state macros, rendered by Remodel when used in a roleplay recipe.
-    'loomAction', 'loomGoals', 'loomVariables',
+    'narratorNote', 'nextAction',
+    // Universal split-state macro, rendered by Remodel when used in a roleplay recipe.
+    'loomAction',
 ]);
 
 /**
@@ -1673,7 +1673,6 @@ function sourceDescription(recipe, key) {
         charPersonality: 'The Personality field from the character card bound to the active Roleplay scene.',
         scenario: 'The Scenario field from the character card bound to the active Roleplay scene.',
         dialogueExamples: 'Example Dialogue from the bound character card, formatted by SillyTavern at generation time.',
-        storyGoals: 'The active Scene’s public and private Goals, framed as pressures that the latest action may help, obstruct, or defeat.',
         chatHistory: 'The token-budgeted messages from the active Roleplay conversation, including the newest user turn.',
         currentInput: 'The newest user message, carried through SillyTavern’s native Chat History marker.',
         generationNudge: 'The generation-specific quiet prompt or nudge supplied by SillyTavern for the current request.',
@@ -1696,7 +1695,6 @@ function canOpenSource(key) {
         'dialogueExamples',
         'chatHistory',
         'currentInput',
-        'storyGoals',
         'authorGuidance',
         // 'priorText' is deliberately absent: the Prior Scene Text panel is
         // retired, so the block still resolves whatever a document already
