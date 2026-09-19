@@ -12,8 +12,7 @@ export function isLoomMode(scene) {
 /**
  * Loom mode starts with one native Narrator generation. A minimal envelope
  * keeps the shared turn machinery (performer, reveal, reconciliation and
- * finalize) unchanged, and carries the mechanics snapshot the Loom resolves
- * against after the draft is complete.
+ * finalize) unchanged.
  *
  * @returns {{ envelope: object, storedTurn: null }}
  */
@@ -26,8 +25,6 @@ export function createLoomTurnEnvelope(scene, snapshot, turn) {
             notebookTurn: turn,
             reasoning: '',
             flow: { continueAfter: false, hardPauseAfter: true },
-            requests: [],
-            mechanicsSnapshot: snapshot.mechanics,
             currentPlayerAction: String(snapshot.currentPlayerAction || ''),
             archiveProjection: snapshot.archiveProjection,
         },

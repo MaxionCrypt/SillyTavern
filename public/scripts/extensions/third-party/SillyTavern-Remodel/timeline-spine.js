@@ -68,7 +68,6 @@ import {
 } from './prompt-studio.js';
 import { positionPopover } from './popover-position.js';
 import { getLatestPlayerAction, limitBoundedChatHistory, removeLatestPlayerAction, removeLegacyNarratorConstraints, removeNativeNewChatBootstrap, restoreTaggedNextAction, tagNextAction } from './prompt-history-limit.js';
-import { clearMechanicsReceiptInjection } from './mechanics-runtime.js';
 import {
     canSendWithoutLiveDirection,
     describeNativeGenerationBlock,
@@ -10263,7 +10262,6 @@ function bindRoleplayGenerationFeedback() {
     });
 
     const finish = () => {
-        clearMechanicsReceiptInjection();
         if (ownsLiveDirectionGeneration() || directedTurnController.getRun()) {
             return;
         }

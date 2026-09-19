@@ -102,7 +102,7 @@ export function usesLoomReconciliation(scene) {
 }
 
 /** Dynamic context blocks available to every Loom recipe. */
-export function buildLoomRecipeSources({ draft, draftReasoning = '', playerAction = '', narrativeState = '', mechanicsSkill = '', livingLore = '' }) {
+export function buildLoomRecipeSources({ draft, draftReasoning = '', playerAction = '', livingLore = '' }) {
     return {
         playerAction: String(playerAction || '').trim()
             ? [
@@ -110,12 +110,6 @@ export function buildLoomRecipeSources({ draft, draftReasoning = '', playerActio
                 'This is the player\'s explicit speech, voluntary action, or attempted action for this turn. It outranks conflicting inference in the Narrator draft. Preserve what the player explicitly said or attempted, judge only uncertain outcomes and world reactions, and never invent additional voluntary player speech, thoughts, decisions, or actions.',
                 String(playerAction).trim(),
             ].join('\n')
-            : '',
-        archiveState: String(narrativeState || '').trim()
-            ? `Current Archive, Goals, and open thread:\n${String(narrativeState).trim()}`
-            : '',
-        mechanicsBoard: String(mechanicsSkill || '').trim()
-            ? `Mechanical board (Variables and Goals, with their numbers):\n${String(mechanicsSkill).trim()}`
             : '',
         livingLore: String(livingLore || '').trim(),
         narratorDraft: `The Narrator's private draft of this turn. Return its complete final version before the state fence:\n${String(draft || '')}`,
@@ -131,12 +125,12 @@ export function buildLoomRecipeSources({ draft, draftReasoning = '', playerActio
  * is already canonical, and the Loom names only the spans a ruling changes plus
  * its state fence. It never asks the model to re-type the turn.
  *
- * @param {{draft: string, draftReasoning?: string, narrativeState?: string, mechanicsSkill?: string, livingLore?: string}} input
+ * @param {{draft: string, draftReasoning?: string, playerAction?: string, livingLore?: string}} input
  * @returns {{role: string, content: string}[]}
  */
-export function buildLoomPrompt({ draft, draftReasoning = '', playerAction = '', narrativeState = '', mechanicsSkill = '', livingLore = '' }) {
-    const sources = buildLoomRecipeSources({ draft, draftReasoning, playerAction, narrativeState, mechanicsSkill, livingLore });
-    const system = [LOOM_POLICY_PATCH, sources.archiveState, sources.mechanicsBoard, sources.livingLore, LOOM_OUTPUT_CONTRACT_PATCH].filter(Boolean).join('\n\n');
+export function buildLoomPrompt({ draft, draftReasoning = '', playerAction = '', livingLore = '' }) {
+    const sources = buildLoomRecipeSources({ draft, draftReasoning, playerAction, livingLore });
+    const system = [LOOM_POLICY_PATCH, sources.livingLore, LOOM_OUTPUT_CONTRACT_PATCH].filter(Boolean).join('\n\n');
     const user = [sources.playerAction, sources.narratorDraft, sources.narratorReasoning].filter(Boolean).join('\n\n');
     return [
         { role: 'system', content: system },
@@ -197,8 +191,7 @@ function readLoomEnvelope(text) {
 
 function isLoomEnvelope(value) {
     return value && typeof value === 'object' && !Array.isArray(value)
-        && (Array.isArray(value.requests) || Array.isArray(value.swaps)
-            || Array.isArray(value.loreOps) || Array.isArray(value.lorePromotionDecisions)
+        && (Array.isArray(value.swaps) || Array.isArray(value.loreKeywords) || Array.isArray(value.loreOps)
             || (value.flow && typeof value.flow === 'object' && !Array.isArray(value.flow)));
 }
 
@@ -293,7 +286,7 @@ export function readLoomProse(raw, { final = false } = {}) {
  * error: no prose changes, no requests.
  *
  * @param {string} raw
- * @returns {{ prose: string, swaps: {find: string, replace: string}[], requests: object[], flow: {continueAfter: boolean, hardPauseAfter: boolean}|null, loreKeywords: string[][], loreOps: object[] }}
+ * @returns {{ prose: string, swaps: {find: string, replace: string}[], flow: {continueAfter: boolean, hardPauseAfter: boolean}|null, loreKeywords: string[][], loreOps: object[] }}
  */
 /**
  * Keywords the Loom asked to retrieve on. Bounded: a request naming half the
@@ -364,14 +357,12 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
     const prose = readLoomProse(text, { final: true });
     const envelope = readLoomEnvelope(text);
     let swaps = [];
-    let requests = [];
     let flow = null;
     let loreKeywords = [];
     let loreOps = [];
     if (envelope.parsed) {
         try {
             const parsed = envelope.value;
-            if (Array.isArray(parsed?.requests)) requests = parsed.requests;
             loreKeywords = readLoreKeywords(parsed?.loreKeywords);
             loreOps = readLoreOps(parsed?.loreOps);
             if (parsed?.flow && typeof parsed.flow === 'object') {
@@ -385,10 +376,10 @@ export function parseLoomReply(raw, { livingLorePacket = null } = {}) {
                     && typeof s.find === 'string' && s.find.length > 0
                     && typeof s.replace === 'string');
             }
-        } catch { swaps = []; requests = []; flow = null; }
+        } catch { swaps = []; flow = null; }
     }
     return {
-        prose, swaps, requests, flow, loreKeywords, loreOps,
+        prose, swaps, flow, loreKeywords, loreOps,
     };
 }
 
@@ -420,8 +411,6 @@ export function describeLoomReply(raw, { tailChars = 400, fenceChars = 2000 } = 
         fenceParsed: envelope.parsed,
         fenceFormat: envelope.format,
         fenceJson: envelope.present ? envelope.json.slice(0, fenceChars) : '',
-        capabilities: parsed.requests.map((request) => String(request?.capability || '(missing)')),
-        requestCount: parsed.requests.length,
         swapCount: parsed.swaps.length,
         loreKeywordCount: parsed.loreKeywords.length,
         loreOpCount: parsed.loreOps.length,

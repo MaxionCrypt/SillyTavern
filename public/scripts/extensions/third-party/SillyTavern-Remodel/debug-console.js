@@ -1,5 +1,4 @@
 import { getContext } from '../../../st-context.js';
-import { getMechanicsProfile, updateMechanicsProfile } from './variables-store.js';
 import { buildMetadataGuide } from './metadata-guide.js';
 
 const STORAGE_KEY = 'remodel.debugJournal.v1';
@@ -737,7 +736,6 @@ export function renderDebugConsoleWorkspace() {
                 <span>API prompt/response transcripts are always recorded here. Secrets and credentials are always redacted.</span>
             </div>
             ${renderMetadataGuide()}
-            ${renderMechanicsProfile()}
             <div class="remodel-debug-filters">
                 <select data-remodel-debug-source><option value="all">all source tabs</option>${sources.map((source) => `<option value="${escapeHtml(source.tabId)}" ${settings.source === source.tabId ? 'selected' : ''}>${escapeHtml(source.shortId)} · ${escapeHtml(source.label)}</option>`).join('')}</select>
                 <select data-remodel-debug-category>${categories.map((category) => `<option value="${escapeHtml(category)}" ${settings.category === category ? 'selected' : ''}>${escapeHtml(category)}</option>`).join('')}</select>
@@ -785,21 +783,6 @@ function renderMetadataGuide() {
         ]),
     ))}
 
-            ${guideSection('Where each operation is accepted', guide.surfaces.map((surface) => `
-                <div class="remodel-debug-guide-surface">
-                    <h5>${escapeHtml(surface.label)} <small>${escapeHtml(surface.recipe)}</small> <em>${escapeHtml(surface.note)}</em></h5>
-                    <p class="remodel-debug-guide-chips">${surface.accepts.map((name) => `<code>${escapeHtml(name)}</code>`).join('')}</p>
-                </div>`).join(''))}
-
-            ${guideSection('Operations', guideTable(
-        ['Capability', 'Arguments', 'Syntax'],
-        guide.capabilities.map((capability) => [
-            `<code>${escapeHtml(capability.name)}</code><span class="remodel-debug-guide-what">${escapeHtml(capability.description)}</span>`,
-            guideArguments(capability.arguments),
-            `<code class="remodel-debug-guide-snippet">${escapeHtml(capability.example)}</code>`,
-        ]),
-    ))}
-
             ${guideSection('Living Lore edits', `
                 ${guideTable(['Field', 'Arguments', 'Syntax'], [[
         '<code>loreOps[]</code>',
@@ -811,15 +794,6 @@ function renderMetadataGuide() {
         `<code class="remodel-debug-guide-snippet">${escapeHtml(guide.lore.keywords.example)}</code>`,
     ]])}
                 <p class="remodel-debug-guide-note">${escapeHtml(guide.lore.ops.note)} ${escapeHtml(guide.lore.keywords.note)}</p>`)}
-
-            ${guideSection('Narrator tool calls <em>not a fence — provider tool calls</em>', guideTable(
-        ['Verb', 'Arguments', 'Syntax'],
-        guide.narrator.tools.map((tool) => [
-            `<code>${escapeHtml(tool.name)}</code><span class="remodel-debug-guide-what">${escapeHtml(tool.description)}</span>`,
-            guideArguments(tool.arguments),
-            `<code class="remodel-debug-guide-snippet">${escapeHtml(tool.example)}</code>`,
-        ]),
-    ))}
         </details>`;
 }
 
@@ -848,46 +822,6 @@ function guideTable(headings, rows) {
         <thead><tr>${headings.map((heading) => `<th>${escapeHtml(heading)}</th>`).join('')}</tr></thead>
         <tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody>
     </table>`;
-}
-
-/**
- * The Mechanics profile lives here rather than in a Variables workspace: it
- * decides whether the Loom may change stored facts at all, and while that
- * pipeline is still being hardened the people who need the switch are the
- * people reading this journal. It moves to the Timeline State drawer once that
- * surface exists.
- */
-function renderMechanicsProfile() {
-    const profile = getMechanicsProfile();
-    const option = (value, label, selected) => `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`;
-    return `
-        <details class="remodel-debug-mechanics" ${profile.enabled ? 'open' : ''}>
-            <summary>Mechanics profile — <b>${profile.enabled ? 'enabled' : 'disabled'}</b></summary>
-            <div class="remodel-debug-mechanics-grid">
-                <label class="is-wide"><input type="checkbox" data-remodel-debug-mechanics="enabled" ${profile.enabled ? 'checked' : ''}>
-                    Let the Loom propose changes to Goals and Variables</label>
-                <label>Context budget
-                    <input type="number" min="1000" max="32000" step="500" data-remodel-debug-mechanics="contextBudget" value="${profile.contextBudget}"></label>
-                <label title="One budget covering both kinds. Goals and Variables are scored in a single ranking and the top of it travels, so a Goal-poor turn spends the budget on Variables and the reverse.">Goals and Variables per pass
-                    <input type="number" min="1" max="16" data-remodel-debug-mechanics="retrievalLimit" value="${profile.retrievalLimit}"></label>
-                <label>Recent messages scanned
-                    <input type="number" min="1" max="60" data-remodel-debug-mechanics="retrievalWindow" value="${profile.retrievalWindow}"></label>
-                <label>Authority
-                    <select data-remodel-debug-mechanics="automationPolicy">
-                        ${option('hybrid', 'Hybrid — world auto, you review', profile.automationPolicy)}
-                        ${option('review-all', 'Review everything', profile.automationPolicy)}
-                        ${option('automatic', 'Apply everything', profile.automationPolicy)}
-                    </select></label>
-                <label>On failure
-                    <select data-remodel-debug-mechanics="failureBehavior">
-                        ${option('pause', 'Pause and show it', profile.failureBehavior)}
-                        ${option('bypass', 'Carry on without mechanics', profile.failureBehavior)}
-                        ${option('retry-once', 'Retry once, then pause', profile.failureBehavior)}
-                    </select></label>
-            </div>
-            <p class="remodel-debug-mechanics-note">The budget sizes how much mechanical state enters the Loom recipe. Response
-                length and reasoning effort come from the Loom connection profile selected for the scene.</p>
-        </details>`;
 }
 
 export function refreshDebugConsoleWorkspace() {
@@ -931,16 +865,6 @@ export function handleDebugConsoleInput(target) {
 }
 
 export function handleDebugConsoleChange(target, requestRender) {
-    const mechanicsField = target.dataset?.remodelDebugMechanics;
-    if (mechanicsField) {
-        const value = target.type === 'checkbox' ? target.checked : target.value;
-        const applied = updateMechanicsProfile({ [mechanicsField]: value });
-        // Store-clamped, so echo what was actually stored rather than what was typed.
-        recordDebugEvent('variables', 'mechanics.profile.changed', { field: mechanicsField, stored: applied[mechanicsField] },
-            { force: true, severity: mechanicsField === 'enabled' && applied.enabled ? 'warn' : 'info', summary: `Mechanics ${mechanicsField} = ${applied[mechanicsField]}` });
-        requestRender();
-        return true;
-    }
     if (target.matches('[data-remodel-debug-source]')) settings.source = target.value;
     else if (target.matches('[data-remodel-debug-category]')) settings.category = target.value;
     else if (target.matches('[data-remodel-debug-severity]')) settings.severity = target.value;

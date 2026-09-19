@@ -1,27 +1,17 @@
 import { getMaxResponseTokens, main_api, online_status, sendMessageAsUser } from '../../../../script.js';
 import { getContext } from '../../../st-context.js';
 import { generateGroupWrapper, is_group_generating } from '../../../group-chats.js';
-import {
-    executeMechanicsRequest,
-    MECHANICS_PROTOCOL,
-    toCoreJsonSchema,
-    undoMechanicsTransaction,
-} from './mechanics-capabilities.js';
-import { getRoleplayLoomGoalSchema } from './loom-fence-schema.js';
-import { buildMechanicalSnapshot, previewMechanicalContext } from './mechanics-runtime.js';
-import { buildLoomContext } from './loom-context.js';
-import { resolveByName } from './direction-address.js';
+import { getRoleplayLoomGoalSchema, toCoreJsonSchema } from './loom-fence-schema.js';
 import { resolveDirectionActions } from './turn-chrome.js';
 import { deriveBeats } from './direction-beats.js';
 import { compilePromptRecipe, getCurrentPromptStudioRecipe, recordLoomPromptTranscript, recordNarratorPromptTranscript } from './prompt-studio.js';
 import { repairDirectedNarratorRoles } from './narrator-history.js';
-import { getMechanicsProfile, listMechanicsTransactions } from './variables-store.js';
 import { readDirectionUnit, sanitizeDirectionText, stripEchoedScaffolding } from './live-direction-markers.js';
 import { splitReasoning } from './reasoning-strip.js';
 import { streamChatPrompt } from './story-stream.js';
 import {
-    buildEmptyResponseNudge, buildGoalObjectives,
-    renderLoomAction, renderLoomGoals, renderLoomVariables,
+    buildEmptyResponseNudge,
+    renderLoomAction,
 } from './narrator-prompt.js';
 import { applySwaps, describeLoomReply, buildLoomPrompt, buildLoomRecipeSources, parseLoomReply, readLoomProse } from './loom-reconciliation.js';
 import { formatLivingLorePacket } from './living-lore-proposals.js';
@@ -83,22 +73,6 @@ const hooks = {
     // hands callers. No-op by default so a caller that never registers one
     // costs nothing; timeline-spine.js registers updateDirectionStreamCard.
 };
-
-/**
- * Route the self-contained universal state macros (those that resolve from the
- * live Scene, needing no per-request context) into their native prompt slots.
- *
- * These are also set once by renderRoleplayScene, but Narrator profile
- * activation can replace core's prompt objects with EMPTY remodel_loom_* slots
- * (the same reason recall/note/nextAction are re-routed here). So a generation
- * site must re-route them AFTER activation, or a recipe placing {{loom.scene}}
- * or {{loom.goals}} renders blank on any turn where activation actually applies.
- */
-export function routeUniversalStateMacros(setContent, scene) {
-    const tl = scene?.timelineId;
-    setContent('loomGoals', (args = {}) => renderLoomGoals(tl, { limit: args.limit, secret: args.secret }));
-    setContent('loomVariables', (args = {}) => renderLoomVariables(tl, { limit: args.limit }));
-}
 
 let initialized = false;
 let activeRun = null;
@@ -830,12 +804,6 @@ export async function regenerateLastDirectedResponse(scene = hooks.getActiveScen
         return directionFailure(error, { operation: 'regenerate', scene, deliveryMode });
     }
     await waitForArchiveCatchup(scene.id);
-    const transactionIds = [...(saved.checkpointTransactionIds || [])].reverse();
-    const transactions = listMechanicsTransactions({ timelineId: scene.timelineId, sceneId: scene.id });
-    for (const id of transactionIds) {
-        const tx = transactions.find((item) => item.id === id);
-        if (tx) undoMechanicsTransaction(tx);
-    }
     // Release the settled run before its message goes. requestNextDirection
     // below finalizes whatever activeRun still points at, and once this row is
     // deleted that index names a different turn's message.
@@ -893,19 +861,6 @@ export async function rerunDirectedRoleplayFromUserMessage({
         .map((message) => message?.extra?.remodelDirection)
         .filter((saved) => saved && (!saved.sceneId || saved.sceneId === scene.id));
 
-    const transactions = listMechanicsTransactions({ timelineId: scene.timelineId, sceneId: scene.id });
-    const transactionById = new Map(transactions.map((transaction) => [transaction.id, transaction]));
-    const rolledBack = [];
-    const seenTransactions = new Set();
-    for (const saved of [...savedDirections].reverse()) {
-        for (const transactionId of [...(saved.checkpointTransactionIds || [])].reverse()) {
-            if (seenTransactions.has(transactionId)) continue;
-            seenTransactions.add(transactionId);
-            const transaction = transactionById.get(transactionId);
-            if (transaction && undoMechanicsTransaction(transaction)) rolledBack.push(transactionId);
-        }
-    }
-
     // Release every runtime pointer before indexes start moving. A settled run
     // otherwise still names the final row that this loop is about to delete.
     activeRun = null;
@@ -923,12 +878,10 @@ export async function rerunDirectedRoleplayFromUserMessage({
 
     const firstSaved = savedDirections[0] || null;
     const notebookTurn = toTurnNumber(firstSaved?.envelope?.notebookTurn);
-    const authorizedGoalIds = [...(firstSaved?.envelope?.authorizedGoalIds || firstSaved?.authorizedGoalIds || [])];
     journal('user-edit.rerun', {
         messageId: id,
         removedMessages: supersededMessages.length,
         supersededDirectionIds: [...new Set(savedDirections.map((saved) => saved.directionId).filter(Boolean))],
-        rolledBackTransactionIds: rolledBack,
         actionLength: action.length,
     }, { severity: 'warn', summary: 'Edited the latest user action and rewound its consequences' });
 
@@ -937,7 +890,6 @@ export async function rerunDirectedRoleplayFromUserMessage({
         action,
         insertUser: true,
         postedMessage,
-        authorizedGoalIds,
         autonomousSequence: 0,
         notebookTurn,
         deliveryMode,
@@ -1048,8 +1000,6 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             // looks at the value, so `historyCount: 12` would be redacted to a
             // placeholder even though a count discloses nothing.
             acceptedLines: snapshot.acceptedHistory.length,
-            goalCount: snapshot.mechanics?.goals?.length ?? null,
-            receiptCount: snapshot.recentReceipts.length,
         }, { correlationId: token.id });
         if (token.aborted) return abandonPass(token, 'snapshot');
         // Connection point 1 — the turn's direction. The narrator drafts first
@@ -1085,20 +1035,6 @@ async function beginDirection({ scene, action, insertUser, authorizedGoalIds = [
             substituted: normalizeRef(requestedRef)?.id !== performer.ref.id,
         }, { correlationId: token.id });
         const normalized = normalizeEnvelope(envelope, scene);
-        // Mechanical requests are addressed by name against exactly what this
-        // pass advertised (direction-address.js); they are validated and
-        // applied once the response is accepted, not here — see
-        // finalizeRunMessage. Carried on the envelope rather than executed
-        // eagerly, which is the change this task makes.
-        normalized.variableRefs = snapshot.mechanics.variableRefs;
-        normalized.goalRefs = snapshot.mechanics.goalRefs;
-        normalized.addressBook = snapshot.mechanics.addressBook;
-        normalized.authorizedGoalIds = authorizedGoalIds;
-        // Carried so Pass 2 extraction can advertise the same Variables/Goals to
-        // the extractor and resolve its requests against the same address book —
-        // without paying for a second retrieval after the turn. A distinct field:
-        // envelope.mechanics is the Loom's pending-requests payload.
-        normalized.mechanicsSnapshot = snapshot.mechanics;
         normalized.livingLore = snapshot.livingLore;
         if (token.aborted) return abandonPass(token, 'normalized');
         // Set BEFORE the call, not after: from here the performer has been
@@ -1254,16 +1190,6 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
     // see previewLoomPrompt), and the same history/activatedEntries just
     // computed above. Only the write-adjacent authority (authorizedGoalIds)
     // is withheld; the retrieval inputs are identical to a real pass's.
-    const mechanics = preview
-        ? await previewMechanicalContext(scene, {
-            cast: performingCast.map((member) => member.ref || member), persona, action,
-            evidence: { history, activatedEntries },
-        })
-        : await buildMechanicalSnapshot(scene, action, performingCast.map((member) => member.ref || member), persona, authorizedGoalIds, {
-            history,
-            activatedEntries,
-            correlationId: directionInFlight?.id || null,
-        });
     return {
         scene: { id: scene.id, timelineId: scene.timelineId, title: scene.title },
         currentAction: action,
@@ -1285,44 +1211,7 @@ async function buildDirectionSnapshot(scene, action, authorizedGoalIds, { previe
         // Loom reads from a plain fixture.
         interruption: cutOffRecord ? { performer: String(cutOff.name || '').trim(), ...cutOffRecord } : null,
         lore: { before: lore.worldInfoBefore || '', after: lore.worldInfoAfter || '', examples: lore.worldInfoExamples || [], depth: lore.worldInfoDepth || [] },
-        mechanics,
-        // Receipts carry before/after snapshots of whole records, which is how
-        // persistent Variable and Goal ids used to reach the model even though
-        // everything else addresses them by ref. The model needs what changed,
-        // not which row it was.
-        recentReceipts: listMechanicsTransactions({ timelineId: scene.timelineId, sceneId: scene.id })
-            .slice(-6).map((tx) => ({ status: tx.status, receipts: (tx.receipts || []).map(scrubReceipt) })),
     };
-}
-
-/** Drops storage identity from a receipt, keeping the mechanical record. */
-function scrubReceipt(receipt) {
-    const withoutIds = (value) => {
-        if (Array.isArray(value)) return value.map(withoutIds);
-        if (!value || typeof value !== 'object') return value;
-        const { id, timelineId, sceneId, variableId, definitionId, ...rest } = value;
-        return Object.fromEntries(Object.entries(rest).map(([key, item]) => [key, withoutIds(item)]));
-    };
-    const { requestId, capability, status, approvalStatus, reason, rejectionReason } = receipt || {};
-    return {
-        requestId, capability, status, approvalStatus, reason, rejectionReason,
-        ...withoutIds(Object.fromEntries(Object.entries(receipt || {}).filter(([key]) =>
-            !['requestId', 'capability', 'status', 'approvalStatus', 'reason', 'rejectionReason'].includes(key)))),
-    };
-}
-
-/**
- * Requests the mechanics layer can at least read.
- *
- * `parseLoomReply` keeps anything object-typed, which includes arrays —
- * and `validateMechanicsRequest` rejects the WHOLE batch when one entry is not
- * a plain object. Dropping the unreadable ones here is what stops a single
- * malformed sibling from voiding four valid requests. It is not containment:
- * every surviving request still has its names resolved against the set this
- * pass advertised, and its shape still checked, by code this task did not touch.
- */
-function usableRequests(requests) {
-    return (Array.isArray(requests) ? requests : []).filter((request) => request && typeof request === 'object' && !Array.isArray(request));
 }
 
 /**
@@ -1439,18 +1328,12 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         holdReason: '',
         state: 'Speaking',
         openingLabel: '',
-        checkpointTransactionIds: [],
         generationFinished: false,
         generationSettled: false,
         interrupted: false,
         waitingAtEnd: false,
         pacing: scene.liveDirection?.pacing || 'natural',
         autonomousSequence: Number(autonomousSequence) || 0,
-        authorizedGoalIds: envelope.authorizedGoalIds || [],
-        variableRefs: envelope.variableRefs instanceof Map ? envelope.variableRefs : new Map(),
-        goalRefs: envelope.goalRefs instanceof Map ? envelope.goalRefs : new Map(),
-        addressBook: envelope.addressBook || { entries: [], duplicates: [] },
-        pendingRequestsApplied: false,
         emptyRetries: Number(emptyRetries) || 0,
         previousReasoningLength: Number(previousReasoningLength) || 0,
         previousFailureCause: String(previousFailureCause || ''),
@@ -1526,7 +1409,6 @@ async function generateDirectedPerformer({ scene, envelope, performer, autonomou
         activeRun.nextActionRouted = Boolean(nextAction) && hooks.setNativePromptContent('nextAction', tagNextAction(nextAction));
         // loom.action carries the same live player action, for recipes that use it.
         hooks.setNativePromptContent('loomAction', renderLoomAction(nextAction));
-        routeUniversalStateMacros(hooks.setNativePromptContent, scene);
         journal('notes.bridge', {
             directionId: envelope.directionId,
             routed: recallRouted ? 'recipe-macro' : 'recipe-macro-disabled',
@@ -1644,7 +1526,6 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
         run.nextAction = nextAction;
         run.nextActionRouted = Boolean(nextAction) && hooks.setNativePromptContent('nextAction', tagNextAction(nextAction));
         hooks.setNativePromptContent('loomAction', renderLoomAction(nextAction));
-        routeUniversalStateMacros(hooks.setNativePromptContent, scene);
         journal('canonical.notes.bridge', {
             directionId: run.directionId,
             narratorNoteRouted,
@@ -2058,7 +1939,6 @@ async function beginLoomVisibleStream(run, scene) {
     // one piece. The same reveal path handles it; there is still only one
     // canonical buffer and one interruption offset.
     run.rawBufferedText = String(result?.committedProse || draft);
-    run.envelope.mechanics.pendingRequests = [...(result?.requests || [])];
     run.envelope.loreOps = structuredClone(result?.loreOps || []);
     run.envelope.loreKeywords = structuredClone(result?.loreKeywords || []);
     if (result?.flow) run.envelope.flow = result.flow;
@@ -2139,122 +2019,23 @@ async function revealStep() {
     }
     if (run.rawOffset < run.rawBufferedText.length) scheduleReveal(pace.cps === Infinity ? 0 : 50);
 }
-
-/**
- * Requests name Variables and Goals by the Timeline's address book (see
- * direction-address.js), not by an opaque ref. This resolves each request's
- * name against the book this pass actually advertised and returns maps the
- * capability layer reads with `.get(ref)` — so mechanics-capabilities.js needs
- * no change, it just gets handed names as keys instead of synthetic refs. A
- * name absent from the book is simply left unresolved, which the capability
- * layer already refuses as "not advertised for this request"; the specific
- * reason (unknown vs. duplicated) is collected in `unresolvedReasons` for the
- * caller to surface — the generic downstream refusal alone is actively
- * misleading for a duplicated name, since it *was* advertised, twice.
- *
- * **The returned maps contain name-resolved entries and nothing else.** That
- * is the validation boundary design §3 asks for — "code validates the name
- * against the set advertised this turn and rejects anything else" — and it is
- * structural rather than probabilistic: there is no key in these maps that was
- * not resolved through `resolveByName`, so there is nothing to guess, mistype,
- * or collide with. Two earlier shapes both failed this. Seeding from the base
- * maps inherited their `v1…vN` / `g1…gN` keys and made every one of them a
- * second unvalidated address. Re-keying those entries under an unguessable
- * placeholder made them unlikely to be reached rather than unreachable — a
- * request carrying that placeholder still resolved and still wrote, while the
- * diagnostic reported it refused. Probability is not a validation boundary.
- *
- * The base maps are still read, but only for their VALUES, and those leave
- * through `retrievedVariableIds` / `retrievedGoalIds` instead. `goal.reach`
- * is their only consumer — it asks whether a Goal's tracked Variable was
- * retrieved this pass — and it now reads those arrays directly rather than
- * inferring the answer from a map that has to double as an address table.
- *
- * @returns {{variableRefs: Map<string, string>, goalRefs: Map<string, string>,
- *   retrievedVariableIds: string[], retrievedGoalIds: string[], unresolvedReasons: string[]}}
- */
-export function addressRequestsByName(requests, addressBook, variableRefs, goalRefs) {
-    const idsOf = (refs) => (refs instanceof Map ? [...refs.values()] : []);
-    const retrievedVariableIds = idsOf(variableRefs);
-    const retrievedGoalIds = idsOf(goalRefs);
-    const resolvedVariableRefs = new Map();
-    const resolvedGoalRefs = new Map();
-    const unresolvedReasons = [];
-    const attempted = new Set();
-    const addResolved = (refs, tag, name) => {
-        if (!name) return;
-        const key = `${tag}:${name}`;
-        if (attempted.has(key)) return;
-        attempted.add(key);
-        const result = resolveByName(addressBook, name);
-        if (result.ok) refs.set(name, result.id);
-        else unresolvedReasons.push(result.reason);
-    };
-    for (const request of requests) {
-        const args = request?.arguments || {};
-        addResolved(resolvedVariableRefs, 'variable', args.variableRef);
-        addResolved(resolvedVariableRefs, 'variable', args.modifierVariableRef);
-        // other Variable reference does — see mechanics-capabilities.js's
-        // normalizeResolutionArgs, which resolves it through this same
-        // lookup. Missing this is the only way to create a tracked Goal.
-        addResolved(resolvedGoalRefs, 'goal', args.goalRef);
-        addResolved(resolvedGoalRefs, 'goal', args.fromGoalRef);
-        addResolved(resolvedGoalRefs, 'goal', args.toGoalRef);
-    }
-    return { variableRefs: resolvedVariableRefs, goalRefs: resolvedGoalRefs, retrievedVariableIds, retrievedGoalIds, unresolvedReasons };
-}
-
-function executeDirectionRequests(requests, context) {
-    const scene = context.scene;
-    if (!Array.isArray(requests) || requests.length === 0) return { ok: true, receipts: [], transaction: null, unresolvedReasons: [] };
-    const { variableRefs, goalRefs, retrievedVariableIds, unresolvedReasons } = addressRequestsByName(requests, context.addressBook, context.variableRefs, context.goalRefs);
-    const result = executeMechanicsRequest({ protocol: MECHANICS_PROTOCOL, requests }, {
-        timelineId: scene.timelineId,
-        sceneId: scene.id,
-        turnId: context.directionId,
-        directionId: context.directionId,
-        messageId: context.messageId,
-        checkpointId: context.checkpointId,
-        authorizedGoalIds: context.authorizedGoalIds || [],
-        authorizedVariableRefs: [],
-        variableRefs, goalRefs,
-        // What retrieval advertised this pass, carried separately from the
-        // address table so goal.reach can answer "was this tracked Variable
-        // retrieved" without the address table having to hold entries nobody
-        // may address.
-        retrievedVariableIds,
-        allowUserGoalCreate: false,
-    });
-    return { ...result, unresolvedReasons };
-}
-
-/**
- * The mechanics snapshot (advertised Variables/Goals + address book) the editor
- * resolves its requests against, without running a full turn. Exported for
- * editor-mode wiring and tests.
- */
-export async function __buildLoomSnapshot(scene) {
-    const mechanics = await buildMechanicalSnapshot(scene, '', [], null, [], {});
-    return { mechanics };
+/** The dry-run snapshot the editor resolves against, without running a full
+ *  turn. Exported for editor-mode wiring and tests. */
+export async function __buildLoomSnapshot() {
+    return {};
 }
 
 function compileLoomRequest({ scene, snapshot, draft, draftReasoning = '' }) {
-    const narrativeState = buildGoalObjectives(scene.id);
-    const mechanicsSkill = buildLoomSkill(snapshot?.mechanics);
     const livingLore = formatLivingLorePacket(snapshot?.livingLore);
     const playerAction = String(snapshot?.currentPlayerAction || '');
-    const sources = buildLoomRecipeSources({ draft, draftReasoning, playerAction, narrativeState, mechanicsSkill, livingLore });
-    // Surviving state macros: Goals, Variables, and the player action. The
-    // Archive-backed macros were dissolved with the Loom Archive.
+    const sources = buildLoomRecipeSources({ draft, draftReasoning, playerAction, livingLore });
     sources.loomAction = renderLoomAction(playerAction);
-    sources.loomGoals = (args = {}) => renderLoomGoals(scene.timelineId, { limit: args.limit, secret: args.secret });
-    sources.loomVariables = (args = {}) => renderLoomVariables(scene.timelineId, { limit: args.limit });
     sources.priorLore = (args = {}) => renderPriorSceneKeywords({ sceneId: scene.id, timelineId: scene.timelineId, scenes: args.scenes });
     const recipe = getCurrentPromptStudioRecipe('loom', 'chat');
     const compiled = compilePromptRecipe(recipe, sources, { trace: true });
     const usedFallback = !compiled.messages.length;
     const prompt = usedFallback
-        ? buildLoomPrompt({ draft, draftReasoning, playerAction, narrativeState, mechanicsSkill, livingLore })
+        ? buildLoomPrompt({ draft, draftReasoning, playerAction, livingLore })
         : compiled.messages;
     return { prompt, recipe, trace: usedFallback ? [] : compiled.trace, usedFallback, sources };
 }
@@ -2333,7 +2114,7 @@ export async function runLoomReconciliation({
     }
     // Preserve-and-patch: the draft is canonical. The Loom only names the
     // exact span(s) a roll changed; code applies them. No swaps → draft stands.
-    if (token?.controller?.signal?.aborted) return { committedProse: '', requests: [], result: null, flow: null, aborted: true };
+    if (token?.controller?.signal?.aborted) return { committedProse: '', result: null, flow: null, aborted: true };
     journalResponse('loom', { text: raw, reasoning: responseReasoning, streamed: responseStreamed }, {
         correlationId: directionInFlight?.id || activeRun?.directionId || null,
         purpose: 'loom-pass',
@@ -2344,28 +2125,15 @@ export async function runLoomReconciliation({
     // did not advance — name the real cause here instead.
     await checkGenerationBudget({ text: raw, reasoning: '', label: 'The Loom pass', directionId: null });
     journalLoomReply(raw, 'loom-pass', scene?.id || null);
-    const { prose, swaps, requests, flow, loreKeywords = [], loreOps = [] } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
+    const { prose, swaps, flow, loreKeywords = [], loreOps = [] } = parseLoomReply(raw, { livingLorePacket: snapshot?.livingLore });
     // Full-prose replies are the v12 contract. Preserve-and-patch remains a
     // compatibility fallback for owner-authored recipes using the old fence.
     const committedProse = prose || applySwaps(draft, swaps).prose;
-    // Living Lore import is applied on the committed turn (applyLoomKeywordImport),
-    // AFTER loreOps, so a same-turn edit/create lands before the working set is
-    // redefined. The keyword groups are carried on the envelope for that step.
-    if (deferRequests || !requests.length) return { committedProse, requests, result: null, flow, loreKeywords, loreOps };
-    try {
-        const result = executeDirectionRequests(requests, {
-            scene: { id: scene.id, timelineId: scene.timelineId },
-            addressBook: snapshot?.mechanics?.addressBook,
-            variableRefs: snapshot?.mechanics?.variableRefs,
-            goalRefs: snapshot?.mechanics?.goalRefs,
-            authorizedGoalIds: [],
-        });
-        journal('loom', { requestCount: requests.length, ok: result.ok, patched: committedProse !== draft }, { summary: 'Loom reconciled and recorded the turn' });
-        return { committedProse, requests, result, flow, loreKeywords, loreOps };
-    } catch (error) {
-        journal('loom.failed', { phase: 'apply', error: String(error?.message || error) }, { severity: 'warn' });
-        return { committedProse, requests, result: null, flow, loreKeywords, loreOps };
-    }
+    // Living Lore ops and imports are applied on the committed turn (see
+    // applyLoomLoreOps / applyLoomKeywordImport); carried on the envelope for
+    // that step. Nothing is executed eagerly here.
+    journal('loom', { patched: committedProse !== draft, loreOps: loreOps.length }, { summary: 'Loom reconciled the turn' });
+    return { committedProse, result: null, flow, loreKeywords, loreOps };
 }
 
 /**
@@ -2419,7 +2187,6 @@ async function completeVisibleRun(run) {
         acceptedLength: run.acceptedVisibleText.length,
         autonomousSequence: run.autonomousSequence,
         limit,
-        mechanicsTransactionIds: run.checkpointTransactionIds,
         checkpointDiagnostics: run.checkpointDiagnostics || [],
         continueAfter: run.envelope.flow.continueAfter,
         hardPauseAfter: run.envelope.flow.hardPauseAfter,
@@ -2685,12 +2452,9 @@ async function interruptLiveDirection({ preserveForIntervention }) {
         await waitFor(() => run.narratorGenerationFinished, 2200);
     }
     // The Loom's completed fence can describe prose still sitting in the
-    // unrevealed tail. Once the user cuts that tail off, none of its requests
-    // may become canon. Archive the accepted prefix afresh below instead.
-    run.envelope.mechanics.pendingRequests = [];
-    // These proposals were authored against the completed hidden tail. The
-    // accepted-prefix catch-up below must derive a fresh set; filtering the old
-    // set by confidence would still let hidden evidence become canon.
+    // unrevealed tail. These lore ops were authored against the completed hidden
+    // tail; once the user cuts that tail off none of it may become canon, so drop
+    // them and let the accepted-prefix catch-up derive a fresh set.
     run.envelope.loreOps = [];
 
     // Loom mode: Stop CUTS OFF, it does not delete. The reveal lags the buffer
@@ -2775,7 +2539,6 @@ async function persistFinalizedRunMessage(run, state) {
     // accepted and applied nothing — the property this replaces the commit
     // marker to preserve: only fiction the user actually read may change
     // stored state.
-    applyPendingRequests(run);
     await applyLoomLoreOps(run);
     await applyLoomKeywordImport(run);
     const interruption = describeRunInterruption(run);
@@ -2872,52 +2635,6 @@ export async function applyLoomKeywordImport(run) {
     }
 }
 
-/**
- * Apply the direction's mechanical requests exactly once, now that some
- * fiction has been accepted (see finalizeRunMessage). Failures are recorded
- * on the run rather than thrown: the performer has already spoken, so there
- * is no earlier point left in this pass to refuse it at.
- */
-function applyPendingRequests(run) {
-    if (run.pendingRequestsApplied) return;
-    run.pendingRequestsApplied = true;
-    const pending = run.envelope.mechanics.pendingRequests;
-    if (!pending?.length) return;
-    const scene = hooks.getActiveScene();
-    if (!scene || scene.id !== run.sceneId) {
-        journal('mechanics.accepted.skipped', {
-            directionId: run.directionId,
-            reason: 'the Scene changed before the response was accepted',
-        }, { correlationId: run.directionId, severity: 'warn' });
-        return;
-    }
-    const result = executeDirectionRequests(pending, {
-        scene, directionId: run.directionId, messageId: run.messageId, checkpointId: 'accepted',
-        authorizedGoalIds: run.authorizedGoalIds,
-        variableRefs: run.variableRefs, goalRefs: run.goalRefs, addressBook: run.addressBook,
-    });
-    journal('mechanics.accepted', {
-        directionId: run.directionId,
-        requested: pending.length,
-        ok: result.ok,
-        errors: result.errors || [],
-        unresolvedReasons: result.unresolvedReasons || [],
-        transactionId: result.transaction?.id || null,
-    }, { correlationId: run.directionId, severity: result.ok ? 'info' : 'error' });
-    if (result.transaction?.id) run.checkpointTransactionIds.push(result.transaction.id);
-    // unresolvedReasons carries the specific reason (unknown vs. duplicated
-    // name) that addressRequestsByName already worked out; folded in even on
-    // an otherwise-ok result, since one request can name an unresolvable
-    // Variable while the rest of the batch still succeeds.
-    if (!result.ok || result.unresolvedReasons?.length) {
-        run.checkpointDiagnostics = [
-            ...(run.checkpointDiagnostics || []),
-            ...(result.ok ? [] : (result.errors || ['Mechanical request failed.'])),
-            ...(result.unresolvedReasons || []),
-        ];
-    }
-}
-
 /** Record what a Loom-shaped reply actually contained, for diagnostics. */
 function journalLoomReply(raw, phase, sceneId, directionId = null) {
     try {
@@ -2936,13 +2653,6 @@ function journalLoomReply(raw, phase, sceneId, directionId = null) {
 // The Archive catch-up worker was dissolved with the Loom Archive; retry and
 // regenerate flows still await this, so it stays as a resolved no-op.
 async function waitForArchiveCatchup() { /* no-op */ }
-
-function buildLoomSkill(mechanics) {
-    if (mechanics && getMechanicsProfile().enabled) {
-        try { return buildLoomContext({ mechanics }, { mechanicsEnabled: true }).mechanicsSkill || ''; } catch { /* mechanics unavailable this turn */ }
-    }
-    return '';
-}
 
 /** Keep Remodel metadata with the active native swipe as well as the message. */
 function writeDirectionMetadata(message, metadata) {
@@ -3012,32 +2722,16 @@ async function recoverLiveDirectionMessages() {
                 timelineId: scene.timelineId,
                 messageId: recovered.messageId,
                 performer,
-                envelope: recovered.metadata.envelope || { flow: { continueAfter: false, hardPauseAfter: true }, mechanics: { pendingRequests: [] } },
+                envelope: recovered.metadata.envelope || { flow: { continueAfter: false, hardPauseAfter: true } },
                 rawBufferedText: recovered.metadata.acceptedText || '',
                 acceptedVisibleText: recovered.metadata.acceptedText || '',
                 rawOffset: String(recovered.metadata.acceptedText || '').length,
                 lastBreathOffset: String(recovered.metadata.acceptedText || '').length,
                 holdReason: 'hard', state: 'Waiting for you', openingLabel: '',
-                checkpointTransactionIds: [...(recovered.metadata.checkpointTransactionIds || [])],
-                variableRefs: new Map(Object.entries(recovered.metadata.variableRefs || {})),
-                goalRefs: new Map(Object.entries(recovered.metadata.goalRefs || {})),
-                addressBook: recovered.metadata.addressBook || { entries: [], duplicates: [] },
-                // The crash-recovery pass above already fixed the message's
-                // saved text directly, without going through finalizeRunMessage
-                // — so the pending requests this run may still carry were
-                // never applied. Leave that decision to whatever resumes this
-                // run (Continue, Next) rather than applying them silently here
-                // on a page load the user did not initiate.
-                pendingRequestsApplied: Boolean(recovered.metadata.pendingRequestsApplied),
                 generationFinished: true, generationSettled: true, interrupted: false,
                 waitingAtEnd: true, acceptedComplete: true,
                 pacing: scene.liveDirection?.pacing || 'natural',
                 autonomousSequence: Number(recovered.metadata.autonomousSequence) || 0,
-                // Restored, not dropped. Rebuilding with [] meant a request
-                // applied after recovery + Continue lost the Goal authority
-                // the user granted and was deferred for review instead of
-                // applying — fail-safe, but surprising and unexplained.
-                authorizedGoalIds: [...(recovered.metadata.authorizedGoalIds || [])],
             };
             notifyState();
         }
@@ -3145,8 +2839,6 @@ function serializeRun(run, state) {
         revealOffset: run.rawOffset,
         performerRef: run.performer.ref,
         ...stored,
-        checkpointTransactionIds: [...run.checkpointTransactionIds],
-        pendingRequestsApplied: Boolean(run.pendingRequestsApplied),
         interrupted: Boolean(run.interrupted),
         // A provider-truncated turn must not read back as a clean one: Retry
         // and reload-recovery both reconstruct from this record.
@@ -3340,15 +3032,12 @@ function normalizeRef(value) {
 function normalizeEnvelope(value, scene) {
     if (!value || value.protocol !== DIRECTION_PROTOCOL) throw new Error(`Direction protocol must be ${DIRECTION_PROTOCOL}.`);
     const directionId = String(value.directionId || createId('direction'));
-    const pendingRequests = Array.isArray(value.requests) ? value.requests : Array.isArray(value.mechanics?.pendingRequests) ? value.mechanics.pendingRequests : [];
     return {
         protocol: DIRECTION_PROTOCOL,
         directionId,
         notebookTurn: toTurnNumber(value.notebookTurn),
         reasoning: String(value.reasoning || ''),
         flow: { continueAfter: Boolean(value.flow?.continueAfter), hardPauseAfter: Boolean(value.flow?.hardPauseAfter) },
-        mechanics: { pendingRequests },
-        mechanicsSnapshot: value.mechanicsSnapshot ? structuredClone(value.mechanicsSnapshot) : null,
         currentPlayerAction: String(value.currentPlayerAction || ''),
         livingLore: value.livingLore ? structuredClone(value.livingLore) : null,
         loreOps: Array.isArray(value.loreOps) ? structuredClone(value.loreOps) : [],

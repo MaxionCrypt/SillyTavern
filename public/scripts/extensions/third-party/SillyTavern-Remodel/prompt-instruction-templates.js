@@ -23,14 +23,8 @@ import { buildMetadataGuide } from './metadata-guide.js';
 /** Groups shown in the picker, in this order. */
 const GROUP_LABELS = Object.freeze({
     contract: 'Output contract',
-    narrative: 'Archive operations',
-    goal: 'Goals',
-    variable: 'Variables & modifiers',
     lore: 'Living Lore',
-    narrator: 'Narrator mechanics',
 });
-
-const ARCHIVE_GROUPS = Object.freeze(new Set(['scene', 'event', 'char_state', 'beat', 'secret']));
 
 /**
  * Every instruction template, for every recipe.
@@ -53,9 +47,7 @@ export function getPromptInstructionTemplates(mode, apiType = 'chat') {
     const guide = buildMetadataGuide();
     return Object.freeze(byGroup([
         ...contractTemplates(guide),
-        ...operationTemplates(guide),
         ...loreTemplates(guide),
-        ...narratorTemplates(guide),
     ]));
 }
 
@@ -88,7 +80,7 @@ function contractTemplates(guide) {
                 'Top-level keys:',
                 keys,
                 '',
-                'Every request is its own object. Close one with } and open the next with {. Never repeat "id" inside a single object.',
+                'Every op is its own object. Close one with } and open the next with {. Never repeat "id" inside a single object.',
             ].join('\n')),
         instruction('contract.flow', 'Flow control', 'contract', 'system',
             'How to ask for another turn, or to stop and wait for the player.', [
@@ -101,45 +93,6 @@ function contractTemplates(guide) {
 }
 
 // --- One per operation ------------------------------------------------------
-
-function operationTemplates(guide) {
-    return guide.capabilities.map((capability) => instruction(
-        `operation.${capability.name}`,
-        capability.name,
-        groupOf(capability.group),
-        'system',
-        capability.description,
-        describeOperation(capability),
-    ));
-}
-
-function groupOf(group) {
-    if (ARCHIVE_GROUPS.has(group)) return 'narrative';
-    if (group === 'modifier') return 'variable';
-    return group;
-}
-
-/**
- * The instruction for one operation: what it does, the arguments it cannot run
- * without, the ones it may take, and a line that runs. Allowed values are
- * printed in full wherever the schema closes the list, because an argument
- * described only as "the typed relation" is an argument a model has to guess.
- */
-function describeOperation(capability) {
-    const required = capability.arguments.filter((argument) => argument.required);
-    const optional = capability.arguments.filter((argument) => !argument.required);
-    // Whole sections, dropped when empty, then joined by a blank line. Building
-    // a flat list of lines and filtering it takes the '' separators out along
-    // with the absent section, and every heading runs into the one above it.
-    return [
-        `${capability.name} — ${capability.description}`,
-        required.length
-            ? `Required arguments:\n${required.map(describeArgument).join('\n')}`
-            : 'Takes no required arguments.',
-        optional.length ? `Optional arguments:\n${optional.map(describeArgument).join('\n')}` : '',
-        `Write it exactly like this, inside "requests":\n${capability.example}`,
-    ].filter(Boolean).join('\n\n');
-}
 
 function describeArgument(argument) {
     const shape = argument.values.length ? argument.values.join(' | ') : argument.type;
@@ -178,29 +131,6 @@ function loreTemplates(guide) {
                 guide.lore.keywords.example,
             ].join('\n')),
     ];
-}
-
-// --- Narrator verbs ---------------------------------------------------------
-
-function narratorTemplates(guide) {
-    return guide.narrator.tools.map((tool) => instruction(
-        `narrator.${tool.name}`,
-        tool.name,
-        'narrator',
-        'instruction',
-        tool.description,
-        [
-            `${tool.name} — ${tool.description}`,
-            '',
-            'Arguments:',
-            ...tool.arguments.map(describeArgument),
-            '',
-            'Call it with:',
-            tool.example,
-            '',
-            'Code freezes the inputs and rolls. Obey the receipt you get back; never state the outcome yourself.',
-        ].join('\n'),
-    ));
 }
 
 // --- Shape ------------------------------------------------------------------

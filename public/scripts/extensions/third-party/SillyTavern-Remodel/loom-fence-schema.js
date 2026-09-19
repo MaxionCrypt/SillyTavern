@@ -2,42 +2,14 @@
 //
 // This is the experimental structured-output contract: instead of teaching the
 // model the fence shape in prose and hoping it complies, we hand the provider a
-// JSON schema and it *cannot* return a malformed request. The reply comes back
-// as bare JSON (no ```state fence), which readLoomEnvelope already recovers as
+// JSON schema and it *cannot* return a malformed reply. The reply comes back as
+// bare JSON (no ```state fence), which readLoomEnvelope already recovers as
 // 'bare-json-recovered' — so nothing on the parse side changes.
 //
-// SCOPE, on purpose (owner's instruction): only GOAL operations are enforced
-// here. A strict JSON schema cannot enforce one capability's arguments while
-// leaving another capability's arguments free — strict mode demands every
-// property be listed and required. So enforcing goal.* strictly means NARROWING
-// the capability set this schema permits to Goals alone. Everything else
-// (variable.*, modifier.*, lore attach/detach) is dropped until its own schema
-// is built. That is the honest cost of "provider-enforced, goal only": while
-// this schema is on, the Loom can do Goals and nothing else.
-//
-// The argument descriptions are pulled from getMechanicsRequestSchema() so the
-// wording stays the single source of truth the validator and the Loom prompt
-// already share — this module never re-writes what a field means, it only
-// selects and groups the goal-relevant ones and marks which are optional.
-
-import { getMechanicsRequestSchema } from './mechanics-capabilities.js';
-
-/** The capabilities this experimental schema permits: Goal ops only.
- *  Exported so a test can assert the boundary is exactly this. */
-export const ROLEPLAY_LOOM_GOAL_CAPABILITIES = Object.freeze([
-    'goal.create', 'goal.edit', 'goal.delete', 'goal.reach', 'goal.relate',
-]);
-
-/** Per capability: which arguments are required, and which are optional. Every
- *  listed argument is enforced (strict mode requires it in `required`); optional
- *  ones are made nullable so "not applicable this request" is expressible. */
-const GOAL_REQUEST_SHAPES = Object.freeze({
-    'goal.create': { required: ['title', 'description', 'holderRefs'], optional: ['alias', 'targetRefs', 'successRate', 'visibility'] },
-    'goal.edit': { required: ['goalRef'], optional: ['title', 'description', 'successRate', 'status', 'visibility'] },
-    'goal.delete': { required: ['goalRef'], optional: [] },
-    'goal.reach': { required: ['goalRef'], optional: ['modifierVariableRef', 'impact'] },
-    'goal.relate': { required: ['fromGoalRef', 'toGoalRef', 'type'], optional: [] },
-});
+// The fence carries: swaps (patch the draft), loreKeywords (replace the working
+// lore set), loreOps (typed edit/create of Living Lore entries), and flow. The
+// Loom's Goal/Variable mechanics are dissolved; those are ordinary Living Lore
+// entries now, changed through loreOps like any other entry.
 
 /** Per capability: the typed lore operations the Loom may emit. lore.edit
  *  rewrites a cached entry's content; lore.create adds a new entry to the
@@ -57,6 +29,11 @@ const LORE_ARG_PROPS = Object.freeze({
     secret: { type: 'boolean', description: 'True hides the entry from the Narrator (Loom-only); false reveals a hidden entry. Null leaves its visibility unchanged.' },
 });
 
+// The shared id/reason descriptors every fence op carries. Defined locally now
+// that the dissolved mechanics schema no longer supplies them.
+const ID_DESCRIPTOR = Object.freeze({ type: 'string', description: 'A short unique id for this op within the reply, e.g. "o1".' });
+const REASON_DESCRIPTOR = Object.freeze({ type: 'string', description: 'Why, in one line.' });
+
 /** Add 'null' to a JSON-schema type so an optional argument can be omitted as
  *  null. Enums also gain a null member, since strict mode reads type and enum
  *  together. */
@@ -69,37 +46,26 @@ function nullable(descriptor) {
 }
 
 /**
- * Build the provider-enforced schema for the Roleplay Loom fence, goal-scoped.
+ * Lift a repo schema descriptor ({ name, description, strict, schema }) to the
+ * core structured-output shape ({ name, description, strict, value }). Core reads
+ * `.value`; handing it a bare schema ships a request with no schema in it and the
+ * model invents a reply shape. Always cross that boundary through here.
+ */
+export function toCoreJsonSchema(descriptor) {
+    return {
+        name: descriptor?.name || 'remodel_structured_reply',
+        description: descriptor?.description || 'Well-formed JSON object',
+        strict: descriptor?.strict !== false,
+        value: descriptor?.schema,
+    };
+}
+
+/**
+ * Build the provider-enforced schema for the Roleplay Loom fence.
  * Returns the repo descriptor shape ({ name, strict, schema }); pass it through
  * toCoreJsonSchema() before handing it to the request path.
  */
 export function getRoleplayLoomGoalSchema() {
-    const mechanics = getMechanicsRequestSchema().schema.properties.requests.items.properties;
-    const argProps = mechanics.arguments.properties;
-    const idDescriptor = mechanics.id;
-    const reasonDescriptor = mechanics.reason;
-
-    const requestBranch = (capability) => {
-        const { required, optional } = GOAL_REQUEST_SHAPES[capability];
-        const properties = {};
-        for (const key of required) properties[key] = argProps[key];
-        for (const key of optional) properties[key] = nullable(argProps[key]);
-        return {
-            type: 'object', additionalProperties: false,
-            required: ['id', 'capability', 'arguments', 'reason'],
-            properties: {
-                id: idDescriptor,
-                capability: { type: 'string', enum: [capability], description: `Always "${capability}" for this request.` },
-                arguments: {
-                    type: 'object', additionalProperties: false,
-                    required: [...required, ...optional],
-                    properties,
-                },
-                reason: reasonDescriptor,
-            },
-        };
-    };
-
     const loreOpBranch = (capability) => {
         const { required, optional } = LORE_OP_SHAPES[capability];
         const properties = {};
@@ -109,25 +75,25 @@ export function getRoleplayLoomGoalSchema() {
             type: 'object', additionalProperties: false,
             required: ['id', 'op', 'arguments', 'reason'],
             properties: {
-                id: idDescriptor,
+                id: ID_DESCRIPTOR,
                 op: { type: 'string', enum: [capability], description: `Always "${capability}" for this op.` },
                 arguments: {
                     type: 'object', additionalProperties: false,
                     required: [...required, ...optional],
                     properties,
                 },
-                reason: reasonDescriptor,
+                reason: REASON_DESCRIPTOR,
             },
         };
     };
 
     return {
         name: 'remodel_roleplay_loom_goal',
-        description: "The Roleplay Loom's state fence: swaps, goal requests, lore, and flow. Goal requests are provider-enforced.",
+        description: "The Roleplay Loom's state fence: swaps, lore keywords, lore ops, and flow.",
         strict: true,
         schema: {
             type: 'object', additionalProperties: false,
-            required: ['swaps', 'requests', 'loreKeywords', 'loreOps', 'flow'],
+            required: ['swaps', 'loreKeywords', 'loreOps', 'flow'],
             properties: {
                 swaps: {
                     type: 'array', maxItems: 16,
@@ -139,11 +105,6 @@ export function getRoleplayLoomGoalSchema() {
                             replace: { type: 'string', description: 'What it becomes; an empty string deletes the span.' },
                         },
                     },
-                },
-                requests: {
-                    type: 'array', maxItems: 32,
-                    description: 'The batch of goal operations for this turn. Empty when nothing changed.',
-                    items: { anyOf: ROLEPLAY_LOOM_GOAL_CAPABILITIES.map(requestBranch) },
                 },
                 loreKeywords: {
                     type: 'array', maxItems: 8,

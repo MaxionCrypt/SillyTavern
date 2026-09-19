@@ -14,17 +14,17 @@ test('isLoomMode is true only when the scene opts in', () => {
 
 test('createLoomTurnEnvelope builds the shared turn envelope', () => {
     const snapshot = {
-        mechanics: { addressBook: { entries: [] }, variableRefs: new Map(), goalRefs: new Map() },
         currentPlayerAction: 'I ask the guard to stand aside.',
         archiveProjection: { version: 1, entries: [{ id: 'evt-1' }] },
     };
     const { envelope, storedTurn } = createLoomTurnEnvelope({ id: 's1', timelineId: 't1' }, snapshot, 3);
     expect(storedTurn).toBe(null);
     expect(envelope.reasoning).toBe('');
-    expect(envelope.requests).toEqual([]);
+    // Goals/Variables are dissolved: the minimal envelope carries no mechanics.
+    expect(envelope.requests).toBeUndefined();
+    expect(envelope.mechanicsSnapshot).toBeUndefined();
     expect(envelope.flow).toEqual({ continueAfter: false, hardPauseAfter: true });
     expect(envelope.notebookTurn).toBe(3);
-    expect(envelope.mechanicsSnapshot).toBe(snapshot.mechanics);
     expect(envelope.currentPlayerAction).toBe('I ask the guard to stand aside.');
     expect(envelope.archiveProjection).toBe(snapshot.archiveProjection);
     expect(typeof envelope.directionId).toBe('string');

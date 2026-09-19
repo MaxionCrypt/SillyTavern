@@ -39,8 +39,7 @@ test('the built-in Loom fallback is the patch contract, never a rewrite', () => 
         playerAction: 'I lower my voice and ask Marisol, “What is your mantra?”',
         draft: 'Eli leans in and Marissa melts into him.',
         draftReasoning: 'He goes for the kiss.',
-        narrativeState: '## Scene\n- location: cafe',
-        mechanicsSkill: '- Goal "Win Marissa over" (30%)',
+        livingLore: '## Selected Living Lore\n- Marissa: guarded',
     });
     const system = messages.find((m) => m.role === 'system').content;
     const user = messages.find((m) => m.role === 'user').content;
@@ -49,9 +48,8 @@ test('the built-in Loom fallback is the patch contract, never a rewrite', () => 
     expect(system).not.toMatch(/complete final scene prose/i);
     expect(system).toMatch(/do NOT rewrite or reproduce it/);
     expect(system).toMatch(/Output NOTHING except one state fence/);
-    expect(system).toMatch(/goal\.reach/i);                                // rolls via goal.reach
     expect(system).toContain('```state');
-    expect(system).toContain('Win Marissa over');                          // mechanical state (with numbers)
+    expect(system).toContain('Marissa: guarded');                         // the injected living lore
     expect(user).toContain('Eli leans in and Marissa melts into him.');    // the draft
     expect(user).toContain('He goes for the kiss.');                       // draft reasoning
     expect(user).toContain('CURRENT PLAYER ACTION — AUTHORITATIVE TURN INPUT');
@@ -59,53 +57,53 @@ test('the built-in Loom fallback is the patch contract, never a rewrite', () => 
     expect(user).toMatch(/outranks conflicting inference/i);
 });
 
-test('parseLoomReply reads swaps and requests from the state fence', () => {
+test('parseLoomReply reads swaps and lore ops from the state fence', () => {
     const raw = [
         'The Loom need not write any prose here — it is ignored.',
         '```state',
         '{"swaps":[{"find":"Marissa melts into him","replace":"Marissa turns her cheek"}],'
-        + '"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"Eli tried to kiss Marissa; she pulled back"},"reason":"seduction roll failed"}],"flow":{"continue":false}}',
+        + '"loreKeywords":[],"loreOps":[{"id":"o1","op":"lore.edit","arguments":{"book":"TL","uid":"3","content":"Marissa pulled back from Eli."},"reason":"the accepted prose changed this"}],"flow":{"continue":false}}',
         '```',
     ].join('\n');
-    const { swaps, requests } = parseLoomReply(raw);
+    const { swaps, loreOps } = parseLoomReply(raw);
     expect(swaps).toEqual([{ find: 'Marissa melts into him', replace: 'Marissa turns her cheek' }]);
-    expect(requests).toHaveLength(1);
-    expect(requests[0].capability).toBe('event.record');
+    expect(loreOps).toHaveLength(1);
+    expect(loreOps[0]).toMatchObject({ op: 'lore.edit', book: 'TL', uid: '3' });
 });
 
 test('parseLoomReply drops malformed swaps and defaults to none', () => {
-    const raw = ['```state', '{"swaps":[{"find":"","replace":"x"},{"replace":"no find"},{"find":"ok","replace":"y"}],"requests":[]}', '```'].join('\n');
-    const { swaps, requests } = parseLoomReply(raw);
+    const raw = ['```state', '{"swaps":[{"find":"","replace":"x"},{"replace":"no find"},{"find":"ok","replace":"y"}],"loreOps":[]}', '```'].join('\n');
+    const { swaps, loreOps } = parseLoomReply(raw);
     expect(swaps).toEqual([{ find: 'ok', replace: 'y' }]);  // empty find and missing find dropped
-    expect(requests).toEqual([]);
-    expect(parseLoomReply('No fence at all.')).toEqual({ prose: 'No fence at all.', swaps: [], requests: [], flow: null, loreKeywords: [], loreOps: [] });
+    expect(loreOps).toEqual([]);
+    expect(parseLoomReply('No fence at all.')).toEqual({ prose: 'No fence at all.', swaps: [], flow: null, loreKeywords: [], loreOps: [] });
 });
 
 test('readLoomProse exposes prose while withholding partial and complete state fences', () => {
     expect(readLoomProse('The guard reaches for the alarm—')).toBe('The guard reaches for the alarm—');
     expect(readLoomProse('The guard reaches.\n``')).toBe('The guard reaches.');
     expect(readLoomProse('The guard reaches.\n```sta')).toBe('The guard reaches.');
-    expect(readLoomProse('The guard reaches.\n```state\n{"requests":[]')).toBe('The guard reaches.');
+    expect(readLoomProse('The guard reaches.\n```state\n{"loreOps":[]')).toBe('The guard reaches.');
 });
 
 test('a whole json-fenced Loom envelope is recovered without becoming visible prose', () => {
-    const raw = '```json\n{"swaps":[],"requests":[{"id":"r1","capability":"goal.create","arguments":{"title":"Marissa investigates"}}],"flow":{"continue":false}}\n```';
+    const raw = '```json\n{"swaps":[],"loreKeywords":[],"loreOps":[{"id":"o1","op":"lore.create","arguments":{"name":"Marissa dossier","keys":["dossier"],"content":"Notes on Marissa."},"reason":"a new durable subject"}],"flow":{"continue":false}}\n```';
     const parsed = parseLoomReply(raw);
     expect(readLoomProse(raw)).toBe('');
     expect(parsed.prose).toBe('');
-    expect(parsed.requests).toHaveLength(1);
-    expect(parsed.requests[0].capability).toBe('goal.create');
+    expect(parsed.loreOps).toHaveLength(1);
+    expect(parsed.loreOps[0]).toMatchObject({ op: 'lore.create', name: 'Marissa dossier' });
     expect(describeLoomReply(raw).fenceFormat).toBe('json-fence-recovered');
 });
 
 test('a bare whole-reply Loom envelope is recovered but incidental prose JSON is not', () => {
-    const raw = '{"swaps":[],"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"The pendant warmed."}}]}';
+    const raw = '{"swaps":[],"loreKeywords":[],"loreOps":[{"id":"o1","op":"lore.edit","arguments":{"book":"TL","uid":"1","content":"The pendant warmed."},"reason":"stated in the prose"}]}';
     expect(readLoomProse(raw)).toBe('');
-    expect(parseLoomReply(raw).requests[0].capability).toBe('event.record');
+    expect(parseLoomReply(raw).loreOps[0]).toMatchObject({ op: 'lore.edit', uid: '1' });
     expect(describeLoomReply(raw).fenceFormat).toBe('bare-json-recovered');
 
-    const prose = 'The terminal displayed {"requests":[]} and went dark.';
-    expect(parseLoomReply(prose)).toEqual({ prose, swaps: [], requests: [], flow: null, loreKeywords: [], loreOps: [] });
+    const prose = 'The terminal displayed {"loreOps":[]} and went dark.';
+    expect(parseLoomReply(prose)).toEqual({ prose, swaps: [], flow: null, loreKeywords: [], loreOps: [] });
 });
 
 test('applySwaps patches only the named span and keeps the rest of the draft verbatim', () => {
@@ -133,53 +131,53 @@ test('a reply with no state fence is reported as having none', () => {
     const reply = describeLoomReply('Just the prose, no fence at all.');
     expect(reply.hasFence).toBe(false);
     expect(reply.fenceParsed).toBe(false);
-    expect(reply.capabilities).toEqual([]);
+    expect(reply.loreOpCount).toBe(0);
     expect(reply.tail).toContain('no fence at all');
 });
 
 test('a malformed fence is distinguished from a missing one', () => {
-    const reply = describeLoomReply('Prose.\n\n```state\n{"requests":[{,,,}]}\n```');
+    const reply = describeLoomReply('Prose.\n\n```state\n{"loreOps":[{,,,}]}\n```');
     expect(reply.hasFence).toBe(true);
     expect(reply.fenceParsed).toBe(false);
-    expect(reply.capabilities).toEqual([]);
+    expect(reply.loreOpCount).toBe(0);
 });
 
-test('repairs quoted request objects at array boundaries without general JSON guessing', () => {
-    const malformed = '```state\n{"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"one"}},"{"id":"r2","capability":"beat.set","arguments":{"directive":"next"}}],"flow":{"continue":false}}\n```';
+test('repairs quoted lore-op objects at array boundaries without general JSON guessing', () => {
+    const malformed = '```state\n{"loreOps":[{"id":"o1","op":"lore.edit","arguments":{"book":"TL","uid":"1","content":"one"},"reason":"a"},"{"id":"o2","op":"lore.edit","arguments":{"book":"TL","uid":"2","content":"two"},"reason":"b"}],"flow":{"continue":false}}\n```';
     const described = describeLoomReply(malformed);
-    expect(described).toMatchObject({ hasFence: true, fenceParsed: true, fenceFormat: 'state-quoted-object-repaired', requestCount: 2 });
-    expect(parseLoomReply(malformed).requests.map((request) => request.id)).toEqual(['r1', 'r2']);
+    expect(described).toMatchObject({ hasFence: true, fenceParsed: true, fenceFormat: 'state-quoted-object-repaired', loreOpCount: 2 });
+    expect(parseLoomReply(malformed).loreOps.map((op) => op.uid)).toEqual(['1', '2']);
 
-    const unrelatedDamage = '```state\n{"requests":[{"id":"r1"} BROKEN]}\n```';
+    const unrelatedDamage = '```state\n{"loreOps":[{"id":"o1"} BROKEN]}\n```';
     expect(describeLoomReply(unrelatedDamage)).toMatchObject({ hasFence: true, fenceParsed: false });
 });
 
-test('repairs one structurally impossible extra request closer without guessing missing JSON', () => {
-    const malformed = '```state\n{"requests":[{"id":"r1","capability":"event.record","arguments":{"summary":"one"},"reason":"accepted"}},{"id":"r2","capability":"beat.set","arguments":{"directive":"next"},"reason":"open"}}],"flow":{"continue":false}}\n```';
+test('repairs one structurally impossible extra lore-op closer without guessing missing JSON', () => {
+    const malformed = '```state\n{"loreOps":[{"id":"o1","op":"lore.edit","arguments":{"book":"TL","uid":"1","content":"one"},"reason":"a"}},{"id":"o2","op":"lore.edit","arguments":{"book":"TL","uid":"2","content":"two"},"reason":"b"}}],"flow":{"continue":false}}\n```';
     const described = describeLoomReply(malformed);
-    expect(described).toMatchObject({ hasFence: true, fenceParsed: true, fenceFormat: 'state-extra-closer-repaired', requestCount: 2 });
-    expect(parseLoomReply(malformed).requests.map((request) => request.id)).toEqual(['r1', 'r2']);
+    expect(described).toMatchObject({ hasFence: true, fenceParsed: true, fenceFormat: 'state-extra-closer-repaired', loreOpCount: 2 });
+    expect(parseLoomReply(malformed).loreOps.map((op) => op.uid)).toEqual(['1', '2']);
 
-    const missingCloser = '```state\n{"requests":[{"id":"r1","arguments":{"summary":"one"}],"flow":{"continue":false}}\n```';
+    const missingCloser = '```state\n{"loreOps":[{"id":"o1","arguments":{"summary":"one"}],"flow":{"continue":false}}\n```';
     expect(describeLoomReply(missingCloser)).toMatchObject({ hasFence: true, fenceParsed: false });
 });
 
-test('a valid fence reports the capabilities it named', () => {
-    const fence = JSON.stringify({ requests: [
-        { id: 'r1', capability: 'event.record', arguments: { summary: 'x' } },
-        { id: 'r2', capability: 'goal.reach', arguments: {} },
-    ], flow: { continue: false } });
+test('a valid fence reports the counts it carried', () => {
+    const fence = JSON.stringify({
+        swaps: [{ find: 'a', replace: 'b' }],
+        loreKeywords: [['Marissa'], ['event', 'dock']],
+        loreOps: [
+            { id: 'o1', op: 'lore.edit', arguments: { book: 'TL', uid: '1', content: 'x' }, reason: 'r' },
+            { id: 'o2', op: 'lore.create', arguments: { name: 'Dock', keys: ['dock'], content: 'y' }, reason: 'r' },
+        ],
+        flow: { continue: false },
+    });
     const reply = describeLoomReply(`Prose.\n\n\`\`\`state\n${fence}\n\`\`\``);
     expect(reply.hasFence).toBe(true);
     expect(reply.fenceParsed).toBe(true);
-    expect(reply.capabilities).toEqual(['event.record', 'goal.reach']);
-    expect(reply.requestCount).toBe(2);
-});
-
-test('a request with no capability name is still counted, not silently dropped', () => {
-    const fence = JSON.stringify({ requests: [{ id: 'r1', arguments: {} }] });
-    const reply = describeLoomReply(`Prose.\n\n\`\`\`state\n${fence}\n\`\`\``);
-    expect(reply.capabilities).toEqual(['(missing)']);
+    expect(reply.swapCount).toBe(1);
+    expect(reply.loreKeywordCount).toBe(2);
+    expect(reply.loreOpCount).toBe(2);
 });
 
 test('the summary is bounded so a long turn cannot bury the journal', () => {
@@ -210,7 +208,7 @@ test('a fence-only reply yields no prose, so the draft is what gets patched', ()
     const draft = 'She crossed the room and opened the window.';
     const raw = fenceOnly({
         swaps: [{ find: 'opened the window', replace: 'failed to open the window' }],
-        requests: [],
+        loreOps: [],
     });
     const parsed = parseLoomReply(raw);
     expect(parsed.prose).toBe('');
@@ -221,17 +219,17 @@ test('a fence-only reply yields no prose, so the draft is what gets patched', ()
 
 test('a fence-only reply with no swaps leaves the draft exactly as written', () => {
     const draft = 'Nothing in the fiction needed correcting.';
-    const raw = fenceOnly({ swaps: [], requests: [{ id: 'r1', capability: 'event.record', arguments: {} }] });
+    const raw = fenceOnly({ swaps: [], loreOps: [{ id: 'o1', op: 'lore.edit', arguments: { book: 'TL', uid: '1', content: 'noted' }, reason: 'r' }] });
     const parsed = parseLoomReply(raw);
     expect(parsed.prose).toBe('');
-    expect(parsed.requests).toHaveLength(1);
+    expect(parsed.loreOps).toHaveLength(1);
     expect(parsed.prose || applySwaps(draft, parsed.swaps).prose).toBe(draft);
 });
 
 // A swap whose anchor the model paraphrased must never corrupt the prose.
 test('a patch whose find is not in the draft is skipped, leaving the draft intact', () => {
     const draft = 'She crossed the room.';
-    const raw = fenceOnly({ swaps: [{ find: 'walked across the room', replace: 'stumbled' }], requests: [] });
+    const raw = fenceOnly({ swaps: [{ find: 'walked across the room', replace: 'stumbled' }], loreOps: [] });
     const parsed = parseLoomReply(raw);
     const result = applySwaps(draft, parsed.swaps);
     expect(result.applied).toBe(0);
@@ -239,18 +237,18 @@ test('a patch whose find is not in the draft is skipped, leaving the draft intac
 });
 
 test('the Loom can ask for a retrieval by naming keyword groups', () => {
-    const raw = ['```state', '{"requests":[],"loreKeywords":[["Queens Lake University"],["event","Marissa"]]}', '```'].join('\n');
+    const raw = ['```state', '{"loreKeywords":[["Queens Lake University"],["event","Marissa"]]}', '```'].join('\n');
     expect(parseLoomReply(raw).loreKeywords).toEqual([['Queens Lake University'], ['event', 'Marissa']]);
 });
 
-test('no request means the working set stands', () => {
-    const raw = ['```state', '{"requests":[]}', '```'].join('\n');
+test('an empty fence leaves the working set standing', () => {
+    const raw = ['```state', '{"loreOps":[]}', '```'].join('\n');
     expect(parseLoomReply(raw).loreKeywords).toEqual([]);
 });
 
 test('a keyword group is bounded, deduplicated and cleaned', () => {
     const many = Array.from({ length: 20 }, (_v, index) => `term-${index}`);
-    const raw = ['```state', JSON.stringify({ requests: [], loreKeywords: [['  Teo  ', 'Teo', '', null, ...many]] }), '```'].join('\n');
+    const raw = ['```state', JSON.stringify({ loreKeywords: [['  Teo  ', 'Teo', '', null, ...many]] }), '```'].join('\n');
     const groups = parseLoomReply(raw).loreKeywords;
     // One group: trimmed, deduplicated, blanks dropped, and capped per group —
     // a group naming half the book is not a request.
@@ -263,7 +261,7 @@ test('a keyword group is bounded, deduplicated and cleaned', () => {
 
 test('a malformed keyword request is ignored rather than throwing', () => {
     for (const bad of ['not-an-array', 42, {}, null]) {
-        const raw = ['```state', JSON.stringify({ requests: [], loreKeywords: bad }), '```'].join('\n');
+        const raw = ['```state', JSON.stringify({ loreKeywords: bad }), '```'].join('\n');
         expect(parseLoomReply(raw).loreKeywords).toEqual([]);
     }
 });

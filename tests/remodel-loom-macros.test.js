@@ -62,15 +62,3 @@ test('{{loom.variables}} shows variable name, value, and meaning', () => {
     expect(out).toContain('## Variables');
     expect(out).toContain("- Aiden's Nerve: 12 — his steadiness under pressure");
 });
-
-test('routeUniversalStateMacros re-routes the surviving self-contained macros (post-activation fix)', async () => {
-    // Regression for the review finding: after Narrator profile activation
-    // clears the native prompt objects, the self-contained macros must be
-    // re-routed, or {{loom.goals}}/{{loom.variables}} render blank.
-    const { routeUniversalStateMacros } = await import('../public/scripts/extensions/third-party/SillyTavern-Remodel/live-direction.js');
-    createTimelineGoal(TL, { title: 'Signal the boat', description: 'at dusk', successRate: 50 }, { actor: 'loom' });
-    const routed = {};
-    routeUniversalStateMacros((key, content) => { routed[key] = typeof content === 'function' ? content({}) : content; return true; }, { timelineId: TL, id: SC });
-    expect(Object.keys(routed).sort()).toEqual(['loomGoals', 'loomVariables']);
-    expect(routed.loomGoals).toContain('Signal the boat');
-});

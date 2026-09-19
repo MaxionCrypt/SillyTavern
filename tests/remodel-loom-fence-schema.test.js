@@ -1,6 +1,5 @@
 import { __setExtensionSettings } from './util/st-context-stub.js';
-import { getRoleplayLoomGoalSchema, ROLEPLAY_LOOM_GOAL_CAPABILITIES } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-fence-schema.js';
-import { toCoreJsonSchema } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/mechanics-capabilities.js';
+import { getRoleplayLoomGoalSchema, toCoreJsonSchema } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-fence-schema.js';
 import { parseLoomReply } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/loom-reconciliation.js';
 
 beforeEach(() => __setExtensionSettings({ remodel: {} }));
@@ -24,10 +23,11 @@ function strictViolations(node, path = 'root', out = []) {
     return out;
 }
 
-const branchesByCapability = () => {
+/** The loreOps branches, keyed by their op enum ("lore.edit" / "lore.create"). */
+const opBranches = () => {
     const map = new Map();
-    for (const branch of getRoleplayLoomGoalSchema().schema.properties.requests.items.anyOf) {
-        map.set(branch.properties.capability.enum[0], branch);
+    for (const branch of getRoleplayLoomGoalSchema().schema.properties.loreOps.items.anyOf) {
+        map.set(branch.properties.op.enum[0], branch);
     }
     return map;
 };
@@ -43,62 +43,46 @@ test('loreKeywords is an array of string-array groups', () => {
     expect(kw.items.items.type).toBe('string');
 });
 
-test('the top-level fence carries exactly the five state-fence keys', () => {
+test('the top-level fence carries exactly the four state-fence keys', () => {
     const schema = getRoleplayLoomGoalSchema().schema;
     expect(new Set(Object.keys(schema.properties)))
-        .toEqual(new Set(['swaps', 'requests', 'loreKeywords', 'loreOps', 'flow']));
+        .toEqual(new Set(['swaps', 'loreKeywords', 'loreOps', 'flow']));
+    // Goals/Variables are dissolved: no mechanics `requests` array survives.
+    expect(schema.properties.requests).toBeUndefined();
+    expect(schema.required).not.toContain('requests');
 });
 
 test('loreOps declares strict edit and create branches', () => {
     const schema = getRoleplayLoomGoalSchema().schema;
     expect(schema.required).toContain('loreOps');
-    const caps = schema.properties.loreOps.items.anyOf.map((b) => b.properties.op.enum[0]).sort();
-    expect(caps).toEqual(['lore.create', 'lore.edit']);
-    const edit = schema.properties.loreOps.items.anyOf.find((b) => b.properties.op.enum[0] === 'lore.edit');
-    // Strict mode lists every property in `required`; the optional `secret` is
-    // present-but-nullable so a visibility change can be omitted as null.
-    expect(edit.properties.arguments.required).toEqual(['book', 'uid', 'content', 'secret']);
-    expect(edit.properties.arguments.properties.secret.type).toEqual(['boolean', 'null']);
-});
-
-test('only goal operations plus the two bookkeeping ops are permitted — no variable/scene/etc.', () => {
-    const permitted = [...branchesByCapability().keys()].sort();
-    expect(permitted).toEqual([...ROLEPLAY_LOOM_GOAL_CAPABILITIES].sort());
-    // The boundary that matters: nothing variable/scene/secret/char_state/modifier/lore leaked in.
-    for (const capability of permitted) {
-        expect(capability.startsWith('variable.')).toBe(false);
-        expect(capability.startsWith('scene.')).toBe(false);
-        expect(capability.startsWith('secret.')).toBe(false);
-        expect(capability.startsWith('char_state.')).toBe(false);
-        expect(capability.startsWith('modifier.')).toBe(false);
-        expect(capability.endsWith('.lore.attach')).toBe(false);
+    const ops = [...opBranches().keys()].sort();
+    expect(ops).toEqual(['lore.create', 'lore.edit']);
+    // The boundary that matters: nothing goal/variable/scene leaked back in.
+    for (const op of ops) {
+        expect(op.startsWith('goal.')).toBe(false);
+        expect(op.startsWith('variable.')).toBe(false);
+        expect(op.startsWith('scene.')).toBe(false);
+        expect(op.startsWith('event.')).toBe(false);
     }
 });
 
-test('goal.create hard-requires title, description, and holderRefs', () => {
-    const args = branchesByCapability().get('goal.create').properties.arguments;
-    expect(args.required).toEqual(expect.arrayContaining(['title', 'description', 'holderRefs']));
-    // And every listed argument resolves to a real descriptor with a type
-    // (a mis-picked key from the source schema would surface as undefined here).
-    const typeless = Object.entries(args.properties).filter(([, d]) => !d || d.type === undefined).map(([k]) => k);
-    expect(typeless).toEqual([]);
+test('lore.edit lists every arg in `required`, with secret present-but-nullable', () => {
+    const edit = opBranches().get('lore.edit').properties.arguments;
+    // Strict mode lists every property in `required`; the optional `secret` is
+    // present-but-nullable so a visibility change can be omitted as null.
+    expect(edit.required).toEqual(['book', 'uid', 'content', 'secret']);
+    expect(edit.properties.secret.type).toEqual(['boolean', 'null']);
 });
 
-test('optional arguments are nullable so "not applicable" is expressible', () => {
-    const create = branchesByCapability().get('goal.create').properties.arguments.properties;
-    // successRate is optional on create; its type must admit null.
-    const rateType = create.successRate.type;
-    expect(Array.isArray(rateType) ? rateType : [rateType]).toContain('null');
-    // holderRefs is required on create; it must NOT be nullable.
-    const holderType = create.holderRefs.type;
-    expect(Array.isArray(holderType) ? holderType : [holderType]).not.toContain('null');
-});
-
-test('goal.reach requires goalRef and keeps impact optional', () => {
-    const args = branchesByCapability().get('goal.reach').properties.arguments;
-    expect(args.required).toContain('goalRef');
-    const impactType = args.properties.impact.type;
-    expect(Array.isArray(impactType) ? impactType : [impactType]).toContain('null');
+test('lore.create hard-requires name/keys/content and keeps secret+secondaryKeys nullable', () => {
+    const create = opBranches().get('lore.create').properties.arguments;
+    expect(create.required).toEqual(expect.arrayContaining(['name', 'keys', 'content']));
+    // Optionals are nullable so "not applicable" is expressible under strict mode.
+    expect(create.properties.secret.type).toEqual(['boolean', 'null']);
+    expect(create.properties.secondaryKeys.type).toContain('null');
+    // The required content key must NOT be nullable.
+    const contentType = create.properties.content.type;
+    expect(Array.isArray(contentType) ? contentType : [contentType]).not.toContain('null');
 });
 
 test('toCoreJsonSchema lifts the descriptor to core shape the request path forwards', () => {
@@ -114,16 +98,16 @@ test('a bare-JSON reply shaped by the schema round-trips through parseLoomReply'
     // parser must recover it — this proves the wiring needs no parser change.
     const reply = JSON.stringify({
         swaps: [{ find: 'the door', replace: 'the iron door' }],
-        requests: [
-            { id: 'r1', capability: 'goal.edit', arguments: { goalRef: 'Escape the compound', successRate: 40 }, reason: 'the guard doubled back' },
-            { id: 'r2', capability: 'event.record', arguments: { summary: 'Aiden reached the courtyard' }, reason: 'it happened' },
-        ],
         loreKeywords: [],
-        loreOps: [],
+        loreOps: [
+            { id: 'o1', op: 'lore.edit', arguments: { book: 'TL', uid: '1', content: 'The door is iron.' }, reason: 'the accepted prose changed this fact' },
+        ],
         flow: { continue: false, hardPause: false },
     });
     const parsed = parseLoomReply(reply);
-    expect(parsed.requests.map((r) => r.capability)).toEqual(['goal.edit', 'event.record']);
+    expect(parsed.loreOps.map((o) => o.op)).toEqual(['lore.edit']);
     expect(parsed.swaps).toEqual([{ find: 'the door', replace: 'the iron door' }]);
     expect(parsed.flow).toEqual({ continueAfter: false, hardPauseAfter: false });
+    // The dissolved `requests` channel is gone from the parse result.
+    expect(parsed.requests).toBeUndefined();
 });
