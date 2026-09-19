@@ -37,12 +37,17 @@ export const canonicalDirectedTurnAdapter = Object.freeze({
     editAndRerun: (options) => rerunDirectedRoleplayFromUserMessage({ ...options, deliveryMode: 'canonical' }),
 });
 
-// This branch exists to build and run the rebuilt pipeline, so canonical is not
-// a per-Scene choice here: it is what this branch is. The legacy adapter is
-// kept intact and callable as the rollback path, which is a branch switch, not
-// a runtime toggle.
-function implementationFor() {
-    return canonicalDirectedTurnAdapter;
+// Which delivery engine a directed turn runs on — the Scene's own choice, at
+// this one seam. A Scene persists `liveDirection.delivery` (timeline-state
+// normalizes it to 'legacy' by default; see the delivery-setting test). Legacy
+// drives the full Narrator -> Loom -> Living Lore turn; the canonical rewrite
+// streams the Narrator but does NOT yet run the Loom/Archive pass (see
+// generateCanonicalNarrator: "Loom/Archive stays disconnected until its
+// independent worker is rebuilt"). So a Scene gets canonical only when it opts
+// in explicitly; everything else — including every fresh Scene — runs legacy and
+// gets the Loom.
+function implementationFor(scene) {
+    return scene?.liveDirection?.delivery === 'canonical' ? canonicalDirectedTurnAdapter : legacyDirectedTurnAdapter;
 }
 
 /** The Scene chooses at one seam; the UI and controller know neither engine. */

@@ -408,7 +408,7 @@ export function getLiveDirectionRun() {
 }
 
 export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
-    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: 'loom', delivery: 'canonical' };
+    if (!isDirectedLiveScene(scene)) return { active: false, state: 'Free play', pacing: scene?.liveDirection?.pacing || 'natural', mode: 'loom', delivery: scene?.liveDirection?.delivery === 'canonical' ? 'canonical' : 'legacy' };
     // A hidden Loom pass is a busy pipeline with no visible run yet. It used
     // to report 'Ready' with Stop disabled, which is what invited the second
     // send that produced a second bubble — notifyTransient('Directing') is a
@@ -422,7 +422,7 @@ export function getLiveDirectionUiState(scene = hooks.getActiveScene()) {
         state: activeRun?.state || (directing ? 'Directing' : 'Ready'),
         pacing: scene.liveDirection?.pacing || 'natural',
         mode: 'loom',
-        delivery: 'canonical',
+        delivery: scene.liveDirection?.delivery === 'canonical' ? 'canonical' : 'legacy',
         openingLabel: activeRun?.openingLabel || '',
         canContinue: activeRun?.state === 'Waiting for you',
         canSend: !directing,
