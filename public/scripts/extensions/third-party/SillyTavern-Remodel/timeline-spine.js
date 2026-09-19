@@ -4139,13 +4139,13 @@ function renderLivingLoreArchiveEntry(entry) {
             <label>Secondary tags<input type="text" value="${escapeAttribute(entry.secondaryTags.join(', '))}" placeholder="Comma-separated" data-remodel-lore-entry-field="secondary-tags"></label>
             <label>Content<textarea rows="8" data-remodel-lore-entry-field="content">${escapeHtml(entry.content)}</textarea></label>
             <div class="remodel-lore-archive-editor-actions">
-                <button type="button" data-remodel-lore-archive-action="save-entry" ${actionAttributes}>Save changes</button>
-                <button type="button" class="is-quiet" data-remodel-lore-archive-action="cancel-edit" ${actionAttributes}>Cancel</button>
+                <button type="button" class="remodel-lore-archive-icon-button" title="Save changes" aria-label="Save changes" data-remodel-lore-archive-action="save-entry" ${actionAttributes}><i class="fa-solid fa-check" aria-hidden="true"></i></button>
+                <button type="button" class="remodel-lore-archive-icon-button is-quiet" title="Cancel" aria-label="Cancel" data-remodel-lore-archive-action="cancel-edit" ${actionAttributes}><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
             </div>
         </div>` : `
         <div class="remodel-lore-archive-entry-body">
             <p>${escapeHtml(entry.content) || '<em>This entry has no content yet.</em>'}</p>
-            <div class="remodel-lore-archive-entry-footer"><small>${escapeHtml(entry.book)} · ${escapeHtml(sourceSceneNames.join(', '))}</small><button type="button" data-remodel-lore-archive-action="edit-entry" ${actionAttributes}>Edit</button></div>
+            <div class="remodel-lore-archive-entry-footer"><button type="button" class="remodel-lore-archive-icon-button" title="Edit entry" aria-label="Edit entry" data-remodel-lore-archive-action="edit-entry" ${actionAttributes}><i class="fa-solid fa-pen" aria-hidden="true"></i></button><small>${escapeHtml(entry.book)} · ${escapeHtml(sourceSceneNames.join(', '))}</small></div>
         </div>`;
     return `
         <article class="remodel-lore-archive-entry ${isExpanded ? 'is-expanded' : ''}" data-remodel-lore-entry ${actionAttributes}>

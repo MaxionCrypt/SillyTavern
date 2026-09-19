@@ -14022,7 +14022,7 @@ body.st-remodel-active .remodel-lore-archive-head p:not(.remodel-lore-archive-ki
 body.st-remodel-active .remodel-lore-archive-empty-state > p:last-child {
     margin: 7px 0 0;
     color: rgba(229, 225, 214, .6);
-    font: 400 .8rem/1.5 var(--remodel-sans, sans-serif);
+    font: 400 .92rem/1.5 var(--remodel-sans, sans-serif);
 }
 
 body.st-remodel-active .remodel-lore-archive-search {
@@ -14045,6 +14045,7 @@ body.st-remodel-active .remodel-lore-archive-search:focus-within {
 body.st-remodel-active .remodel-lore-archive-search input {
     width: 100%;
     min-width: 0;
+    font-size: .95rem;
     color: rgba(246, 242, 229, .94);
     background: transparent;
     border: 0;
@@ -14096,7 +14097,7 @@ body.st-remodel-active .remodel-lore-archive-entry.is-expanded .remodel-lore-arc
 body.st-remodel-active .remodel-lore-archive-entry-title {
     min-width: 0;
     color: rgba(247, 243, 231, .94);
-    font: 500 .96rem/1.3 var(--remodel-serif, Georgia, serif);
+    font: 500 1.1rem/1.3 var(--remodel-serif, Georgia, serif);
     overflow-wrap: anywhere;
 }
 
@@ -14107,7 +14108,7 @@ body.st-remodel-active .remodel-lore-archive-tags span {
     background: rgba(234, 226, 199, .06);
     border: 1px solid rgba(234, 226, 199, .1);
     border-radius: 3px;
-    font: 600 .58rem/1.2 var(--remodel-sans, sans-serif);
+    font: 600 .66rem/1.2 var(--remodel-sans, sans-serif);
     letter-spacing: .04em;
 }
 body.st-remodel-active .remodel-lore-archive-tags.is-secondary span { color: rgba(215, 200, 0, .62); border-color: rgba(215, 200, 0, .15); }
@@ -14132,7 +14133,7 @@ body.st-remodel-active .remodel-lore-archive-entry-body { padding: 0 4px 15px 27
 body.st-remodel-active .remodel-lore-archive-entry-body > p {
     margin: 0;
     color: rgba(234, 231, 221, .75);
-    font: 400 .86rem/1.6 var(--remodel-sans, sans-serif);
+    font: 400 1rem/1.6 var(--remodel-sans, sans-serif);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
@@ -14141,11 +14142,11 @@ body.st-remodel-active .remodel-lore-archive-entry-body em { color: rgba(234, 23
 body.st-remodel-active .remodel-lore-archive-entry-footer {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 16px;
+    justify-content: flex-start;
+    gap: 12px;
     margin-top: 12px;
 }
-body.st-remodel-active .remodel-lore-archive-entry-footer small { color: rgba(234, 231, 221, .43); font-size: .68rem; overflow-wrap: anywhere; }
+body.st-remodel-active .remodel-lore-archive-entry-footer small { color: rgba(234, 231, 221, .43); font-size: .78rem; overflow-wrap: anywhere; }
 
 body.st-remodel-active .remodel-lore-archive :is(.remodel-lore-archive-entry-footer button, .remodel-lore-archive-editor-actions button) {
     min-height: 28px;
@@ -14162,6 +14163,15 @@ body.st-remodel-active .remodel-lore-archive :is(.remodel-lore-archive-entry-foo
 body.st-remodel-active .remodel-lore-archive :is(.remodel-lore-archive-entry-footer button, .remodel-lore-archive-editor-actions button):hover,
 body.st-remodel-active .remodel-lore-archive :is(.remodel-lore-archive-entry-footer button, .remodel-lore-archive-editor-actions button):focus-visible { background: rgba(215, 200, 0, .13); }
 body.st-remodel-active .remodel-lore-archive .remodel-lore-archive-editor-actions button.is-quiet { color: rgba(234, 231, 221, .62); background: transparent; border-color: rgba(234, 226, 199, .18); }
+body.st-remodel-active .remodel-lore-archive :is(.remodel-lore-archive-entry-footer, .remodel-lore-archive-editor-actions) button.remodel-lore-archive-icon-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    min-height: 34px;
+    padding: 0;
+    font-size: .95rem;
+}
 
 body.st-remodel-active .remodel-lore-archive-editor {
     display: grid;
@@ -14184,6 +14194,7 @@ body.st-remodel-active .remodel-lore-archive-editor :is(input, textarea) {
     width: 100%;
     box-sizing: border-box;
     padding: 8px 9px;
+    font-size: .95rem;
     color: rgba(246, 242, 229, .94);
     background: rgba(7, 7, 12, .74);
     border: 1px solid rgba(234, 226, 199, .19);
@@ -14197,7 +14208,7 @@ body.st-remodel-active .remodel-lore-archive-editor textarea { resize: vertical;
 body.st-remodel-active .remodel-lore-archive-editor :is(input, textarea):focus { border-color: rgba(215, 200, 0, .58); outline: 0; }
 body.st-remodel-active .remodel-lore-archive-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 2px; }
 
-body.st-remodel-active .remodel-lore-archive-message { margin: 8px 2px; color: rgba(229, 225, 214, .6); font: 400 .85rem/1.55 var(--remodel-sans, sans-serif); }
+body.st-remodel-active .remodel-lore-archive-message { margin: 8px 2px; color: rgba(229, 225, 214, .6); font: 400 .95rem/1.55 var(--remodel-sans, sans-serif); }
 body.st-remodel-active .remodel-lore-archive-message.is-error { color: #f1a0a3; }
 body.st-remodel-active .remodel-lore-archive-empty-state { max-width: 650px; padding-top: 7vh; }
 
