@@ -14148,7 +14148,7 @@ body.st-remodel-active .remodel-lore-archive-entry-footer {
 }
 body.st-remodel-active .remodel-lore-archive-entry-footer small { color: rgba(234, 231, 221, .43); font-size: .78rem; overflow-wrap: anywhere; }
 
-body.st-remodel-active .remodel-lore-archive :is(.remodel-lore-archive-entry-footer button, .remodel-lore-archive-editor-actions button) {
+body.st-remodel-active :is(.remodel-lore-archive, .remodel-scene-lore-panel) :is(.remodel-lore-archive-entry-footer button, .remodel-lore-archive-editor-actions button) {
     min-height: 28px;
     padding: 0 10px;
     color: rgba(215, 200, 0, .88);
@@ -14160,10 +14160,10 @@ body.st-remodel-active .remodel-lore-archive :is(.remodel-lore-archive-entry-foo
     letter-spacing: .06em;
     text-transform: none;
 }
-body.st-remodel-active .remodel-lore-archive :is(.remodel-lore-archive-entry-footer button, .remodel-lore-archive-editor-actions button):hover,
-body.st-remodel-active .remodel-lore-archive :is(.remodel-lore-archive-entry-footer button, .remodel-lore-archive-editor-actions button):focus-visible { background: rgba(215, 200, 0, .13); }
-body.st-remodel-active .remodel-lore-archive .remodel-lore-archive-editor-actions button.is-quiet { color: rgba(234, 231, 221, .62); background: transparent; border-color: rgba(234, 226, 199, .18); }
-body.st-remodel-active .remodel-lore-archive :is(.remodel-lore-archive-entry-footer, .remodel-lore-archive-editor-actions) button.remodel-lore-archive-icon-button {
+body.st-remodel-active :is(.remodel-lore-archive, .remodel-scene-lore-panel) :is(.remodel-lore-archive-entry-footer button, .remodel-lore-archive-editor-actions button):hover,
+body.st-remodel-active :is(.remodel-lore-archive, .remodel-scene-lore-panel) :is(.remodel-lore-archive-entry-footer button, .remodel-lore-archive-editor-actions button):focus-visible { background: rgba(215, 200, 0, .13); }
+body.st-remodel-active :is(.remodel-lore-archive, .remodel-scene-lore-panel) .remodel-lore-archive-editor-actions button.is-quiet { color: rgba(234, 231, 221, .62); background: transparent; border-color: rgba(234, 226, 199, .18); }
+body.st-remodel-active :is(.remodel-lore-archive, .remodel-scene-lore-panel) :is(.remodel-lore-archive-entry-footer, .remodel-lore-archive-editor-actions) button.remodel-lore-archive-icon-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -14278,3 +14278,14 @@ body.st-remodel-active .remodel-scene-lore-list { flex: 1; min-height: 0; overfl
 /* Single-column, tighter editor + body for the narrow panel. */
 body.st-remodel-active .remodel-scene-lore-panel .remodel-lore-archive-editor { grid-template-columns: 1fr; padding: 0 2px 16px 26px; }
 body.st-remodel-active .remodel-scene-lore-panel .remodel-lore-archive-entry-body { padding-right: 2px; }
+/* Slightly smaller title + description in the compact panel (view mode only,
+   not the edit fields). */
+body.st-remodel-active .remodel-scene-lore-panel .remodel-lore-archive-entry-title { font-size: 1rem; }
+body.st-remodel-active .remodel-scene-lore-panel .remodel-lore-archive-entry-body > p { font-size: .9rem; }
+
+/* While the panel is open in a Roleplay scene, reserve its width so the chat
+   column narrows instead of being covered — same mechanism as the docked panels. */
+body.st-remodel-active.remodel-roleplay-workspace-active.remodel-scene-lore-open {
+    --remodel-left-edge: calc(var(--rail-width, 60px) + 384px);
+    --remodel-chat-width: calc(100vw - var(--rail-width, 60px) - 384px);
+}

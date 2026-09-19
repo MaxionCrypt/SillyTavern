@@ -3307,6 +3307,7 @@ function openSceneLivingLorePanel(scene = getActiveScene()) {
         }
     });
     document.body.appendChild(panel);
+    document.body.classList.add('remodel-scene-lore-open');
     requestAnimationFrame(() => panel.classList.add('is-open'));
     void loadSceneLoreEntries();
 }
@@ -3314,6 +3315,7 @@ function openSceneLivingLorePanel(scene = getActiveScene()) {
 function closeSceneLivingLorePanel() {
     const panel = document.getElementById('remodel-scene-lore-panel');
     sceneLorePanel = null;
+    document.body.classList.remove('remodel-scene-lore-open');
     if (!panel) return;
     panel.classList.remove('is-open');
     setTimeout(() => panel.remove(), 220);
