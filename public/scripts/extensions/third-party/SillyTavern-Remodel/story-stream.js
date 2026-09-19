@@ -2,7 +2,18 @@ import { extractReasoningFromData } from '../../../reasoning.js';
 import { getContext } from '../../../st-context.js';
 import { getMaxResponseTokens } from '../../../../script.js';
 import { ConnectionManagerRequestService } from '../../shared.js';
-import { collectMechanicsToolCalls, readMechanicsFinishReason } from './mechanics-transport.js';
+
+/** The provider's finish reason, in whichever field it landed. Used downstream
+ *  to tell a clean stop from a length-truncated one. */
+function readFinishReason(payload) {
+    return String(
+        payload?.finishReason
+        ?? payload?.finish_reason
+        ?? payload?.choices?.[0]?.finish_reason
+        ?? payload?.choices?.[0]?.delta?.finish_reason
+        ?? '',
+    ).trim();
+}
 
 // Streaming transport for Remodel's own hidden Chat Completion calls — Story
 // prose and the Loom's notebook both go out through here.
@@ -73,13 +84,12 @@ export async function streamChatPrompt({ prompt, onChunk, signal, profileId, ove
     if (typeof response !== 'function') {
         return {
             text: readWholeResponse(response), reasoning: readWholeReasoning(response), streamed: false,
-            toolCalls: collectMechanicsToolCalls(response), finishReason: readMechanicsFinishReason(response),
+            finishReason: readFinishReason(response),
         };
     }
 
     let text = '';
     let reasoning = '';
-    let toolCalls = [];
     let finishReason = '';
     for await (const chunk of response()) {
         if (signal?.aborted) {
@@ -87,12 +97,10 @@ export async function streamChatPrompt({ prompt, onChunk, signal, profileId, ove
         }
         text = String(chunk?.text ?? text);
         reasoning = String(chunk?.state?.reasoning ?? reasoning);
-        const detectedCalls = collectMechanicsToolCalls(chunk);
-        if (detectedCalls.length) toolCalls = detectedCalls;
-        finishReason = readMechanicsFinishReason(chunk) || finishReason;
-        onChunk?.({ text, reasoning, toolCalls, finishReason });
+        finishReason = readFinishReason(chunk) || finishReason;
+        onChunk?.({ text, reasoning, finishReason });
     }
-    return { text: text.trim(), reasoning: reasoning.trim(), streamed: true, toolCalls, finishReason };
+    return { text: text.trim(), reasoning: reasoning.trim(), streamed: true, finishReason };
 }
 
 /**

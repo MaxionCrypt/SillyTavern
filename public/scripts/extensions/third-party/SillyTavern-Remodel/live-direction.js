@@ -46,8 +46,6 @@ import { limitBoundedChatHistory, removeLatestPlayerAction, removeLegacyNarrator
 import { snapshotGenerationRoutes } from './generation-route.js';
 import { createNarratorDelivery } from './narrator-delivery.js';
 import { captureNativeNarratorPrompt, createNativeNarratorTransport, prepareNativeNarratorPrompt } from './native-narrator-runtime.js';
-import { createTurnMechanicsForScene } from './pipeline-runtime.js';
-import { buildProviderToolDefinitions } from './mechanics-gateway.js';
 import { selectImplementation } from './pipeline-diagnostics.js';
 
 export const DIRECTION_PROTOCOL = 'remodel-direction/1';
@@ -1653,16 +1651,9 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
             nextActionRouted: run.nextActionRouted,
         }, { correlationId: run.directionId });
         if (run.canonicalCancelled || activeRun !== run) return false;
-        // Which verbs this turn offers is the recipe's call. Captured from the
-        // block's own argument while the prompt assembles; a removed block
-        // leaves this empty and the Narrator is never told the verbs exist.
-        let advertisedTools = [];
-        hooks.setNativePromptContent('mechanicsTools', (args = {}) => {
-            advertisedTools = String(args.tools || '').split(',').map((name) => name.trim()).filter(Boolean);
-            return advertisedTools.length
-                ? `Mechanics you may request this turn: ${advertisedTools.join(', ')}. Code freezes the inputs and rolls; obey the receipt you get back.`
-                : '';
-        });
+        // The Narrator no longer requests mechanics mid-turn; the mechanics
+        // macro renders nothing and no tools are advertised.
+        hooks.setNativePromptContent('mechanicsTools', '');
         const generationType = 'normal';
         const capturedPrompt = testAdapters?.captureNarratorPrompt
             ? await testAdapters.captureNarratorPrompt({ scene, run, performer, context, generationType })
@@ -1702,8 +1693,6 @@ async function generateCanonicalNarrator({ scene, run, performer }) {
             : createNativeNarratorTransport({
                 pacing: run.pacing,
                 getPacing: () => run.pacing,
-                mechanics: createTurnMechanicsForScene({ scene, run }),
-                tools: buildProviderToolDefinitions(advertisedTools),
             });
         const delivery = createNarratorDelivery({
             transport,

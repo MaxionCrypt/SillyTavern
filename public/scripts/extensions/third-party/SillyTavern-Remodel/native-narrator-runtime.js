@@ -3,7 +3,6 @@ import { describeIncompleteProse } from './generation-budget.js';
 import { describeNarratorOutput } from './narrator-output-contract.js';
 import { limitBoundedChatHistory, removeLatestPlayerAction, removeLegacyNarratorConstraints, removeNativeNewChatBootstrap, restoreTaggedNextAction } from './prompt-history-limit.js';
 import { streamChatPrompt } from './story-stream.js';
-import { DEFAULT_MECHANICS_CONTINUATIONS, appendMechanicsContinuation, collectMechanicsToolCalls } from './mechanics-transport.js';
 import { createReasoningStreamFilter } from './reasoning-strip.js';
 import { reasoningDisabledPayload, resolveNarratorReasoningPolicy } from './narrator-reasoning-policy.js';
 
@@ -79,14 +78,6 @@ export function createNativeNarratorTransport({
     pacing = 'natural',
     getPacing = null,
     send = streamChatPrompt,
-    // Absent by default: with no mechanics dependency the loop below runs
-    // exactly once and this transport behaves as it did before the gateway
-    // existed, which is what keeps an un-opted-in Scene on the legacy path.
-    mechanics = null,
-    maxContinuations = DEFAULT_MECHANICS_CONTINUATIONS,
-    // Advertised to the provider so the model knows the verbs exist at all.
-    // Empty means the recipe advertised none, and no tool field is sent.
-    tools = [],
 } = {}) {
     // Read per tick, never captured once: switching Pacing mid-turn has to take
     // effect on the prose still being revealed, not only on the next turn.
@@ -116,55 +107,30 @@ export function createNativeNarratorTransport({
             const overridePayload = {
                 ...reasoningPolicy.override,
                 ...(recovery?.requestReasoning === false ? reasoningDisabledPayload(route?.profileId) : {}),
-                ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
             };
             const request = (async () => {
-                let messages = Array.isArray(prompt?.messages) ? prompt.messages : prompt;
-                // Text already accepted earlier in this SAME logical turn. A
-                // mechanics continuation is a second HTTP request but still one
-                // visible message, so its snapshots must extend what is on
-                // screen rather than restart it.
-                let carry = '';
-                let continuations = 0;
-                for (;;) {
-                    // eslint-disable-next-line no-await-in-loop
-                    const result = await send({
-                        prompt: messages,
-                        profileId: route?.profileId,
-                        signal,
-                        overridePayload,
-                        onChunk: ({ text, reasoning }) => {
-                            const filtered = reasoningFilter.accept(text, reasoning);
-                            push({ type: 'snapshot', text: carry + filtered.prose, reasoning: filtered.reasoning });
-                        },
-                    });
-                    const filtered = reasoningFilter.accept(result?.text, result?.reasoning);
-                    final = { ...(result || final), text: filtered.prose, reasoning: filtered.reasoning };
-                    const whole = carry + String(final.text || '');
-                    // Streaming transports commonly trim their returned final
-                    // value even though the last cumulative snapshot retains a
-                    // trailing space. A shorter final value is not a rewrite and
-                    // must not be emitted as one. A non-streamed response, or a
-                    // genuine final extension, still becomes a snapshot.
-                    if (whole && whole !== latestText && (!latestText || whole.startsWith(latestText))) {
-                        push({ type: 'snapshot', text: whole, reasoning: final.reasoning });
-                    }
-                    const calls = mechanics ? collectMechanicsToolCalls(final) : [];
-                    if (!calls.length || continuations >= maxContinuations) {
-                        final = { ...final, text: whole };
-                        return;
-                    }
-                    // Pause the logical turn, resolve the mechanic locally, and
-                    // resume the same message from its authoritative receipt.
-                    const receipts = [];
-                    for (const call of calls) {
-                        // eslint-disable-next-line no-await-in-loop
-                        receipts.push(await mechanics.execute(call));
-                    }
-                    messages = appendMechanicsContinuation(messages, final, receipts);
-                    carry = whole;
-                    continuations += 1;
+                const messages = Array.isArray(prompt?.messages) ? prompt.messages : prompt;
+                const result = await send({
+                    prompt: messages,
+                    profileId: route?.profileId,
+                    signal,
+                    overridePayload,
+                    onChunk: ({ text, reasoning }) => {
+                        const filtered = reasoningFilter.accept(text, reasoning);
+                        push({ type: 'snapshot', text: filtered.prose, reasoning: filtered.reasoning });
+                    },
+                });
+                const filtered = reasoningFilter.accept(result?.text, result?.reasoning);
+                final = { ...(result || final), text: filtered.prose, reasoning: filtered.reasoning };
+                const whole = String(final.text || '');
+                // Streaming transports commonly trim their returned final value even
+                // though the last cumulative snapshot retains a trailing space. A
+                // shorter final value is not a rewrite and must not be emitted as
+                // one. A non-streamed response still becomes a snapshot.
+                if (whole && whole !== latestText && (!latestText || whole.startsWith(latestText))) {
+                    push({ type: 'snapshot', text: whole, reasoning: final.reasoning });
                 }
+                final = { ...final, text: whole };
             })().catch((error) => {
                 failure = error;
             });
