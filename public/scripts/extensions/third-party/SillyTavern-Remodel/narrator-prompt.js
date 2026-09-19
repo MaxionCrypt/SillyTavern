@@ -1,30 +1,7 @@
-import { getSceneGoals, getTimelineGoals } from './story-goals-store.js';
-import { listVariableValues, formatVariable } from './variables-store.js';
-
-/**
- * Active Goals for the Loom's readable Archive view. The Narrator receives
- * Goals once through the recipe-owned story.goals macro.
- */
-export function buildGoalObjectives(sceneId, { limit = null } = {}) {
-    const goals = getSceneGoals(sceneId, { includeResolved: false, states: ['active', 'background'] });
-    const selected = boundedTail(goals, limit);
-    if (!selected.length) return '';
-    const lines = selected.map((goal) => {
-        const desc = String(goal.description || '').trim();
-        const holders = (Array.isArray(goal.holderRefs) ? goal.holderRefs : [])
-            .map((holder) => String(holder?.label || holder?.id || '').trim())
-            .filter(Boolean);
-        const owner = holders.length ? holders.join(', ') : 'Unassigned';
-        return `- ${owner} — ${goal.title}${desc ? `: ${desc}` : ''}`;
-    });
-    return `## Goals — consequential pressures\n${lines.join('\n')}`;
-}
-
-// --- Loom state renderers (Goals / Variables / player action) --------------
-//
-// The Archive-backed renderers (scene facts, characters, events, secrets,
-// prev.events) were dissolved with the Loom Archive. What survives reads the
-// Goals and Variables stores, which are separate systems.
+// Loom state renderer. Goals and Variables are dissolved into Living Lore
+// (reserved-keyword entries surfaced through {{loom.lore}}), and the
+// Archive-backed renderers went with the Loom Archive. What survives is the
+// current player action.
 
 /** {{loom.action}} — the player's authoritative turn input. */
 export function renderLoomAction(action) {
@@ -35,49 +12,6 @@ export function renderLoomAction(action) {
         'This is the player\'s explicit speech, voluntary action, or attempted action for this turn. It outranks conflicting inference in the Narrator draft. Preserve what the player explicitly said or attempted, judge only uncertain outcomes and world reactions, and never invent additional voluntary player speech, thoughts, decisions, or actions.',
         text,
     ].join('\n');
-}
-
-/** {{loom.goals}} — every open Goal for the Timeline, with its numbers. Secret
- *  Goals are hidden unless secret=true, so this macro is safe in a player-facing
- *  recipe; the Loom recipe passes secret=true to see them. */
-export function renderLoomGoals(timelineId, { limit = null, secret = false } = {}) {
-    const all = getTimelineGoals(String(timelineId || ''), { includeResolved: false });
-    const goals = secret === true ? all : all.filter((goal) => goal.visibility !== 'secret');
-    const selected = limit === null || limit === undefined || limit === ''
-        ? goals
-        : goals.slice(-Math.max(0, Math.floor(Number(limit) || 0)));
-    if (!selected.length) return '';
-    const lines = selected.map((goal) => {
-        const rate = Number.isFinite(Number(goal.successRate)) ? ` — ${Number(goal.successRate)}%` : '';
-        const facets = [goal.status, goal.visibility].filter(Boolean).join(', ');
-        const holders = (Array.isArray(goal.holderRefs) ? goal.holderRefs : [])
-            .map((holder) => holder?.label || holder?.id).filter(Boolean).join(', ');
-        const detail = [String(goal.description || '').trim(), holders ? `Held by: ${holders}` : '']
-            .filter(Boolean).map((line) => `  ${line}`);
-        return [`- ${goal.title}${rate}${facets ? ` (${facets})` : ''}`, ...detail].join('\n');
-    });
-    return `## Goals\n${lines.join('\n')}`;
-}
-
-/** {{loom.variables}} — every Variable for the Timeline, with its value. */
-export function renderLoomVariables(timelineId, { limit = null } = {}) {
-    const variables = listVariableValues({ timelineId: String(timelineId || '') });
-    const selected = limit === null || limit === undefined || limit === ''
-        ? variables
-        : variables.slice(-Math.max(0, Math.floor(Number(limit) || 0)));
-    if (!selected.length) return '';
-    const lines = selected.map((variable) => {
-        const value = formatVariable(variable);
-        const meaning = String(variable.description || '').trim();
-        return `- ${variable.name}: ${value}${meaning ? ` — ${meaning}` : ''}`;
-    });
-    return `## Variables\n${lines.join('\n')}`;
-}
-
-function boundedTail(items, requested) {
-    if (requested === null || requested === undefined || requested === '') return items;
-    const count = Math.max(0, Math.floor(Number(requested) || 0));
-    return count > 0 ? items.slice(-count) : [];
 }
 
 /**

@@ -557,32 +557,3 @@ test('an intervention stores only the visible Loom prefix and never the private 
 });
 
 
-test('Narrator recall does not duplicate the recipe-owned Story Goals source', async () => {
-    const { createTimelineGoal, linkGoalToScene } = await import('../public/scripts/extensions/third-party/SillyTavern-Remodel/story-goals-store.js');
-    const goal = createTimelineGoal(scene.timelineId, {
-        title: 'Marissa means to be home by six',
-        holderRefs: [{ kind: 'character', id: 'marissa', label: 'Marissa' }],
-        successRate: 30,
-    }, { sceneId: scene.id, actor: 'mechanics' });
-    linkGoalToScene(scene.id, goal.id);
-
-    const promptContent = [];
-    const order = [];
-    scene.generationProfileIds = { narrator: 'narrator-route', loom: 'loom-route' };
-    initLiveDirection({
-        activateConnectionProfile: async () => { order.push('profile-activated'); },
-        setNativePromptContent: (...args) => {
-            promptContent.push(args);
-            order.push(args[0]);
-            return true;
-        },
-    });
-
-    await requestNextDirection(scene, { deliveryMode: 'legacy' });
-    expect(await until(() => getLiveDirectionRun()?.state === 'Waiting for you')).toBe(true);
-
-    const recall = promptContent.filter(([key]) => key === 'narratorRecall');
-    expect(recall[0]?.[1]).not.toContain('Marissa means to be home by six');
-    expect(recall[0]?.[1]).not.toContain('## Objectives');
-    expect(order.indexOf('profile-activated')).toBeLessThan(order.indexOf('narratorRecall'));
-});

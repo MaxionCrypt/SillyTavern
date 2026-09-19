@@ -9,7 +9,6 @@ export const LIVING_LORE_ORIGINS = Object.freeze(['user', 'imported', 'loom', 'm
 export const LIVING_LORE_PROTECTED_FIELDS = Object.freeze([
     'identity', 'primaryKeys', 'secondaryKeys', 'established', 'current', 'openThreads', 'nativeSettings', 'retirement',
 ]);
-export const GOAL_LORE_LINK_TYPES = Object.freeze(['subject', 'context', 'stake', 'origin', 'consequence']);
 
 /** Matches native World Info's `${entry.world}.${entry.uid}` identity. */
 export function loreEntryKey(ref) {
@@ -27,14 +26,6 @@ export function normalizeLoreEntryRef(ref) {
     const key = loreEntryKey(ref);
     if (!key) return null;
     return { book: String(ref.book ?? ref.world).trim(), uid: String(ref.uid).trim() };
-}
-
-/** A Goal stays separate from lore; this validates only its typed reference. */
-export function normalizeGoalLoreLink(value) {
-    const ref = normalizeLoreEntryRef(value);
-    const type = String(value?.type ?? '').trim().toLowerCase();
-    if (!ref || !GOAL_LORE_LINK_TYPES.includes(type)) return null;
-    return { ...ref, type };
 }
 
 /** Normalize a directed relationship between two native lore entries. */
