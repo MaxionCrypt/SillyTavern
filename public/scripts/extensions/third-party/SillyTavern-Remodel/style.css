@@ -14220,3 +14220,56 @@ body.st-remodel-active .remodel-lore-archive-empty-state { max-width: 650px; pad
     body.st-remodel-active .remodel-lore-archive-editor-actions { grid-column: auto; }
     body.st-remodel-active .remodel-lore-archive-entry-body { padding-left: 18px; }
 }
+
+/* Scene Living Lore panel — a compact, scene-scoped archive that slides in from
+   the LEFT, opened by the Loom Archive button in Story and Roleplay scenes. It
+   reuses the .remodel-lore-archive-* entry styling for the list. */
+body.st-remodel-active .remodel-scene-lore-panel {
+    position: fixed;
+    top: var(--topBarBlockSize, 40px);
+    left: 0;
+    width: 380px;
+    max-width: 90vw;
+    height: calc(100vh - var(--topBarBlockSize, 40px));
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    color: rgba(242, 238, 226, .92);
+    background: rgba(11, 11, 13, .96);
+    border-right: 1px solid rgba(215, 200, 0, .3);
+    box-shadow: 18px 0 42px rgba(0, 0, 0, .5);
+    transform: translateX(-100%);
+    transition: transform .22s ease;
+}
+body.st-remodel-active .remodel-scene-lore-panel.is-open { transform: translateX(0); }
+body.st-remodel-active .remodel-scene-lore-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 16px 18px 14px;
+    border-bottom: 1px solid rgba(215, 200, 0, .26);
+}
+body.st-remodel-active .remodel-scene-lore-head h3 {
+    margin: 4px 0 0;
+    color: #f3eedc;
+    font: 500 1.2rem/1.15 var(--remodel-serif, Georgia, serif);
+    letter-spacing: .015em;
+}
+body.st-remodel-active .remodel-scene-lore-close {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    padding: 2px 6px;
+    color: rgba(238, 235, 245, .55);
+    font-size: 1.15rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: color .14s ease;
+}
+body.st-remodel-active .remodel-scene-lore-close:hover { color: rgba(215, 200, 0, .92); }
+body.st-remodel-active .remodel-scene-lore-search-box { margin: 14px 16px 0; }
+body.st-remodel-active .remodel-scene-lore-list { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 16px 24px; }
+/* Single-column, tighter editor + body for the narrow panel. */
+body.st-remodel-active .remodel-scene-lore-panel .remodel-lore-archive-editor { grid-template-columns: 1fr; padding: 0 2px 16px 26px; }
+body.st-remodel-active .remodel-scene-lore-panel .remodel-lore-archive-entry-body { padding-right: 2px; }
