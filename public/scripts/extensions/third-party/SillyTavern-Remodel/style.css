@@ -14589,3 +14589,79 @@ body.st-remodel-active .remodel-lore-slot-label {
 }
 
 body.st-remodel-active .remodel-lore-slot.is-active .remodel-lore-slot-label { fill: #f6edb8; }
+
+/* Right section: the entry a selected keyword set resolves to. No outlines. */
+body.st-remodel-active .remodel-lore-detail {
+    position: absolute;
+    left: 67%;
+    right: 3%;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    color: rgba(242, 238, 226, .92);
+}
+
+body.st-remodel-active .remodel-lore-detail.is-empty { justify-content: center; }
+
+body.st-remodel-active .remodel-lore-detail-hint {
+    margin: 0;
+    max-width: 26ch;
+    color: rgba(229, 225, 214, .4);
+    font: 400 .9rem/1.5 var(--remodel-sans, sans-serif);
+}
+
+body.st-remodel-active .remodel-lore-detail-name {
+    margin: 0;
+    color: #f3eedc;
+    font: 500 clamp(1.25rem, 1.7vw, 1.6rem)/1.1 var(--remodel-serif, Georgia, serif);
+    letter-spacing: .01em;
+}
+
+/* Keywords in a row, no outline, bullet dividers between them. */
+body.st-remodel-active .remodel-lore-detail-keys {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    margin: 11px 0 16px;
+}
+
+body.st-remodel-active .remodel-lore-detail-keys span {
+    color: rgba(215, 200, 0, .82);
+    font: 600 .72rem/1.3 var(--remodel-serif, Georgia, serif);
+    letter-spacing: .13em;
+    text-transform: uppercase;
+}
+
+body.st-remodel-active .remodel-lore-detail-keys span + span::before {
+    content: '\2022';
+    margin: 0 10px;
+    color: rgba(215, 200, 0, .4);
+}
+
+/* Content over a partially transparent dot-mesh that fades at top and bottom. */
+body.st-remodel-active .remodel-lore-detail-content {
+    position: relative;
+    padding: 20px 4px;
+}
+
+body.st-remodel-active .remodel-lore-detail-content::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(circle, rgba(232, 227, 208, .12) 1px, transparent 1.5px);
+    background-size: 18px 18px;
+    -webkit-mask-image: linear-gradient(180deg, transparent, #000 18%, #000 82%, transparent);
+    mask-image: linear-gradient(180deg, transparent, #000 18%, #000 82%, transparent);
+    pointer-events: none;
+    z-index: 0;
+}
+
+body.st-remodel-active .remodel-lore-detail-content p {
+    position: relative;
+    z-index: 1;
+    margin: 0;
+    color: rgba(233, 228, 214, .82);
+    font: 400 .95rem/1.65 var(--remodel-sans, sans-serif);
+}

@@ -4357,15 +4357,20 @@ function renderLivingLoreTags(tags, className = '') {
 // entries (and whatever links them) wire in later.
 const LORE_GRID = { rows: 5, cols: 5, r: 42, dx: 104, dy: 62, pad: 52 };
 const LORE_TEST_TAGS = ['Rayse', 'Abilities', 'Iron Gate', 'the gate', 'Wren', 'Ashfall'];
+// Two extra slots filling the left notch: the odd rows reach one column further
+// left than the regular grid. They stay empty — the tags fill the grid proper.
+const LORE_EXTRA_SLOTS = [{ row: 1, col: -1 }, { row: 3, col: -1 }];
 
 function buildLoreGridSlots() {
     const { rows, cols, r, dx, dy, pad } = LORE_GRID;
     const offset = dx / 2;
+    const cellAt = (row, col) => ({ cx: pad + col * dx + (row % 2) * offset, cy: pad + row * dy });
     const slots = [];
     let i = 0;
     for (let row = 0; row < rows; row += 1) {
         for (let col = 0; col < cols; col += 1) {
-            slots.push({ i, cx: pad + col * dx + (row % 2) * offset, cy: pad + row * dy, r, tag: '' });
+            const { cx, cy } = cellAt(row, col);
+            slots.push({ i, cx, cy, r, tag: '' });
             i += 1;
         }
     }
@@ -4373,15 +4378,25 @@ function buildLoreGridSlots() {
     slots.slice()
         .sort((a, b) => a.cx - b.cx || a.cy - b.cy)
         .forEach((slot, k) => { if (k < LORE_TEST_TAGS.length) slot.tag = LORE_TEST_TAGS[k]; });
+    for (const pos of LORE_EXTRA_SLOTS) {
+        const { cx, cy } = cellAt(pos.row, pos.col);
+        slots.push({ i, cx, cy, r, tag: '' });
+        i += 1;
+    }
+    // viewBox sized to the actual slot extents, so the extras never clip.
+    const m = 12;
+    const xs = slots.map((s) => s.cx);
+    const ys = slots.map((s) => s.cy);
+    const minX = Math.min(...xs) - r - m;
+    const minY = Math.min(...ys) - r - m;
     return {
         slots,
-        width: pad * 2 + (cols - 1) * dx + offset,
-        height: pad * 2 + (rows - 1) * dy,
+        viewBox: { x: minX, y: minY, w: (Math.max(...xs) + r + m) - minX, h: (Math.max(...ys) + r + m) - minY },
     };
 }
 
 function renderLoreSkillGrid() {
-    const { slots, width, height } = buildLoreGridSlots();
+    const { slots, viewBox } = buildLoreGridSlots();
     const sel = loomArchive.slotSelection || [];
 
     const diamonds = slots.map((s) => {
@@ -4396,9 +4411,29 @@ function renderLoreSkillGrid() {
         </g>`;
     }).join('');
 
-    return `<svg class="remodel-lore-grid-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Living Lore keyword grid">
+    return `<svg class="remodel-lore-grid-svg" viewBox="${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Living Lore keyword grid">
         ${diamonds}
     </svg>`;
+}
+
+// Right-side entry detail: the entry a selected keyword set resolves to. Name,
+// then its keywords in a bullet-separated row, then the content over a faded
+// dot-mesh. Placeholder data for now — real entries wire in later.
+function renderLoreDetailPanel() {
+    const { slots } = buildLoreGridSlots();
+    const keys = (loomArchive.slotSelection || [])
+        .map((idx) => slots.find((s) => s.i === idx)?.tag)
+        .filter(Boolean);
+    if (!keys.length) {
+        return '<aside class="remodel-lore-detail is-empty"><p class="remodel-lore-detail-hint">Select a keyword set in the grid to reveal its entry.</p></aside>';
+    }
+    const name = keys[0];
+    const content = `This is placeholder Living Lore content for the entry called by ${keys.join(', ')}. The real entry text will surface here once keyword sets resolve to their archived entries. It can run several lines, and the dot-mesh behind it fades away toward the top and bottom.`;
+    return `<aside class="remodel-lore-detail">
+        <h3 class="remodel-lore-detail-name">${escapeHtml(name)}</h3>
+        <div class="remodel-lore-detail-keys">${keys.map((t) => `<span>${escapeHtml(t)}</span>`).join('')}</div>
+        <div class="remodel-lore-detail-content"><p>${escapeHtml(content)}</p></div>
+    </aside>`;
 }
 
 function renderLivingLoreArchive(timeline) {
@@ -4465,6 +4500,7 @@ function renderLivingLoreArchive(timeline) {
                 <span class="remodel-lore-nav-caret" role="button" tabindex="0" data-remodel-lore-archive-action="nav-down" aria-label="Scroll down"${canScrollDown ? '' : ' hidden'}><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></span>
             </nav>
             <div class="remodel-lore-grid">${renderLoreSkillGrid()}</div>
+            ${renderLoreDetailPanel()}
         </section>`;
 }
 
