@@ -4350,13 +4350,13 @@ function renderLivingLoreTags(tags, className = '') {
 
 // --- Skill-tree grid ---------------------------------------------------------
 //
-// A wide, diagonal lattice of diamond slots (SVG). It grows sideways rather than
-// up, so it never clips the window's top/bottom. Tagged slots are clickable and
-// glow when active; selecting several draws a glowing zig-zag link that threads
-// their corners through the inter-slot space. Slots/tags are placeholder test
-// data for now — the real entries wire in later.
-const LORE_GRID = { rows: 3, cols: 8, r: 42, dx: 104, dy: 62, pad: 52 };
-const LORE_TEST_TAGS = { 2: 'Rayse', 10: 'Abilities', 5: 'Iron Gate', 13: 'the gate', 18: 'Wren', 21: 'Ashfall' };
+// A diagonal lattice of diamond slots (SVG), sitting in the left half of the
+// window beside the centre divider. Tags fill in reading order — the top-left
+// slot, down its column, then the next column. Tagged slots are clickable and
+// glow when active. Slots/tags are placeholder test data for now — the real
+// entries (and whatever links them) wire in later.
+const LORE_GRID = { rows: 5, cols: 5, r: 42, dx: 104, dy: 62, pad: 52 };
+const LORE_TEST_TAGS = ['Rayse', 'Abilities', 'Iron Gate', 'the gate', 'Wren', 'Ashfall'];
 
 function buildLoreGridSlots() {
     const { rows, cols, r, dx, dy, pad } = LORE_GRID;
@@ -4365,182 +4365,19 @@ function buildLoreGridSlots() {
     let i = 0;
     for (let row = 0; row < rows; row += 1) {
         for (let col = 0; col < cols; col += 1) {
-            slots.push({
-                i,
-                cx: pad + col * dx + (row % 2) * offset,
-                cy: pad + row * dy,
-                r,
-                tag: LORE_TEST_TAGS[i] || '',
-            });
+            slots.push({ i, cx: pad + col * dx + (row % 2) * offset, cy: pad + row * dy, r, tag: '' });
             i += 1;
         }
     }
+    // Fill order: leftmost column top-to-bottom, then the next column, etc.
+    slots.slice()
+        .sort((a, b) => a.cx - b.cx || a.cy - b.cy)
+        .forEach((slot, k) => { if (k < LORE_TEST_TAGS.length) slot.tag = LORE_TEST_TAGS[k]; });
     return {
         slots,
         width: pad * 2 + (cols - 1) * dx + offset,
         height: pad * 2 + (rows - 1) * dy,
     };
-}
-
-/** The diamond corner of `slot` that faces `target` — used to thread the link. */
-function loreSlotCornerToward(slot, target) {
-    const dx = target.cx - slot.cx;
-    const dy = target.cy - slot.cy;
-    if (Math.abs(dx) >= Math.abs(dy)) {
-        return { x: slot.cx + (dx >= 0 ? slot.r : -slot.r), y: slot.cy };
-    }
-    return { x: slot.cx, y: slot.cy + (dy >= 0 ? slot.r : -slot.r) };
-}
-
-// The link between selected slots must NOT cross any diamond — it threads the
-// gaps. We route it on a coarse grid where every non-endpoint diamond (grown by
-// a clearance margin) is blocked, BFS through the free channels, then string-pull
-// the path straight where the channel allows. Deterministic from the geometry.
-const LINK_CELL = 4;    // routing resolution (px)
-const LINK_MARGIN = 3;  // clearance kept from every diamond edge (px)
-
-function loreBlockedGrid(slots, width, height, exceptSet) {
-    const C = LINK_CELL;
-    const cols = Math.ceil(width / C) + 1;
-    const rows = Math.ceil(height / C) + 1;
-    const blocked = new Uint8Array(cols * rows);
-    for (const s of slots) {
-        if (exceptSet.has(s.i)) continue;
-        const rr = s.r + LINK_MARGIN;
-        const gx0 = Math.max(0, Math.floor((s.cx - rr) / C));
-        const gx1 = Math.min(cols - 1, Math.ceil((s.cx + rr) / C));
-        const gy0 = Math.max(0, Math.floor((s.cy - rr) / C));
-        const gy1 = Math.min(rows - 1, Math.ceil((s.cy + rr) / C));
-        for (let gy = gy0; gy <= gy1; gy += 1) {
-            for (let gx = gx0; gx <= gx1; gx += 1) {
-                // Diamond interior test (rotated square): |dx| + |dy| <= r.
-                if (Math.abs(gx * C - s.cx) + Math.abs(gy * C - s.cy) <= rr) blocked[gy * cols + gx] = 1;
-            }
-        }
-    }
-    return { C, cols, rows, blocked };
-}
-
-// Theta*: any-angle A*. When a node can see its parent's parent directly, we
-// connect straight to it — so the path is made of long straight runs that bend
-// only at diamond corners, hugging the diagonal channels (a clean 45deg zig-zag)
-// instead of the stair-stepping a grid BFS produces.
-function loreThetaStar(grid, ax, ay, bx, by) {
-    const { C, cols, rows, blocked } = grid;
-    const N = cols * rows;
-    const at = (x, y) => y * cols + x;
-    const inb = (x, y) => x >= 0 && y >= 0 && x < cols && y < rows;
-    const cellX = (i) => i % cols;
-    const cellY = (i) => (i - (i % cols)) / cols;
-    const start = at(Math.round(ax / C), Math.round(ay / C));
-    const goal = at(Math.round(bx / C), Math.round(by / C));
-    const los = (i, j) => loreHasLineOfSight(grid, { x: cellX(i) * C, y: cellY(i) * C }, { x: cellX(j) * C, y: cellY(j) * C });
-
-    const g = new Float64Array(N).fill(Infinity);
-    const parent = new Int32Array(N).fill(-1);
-    const closed = new Uint8Array(N);
-    const heap = []; // [f, idx] min-heap on f
-    const push = (f, i) => {
-        heap.push([f, i]);
-        let c = heap.length - 1;
-        while (c > 0) { const p = (c - 1) >> 1; if (heap[p][0] <= heap[c][0]) break; const t = heap[p]; heap[p] = heap[c]; heap[c] = t; c = p; }
-    };
-    const pop = () => {
-        const top = heap[0];
-        const last = heap.pop();
-        if (heap.length) {
-            heap[0] = last;
-            let c = 0;
-            for (;;) {
-                const l = 2 * c + 1; const r = 2 * c + 2; let m = c;
-                if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
-                if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
-                if (m === c) break;
-                const t = heap[m]; heap[m] = heap[c]; heap[c] = t; c = m;
-            }
-        }
-        return top;
-    };
-    const h = (i) => Math.hypot(cellX(i) - cellX(goal), cellY(i) - cellY(goal));
-
-    g[start] = 0; parent[start] = start; push(h(start), start);
-    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
-    let found = false;
-    while (heap.length) {
-        const cur = pop()[1];
-        if (closed[cur]) continue;
-        closed[cur] = 1;
-        if (cur === goal) { found = true; break; }
-        const cx = cellX(cur); const cy = cellY(cur);
-        for (const [dx, dy] of dirs) {
-            const nx = cx + dx; const ny = cy + dy;
-            if (!inb(nx, ny)) continue;
-            const ni = at(nx, ny);
-            if (blocked[ni] || closed[ni]) continue;
-            if (dx && dy && blocked[at(cx + dx, cy)] && blocked[at(cx, cy + dy)]) continue;
-            const par = parent[cur];
-            let via = cur;
-            let ng = g[cur] + Math.hypot(dx, dy);
-            if (par !== -1 && par !== cur && los(par, ni)) {
-                const alt = g[par] + Math.hypot(cellX(ni) - cellX(par), cellY(ni) - cellY(par));
-                if (alt < ng) { ng = alt; via = par; }
-            }
-            if (ng < g[ni]) { g[ni] = ng; parent[ni] = via; push(ng + h(ni), ni); }
-        }
-    }
-    if (!found) return null;
-    const path = [];
-    let cur = goal;
-    for (;;) { path.push({ x: cellX(cur) * C, y: cellY(cur) * C }); if (cur === start) break; cur = parent[cur]; }
-    return path.reverse();
-}
-
-function loreHasLineOfSight(grid, a, b) {
-    const { C, cols, blocked } = grid;
-    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / (C * 0.5)));
-    for (let k = 0; k <= steps; k += 1) {
-        const t = k / steps;
-        const gx = Math.round((a.x + (b.x - a.x) * t) / C);
-        const gy = Math.round((a.y + (b.y - a.y) * t) / C);
-        if (blocked[gy * cols + gx]) return false;
-    }
-    return true;
-}
-
-/** String-pull: keep only the corners the channel actually forces. */
-function loreSimplifyPath(path, grid) {
-    if (path.length <= 2) return path;
-    const out = [path[0]];
-    let i = 0;
-    while (i < path.length - 1) {
-        let j = path.length - 1;
-        while (j > i + 1 && !loreHasLineOfSight(grid, path[i], path[j])) j -= 1;
-        out.push(path[j]);
-        i = j;
-    }
-    return out;
-}
-
-function renderLoreLink(slots, sel, width, height) {
-    const active = sel.map((idx) => slots.find((s) => s.i === idx)).filter(Boolean)
-        .sort((a, b) => a.cx - b.cx || a.cy - b.cy);
-    if (active.length < 2) return '';
-    const subpaths = [];
-    for (let k = 0; k < active.length - 1; k += 1) {
-        const A = active[k];
-        const B = active[k + 1];
-        const grid = loreBlockedGrid(slots, width, height, new Set([A.i, B.i]));
-        let path = loreThetaStar(grid, A.cx, A.cy, B.cx, B.cy);
-        path = path ? loreSimplifyPath(path, grid) : [{ x: A.cx, y: A.cy }, { x: B.cx, y: B.cy }];
-        // Anchor the ends at each diamond's facing corner, not deep in its centre.
-        path[0] = loreSlotCornerToward(A, { cx: path[1].x, cy: path[1].y });
-        path[path.length - 1] = loreSlotCornerToward(B, { cx: path[path.length - 2].x, cy: path[path.length - 2].y });
-        subpaths.push(path);
-    }
-    const d = subpaths
-        .map((p) => p.map((pt, idx) => `${idx === 0 ? 'M' : 'L'} ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`).join(' '))
-        .join(' ');
-    return `<path class="remodel-lore-link" d="${d}"></path>`;
 }
 
 function renderLoreSkillGrid() {
@@ -4559,11 +4396,8 @@ function renderLoreSkillGrid() {
         </g>`;
     }).join('');
 
-    const link = renderLoreLink(slots, sel, width, height);
-
     return `<svg class="remodel-lore-grid-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Living Lore keyword grid">
         ${diamonds}
-        ${link}
     </svg>`;
 }
 

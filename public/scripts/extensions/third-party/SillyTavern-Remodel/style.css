@@ -14370,12 +14370,27 @@ body.st-remodel-active .remodel-lore-archive.is-blank { min-height: 66vh; }
    gutter. No borders or outlines on anything here or its containers. */
 
 /* The layout IS the full workspace and begins at the toolbar's lower edge.
-   One large window (no divider): tighten the inset (top gap == left gap) so
-   the heading sits high in the corner. */
+   Tighten the inset (top gap == left gap) so the heading sits high in the
+   corner, and host the centre divider that splits the grid (left) from the
+   still-empty right space. */
 body.st-remodel-active .remodel-route-layout.is-archive {
     position: relative !important;
     padding: 18px !important;
     overflow: hidden !important;
+}
+
+/* Divider: bisects the workspace from the toolbar's lower edge down, biased
+   right so the grid gets the wider left share; fades at both ends. */
+body.st-remodel-active .remodel-route-layout.is-archive::after {
+    content: '';
+    position: absolute;
+    left: 64%;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: linear-gradient(180deg, transparent, rgba(232, 227, 208, .22) 7%, rgba(232, 227, 208, .22) 93%, transparent);
+    pointer-events: none;
+    z-index: 0;
 }
 
 body.st-remodel-active .remodel-lore-archive.is-canvas {
@@ -14533,10 +14548,10 @@ body.st-remodel-active .remodel-lore-nav-empty {
    threads their corners through the inter-slot space. */
 body.st-remodel-active .remodel-lore-grid {
     position: absolute;
-    left: 56%;
+    left: 39%;
     top: 50%;
     transform: translate(-50%, -50%);
-    width: min(64vw, 780px);
+    width: min(44vw, 540px);
     z-index: 1;
     pointer-events: none;   /* only tagged slots re-enable clicks */
 }
@@ -14574,13 +14589,3 @@ body.st-remodel-active .remodel-lore-slot-label {
 }
 
 body.st-remodel-active .remodel-lore-slot.is-active .remodel-lore-slot-label { fill: #f6edb8; }
-
-body.st-remodel-active .remodel-lore-link {
-    fill: none;
-    stroke: rgba(242, 228, 110, .92);
-    stroke-width: 2;
-    stroke-linejoin: round;
-    stroke-linecap: round;
-    filter: drop-shadow(0 0 4px rgba(226, 205, 60, .9));
-    pointer-events: none;
-}
