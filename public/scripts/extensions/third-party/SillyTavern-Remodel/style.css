@@ -14221,73 +14221,77 @@ body.st-remodel-active .remodel-lore-archive-empty-state { max-width: 650px; pad
     body.st-remodel-active .remodel-lore-archive-entry-body { padding-left: 18px; }
 }
 
-/* Scene Living Lore panel — a compact, scene-scoped archive that slides in from
-   the LEFT, opened by the Loom Archive button in Story and Roleplay scenes. It
-   reuses the .remodel-lore-archive-* entry styling for the list. */
-/* Docked beside the sidebar rail like the native Author's Note (see the docked
-   floating panels above): offset by the rail width so the rail stays visible,
-   floating card with margins, over the chat. */
-body.st-remodel-active .remodel-scene-lore-panel {
+/* Scene Living Lore window — a floating window opened by the Loom Archive button
+   in Story and Roleplay scenes. It mirrors the timeline archive's two panes (the
+   keyword grid + entry detail) over the chat, without the rail or title. */
+body.st-remodel-active .remodel-scene-archive {
     position: fixed;
-    top: 12px;
-    left: calc(var(--rail-width, 60px) + 8px);
-    width: 360px;
-    max-width: calc(100vw - var(--rail-width, 60px) - 24px);
-    height: calc(100vh - 24px);
-    z-index: 6200;
+    inset: 0;
+    z-index: 9000;
     display: flex;
-    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s ease;
+}
+body.st-remodel-active .remodel-scene-archive.is-open { opacity: 1; pointer-events: auto; }
+
+body.st-remodel-active .remodel-scene-archive-scrim {
+    position: absolute;
+    inset: 0;
+    background: rgba(4, 4, 8, .55);
+    backdrop-filter: blur(2px);
+}
+
+body.st-remodel-active .remodel-scene-archive-card {
+    position: relative;
+    width: min(92vw, 1080px);
+    height: min(76vh, 640px);
+    background: linear-gradient(180deg, rgba(9, 9, 14, .97), rgba(6, 6, 10, .99));
+    border: 1px solid rgba(215, 200, 0, .22);
+    border-radius: 16px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, .62);
     overflow: hidden;
-    color: rgba(242, 238, 226, .92);
-    background: #0c0c11;
-    border: 1px solid rgba(215, 200, 0, .3);
-    border-radius: var(--card-radius, 12px);
-    box-shadow: 0 18px 46px rgba(0, 0, 0, .6);
-    transform: translateX(-480px);
-    transition: transform .22s ease;
+    transform: translateY(10px) scale(.99);
+    transition: transform .2s ease;
 }
-body.st-remodel-active .remodel-scene-lore-panel.is-open { transform: translateX(0); }
-body.st-remodel-active .remodel-scene-lore-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 14px;
-    padding: 16px 18px 14px;
-    border-bottom: 1px solid rgba(215, 200, 0, .26);
-}
-body.st-remodel-active .remodel-scene-lore-head h3 {
-    margin: 4px 0 0;
-    color: #f3eedc;
-    font: 500 1.2rem/1.15 var(--remodel-serif, Georgia, serif);
-    letter-spacing: .015em;
-}
-body.st-remodel-active .remodel-scene-lore-close {
+body.st-remodel-active .remodel-scene-archive.is-open .remodel-scene-archive-card { transform: none; }
+
+body.st-remodel-active .remodel-scene-archive-close {
+    position: absolute;
+    top: 12px;
+    right: 14px;
+    z-index: 5;
     appearance: none;
     background: transparent;
     border: 0;
-    padding: 2px 6px;
+    padding: 4px 8px;
     color: rgba(238, 235, 245, .55);
-    font-size: 1.15rem;
+    font-size: 1.2rem;
     line-height: 1;
     cursor: pointer;
     transition: color .14s ease;
 }
-body.st-remodel-active .remodel-scene-lore-close:hover { color: rgba(215, 200, 0, .92); }
-body.st-remodel-active .remodel-scene-lore-search-box { margin: 14px 16px 0; }
-body.st-remodel-active .remodel-scene-lore-list { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 16px 24px; }
-/* Single-column, tighter editor + body for the narrow panel. */
-body.st-remodel-active .remodel-scene-lore-panel .remodel-lore-archive-editor { grid-template-columns: 1fr; padding: 0 2px 16px 26px; }
-body.st-remodel-active .remodel-scene-lore-panel .remodel-lore-archive-entry-body { padding-right: 2px; }
-/* Slightly smaller title + description in the compact panel (view mode only,
-   not the edit fields). */
-body.st-remodel-active .remodel-scene-lore-panel .remodel-lore-archive-entry-title { font-size: 1rem; }
-body.st-remodel-active .remodel-scene-lore-panel .remodel-lore-archive-entry-body > p { font-size: .9rem; }
+body.st-remodel-active .remodel-scene-archive-close:hover { color: rgba(215, 200, 0, .92); }
 
-/* While the panel is open in a Roleplay scene, reserve its width so the chat
-   column narrows instead of being covered — same mechanism as the docked panels. */
-body.st-remodel-active.remodel-roleplay-workspace-active.remodel-scene-lore-open {
-    --remodel-left-edge: calc(var(--rail-width, 60px) + 384px);
-    --remodel-chat-width: calc(100vw - var(--rail-width, 60px) - 384px);
+/* The canvas hosts the same grid + detail as the timeline archive, plus its own
+   centre divider — it is the positioning context those panes lay out against. */
+body.st-remodel-active .remodel-scene-archive-canvas {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+body.st-remodel-active .remodel-scene-archive-canvas::after {
+    content: '';
+    position: absolute;
+    left: 64%;
+    top: 26px;
+    bottom: 26px;
+    width: 1px;
+    background: linear-gradient(180deg, transparent, rgba(232, 227, 208, .22) 7%, rgba(232, 227, 208, .22) 93%, transparent);
+    pointer-events: none;
+    z-index: 0;
 }
 
 /* ===== Living Lore constellation — the Loom Archive keyword mesh + card detail. ===== */
@@ -14551,7 +14555,7 @@ body.st-remodel-active .remodel-lore-grid {
     left: 39%;
     top: 50%;
     transform: translate(-50%, -50%);
-    width: min(44vw, 540px);
+    width: 46%;             /* of the canvas — mirrors in the scene window too */
     z-index: 1;
     pointer-events: none;   /* only tagged slots re-enable clicks */
 }
@@ -14590,24 +14594,57 @@ body.st-remodel-active .remodel-lore-slot-label {
 
 body.st-remodel-active .remodel-lore-slot.is-active .remodel-lore-slot-label { fill: #f6edb8; }
 
-/* Right section: the entry a selected keyword set resolves to. No outlines. */
+/* Right section: the entry a selected keyword set resolves to, shown on a whole
+   tarot card. Everything centred; the dot-mesh fills the card (fading top and
+   bottom) rather than just the content. No square outlines — the card frame is
+   the only border. */
 body.st-remodel-active .remodel-lore-detail {
     position: absolute;
-    left: 67%;
-    right: 3%;
+    left: 66%;
+    right: 2.5%;
     top: 50%;
     transform: translateY(-50%);
     z-index: 1;
     display: flex;
-    flex-direction: column;
+    justify-content: center;
     color: rgba(242, 238, 226, .92);
 }
 
-body.st-remodel-active .remodel-lore-detail.is-empty { justify-content: center; }
+body.st-remodel-active .remodel-lore-detail-card {
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 320px;
+    min-height: min(66vh, 452px);
+    padding: 34px 28px;
+    border: 1px solid rgba(215, 200, 0, .32);
+    border-radius: 16px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+}
+
+/* Dot-mesh across the whole card, a touch more opaque, fading top and bottom. */
+body.st-remodel-active .remodel-lore-detail-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(circle, rgba(232, 227, 208, .18) 1px, transparent 1.6px);
+    background-size: 17px 17px;
+    -webkit-mask-image: linear-gradient(180deg, transparent, #000 12%, #000 88%, transparent);
+    mask-image: linear-gradient(180deg, transparent, #000 12%, #000 88%, transparent);
+    pointer-events: none;
+    z-index: 0;
+}
+
+body.st-remodel-active .remodel-lore-detail-card > * { position: relative; z-index: 1; }
 
 body.st-remodel-active .remodel-lore-detail-hint {
     margin: 0;
-    max-width: 26ch;
+    max-width: 24ch;
     color: rgba(229, 225, 214, .4);
     font: 400 .9rem/1.5 var(--remodel-sans, sans-serif);
 }
@@ -14619,12 +14656,13 @@ body.st-remodel-active .remodel-lore-detail-name {
     letter-spacing: .01em;
 }
 
-/* Keywords in a row, no outline, bullet dividers between them. */
+/* Keywords centred in a row, no outline, bullet dividers between them. */
 body.st-remodel-active .remodel-lore-detail-keys {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    margin: 11px 0 16px;
+    justify-content: center;
+    margin: 12px 0 18px;
 }
 
 body.st-remodel-active .remodel-lore-detail-keys span {
@@ -14640,28 +14678,9 @@ body.st-remodel-active .remodel-lore-detail-keys span + span::before {
     color: rgba(215, 200, 0, .4);
 }
 
-/* Content over a partially transparent dot-mesh that fades at top and bottom. */
-body.st-remodel-active .remodel-lore-detail-content {
-    position: relative;
-    padding: 20px 4px;
-}
-
-body.st-remodel-active .remodel-lore-detail-content::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background-image: radial-gradient(circle, rgba(232, 227, 208, .12) 1px, transparent 1.5px);
-    background-size: 18px 18px;
-    -webkit-mask-image: linear-gradient(180deg, transparent, #000 18%, #000 82%, transparent);
-    mask-image: linear-gradient(180deg, transparent, #000 18%, #000 82%, transparent);
-    pointer-events: none;
-    z-index: 0;
-}
-
 body.st-remodel-active .remodel-lore-detail-content p {
-    position: relative;
-    z-index: 1;
     margin: 0;
     color: rgba(233, 228, 214, .82);
     font: 400 .95rem/1.65 var(--remodel-sans, sans-serif);
+    text-align: center;
 }

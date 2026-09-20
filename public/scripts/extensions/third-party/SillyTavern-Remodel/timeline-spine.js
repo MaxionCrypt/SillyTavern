@@ -3325,199 +3325,73 @@ async function handleLoomArchiveAction(element) {
     await refreshLoomArchive();
 }
 
-// --- Scene Living Lore panel -------------------------------------------------
+// --- Scene Living Lore window ------------------------------------------------
 //
-// A compact, scene-scoped Living Lore archive that slides in from the LEFT,
-// opened by the Loom Archive button in both Story and Roleplay scenes. It reuses
-// the full archive's entry styling and the updateSceneLivingLoreEntry save path,
-// scoped to the entries active for the current Scene.
+// A floating window opened by the Loom Archive button in both Story and Roleplay
+// scenes. It mirrors the timeline archive's two divided panes — the keyword grid
+// on the left, the entry detail on the right — but without the Arc/Scene rail or
+// title, since it is fixed to the Scene the button belongs to.
 
 let sceneLorePanel = null;
 
 function openSceneLivingLorePanel(scene = getActiveScene()) {
     if (!scene?.id) return;
-    if (document.getElementById('remodel-scene-lore-panel')) {
+    if (document.getElementById('remodel-scene-lore-window')) {
         closeSceneLivingLorePanel();
         return;
     }
-    sceneLorePanel = {
-        sceneId: scene.id,
-        timelineId: scene.timelineId || '',
-        sceneTitle: scene.title || 'This Scene',
-        query: '',
-        expandedKey: '',
-        editingKey: '',
-        entries: [],
-        loading: true,
-        error: '',
-        refreshId: 0,
-    };
-    const panel = document.createElement('div');
-    panel.id = 'remodel-scene-lore-panel';
-    panel.className = 'remodel-scene-lore-panel';
-    panel.innerHTML = renderSceneLorePanel();
-    panel.addEventListener('click', (event) => {
-        const action = event.target.closest?.('[data-remodel-scene-lore-action]');
-        if (action) { event.preventDefault(); void handleSceneLoreAction(action); }
-    });
-    panel.addEventListener('input', (event) => {
-        const search = event.target.closest?.('[data-remodel-scene-lore-search]');
-        if (search instanceof HTMLInputElement && sceneLorePanel) {
-            sceneLorePanel.query = search.value;
-            renderSceneLorePanelBody();
+    sceneLorePanel = { sceneId: scene.id, sceneTitle: scene.title || 'This Scene', selection: [] };
+    const win = document.createElement('div');
+    win.id = 'remodel-scene-lore-window';
+    win.className = 'remodel-scene-archive';
+    win.innerHTML = renderSceneArchiveWindow();
+    win.addEventListener('click', (event) => {
+        if (!(event.target instanceof Element)) return;
+        if (event.target.closest('[data-remodel-scene-archive-close]')) {
+            event.preventDefault();
+            closeSceneLivingLorePanel();
+            return;
+        }
+        const slot = event.target.closest('[data-remodel-lore-archive-action="toggle-slot"]');
+        if (slot && sceneLorePanel) {
+            event.preventDefault();
+            const idx = Number(slot.dataset.slot);
+            const at = sceneLorePanel.selection.indexOf(idx);
+            if (at >= 0) sceneLorePanel.selection.splice(at, 1); else sceneLorePanel.selection.push(idx);
+            renderSceneArchiveBody();
         }
     });
-    document.body.appendChild(panel);
+    document.body.appendChild(win);
     document.body.classList.add('remodel-scene-lore-open');
-    requestAnimationFrame(() => panel.classList.add('is-open'));
-    void loadSceneLoreEntries();
+    requestAnimationFrame(() => win.classList.add('is-open'));
 }
 
 function closeSceneLivingLorePanel() {
-    const panel = document.getElementById('remodel-scene-lore-panel');
+    const win = document.getElementById('remodel-scene-lore-window');
     sceneLorePanel = null;
     document.body.classList.remove('remodel-scene-lore-open');
-    if (!panel) return;
-    panel.classList.remove('is-open');
-    setTimeout(() => panel.remove(), 220);
+    if (!win) return;
+    win.classList.remove('is-open');
+    setTimeout(() => win.remove(), 220);
 }
 
-async function loadSceneLoreEntries() {
-    if (!sceneLorePanel) return;
-    const refreshId = sceneLorePanel.refreshId + 1;
-    sceneLorePanel.refreshId = refreshId;
-    sceneLorePanel.loading = true;
-    sceneLorePanel.error = '';
-    renderSceneLorePanelBody();
-    try {
-        const all = await listTimelineLivingLoreEntries(sceneLorePanel.timelineId);
-        if (!sceneLorePanel || sceneLorePanel.refreshId !== refreshId) return;
-        const sceneId = sceneLorePanel.sceneId;
-        sceneLorePanel.entries = (all || []).filter((entry) => (entry.sceneIds || []).includes(sceneId));
-    } catch (error) {
-        if (!sceneLorePanel || sceneLorePanel.refreshId !== refreshId) return;
-        sceneLorePanel.error = error instanceof Error ? error.message : 'Could not read Living Lore.';
-    } finally {
-        if (sceneLorePanel && sceneLorePanel.refreshId === refreshId) {
-            sceneLorePanel.loading = false;
-            renderSceneLorePanelBody();
-        }
-    }
-}
-
-function renderSceneLorePanel() {
-    const title = sceneLorePanel?.sceneTitle || 'This Scene';
+function renderSceneArchiveWindow() {
     return `
-        <div class="remodel-scene-lore-head">
-            <div>
-                <p class="remodel-lore-archive-kicker">Living Lore</p>
-                <h3>${escapeHtml(title)}</h3>
-            </div>
-            <button type="button" class="remodel-scene-lore-close" data-remodel-scene-lore-action="close" title="Close" aria-label="Close"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
-        </div>
-        <label class="remodel-lore-archive-search remodel-scene-lore-search-box">
-            <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
-            <input type="search" value="${escapeAttribute(sceneLorePanel?.query || '')}" placeholder="Search this scene's lore…" aria-label="Search scene Living Lore" data-remodel-scene-lore-search>
-        </label>
-        <div class="remodel-scene-lore-list" data-remodel-scene-lore-list>${renderSceneLoreList()}</div>`;
-}
-
-function renderSceneLoreList() {
-    if (!sceneLorePanel) return '';
-    if (sceneLorePanel.loading) return '<p class="remodel-lore-archive-message">Reading Living Lore…</p>';
-    if (sceneLorePanel.error) return `<p class="remodel-lore-archive-message is-error">${escapeHtml(sceneLorePanel.error)}</p>`;
-    const entries = filterLivingLoreEntries(sceneLorePanel.entries, sceneLorePanel.query);
-    if (!entries.length && sceneLorePanel.query) return '<p class="remodel-lore-archive-message">No entries match that title or tag.</p>';
-    if (!entries.length) return '<p class="remodel-lore-archive-message">No Living Lore is active for this Scene yet.</p>';
-    return entries.map(renderSceneLoreEntry).join('');
-}
-
-function renderSceneLoreEntry(entry) {
-    const key = loomArchiveEntryKey(entry.book, entry.uid);
-    const isExpanded = sceneLorePanel?.expandedKey === key;
-    const isEditing = sceneLorePanel?.editingKey === key;
-    const sourceSceneId = entry.sceneIds?.[0] || '';
-    const attrs = `data-lore-book="${escapeAttribute(entry.book)}" data-lore-uid="${escapeAttribute(entry.uid)}" data-lore-scene-id="${escapeAttribute(sourceSceneId)}"`;
-    const body = !isExpanded ? '' : isEditing ? `
-        <div class="remodel-lore-archive-editor">
-            <label>Title<input type="text" value="${escapeAttribute(entry.title)}" data-remodel-lore-entry-field="title"></label>
-            <label>Tags<input type="text" value="${escapeAttribute(entry.tags.join(', '))}" placeholder="Comma-separated" data-remodel-lore-entry-field="tags"></label>
-            <label>Secondary tags<input type="text" value="${escapeAttribute(entry.secondaryTags.join(', '))}" placeholder="Comma-separated" data-remodel-lore-entry-field="secondary-tags"></label>
-            <label>Content<textarea rows="6" data-remodel-lore-entry-field="content">${escapeHtml(entry.content)}</textarea></label>
-            <div class="remodel-lore-archive-editor-actions">
-                <button type="button" class="remodel-lore-archive-icon-button" title="Save changes" aria-label="Save changes" data-remodel-scene-lore-action="save-entry" ${attrs}><i class="fa-solid fa-check" aria-hidden="true"></i></button>
-                <button type="button" class="remodel-lore-archive-icon-button is-quiet" title="Cancel" aria-label="Cancel" data-remodel-scene-lore-action="cancel-edit" ${attrs}><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
-            </div>
-        </div>` : `
-        <div class="remodel-lore-archive-entry-body">
-            <p>${escapeHtml(entry.content) || '<em>This entry has no content yet.</em>'}</p>
-            <div class="remodel-lore-archive-entry-footer"><button type="button" class="remodel-lore-archive-icon-button" title="Edit entry" aria-label="Edit entry" data-remodel-scene-lore-action="edit-entry" ${attrs}><i class="fa-solid fa-pen" aria-hidden="true"></i></button><small>${escapeHtml(entry.book)}</small></div>
+        <div class="remodel-scene-archive-scrim" data-remodel-scene-archive-close aria-hidden="true"></div>
+        <div class="remodel-scene-archive-card" role="dialog" aria-label="Scene Living Lore">
+            <button type="button" class="remodel-scene-archive-close" data-remodel-scene-archive-close title="Close" aria-label="Close"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+            <div class="remodel-scene-archive-canvas" data-remodel-scene-archive-canvas>${renderSceneArchiveBodyMarkup()}</div>
         </div>`;
-    return `
-        <article class="remodel-lore-archive-entry ${isExpanded ? 'is-expanded' : ''}" data-remodel-lore-entry ${attrs}>
-            <button type="button" class="remodel-lore-archive-entry-toggle" aria-expanded="${isExpanded ? 'true' : 'false'}" data-remodel-scene-lore-action="toggle-entry" ${attrs}>
-                <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
-                <span class="remodel-lore-archive-entry-title">${escapeHtml(entry.title)}</span>
-                ${entry.secret ? '<span class="remodel-lore-secret-badge" title="Hidden from the Narrator"><i class="fa-solid fa-eye-slash" aria-hidden="true"></i> Secret</span>' : ''}
-                ${renderLivingLoreTags(entry.tags)}
-                ${renderLivingLoreTags(entry.secondaryTags, 'is-secondary')}
-            </button>
-            ${body}
-        </article>`;
 }
 
-function renderSceneLorePanelBody() {
-    const list = document.querySelector('#remodel-scene-lore-panel [data-remodel-scene-lore-list]');
-    if (list) list.innerHTML = renderSceneLoreList();
+function renderSceneArchiveBodyMarkup() {
+    const sel = sceneLorePanel?.selection || [];
+    return `<div class="remodel-lore-grid">${renderLoreSkillGrid(sel)}</div>${renderLoreDetailPanel(sel)}`;
 }
 
-async function handleSceneLoreAction(element) {
-    if (!sceneLorePanel) return;
-    const action = element.dataset.remodelSceneLoreAction;
-    if (action === 'close') { closeSceneLivingLorePanel(); return; }
-    const key = loomArchiveEntryKey(element.dataset.loreBook, element.dataset.loreUid);
-    if (action === 'toggle-entry') {
-        sceneLorePanel.expandedKey = sceneLorePanel.expandedKey === key ? '' : key;
-        sceneLorePanel.editingKey = '';
-        renderSceneLorePanelBody();
-        return;
-    }
-    if (action === 'edit-entry') {
-        sceneLorePanel.editingKey = key;
-        sceneLorePanel.expandedKey = key;
-        renderSceneLorePanelBody();
-        return;
-    }
-    if (action === 'cancel-edit') {
-        sceneLorePanel.editingKey = '';
-        renderSceneLorePanelBody();
-        return;
-    }
-    if (action !== 'save-entry') return;
-    const entryElement = element.closest('[data-remodel-lore-entry]');
-    const readField = (name) => entryElement?.querySelector(`[data-remodel-lore-entry-field="${name}"]`);
-    element.disabled = true;
-    const saved = await updateSceneLivingLoreEntry({
-        sceneId: element.dataset.loreSceneId,
-        book: element.dataset.loreBook,
-        uid: element.dataset.loreUid,
-        title: readField('title')?.value ?? '',
-        tags: readField('tags')?.value ?? '',
-        secondaryTags: readField('secondary-tags')?.value ?? '',
-        content: readField('content')?.value ?? '',
-    });
-    if (!sceneLorePanel) return;
-    if (!saved.ok) {
-        element.disabled = false;
-        sceneLorePanel.error = saved.reason === 'not-in-cache'
-            ? 'That entry is no longer active for this Scene.'
-            : 'The Living Lore entry could not be saved.';
-        renderSceneLorePanelBody();
-        return;
-    }
-    sceneLorePanel.editingKey = '';
-    sceneLorePanel.expandedKey = key;
-    await loadSceneLoreEntries();
+function renderSceneArchiveBody() {
+    const canvas = document.querySelector('#remodel-scene-lore-window [data-remodel-scene-archive-canvas]');
+    if (canvas) canvas.innerHTML = renderSceneArchiveBodyMarkup();
 }
 
 async function handleAction(element) {
@@ -4395,9 +4269,9 @@ function buildLoreGridSlots() {
     };
 }
 
-function renderLoreSkillGrid() {
+function renderLoreSkillGrid(selection) {
     const { slots, viewBox } = buildLoreGridSlots();
-    const sel = loomArchive.slotSelection || [];
+    const sel = selection || loomArchive.slotSelection || [];
 
     const diamonds = slots.map((s) => {
         const state = `${s.tag ? ' has-tag' : ''}${sel.includes(s.i) ? ' is-active' : ''}`;
@@ -4419,20 +4293,21 @@ function renderLoreSkillGrid() {
 // Right-side entry detail: the entry a selected keyword set resolves to. Name,
 // then its keywords in a bullet-separated row, then the content over a faded
 // dot-mesh. Placeholder data for now — real entries wire in later.
-function renderLoreDetailPanel() {
+function renderLoreDetailPanel(selection) {
     const { slots } = buildLoreGridSlots();
-    const keys = (loomArchive.slotSelection || [])
+    const keys = (selection || loomArchive.slotSelection || [])
         .map((idx) => slots.find((s) => s.i === idx)?.tag)
         .filter(Boolean);
-    if (!keys.length) {
-        return '<aside class="remodel-lore-detail is-empty"><p class="remodel-lore-detail-hint">Select a keyword set in the grid to reveal its entry.</p></aside>';
-    }
-    const name = keys[0];
-    const content = `This is placeholder Living Lore content for the entry called by ${keys.join(', ')}. The real entry text will surface here once keyword sets resolve to their archived entries. It can run several lines, and the dot-mesh behind it fades away toward the top and bottom.`;
-    return `<aside class="remodel-lore-detail">
-        <h3 class="remodel-lore-detail-name">${escapeHtml(name)}</h3>
-        <div class="remodel-lore-detail-keys">${keys.map((t) => `<span>${escapeHtml(t)}</span>`).join('')}</div>
-        <div class="remodel-lore-detail-content"><p>${escapeHtml(content)}</p></div>
+    const inner = keys.length
+        ? `<h3 class="remodel-lore-detail-name">${escapeHtml(keys[0])}</h3>
+            <div class="remodel-lore-detail-keys">${keys.map((t) => `<span>${escapeHtml(t)}</span>`).join('')}</div>
+            <div class="remodel-lore-detail-content"><p>${escapeHtml(`This is placeholder Living Lore content for the entry called by ${keys.join(', ')}. The real entry text will surface here once keyword sets resolve to their archived entries. It can run several lines, and the dot-mesh behind it fades away toward the top and bottom.`)}</p></div>`
+        : '<p class="remodel-lore-detail-hint">Select a keyword set in the grid to reveal its entry.</p>';
+    return `<aside class="remodel-lore-detail${keys.length ? '' : ' is-empty'}">
+        <div class="remodel-lore-detail-card">
+            ${renderCardFlourishes()}
+            ${inner}
+        </div>
     </aside>`;
 }
 
