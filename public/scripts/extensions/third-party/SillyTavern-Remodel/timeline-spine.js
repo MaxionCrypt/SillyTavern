@@ -4401,6 +4401,7 @@ function renderLivingLoreArchive(timeline) {
                 <div class="remodel-lore-nav-list">${listMarkup || '<p class="remodel-lore-nav-empty">No Arcs yet.</p>'}</div>
                 <span class="remodel-lore-nav-caret" role="button" tabindex="0" data-remodel-lore-archive-action="nav-down" aria-label="Scroll down"${canScrollDown ? '' : ' hidden'}><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></span>
             </nav>
+            <div class="remodel-lore-grid" aria-hidden="true">${Array.from({ length: 25 }, () => '<span class="remodel-lore-slot"></span>').join('')}</div>
         </section>`;
 }
 

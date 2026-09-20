@@ -14369,43 +14369,13 @@ body.st-remodel-active .remodel-lore-archive.is-blank { min-height: 66vh; }
    vertically-centred Arc/Scene navigator with a decorative dot-and-spine
    gutter. No borders or outlines on anything here or its containers. */
 
-/* The layout IS the full workspace and begins at the toolbar's lower edge:
-   host the centre divider and the left-half dot mesh here, and tighten the
-   inset (top gap == left gap) so the heading sits high in the corner. */
+/* The layout IS the full workspace and begins at the toolbar's lower edge.
+   One large window (no divider): tighten the inset (top gap == left gap) so
+   the heading sits high in the corner. */
 body.st-remodel-active .remodel-route-layout.is-archive {
     position: relative !important;
     padding: 18px !important;
     overflow: hidden !important;
-}
-
-/* Left-half dot mesh, low opacity, fading out at every edge. */
-body.st-remodel-active .remodel-route-layout.is-archive::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 50%;
-    background-image: radial-gradient(circle, rgba(232, 227, 208, .11) 1px, transparent 1.5px);
-    background-size: 21px 21px;
-    -webkit-mask-image: radial-gradient(ellipse 78% 82% at 32% 50%, #000 42%, transparent 92%);
-    mask-image: radial-gradient(ellipse 78% 82% at 32% 50%, #000 42%, transparent 92%);
-    pointer-events: none;
-    z-index: 0;
-}
-
-/* Centre divider: bisects the workspace from the toolbar's lower edge down,
-   fading at both ends. */
-body.st-remodel-active .remodel-route-layout.is-archive::after {
-    content: '';
-    position: absolute;
-    left: 50%;
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    background: linear-gradient(180deg, transparent, rgba(232, 227, 208, .22) 7%, rgba(232, 227, 208, .22) 93%, transparent);
-    pointer-events: none;
-    z-index: 0;
 }
 
 body.st-remodel-active .remodel-lore-archive.is-canvas {
@@ -14479,14 +14449,14 @@ body.st-remodel-active .remodel-lore-nav-list {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 11px;
+    gap: 10px;
     border: 0;
 }
 
 body.st-remodel-active .remodel-lore-nav-list::before {
     content: '';
     position: absolute;
-    left: 4px;
+    left: 3px;
     top: .8em;
     bottom: .8em;
     width: 1px;
@@ -14516,25 +14486,25 @@ body.st-remodel-active .remodel-lore-nav-arc::before,
 body.st-remodel-active .remodel-lore-nav-scene::before {
     content: '';
     position: absolute;
-    left: 1px;
+    left: 0;
     top: 50%;
     transform: translateY(-50%);
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     background: rgba(215, 200, 0, .5);
 }
 
 body.st-remodel-active .remodel-lore-nav-arc {
     color: #f1ecd8;
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 600;
     line-height: 1.2;
 }
 
 body.st-remodel-active .remodel-lore-nav-scene {
     color: rgba(229, 225, 214, .58);
-    font-size: 14px;                 /* one pixel under the Arc */
+    font-size: 12px;                 /* one pixel under the Arc */
     font-weight: 500;
     line-height: 1.2;
 }
@@ -14555,4 +14525,27 @@ body.st-remodel-active .remodel-lore-nav-empty {
     padding-left: 22px;
     color: rgba(229, 225, 214, .5);
     font: 400 .85rem/1.4 var(--remodel-sans, sans-serif);
+}
+
+/* Skill-tree grid: 25 empty slots. A 5x5 grid rotated 45deg makes every cell
+   AND the overall footprint a diamond, evenly spaced. It is the hero of the
+   one large window, centred and biased right of the Arc/Scene rail. */
+body.st-remodel-active .remodel-lore-grid {
+    position: absolute;
+    left: 54%;
+    top: 50%;
+    transform: translate(-50%, -50%) rotate(45deg);
+    display: grid;
+    grid-template-columns: repeat(5, clamp(44px, 5.6vw, 66px));
+    grid-auto-rows: clamp(44px, 5.6vw, 66px);
+    gap: clamp(8px, 1vw, 13px);
+    z-index: 1;
+    pointer-events: none;   /* empty placeholders for now */
+}
+
+body.st-remodel-active .remodel-lore-slot {
+    border: 1px solid rgba(215, 200, 0, .3);
+    border-radius: 4px;
+    background: rgba(18, 16, 11, .4);
+    box-shadow: inset 0 0 14px rgba(0, 0, 0, .45), 0 0 0 1px rgba(0, 0, 0, .3);
 }
