@@ -177,6 +177,7 @@ const loomArchive = {
     detailEntryKey: '',
     navSceneId: '',
     navOffset: 0,
+    slotSelection: [],
     refreshId: 0,
     searchFocused: false,
     searchCursor: 0,
@@ -268,6 +269,7 @@ function resetLoomArchiveView() {
         detailEntryKey: '',
         navSceneId: '',
         navOffset: 0,
+        slotSelection: [],
         refreshId: loomArchive.refreshId + 1,
         searchFocused: false,
         searchCursor: 0,
@@ -3246,6 +3248,14 @@ async function handleLoomArchiveAction(element) {
         queueRender();
         return;
     }
+    if (action === 'toggle-slot') {
+        const idx = Number(element.dataset.slot);
+        const sel = loomArchive.slotSelection;
+        const at = sel.indexOf(idx);
+        if (at >= 0) sel.splice(at, 1); else sel.push(idx);
+        queueRender();
+        return;
+    }
     if (action === 'select-keyword') {
         const keyword = element.dataset.loreKeyword || '';
         loomArchive.selectedKeyword = loomArchive.selectedKeyword === keyword ? '' : keyword;
@@ -4338,6 +4348,85 @@ function renderLivingLoreTags(tags, className = '') {
     return `<span class="remodel-lore-archive-tags ${className}">${list.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</span>`;
 }
 
+// --- Skill-tree grid ---------------------------------------------------------
+//
+// A wide, diagonal lattice of diamond slots (SVG). It grows sideways rather than
+// up, so it never clips the window's top/bottom. Tagged slots are clickable and
+// glow when active; selecting several draws a glowing zig-zag link that threads
+// their corners through the inter-slot space. Slots/tags are placeholder test
+// data for now — the real entries wire in later.
+const LORE_GRID = { rows: 3, cols: 8, r: 42, dx: 104, dy: 62, pad: 52 };
+const LORE_TEST_TAGS = { 2: 'Rayse', 10: 'Abilities', 5: 'Iron Gate', 13: 'the gate', 18: 'Wren', 21: 'Ashfall' };
+
+function buildLoreGridSlots() {
+    const { rows, cols, r, dx, dy, pad } = LORE_GRID;
+    const offset = dx / 2;
+    const slots = [];
+    let i = 0;
+    for (let row = 0; row < rows; row += 1) {
+        for (let col = 0; col < cols; col += 1) {
+            slots.push({
+                i,
+                cx: pad + col * dx + (row % 2) * offset,
+                cy: pad + row * dy,
+                r,
+                tag: LORE_TEST_TAGS[i] || '',
+            });
+            i += 1;
+        }
+    }
+    return {
+        slots,
+        width: pad * 2 + (cols - 1) * dx + offset,
+        height: pad * 2 + (rows - 1) * dy,
+    };
+}
+
+/** The diamond corner of `slot` that faces `target` — used to thread the link. */
+function loreSlotCornerToward(slot, target) {
+    const dx = target.cx - slot.cx;
+    const dy = target.cy - slot.cy;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+        return { x: slot.cx + (dx >= 0 ? slot.r : -slot.r), y: slot.cy };
+    }
+    return { x: slot.cx, y: slot.cy + (dy >= 0 ? slot.r : -slot.r) };
+}
+
+function renderLoreSkillGrid() {
+    const { slots, width, height } = buildLoreGridSlots();
+    const sel = loomArchive.slotSelection || [];
+
+    const diamonds = slots.map((s) => {
+        const state = `${s.tag ? ' has-tag' : ''}${sel.includes(s.i) ? ' is-active' : ''}`;
+        const points = `${s.cx},${s.cy - s.r} ${s.cx + s.r},${s.cy} ${s.cx},${s.cy + s.r} ${s.cx - s.r},${s.cy}`;
+        const action = s.tag
+            ? ` data-remodel-lore-archive-action="toggle-slot" data-slot="${s.i}" role="button" tabindex="0" aria-label="Keyword ${escapeAttribute(s.tag)}"`
+            : ' aria-hidden="true"';
+        return `<g class="remodel-lore-slot${state}"${action}>
+            <polygon class="remodel-lore-slot-face" points="${points}"></polygon>
+            ${s.tag ? `<text class="remodel-lore-slot-label" x="${s.cx}" y="${s.cy}" text-anchor="middle" dominant-baseline="central">${escapeHtml(s.tag)}</text>` : ''}
+        </g>`;
+    }).join('');
+
+    const active = sel.map((idx) => slots.find((s) => s.i === idx)).filter(Boolean)
+        .sort((a, b) => a.cx - b.cx || a.cy - b.cy);
+    let link = '';
+    if (active.length >= 2) {
+        const pts = [];
+        active.forEach((s, k) => {
+            if (k > 0) pts.push(loreSlotCornerToward(s, active[k - 1]));
+            if (k < active.length - 1) pts.push(loreSlotCornerToward(s, active[k + 1]));
+        });
+        const d = pts.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+        link = `<path class="remodel-lore-link" d="${d}"></path>`;
+    }
+
+    return `<svg class="remodel-lore-grid-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Living Lore keyword grid">
+        ${diamonds}
+        ${link}
+    </svg>`;
+}
+
 function renderLivingLoreArchive(timeline) {
     const store = getTimelineStore();
     const timelineName = timeline?.title || 'Timeline';
@@ -4401,7 +4490,7 @@ function renderLivingLoreArchive(timeline) {
                 <div class="remodel-lore-nav-list">${listMarkup || '<p class="remodel-lore-nav-empty">No Arcs yet.</p>'}</div>
                 <span class="remodel-lore-nav-caret" role="button" tabindex="0" data-remodel-lore-archive-action="nav-down" aria-label="Scroll down"${canScrollDown ? '' : ' hidden'}><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></span>
             </nav>
-            <div class="remodel-lore-grid" aria-hidden="true">${Array.from({ length: 25 }, () => '<span class="remodel-lore-slot"></span>').join('')}</div>
+            <div class="remodel-lore-grid">${renderLoreSkillGrid()}</div>
         </section>`;
 }
 

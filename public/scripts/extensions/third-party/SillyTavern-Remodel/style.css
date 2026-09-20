@@ -14527,25 +14527,60 @@ body.st-remodel-active .remodel-lore-nav-empty {
     font: 400 .85rem/1.4 var(--remodel-sans, sans-serif);
 }
 
-/* Skill-tree grid: 25 empty slots. A 5x5 grid rotated 45deg makes every cell
-   AND the overall footprint a diamond, evenly spaced. It is the hero of the
-   one large window, centred and biased right of the Arc/Scene rail. */
+/* Skill-tree grid: a wide, diagonal diamond lattice (SVG). It grows sideways,
+   not up, so it never clips the window's top/bottom. Tagged slots are clickable
+   and glow when active; selecting several draws a glowing zig-zag link that
+   threads their corners through the inter-slot space. */
 body.st-remodel-active .remodel-lore-grid {
     position: absolute;
-    left: 54%;
+    left: 56%;
     top: 50%;
-    transform: translate(-50%, -50%) rotate(45deg);
-    display: grid;
-    grid-template-columns: repeat(5, clamp(44px, 5.6vw, 66px));
-    grid-auto-rows: clamp(44px, 5.6vw, 66px);
-    gap: clamp(8px, 1vw, 13px);
+    transform: translate(-50%, -50%);
+    width: min(64vw, 780px);
     z-index: 1;
-    pointer-events: none;   /* empty placeholders for now */
+    pointer-events: none;   /* only tagged slots re-enable clicks */
 }
 
-body.st-remodel-active .remodel-lore-slot {
-    border: 1px solid rgba(215, 200, 0, .3);
-    border-radius: 4px;
-    background: rgba(18, 16, 11, .4);
-    box-shadow: inset 0 0 14px rgba(0, 0, 0, .45), 0 0 0 1px rgba(0, 0, 0, .3);
+body.st-remodel-active .remodel-lore-grid-svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;      /* let the glow spill past the viewBox */
+}
+
+body.st-remodel-active .remodel-lore-slot-face {
+    fill: rgba(18, 16, 11, .4);
+    stroke: rgba(215, 200, 0, .28);
+    stroke-width: 1.5;
+    transition: stroke .15s ease, filter .15s ease;
+}
+
+body.st-remodel-active .remodel-lore-slot.has-tag { cursor: pointer; pointer-events: auto; }
+body.st-remodel-active .remodel-lore-slot.has-tag .remodel-lore-slot-face { stroke: rgba(215, 200, 0, .5); }
+body.st-remodel-active .remodel-lore-slot.has-tag:hover .remodel-lore-slot-face { stroke: rgba(232, 216, 90, .8); }
+
+body.st-remodel-active .remodel-lore-slot.is-active .remodel-lore-slot-face {
+    stroke: rgba(240, 226, 96, .95);
+    stroke-width: 2;
+    filter: drop-shadow(0 0 5px rgba(226, 205, 60, .85));
+}
+
+body.st-remodel-active .remodel-lore-slot-label {
+    fill: rgba(240, 236, 220, .92);
+    font: 600 11px/1 var(--remodel-serif, Georgia, serif);
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    pointer-events: none;
+}
+
+body.st-remodel-active .remodel-lore-slot.is-active .remodel-lore-slot-label { fill: #f6edb8; }
+
+body.st-remodel-active .remodel-lore-link {
+    fill: none;
+    stroke: rgba(242, 228, 110, .92);
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    filter: drop-shadow(0 0 4px rgba(226, 205, 60, .9));
+    pointer-events: none;
 }
