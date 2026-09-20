@@ -14364,14 +14364,56 @@ body.st-remodel-active .remodel-lore-detail-content { margin: 0; color: rgba(234
 /* Blank Loom Archive canvas — the design space, cleared for layout planning. */
 body.st-remodel-active .remodel-lore-archive.is-blank { min-height: 66vh; }
 
-/* Loom's Archive canvas: a left-snug heading + sub-header, and a vertically
-   centred Arc/Scene navigator sitting against the left edge. No borders or
-   outlines on anything here or its containers. */
+/* Loom's Archive canvas: a left-snug all-caps heading + sub-header, a centre
+   divider bisecting the workspace, a faint dot-mesh over the left half, and a
+   vertically-centred Arc/Scene navigator with a decorative dot-and-spine
+   gutter. No borders or outlines on anything here or its containers. */
+
+/* The layout IS the full workspace and begins at the toolbar's lower edge:
+   host the centre divider and the left-half dot mesh here, and tighten the
+   inset (top gap == left gap) so the heading sits high in the corner. */
+body.st-remodel-active .remodel-route-layout.is-archive {
+    position: relative !important;
+    padding: 18px !important;
+    overflow: hidden !important;
+}
+
+/* Left-half dot mesh, low opacity, fading out at every edge. */
+body.st-remodel-active .remodel-route-layout.is-archive::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 50%;
+    background-image: radial-gradient(circle, rgba(232, 227, 208, .11) 1px, transparent 1.5px);
+    background-size: 21px 21px;
+    -webkit-mask-image: radial-gradient(ellipse 78% 82% at 32% 50%, #000 42%, transparent 92%);
+    mask-image: radial-gradient(ellipse 78% 82% at 32% 50%, #000 42%, transparent 92%);
+    pointer-events: none;
+    z-index: 0;
+}
+
+/* Centre divider: bisects the workspace from the toolbar's lower edge down,
+   fading at both ends. */
+body.st-remodel-active .remodel-route-layout.is-archive::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: linear-gradient(180deg, transparent, rgba(232, 227, 208, .22) 7%, rgba(232, 227, 208, .22) 93%, transparent);
+    pointer-events: none;
+    z-index: 0;
+}
+
 body.st-remodel-active .remodel-lore-archive.is-canvas {
     width: 100%;
     min-height: 100%;
     margin: 0;
     position: relative;
+    z-index: 1;
     display: block;
     border: 0;
     color: rgba(242, 238, 226, .92);
@@ -14390,35 +14432,39 @@ body.st-remodel-active .remodel-lore-canvas-title {
     letter-spacing: .015em;
 }
 
+/* {timeline}: {scene} — a small-caps kicker in the same inscriptional face. */
 body.st-remodel-active .remodel-lore-canvas-sub {
-    margin: 6px 0 0;
+    margin: 7px 0 0;
     color: rgba(215, 200, 0, .72);
-    font: 400 .95rem/1.4 var(--remodel-sans, sans-serif);
-    letter-spacing: .01em;
+    font: 600 .78rem/1.35 var(--remodel-serif, Georgia, serif);
+    letter-spacing: .17em;
+    text-transform: uppercase;
 }
 
 body.st-remodel-active .remodel-lore-nav {
     position: absolute;
-    left: 0;
+    left: -14px;
     top: 50%;
     transform: translateY(-50%);
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 6px;
+    gap: 8px;
     border: 0;
 }
 
 body.st-remodel-active .remodel-lore-nav-caret {
     align-self: flex-start;
+    width: 9px;
     margin: 0;
-    padding: 2px 10px 2px 0;
+    padding: 3px 0;
     background: none;
     border: 0;
     outline: 0;
     box-shadow: none;
+    text-align: center;
     color: rgba(215, 200, 0, .55);
-    font-size: .82rem;
+    font-size: .78rem;
     line-height: 1;
     cursor: pointer;
     transition: color .15s ease;
@@ -14427,39 +14473,70 @@ body.st-remodel-active .remodel-lore-nav-caret {
 body.st-remodel-active .remodel-lore-nav-caret:hover,
 body.st-remodel-active .remodel-lore-nav-caret:focus-visible { color: rgba(215, 200, 0, .95); outline: 0; }
 
+/* Decorative gutter: a faint vertical spine linking a dot beside each row. */
 body.st-remodel-active .remodel-lore-nav-list {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 2px;
+    gap: 11px;
     border: 0;
+}
+
+body.st-remodel-active .remodel-lore-nav-list::before {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: .8em;
+    bottom: .8em;
+    width: 1px;
+    background: rgba(215, 200, 0, .2);
+    pointer-events: none;
 }
 
 body.st-remodel-active .remodel-lore-nav-arc,
 body.st-remodel-active .remodel-lore-nav-scene {
+    position: relative;
+    margin: 0;
+    padding: 0 0 0 22px;              /* shared indent — Scenes sit level with Arcs */
     background: none;
     border: 0;
     outline: 0;
     box-shadow: none;
     text-align: left;
+    text-transform: uppercase;
+    font-family: var(--remodel-serif, Georgia, serif);
+    letter-spacing: .14em;
     cursor: pointer;
     transition: color .15s ease;
 }
 
-body.st-remodel-active .remodel-lore-nav-arc {
-    margin: 9px 0 2px;
-    padding: 0;
-    color: #f1ecd8;
-    font: 600 1.08rem/1.2 var(--remodel-serif, Georgia, serif);
-    letter-spacing: .02em;
+/* The dot on each row, sitting on the spine. */
+body.st-remodel-active .remodel-lore-nav-arc::before,
+body.st-remodel-active .remodel-lore-nav-scene::before {
+    content: '';
+    position: absolute;
+    left: 1px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: rgba(215, 200, 0, .5);
 }
 
-body.st-remodel-active .remodel-lore-nav-list > .remodel-lore-nav-arc:first-child { margin-top: 0; }
+body.st-remodel-active .remodel-lore-nav-arc {
+    color: #f1ecd8;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.2;
+}
 
 body.st-remodel-active .remodel-lore-nav-scene {
-    padding: 1px 0 1px 15px;
     color: rgba(229, 225, 214, .58);
-    font: 400 .82rem/1.35 var(--remodel-sans, sans-serif);
+    font-size: 14px;                 /* one pixel under the Arc */
+    font-weight: 500;
+    line-height: 1.2;
 }
 
 body.st-remodel-active .remodel-lore-nav-arc:hover,
@@ -14470,8 +14547,12 @@ body.st-remodel-active .remodel-lore-nav-scene:focus-visible { color: #f7f2df; o
 body.st-remodel-active .remodel-lore-nav-arc.is-active,
 body.st-remodel-active .remodel-lore-nav-scene.is-active { color: rgba(215, 200, 0, .95); }
 
+body.st-remodel-active .remodel-lore-nav-arc.is-active::before,
+body.st-remodel-active .remodel-lore-nav-scene.is-active::before { background: rgba(215, 200, 0, .95); }
+
 body.st-remodel-active .remodel-lore-nav-empty {
     margin: 0;
+    padding-left: 22px;
     color: rgba(229, 225, 214, .5);
     font: 400 .85rem/1.4 var(--remodel-sans, sans-serif);
 }
