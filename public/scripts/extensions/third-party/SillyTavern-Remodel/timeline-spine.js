@@ -3256,6 +3256,11 @@ async function handleLoomArchiveAction(element) {
         queueRender();
         return;
     }
+    if (action === 'clear-slots') {
+        loomArchive.slotSelection = [];
+        queueRender();
+        return;
+    }
     if (action === 'select-keyword') {
         const keyword = element.dataset.loreKeyword || '';
         loomArchive.selectedKeyword = loomArchive.selectedKeyword === keyword ? '' : keyword;
@@ -3350,6 +3355,12 @@ function openSceneLivingLorePanel(scene = getActiveScene()) {
         if (event.target.closest('[data-remodel-scene-archive-close]')) {
             event.preventDefault();
             closeSceneLivingLorePanel();
+            return;
+        }
+        if (event.target.closest('[data-remodel-lore-archive-action="clear-slots"]') && sceneLorePanel) {
+            event.preventDefault();
+            sceneLorePanel.selection = [];
+            renderSceneArchiveBody();
             return;
         }
         const slot = event.target.closest('[data-remodel-lore-archive-action="toggle-slot"]');
@@ -4301,7 +4312,8 @@ function renderLoreDetailPanel(selection) {
     const inner = keys.length
         ? `<h3 class="remodel-lore-detail-name">${escapeHtml(keys[0])}</h3>
             <div class="remodel-lore-detail-keys">${keys.map((t) => `<span>${escapeHtml(t)}</span>`).join('')}</div>
-            <div class="remodel-lore-detail-content"><p>${escapeHtml(`This is placeholder Living Lore content for the entry called by ${keys.join(', ')}. The real entry text will surface here once keyword sets resolve to their archived entries. It can run several lines, and the dot-mesh behind it fades away toward the top and bottom.`)}</p></div>`
+            <div class="remodel-lore-detail-content"><p>${escapeHtml(`This is placeholder Living Lore content for the entry called by ${keys.join(', ')}. The real entry text will surface here once keyword sets resolve to their archived entries. It can run several lines, and the dot-mesh behind it fades away toward the top and bottom.`)}</p></div>
+            <span class="remodel-lore-detail-clear" role="button" tabindex="0" data-remodel-lore-archive-action="clear-slots">Clear</span>`
         : '<p class="remodel-lore-detail-hint">Select a keyword set in the grid to reveal its entry.</p>';
     return `<aside class="remodel-lore-detail${keys.length ? '' : ' is-empty'}">
         <div class="remodel-lore-detail-card">

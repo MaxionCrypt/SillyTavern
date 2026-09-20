@@ -14601,22 +14601,31 @@ body.st-remodel-active .remodel-lore-slot.is-active .remodel-lore-slot-label { f
 body.st-remodel-active .remodel-lore-detail {
     position: absolute;
     left: 66%;
-    right: 2.5%;
+    right: 2%;
     top: 50%;
     transform: translateY(-50%);
     z-index: 1;
     display: flex;
-    justify-content: center;
+    justify-content: center;  /* centre the card horizontally */
     color: rgba(242, 238, 226, .92);
+}
+
+/* The timeline layout carries 18px padding + a stable scrollbar gutter, so its
+   64% divider sits inside a wider box than the canvas the card lives in. Nudge
+   the card's band right so it centres on the divider-to-edge section. */
+body.st-remodel-active .remodel-lore-archive.is-canvas .remodel-lore-detail {
+    left: 69%;
+    right: 2%;
 }
 
 body.st-remodel-active .remodel-lore-detail-card {
     position: relative;
     box-sizing: border-box;
-    width: 100%;
-    max-width: 320px;
-    min-height: min(66vh, 452px);
-    padding: 34px 28px;
+    width: 360px;
+    max-width: 100%;
+    margin-inline: auto;
+    min-height: min(70vh, 466px);
+    padding: 36px 30px;
     border: 1px solid rgba(215, 200, 0, .32);
     border-radius: 16px;
     overflow: hidden;
@@ -14683,4 +14692,45 @@ body.st-remodel-active .remodel-lore-detail-content p {
     color: rgba(233, 228, 214, .82);
     font: 400 .95rem/1.65 var(--remodel-sans, sans-serif);
     text-align: center;
+}
+
+/* Clear the selected keywords. A span (not a button) so the drawer's menu reset
+   can't restyle it; text only, no icon. */
+body.st-remodel-active .remodel-lore-detail-clear {
+    margin-top: 22px;
+    padding: 7px 20px;
+    background: transparent;
+    border: 1px solid rgba(215, 200, 0, .3);
+    border-radius: 9px;
+    color: rgba(215, 200, 0, .82);
+    font: 600 .72rem/1 var(--remodel-serif, Georgia, serif);
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+
+body.st-remodel-active .remodel-lore-detail-clear:hover,
+body.st-remodel-active .remodel-lore-detail-clear:focus-visible {
+    background: rgba(215, 200, 0, .1);
+    border-color: rgba(215, 200, 0, .55);
+    color: #f6edb8;
+    outline: 0;
+}
+
+/* Scene window: no rail, so shift the grid left into the dead space and grow it,
+   freeing more room for the (already-centred) detail card on the right. */
+body.st-remodel-active .remodel-scene-archive-canvas .remodel-lore-grid {
+    left: 32%;
+    width: 54%;
+}
+
+body.st-remodel-active .remodel-scene-archive-canvas .remodel-lore-detail {
+    left: 64.5%;
+    right: 1.5%;
+}
+
+body.st-remodel-active .remodel-scene-archive-canvas .remodel-lore-detail-card {
+    width: 400px;
+    min-height: min(74vh, 540px);
 }
