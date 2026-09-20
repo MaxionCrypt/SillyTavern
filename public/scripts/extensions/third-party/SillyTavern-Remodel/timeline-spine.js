@@ -175,6 +175,8 @@ const loomArchive = {
     editingKey: '',
     selectedKeyword: '',
     detailEntryKey: '',
+    navSceneId: '',
+    navOffset: 0,
     refreshId: 0,
     searchFocused: false,
     searchCursor: 0,
@@ -264,6 +266,8 @@ function resetLoomArchiveView() {
         editingKey: '',
         selectedKeyword: '',
         detailEntryKey: '',
+        navSceneId: '',
+        navOffset: 0,
         refreshId: loomArchive.refreshId + 1,
         searchFocused: false,
         searchCursor: 0,
@@ -3220,6 +3224,28 @@ async function refreshLoomArchive(timelineId = getSessionState().focusedTimeline
 async function handleLoomArchiveAction(element) {
     const action = element.dataset.remodelLoreArchiveAction;
     const key = loomArchiveEntryKey(element.dataset.loreBook, element.dataset.loreUid);
+    if (action === 'nav-up') {
+        loomArchive.navOffset = Math.max(0, loomArchive.navOffset - 1);
+        queueRender();
+        return;
+    }
+    if (action === 'nav-down') {
+        loomArchive.navOffset += 1;
+        queueRender();
+        return;
+    }
+    if (action === 'nav-scene') {
+        loomArchive.navSceneId = element.dataset.sceneId || '';
+        queueRender();
+        return;
+    }
+    if (action === 'nav-arc') {
+        const arc = getTimelineStore().arcs[element.dataset.arcId];
+        const firstScene = (arc?.sceneIds || []).find((id) => getTimelineStore().scenes[id]);
+        if (firstScene) loomArchive.navSceneId = firstScene;
+        queueRender();
+        return;
+    }
     if (action === 'select-keyword') {
         const keyword = element.dataset.loreKeyword || '';
         loomArchive.selectedKeyword = loomArchive.selectedKeyword === keyword ? '' : keyword;
@@ -4312,12 +4338,70 @@ function renderLivingLoreTags(tags, className = '') {
     return `<span class="remodel-lore-archive-tags ${className}">${list.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</span>`;
 }
 
-function renderLivingLoreArchive() {
-    // Intentionally blank. The Loom Archive layout is being designed from a clean
-    // slate: the left sidebar, top bar and timeline toolbar stay; everything in
-    // this content region is cleared so the exact design space is visible. The
-    // constellation/detail/card builders below are kept for the rebuild.
-    return '<section class="remodel-lore-archive is-blank" aria-label="Living Lore"></section>';
+function renderLivingLoreArchive(timeline) {
+    const store = getTimelineStore();
+    const timelineName = timeline?.title || 'Timeline';
+    const pad2 = (n) => String(n).padStart(2, '0');
+
+    // Flatten the timeline into a single scrolling column: each Arc (button text)
+    // followed by its Scenes (smaller text under it). Arcs and Scenes share one
+    // list so scrolling reveals later Arcs and their Scenes below.
+    const rows = [];
+    (timeline?.arcIds || []).forEach((arcId, arcIndex) => {
+        const arc = store.arcs[arcId];
+        if (!arc) return;
+        rows.push({ type: 'arc', id: arcId, label: arc.title || `Arc ${pad2(arcIndex + 1)}` });
+        (arc.sceneIds || []).forEach((sceneId, sceneIndex) => {
+            const scene = store.scenes[sceneId];
+            if (!scene) return;
+            rows.push({ type: 'scene', id: sceneId, arcId, label: scene.title || `Scene ${pad2(sceneIndex + 1)}` });
+        });
+    });
+
+    // Which Scene's archive is "on": the one picked in the list, else the
+    // timeline's active Scene, else the first Scene in the timeline.
+    const firstSceneRow = rows.find((row) => row.type === 'scene');
+    const activeSceneId = store.scenes[loomArchive.navSceneId]
+        ? loomArchive.navSceneId
+        : store.scenes[timeline?.activeSceneId]
+            ? timeline.activeSceneId
+            : (firstSceneRow?.id || '');
+    const activeSceneName = store.scenes[activeSceneId]?.title || '';
+    const activeArcId = store.scenes[activeSceneId]?.arcId || '';
+
+    // Windowed view: always the Arc header plus up to eight elements (nine rows).
+    const WINDOW = 9;
+    const maxOffset = Math.max(0, rows.length - WINDOW);
+    loomArchive.navOffset = Math.min(Math.max(0, loomArchive.navOffset), maxOffset);
+    const offset = loomArchive.navOffset;
+    const windowRows = rows.slice(offset, offset + WINDOW);
+    const canScrollUp = offset > 0;
+    const canScrollDown = offset < maxOffset;
+
+    // Rendered as role=button spans, not <button>: the drawer's "Docked Menu
+    // Surface Reset" forces every real button to one colour and a hover fill,
+    // which would erase the Arc/Scene colour states and add a box we don't want.
+    const listMarkup = windowRows.map((row) => {
+        if (row.type === 'arc') {
+            const active = row.id === activeArcId ? ' is-active' : '';
+            return `<span class="remodel-lore-nav-arc${active}" role="button" tabindex="0" data-remodel-lore-archive-action="nav-arc" data-arc-id="${escapeAttribute(row.id)}">${escapeHtml(row.label)}</span>`;
+        }
+        const active = row.id === activeSceneId ? ' is-active' : '';
+        return `<span class="remodel-lore-nav-scene${active}" role="button" tabindex="0" data-remodel-lore-archive-action="nav-scene" data-scene-id="${escapeAttribute(row.id)}" data-arc-id="${escapeAttribute(row.arcId)}">${escapeHtml(row.label)}</span>`;
+    }).join('');
+
+    return `
+        <section class="remodel-lore-archive is-canvas" aria-label="Living Lore">
+            <header class="remodel-lore-canvas-head">
+                <h2 class="remodel-lore-canvas-title">Loom's Archive</h2>
+                <p class="remodel-lore-canvas-sub">${escapeHtml(timelineName)}:${activeSceneName ? ` ${escapeHtml(activeSceneName)}` : ''}</p>
+            </header>
+            <nav class="remodel-lore-nav" aria-label="Arcs and Scenes">
+                <span class="remodel-lore-nav-caret" role="button" tabindex="0" data-remodel-lore-archive-action="nav-up" aria-label="Scroll up"${canScrollUp ? '' : ' hidden'}><i class="fa-solid fa-chevron-up" aria-hidden="true"></i></span>
+                <div class="remodel-lore-nav-list">${listMarkup || '<p class="remodel-lore-nav-empty">No Arcs yet.</p>'}</div>
+                <span class="remodel-lore-nav-caret" role="button" tabindex="0" data-remodel-lore-archive-action="nav-down" aria-label="Scroll down"${canScrollDown ? '' : ' hidden'}><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></span>
+            </nav>
+        </section>`;
 }
 
 function renderLoreConstellation(graph) {
