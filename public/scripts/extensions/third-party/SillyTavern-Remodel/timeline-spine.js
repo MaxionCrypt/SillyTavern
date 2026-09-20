@@ -4392,6 +4392,121 @@ function loreSlotCornerToward(slot, target) {
     return { x: slot.cx, y: slot.cy + (dy >= 0 ? slot.r : -slot.r) };
 }
 
+// The link between selected slots must NOT cross any diamond — it threads the
+// gaps. We route it on a coarse grid where every non-endpoint diamond (grown by
+// a clearance margin) is blocked, BFS through the free channels, then string-pull
+// the path straight where the channel allows. Deterministic from the geometry.
+const LINK_CELL = 3;    // routing resolution (px)
+const LINK_MARGIN = 3;  // clearance kept from every diamond edge (px)
+
+function loreBlockedGrid(slots, width, height, exceptSet) {
+    const C = LINK_CELL;
+    const cols = Math.ceil(width / C) + 1;
+    const rows = Math.ceil(height / C) + 1;
+    const blocked = new Uint8Array(cols * rows);
+    for (const s of slots) {
+        if (exceptSet.has(s.i)) continue;
+        const rr = s.r + LINK_MARGIN;
+        const gx0 = Math.max(0, Math.floor((s.cx - rr) / C));
+        const gx1 = Math.min(cols - 1, Math.ceil((s.cx + rr) / C));
+        const gy0 = Math.max(0, Math.floor((s.cy - rr) / C));
+        const gy1 = Math.min(rows - 1, Math.ceil((s.cy + rr) / C));
+        for (let gy = gy0; gy <= gy1; gy += 1) {
+            for (let gx = gx0; gx <= gx1; gx += 1) {
+                // Diamond interior test (rotated square): |dx| + |dy| <= r.
+                if (Math.abs(gx * C - s.cx) + Math.abs(gy * C - s.cy) <= rr) blocked[gy * cols + gx] = 1;
+            }
+        }
+    }
+    return { C, cols, rows, blocked };
+}
+
+function loreBfsPath(grid, ax, ay, bx, by) {
+    const { C, cols, rows, blocked } = grid;
+    const at = (x, y) => y * cols + x;
+    const inb = (x, y) => x >= 0 && y >= 0 && x < cols && y < rows;
+    const start = at(Math.round(ax / C), Math.round(ay / C));
+    const goal = at(Math.round(bx / C), Math.round(by / C));
+    const prev = new Int32Array(cols * rows).fill(-2); // -2 unseen, -1 = start
+    const queue = [start];
+    prev[start] = -1;
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+    let head = 0;
+    let found = false;
+    while (head < queue.length) {
+        const cur = queue[head++];
+        if (cur === goal) { found = true; break; }
+        const cx = cur % cols;
+        const cy = (cur - cx) / cols;
+        for (const [dx, dy] of dirs) {
+            const nx = cx + dx;
+            const ny = cy + dy;
+            if (!inb(nx, ny)) continue;
+            const ni = at(nx, ny);
+            if (prev[ni] !== -2 || blocked[ni]) continue;
+            // No diagonal corner-cutting between two blocked orthogonal cells.
+            if (dx && dy && blocked[at(cx + dx, cy)] && blocked[at(cx, cy + dy)]) continue;
+            prev[ni] = cur;
+            queue.push(ni);
+        }
+    }
+    if (!found) return null;
+    const path = [];
+    for (let cur = goal; cur !== -1; cur = prev[cur]) {
+        const x = cur % cols;
+        path.push({ x: x * C, y: ((cur - x) / cols) * C });
+    }
+    return path.reverse();
+}
+
+function loreHasLineOfSight(grid, a, b) {
+    const { C, cols, blocked } = grid;
+    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / (C * 0.5)));
+    for (let k = 0; k <= steps; k += 1) {
+        const t = k / steps;
+        const gx = Math.round((a.x + (b.x - a.x) * t) / C);
+        const gy = Math.round((a.y + (b.y - a.y) * t) / C);
+        if (blocked[gy * cols + gx]) return false;
+    }
+    return true;
+}
+
+/** String-pull: keep only the corners the channel actually forces. */
+function loreSimplifyPath(path, grid) {
+    if (path.length <= 2) return path;
+    const out = [path[0]];
+    let i = 0;
+    while (i < path.length - 1) {
+        let j = path.length - 1;
+        while (j > i + 1 && !loreHasLineOfSight(grid, path[i], path[j])) j -= 1;
+        out.push(path[j]);
+        i = j;
+    }
+    return out;
+}
+
+function renderLoreLink(slots, sel, width, height) {
+    const active = sel.map((idx) => slots.find((s) => s.i === idx)).filter(Boolean)
+        .sort((a, b) => a.cx - b.cx || a.cy - b.cy);
+    if (active.length < 2) return '';
+    const subpaths = [];
+    for (let k = 0; k < active.length - 1; k += 1) {
+        const A = active[k];
+        const B = active[k + 1];
+        const grid = loreBlockedGrid(slots, width, height, new Set([A.i, B.i]));
+        let path = loreBfsPath(grid, A.cx, A.cy, B.cx, B.cy);
+        path = path ? loreSimplifyPath(path, grid) : [{ x: A.cx, y: A.cy }, { x: B.cx, y: B.cy }];
+        // Anchor the ends at each diamond's facing corner, not deep in its centre.
+        path[0] = loreSlotCornerToward(A, { cx: path[1].x, cy: path[1].y });
+        path[path.length - 1] = loreSlotCornerToward(B, { cx: path[path.length - 2].x, cy: path[path.length - 2].y });
+        subpaths.push(path);
+    }
+    const d = subpaths
+        .map((p) => p.map((pt, idx) => `${idx === 0 ? 'M' : 'L'} ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`).join(' '))
+        .join(' ');
+    return `<path class="remodel-lore-link" d="${d}"></path>`;
+}
+
 function renderLoreSkillGrid() {
     const { slots, width, height } = buildLoreGridSlots();
     const sel = loomArchive.slotSelection || [];
@@ -4408,18 +4523,7 @@ function renderLoreSkillGrid() {
         </g>`;
     }).join('');
 
-    const active = sel.map((idx) => slots.find((s) => s.i === idx)).filter(Boolean)
-        .sort((a, b) => a.cx - b.cx || a.cy - b.cy);
-    let link = '';
-    if (active.length >= 2) {
-        const pts = [];
-        active.forEach((s, k) => {
-            if (k > 0) pts.push(loreSlotCornerToward(s, active[k - 1]));
-            if (k < active.length - 1) pts.push(loreSlotCornerToward(s, active[k + 1]));
-        });
-        const d = pts.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
-        link = `<path class="remodel-lore-link" d="${d}"></path>`;
-    }
+    const link = renderLoreLink(slots, sel, width, height);
 
     return `<svg class="remodel-lore-grid-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Living Lore keyword grid">
         ${diamonds}

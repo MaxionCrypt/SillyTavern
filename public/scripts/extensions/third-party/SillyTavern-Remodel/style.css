@@ -14413,7 +14413,7 @@ body.st-remodel-active .remodel-lore-canvas-sub {
 
 body.st-remodel-active .remodel-lore-nav {
     position: absolute;
-    left: -14px;
+    left: 6px;
     top: 50%;
     transform: translateY(-50%);
     display: flex;
