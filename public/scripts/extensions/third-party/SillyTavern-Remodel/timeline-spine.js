@@ -4396,7 +4396,7 @@ function loreSlotCornerToward(slot, target) {
 // gaps. We route it on a coarse grid where every non-endpoint diamond (grown by
 // a clearance margin) is blocked, BFS through the free channels, then string-pull
 // the path straight where the channel allows. Deterministic from the geometry.
-const LINK_CELL = 3;    // routing resolution (px)
+const LINK_CELL = 4;    // routing resolution (px)
 const LINK_MARGIN = 3;  // clearance kept from every diamond edge (px)
 
 function loreBlockedGrid(slots, width, height, exceptSet) {
@@ -4421,41 +4421,77 @@ function loreBlockedGrid(slots, width, height, exceptSet) {
     return { C, cols, rows, blocked };
 }
 
-function loreBfsPath(grid, ax, ay, bx, by) {
+// Theta*: any-angle A*. When a node can see its parent's parent directly, we
+// connect straight to it — so the path is made of long straight runs that bend
+// only at diamond corners, hugging the diagonal channels (a clean 45deg zig-zag)
+// instead of the stair-stepping a grid BFS produces.
+function loreThetaStar(grid, ax, ay, bx, by) {
     const { C, cols, rows, blocked } = grid;
+    const N = cols * rows;
     const at = (x, y) => y * cols + x;
     const inb = (x, y) => x >= 0 && y >= 0 && x < cols && y < rows;
+    const cellX = (i) => i % cols;
+    const cellY = (i) => (i - (i % cols)) / cols;
     const start = at(Math.round(ax / C), Math.round(ay / C));
     const goal = at(Math.round(bx / C), Math.round(by / C));
-    const prev = new Int32Array(cols * rows).fill(-2); // -2 unseen, -1 = start
-    const queue = [start];
-    prev[start] = -1;
+    const los = (i, j) => loreHasLineOfSight(grid, { x: cellX(i) * C, y: cellY(i) * C }, { x: cellX(j) * C, y: cellY(j) * C });
+
+    const g = new Float64Array(N).fill(Infinity);
+    const parent = new Int32Array(N).fill(-1);
+    const closed = new Uint8Array(N);
+    const heap = []; // [f, idx] min-heap on f
+    const push = (f, i) => {
+        heap.push([f, i]);
+        let c = heap.length - 1;
+        while (c > 0) { const p = (c - 1) >> 1; if (heap[p][0] <= heap[c][0]) break; const t = heap[p]; heap[p] = heap[c]; heap[c] = t; c = p; }
+    };
+    const pop = () => {
+        const top = heap[0];
+        const last = heap.pop();
+        if (heap.length) {
+            heap[0] = last;
+            let c = 0;
+            for (;;) {
+                const l = 2 * c + 1; const r = 2 * c + 2; let m = c;
+                if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+                if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+                if (m === c) break;
+                const t = heap[m]; heap[m] = heap[c]; heap[c] = t; c = m;
+            }
+        }
+        return top;
+    };
+    const h = (i) => Math.hypot(cellX(i) - cellX(goal), cellY(i) - cellY(goal));
+
+    g[start] = 0; parent[start] = start; push(h(start), start);
     const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
-    let head = 0;
     let found = false;
-    while (head < queue.length) {
-        const cur = queue[head++];
+    while (heap.length) {
+        const cur = pop()[1];
+        if (closed[cur]) continue;
+        closed[cur] = 1;
         if (cur === goal) { found = true; break; }
-        const cx = cur % cols;
-        const cy = (cur - cx) / cols;
+        const cx = cellX(cur); const cy = cellY(cur);
         for (const [dx, dy] of dirs) {
-            const nx = cx + dx;
-            const ny = cy + dy;
+            const nx = cx + dx; const ny = cy + dy;
             if (!inb(nx, ny)) continue;
             const ni = at(nx, ny);
-            if (prev[ni] !== -2 || blocked[ni]) continue;
-            // No diagonal corner-cutting between two blocked orthogonal cells.
+            if (blocked[ni] || closed[ni]) continue;
             if (dx && dy && blocked[at(cx + dx, cy)] && blocked[at(cx, cy + dy)]) continue;
-            prev[ni] = cur;
-            queue.push(ni);
+            const par = parent[cur];
+            let via = cur;
+            let ng = g[cur] + Math.hypot(dx, dy);
+            if (par !== -1 && par !== cur && los(par, ni)) {
+                const alt = g[par] + Math.hypot(cellX(ni) - cellX(par), cellY(ni) - cellY(par));
+                if (alt < ng) { ng = alt; via = par; }
+            }
+            if (ng < g[ni]) { g[ni] = ng; parent[ni] = via; push(ng + h(ni), ni); }
         }
     }
     if (!found) return null;
     const path = [];
-    for (let cur = goal; cur !== -1; cur = prev[cur]) {
-        const x = cur % cols;
-        path.push({ x: x * C, y: ((cur - x) / cols) * C });
-    }
+    let cur = goal;
+    for (;;) { path.push({ x: cellX(cur) * C, y: cellY(cur) * C }); if (cur === start) break; cur = parent[cur]; }
     return path.reverse();
 }
 
@@ -4494,7 +4530,7 @@ function renderLoreLink(slots, sel, width, height) {
         const A = active[k];
         const B = active[k + 1];
         const grid = loreBlockedGrid(slots, width, height, new Set([A.i, B.i]));
-        let path = loreBfsPath(grid, A.cx, A.cy, B.cx, B.cy);
+        let path = loreThetaStar(grid, A.cx, A.cy, B.cx, B.cy);
         path = path ? loreSimplifyPath(path, grid) : [{ x: A.cx, y: A.cy }, { x: B.cx, y: B.cy }];
         // Anchor the ends at each diamond's facing corner, not deep in its centre.
         path[0] = loreSlotCornerToward(A, { cx: path[1].x, cy: path[1].y });
