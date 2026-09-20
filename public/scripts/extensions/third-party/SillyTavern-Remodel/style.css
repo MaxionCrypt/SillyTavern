@@ -14694,10 +14694,15 @@ body.st-remodel-active .remodel-lore-detail-content p {
     text-align: center;
 }
 
-/* Clear the selected keywords. A span (not a button) so the drawer's menu reset
-   can't restyle it; text only, no icon. */
-body.st-remodel-active .remodel-lore-detail-clear {
-    margin-top: 22px;
+/* Clear the selected keywords. It belongs to the tag side, so it sits centred
+   beneath the grid. A span (not a button) so the drawer's menu reset can't
+   restyle it; text only, no icon. */
+body.st-remodel-active .remodel-lore-grid-clear {
+    position: absolute;
+    left: 50%;
+    bottom: -48px;
+    transform: translateX(-50%);
+    pointer-events: auto;
     padding: 7px 20px;
     background: transparent;
     border: 1px solid rgba(215, 200, 0, .3);
@@ -14706,12 +14711,13 @@ body.st-remodel-active .remodel-lore-detail-clear {
     font: 600 .72rem/1 var(--remodel-serif, Georgia, serif);
     letter-spacing: .14em;
     text-transform: uppercase;
+    white-space: nowrap;
     cursor: pointer;
     transition: background .15s ease, color .15s ease, border-color .15s ease;
 }
 
-body.st-remodel-active .remodel-lore-detail-clear:hover,
-body.st-remodel-active .remodel-lore-detail-clear:focus-visible {
+body.st-remodel-active .remodel-lore-grid-clear:hover,
+body.st-remodel-active .remodel-lore-grid-clear:focus-visible {
     background: rgba(215, 200, 0, .1);
     border-color: rgba(215, 200, 0, .55);
     color: #f6edb8;
@@ -14732,5 +14738,6 @@ body.st-remodel-active .remodel-scene-archive-canvas .remodel-lore-detail {
 
 body.st-remodel-active .remodel-scene-archive-canvas .remodel-lore-detail-card {
     width: 400px;
-    min-height: min(74vh, 540px);
+    min-height: min(64vh, 500px);
+    max-height: min(70vh, 540px);   /* stay clear of the window's top/bottom edges */
 }

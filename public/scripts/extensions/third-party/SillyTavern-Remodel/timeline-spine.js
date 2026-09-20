@@ -4296,9 +4296,13 @@ function renderLoreSkillGrid(selection) {
         </g>`;
     }).join('');
 
+    // Clear lives on the tag side (beneath the grid), since it clears keywords.
+    const clear = sel.length
+        ? '<span class="remodel-lore-grid-clear" role="button" tabindex="0" data-remodel-lore-archive-action="clear-slots">Clear</span>'
+        : '';
     return `<svg class="remodel-lore-grid-svg" viewBox="${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Living Lore keyword grid">
         ${diamonds}
-    </svg>`;
+    </svg>${clear}`;
 }
 
 // Right-side entry detail: the entry a selected keyword set resolves to. Name,
@@ -4312,8 +4316,7 @@ function renderLoreDetailPanel(selection) {
     const inner = keys.length
         ? `<h3 class="remodel-lore-detail-name">${escapeHtml(keys[0])}</h3>
             <div class="remodel-lore-detail-keys">${keys.map((t) => `<span>${escapeHtml(t)}</span>`).join('')}</div>
-            <div class="remodel-lore-detail-content"><p>${escapeHtml(`This is placeholder Living Lore content for the entry called by ${keys.join(', ')}. The real entry text will surface here once keyword sets resolve to their archived entries. It can run several lines, and the dot-mesh behind it fades away toward the top and bottom.`)}</p></div>
-            <span class="remodel-lore-detail-clear" role="button" tabindex="0" data-remodel-lore-archive-action="clear-slots">Clear</span>`
+            <div class="remodel-lore-detail-content"><p>${escapeHtml(`This is placeholder Living Lore content for the entry called by ${keys.join(', ')}. The real entry text will surface here once keyword sets resolve to their archived entries. It can run several lines, and the dot-mesh behind it fades away toward the top and bottom.`)}</p></div>`
         : '<p class="remodel-lore-detail-hint">Select a keyword set in the grid to reveal its entry.</p>';
     return `<aside class="remodel-lore-detail${keys.length ? '' : ' is-empty'}">
         <div class="remodel-lore-detail-card">
