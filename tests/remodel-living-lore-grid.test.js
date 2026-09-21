@@ -96,12 +96,22 @@ test('the Scene view hides secret entries’ own keywords but keeps the secret m
     expect(scene.Ashfall).toBeUndefined();     // the secret entry's keyword is gone
 });
 
-test('secret entries are excluded from resolution when includeSecret is false', () => {
+test('a reserved marker is AND-required — the marker alone, or the topic alone, never resolves', () => {
     const entries = [
         { uid: 's', tags: ['Hidden'], secret: true },  // primary keys: Hidden + secret
-        { uid: 'n', tags: ['Rayse'], secret: false },
+        { uid: 'g', tags: ['goal', 'Vengeance'] },     // goal marker + a topic key
     ];
-    expect(resolveEntryForKeywords(entries, ['Hidden']).uid).toBe('s');
-    expect(resolveEntryForKeywords(entries, ['Hidden'], { includeSecret: false })).toBeNull();
+    expect(resolveEntryForKeywords(entries, ['secret'])).toBeNull();               // marker alone
+    expect(resolveEntryForKeywords(entries, ['Hidden'])).toBeNull();               // topic alone (needs secret)
+    expect(resolveEntryForKeywords(entries, ['Hidden', 'secret']).uid).toBe('s');  // both
+    expect(resolveEntryForKeywords(entries, ['goal'])).toBeNull();
+    expect(resolveEntryForKeywords(entries, ['Vengeance'])).toBeNull();
+    expect(resolveEntryForKeywords(entries, ['Vengeance', 'goal']).uid).toBe('g');
+});
+
+test('secret entries are excluded from resolution when includeSecret is false', () => {
+    const entries = [{ uid: 's', tags: ['Hidden'], secret: true }, { uid: 'n', tags: ['Rayse'], secret: false }];
+    expect(resolveEntryForKeywords(entries, ['Hidden', 'secret']).uid).toBe('s');
+    expect(resolveEntryForKeywords(entries, ['Hidden', 'secret'], { includeSecret: false })).toBeNull();
     expect(resolveEntryForKeywords(entries, ['Rayse'], { includeSecret: false }).uid).toBe('n');
 });

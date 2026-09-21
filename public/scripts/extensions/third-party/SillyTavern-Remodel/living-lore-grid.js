@@ -132,6 +132,8 @@ export function buildKeywordGrid(entries, { hideSecret = false } = {}) {
  * entry's keys. The more-constrained match wins (more secondary keys), then the
  * one with fewer keys. `includeSecret: false` hides secret entries from resolution.
  */
+const RESERVED = new Set([SECRET_KEYWORD, GOAL_KEYWORD, VARIABLE_KEYWORD].map(norm));
+
 export function resolveEntryForKeywords(entries, selectedKeywords, { includeSecret = true } = {}) {
     const sel = new Set((Array.isArray(selectedKeywords) ? selectedKeywords : []).map(norm).filter(Boolean));
     if (!sel.size) return null;
@@ -140,11 +142,16 @@ export function resolveEntryForKeywords(entries, selectedKeywords, { includeSecr
         if (!includeSecret && entry?.secret) continue;
         const primary = primaryKeys(entry).map(norm);
         const secondary = secondaryKeys(entry).map(norm);
+        // Reserved markers (secret/goal/variable) are AND conditions, not triggers
+        // on their own — you need the marker AND one of the entry's real keywords.
+        const reserved = primary.filter((k) => RESERVED.has(k));
+        const topicPrimary = primary.filter((k) => !RESERVED.has(k));
         const allKeys = new Set([...primary, ...secondary]);
-        if (![...sel].every((k) => allKeys.has(k))) continue;   // selection ⊆ entry keys
-        if (!primary.some((k) => sel.has(k))) continue;          // ≥1 primary (OR)
-        if (!secondary.every((k) => sel.has(k))) continue;       // all secondary (AND)
-        const score = secondary.length * 1000 - allKeys.size;    // constrained, then tight
+        if (![...sel].every((k) => allKeys.has(k))) continue;         // selection ⊆ entry keys
+        if (!topicPrimary.some((k) => sel.has(k))) continue;          // ≥1 real primary key (OR)
+        if (!reserved.every((k) => sel.has(k))) continue;             // every reserved marker (AND)
+        if (!secondary.every((k) => sel.has(k))) continue;            // every secondary key (AND)
+        const score = (secondary.length + reserved.length) * 1000 - allKeys.size; // constrained, then tight
         if (!best || score > best.score) best = { entry, score };
     }
     return best ? best.entry : null;
