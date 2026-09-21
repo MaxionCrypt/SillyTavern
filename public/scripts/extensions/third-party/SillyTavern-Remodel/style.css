@@ -14616,6 +14616,10 @@ body.st-remodel-active .remodel-lore-slot.is-variable.is-active .remodel-lore-sl
 body.st-remodel-active .remodel-lore-slot.is-locked { cursor: default; pointer-events: none; }
 body.st-remodel-active .remodel-lore-slot.is-locked .remodel-lore-slot-face { stroke: rgba(178, 132, 226, .4); fill: rgba(24, 18, 30, .45); }
 
+/* Secondary-key slots are AND conditions — drawn dashed to set them apart from
+   the solid primary (OR) slots. */
+body.st-remodel-active .remodel-lore-slot.is-secondary-key .remodel-lore-slot-face { stroke-dasharray: 5 4; }
+
 /* Right section: the entry a selected keyword set resolves to, shown on a whole
    tarot card. Everything centred; the dot-mesh fills the card (fading top and
    bottom) rather than just the content. No square outlines — the card frame is
@@ -14711,6 +14715,12 @@ body.st-remodel-active .remodel-lore-detail-keys span + span::before {
     content: '\2022';
     margin: 0 10px;
     color: rgba(215, 200, 0, .4);
+}
+
+/* Secondary (AND) keys read dimmer and italic. */
+body.st-remodel-active .remodel-lore-detail-keys span.is-secondary {
+    font-style: italic;
+    color: rgba(215, 200, 0, .55);
 }
 
 body.st-remodel-active .remodel-lore-detail-content p {

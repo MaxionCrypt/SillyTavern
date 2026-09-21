@@ -1,102 +1,107 @@
 import { collectKeywords, keywordKind, buildKeywordGrid, resolveEntryForKeywords } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-grid.js';
 
-test('keywords are deduped case-insensitively (first casing) and sorted A→Z', () => {
-    const kws = collectKeywords([
+test('keyword kind flags reserved markers only (case-insensitive)', () => {
+    expect(keywordKind('secret')).toBe('secret');
+    expect(keywordKind('Goal')).toBe('goal');
+    expect(keywordKind('VARIABLE')).toBe('variable');
+    expect(keywordKind('Rayse')).toBe('normal');
+});
+
+test('collectKeywords dedupes A→Z and assigns primary/secondary roles', () => {
+    const list = collectKeywords([
         { tags: ['Delta', 'Alpha'] },
-        { tags: ['charlie', 'ALPHA'] },
-        { tags: ['bravo'] },
+        { tags: ['Charlie'], secondaryTags: ['Bravo'] },
+        { tags: ['alpha'] },
     ]);
-    expect(kws).toEqual(['Alpha', 'bravo', 'charlie', 'Delta']);
+    expect(list.map((k) => k.keyword)).toEqual(['Alpha', 'Bravo', 'Charlie', 'Delta']);
+    const role = Object.fromEntries(list.map((k) => [k.keyword, k.role]));
+    expect(role.Alpha).toBe('primary');
+    expect(role.Charlie).toBe('primary');
+    expect(role.Bravo).toBe('secondary');
 });
 
 test('keywords fill the lattice in down-left diagonal order (alphabetical along it)', () => {
     const { slots, keywords } = buildKeywordGrid([
         { tags: ['Delta', 'Alpha'] },
         { tags: ['Charlie'] },
-        { tags: ['bravo', 'Alpha'] },
+        { tags: ['bravo'] },
     ]);
-    expect(keywords).toEqual(['Alpha', 'bravo', 'Charlie', 'Delta']);
-    // Read placed keywords in the same down-left diagonal order the builder uses.
+    expect(keywords.map((k) => k.keyword)).toEqual(['Alpha', 'bravo', 'Charlie', 'Delta']);
     const diag = (s) => s.cx / 52 + s.cy / 62;
     const placed = slots.slice()
         .sort((a, b) => diag(a) - diag(b) || a.cy - b.cy || a.cx - b.cx)
         .map((s) => s.keyword)
         .filter(Boolean);
-    expect(placed).toEqual(keywords);
+    expect(placed).toEqual(['Alpha', 'bravo', 'Charlie', 'Delta']);
 });
 
-test('the grid grows sideways when there are many keywords, and never fewer than 5 columns', () => {
-    const few = buildKeywordGrid([{ tags: ['one', 'two'] }]);
+test('the grid grows sideways for many keywords and places every one', () => {
     const many = buildKeywordGrid([{ tags: Array.from({ length: 24 }, (_v, i) => `kw${String(i).padStart(2, '0')}`) }]);
-    const cols = (grid) => new Set(grid.slots.map((s) => s.cx)).size;
-    expect(cols(few)).toBeGreaterThanOrEqual(5);          // 5 cols + the notch column
-    expect(cols(many)).toBeGreaterThan(cols(few));        // grew to fit 24 keywords
-    // Every keyword lands on a slot.
+    expect(new Set(many.slots.map((s) => s.cx)).size).toBeGreaterThan(5);
     expect(many.slots.filter((s) => s.keyword).length).toBe(24);
 });
 
-const ENTRIES = [
-    { uid: '1', title: 'Rayse', tags: ['Rayse'] },
-    { uid: '2', title: 'Rayse Abilities', tags: ['Rayse', 'Abilities'] },
-    { uid: '3', title: 'The Gate', tags: ['Iron Gate', 'the gate'] },
+// --- Primary OR + Secondary AND resolution ----------------------------------
+
+test('primary keys are OR — any one selected reveals the entry', () => {
+    const one = [{ uid: 'x', tags: ['A', 'B'] }];
+    expect(resolveEntryForKeywords(one, ['A']).uid).toBe('x');
+    expect(resolveEntryForKeywords(one, ['B']).uid).toBe('x');
+});
+
+test('secondary keys are AND — they must also be selected', () => {
+    const e = [{ uid: 'y', tags: ['A'], secondaryTags: ['B'] }];
+    expect(resolveEntryForKeywords(e, ['A'])).toBeNull();
+    expect(resolveEntryForKeywords(e, ['A', 'B']).uid).toBe('y');
+});
+
+const OR_AND = [
+    { uid: 'or', title: 'A or B', tags: ['A', 'B'] },                 // primary OR
+    { uid: 'and', title: 'A and B', tags: ['A'], secondaryTags: ['B'] }, // A primary + B secondary
 ];
 
-test('an exact keyword-set selection resolves to its entry', () => {
-    expect(resolveEntryForKeywords(ENTRIES, ['Rayse', 'Abilities']).uid).toBe('2');
+test('"A or B" and "A and B" (same keyword union) are told apart', () => {
+    expect(resolveEntryForKeywords(OR_AND, ['A']).uid).toBe('or');      // the AND entry needs B
+    expect(resolveEntryForKeywords(OR_AND, ['B']).uid).toBe('or');
+    expect(resolveEntryForKeywords(OR_AND, ['A', 'B']).uid).toBe('and'); // more constrained wins
 });
 
-test('a keyword shared by several entries resolves to the one with the fewest extra keywords', () => {
-    // "Rayse" is entry 1 (exact, 0 extra) and entry 2 (1 extra) → entry 1.
-    expect(resolveEntryForKeywords(ENTRIES, ['Rayse']).uid).toBe('1');
-});
-
-test('a superset selection with no exact match still resolves to the containing entry', () => {
-    expect(resolveEntryForKeywords(ENTRIES, ['the gate']).uid).toBe('3');
+test('a selection with an unrelated keyword resolves to nothing', () => {
+    expect(resolveEntryForKeywords(OR_AND, ['A', 'Z'])).toBeNull();
+    expect(resolveEntryForKeywords(OR_AND, [])).toBeNull();
 });
 
 test('matching is case-insensitive', () => {
-    expect(resolveEntryForKeywords(ENTRIES, ['rayse', 'ABILITIES']).uid).toBe('2');
+    expect(resolveEntryForKeywords(OR_AND, ['a', 'b']).uid).toBe('and');
 });
 
-test('an unmatched or empty selection resolves to null', () => {
-    expect(resolveEntryForKeywords(ENTRIES, ['Nope'])).toBeNull();
-    expect(resolveEntryForKeywords(ENTRIES, [])).toBeNull();
-    expect(resolveEntryForKeywords(ENTRIES, ['Rayse', 'the gate'])).toBeNull(); // no entry has both
+// --- Secret marker + hiding -------------------------------------------------
+
+test('a secret entry contributes one "secret" marker slot, not tinted topic keywords', () => {
+    const entries = [{ tags: ['Rayse'], secret: false }, { tags: ['Ashfall'], secret: true }];
+    const kinds = (grid) => Object.fromEntries(grid.slots.filter((s) => s.keyword).map((s) => [s.keyword, s.kind]));
+    const timeline = kinds(buildKeywordGrid(entries));
+    expect(timeline.Rayse).toBe('normal');
+    expect(timeline.Ashfall).toBe('normal');   // the secret entry's own keyword stays normal
+    expect(timeline.secret).toBe('secret');    // one reserved marker slot
 });
 
-const KINDED = [
-    { tags: ['Rayse'], secret: false },
-    { tags: ['Hidden'], secret: true },          // only a secret entry uses "Hidden"
-    { tags: ['Rayse', 'goal'], secret: false },  // "goal" is a reserved marker
-    { tags: ['variable'], secret: false },
-    { tags: ['Shared'], secret: true },
-    { tags: ['Shared'], secret: false },          // "Shared" is used by a visible entry too
-];
-
-test('keyword kind flags reserved markers and secret-only keywords', () => {
-    expect(keywordKind('Rayse', KINDED)).toBe('normal');
-    expect(keywordKind('Hidden', KINDED)).toBe('secret');
-    expect(keywordKind('goal', KINDED)).toBe('goal');
-    expect(keywordKind('variable', KINDED)).toBe('variable');
-    expect(keywordKind('Shared', KINDED)).toBe('normal'); // shared with a non-secret entry
-});
-
-test('the grid tags each slot with its keyword kind', () => {
-    const byKw = Object.fromEntries(
-        buildKeywordGrid(KINDED).slots.filter((s) => s.keyword).map((s) => [s.keyword, s.kind]),
+test('the Scene view hides secret entries’ own keywords but keeps the secret marker', () => {
+    const entries = [{ tags: ['Rayse'], secret: false }, { tags: ['Ashfall'], secret: true }];
+    const scene = Object.fromEntries(
+        buildKeywordGrid(entries, { hideSecret: true }).slots.filter((s) => s.keyword).map((s) => [s.keyword, s.kind]),
     );
-    expect(byKw.Rayse).toBe('normal');
-    expect(byKw.Hidden).toBe('secret');
-    expect(byKw.goal).toBe('goal');
-    expect(byKw.variable).toBe('variable');
+    expect(scene.Rayse).toBe('normal');
+    expect(scene.secret).toBe('secret');
+    expect(scene.Ashfall).toBeUndefined();     // the secret entry's keyword is gone
 });
 
 test('secret entries are excluded from resolution when includeSecret is false', () => {
     const entries = [
-        { uid: 's', title: 'Secret', tags: ['Hidden'], secret: true },
-        { uid: 'n', title: 'Open', tags: ['Rayse'], secret: false },
+        { uid: 's', tags: ['Hidden'], secret: true },  // primary keys: Hidden + secret
+        { uid: 'n', tags: ['Rayse'], secret: false },
     ];
-    expect(resolveEntryForKeywords(entries, ['Hidden']).uid).toBe('s');                       // timeline sees it
-    expect(resolveEntryForKeywords(entries, ['Hidden'], { includeSecret: false })).toBeNull(); // scene hides it
+    expect(resolveEntryForKeywords(entries, ['Hidden']).uid).toBe('s');
+    expect(resolveEntryForKeywords(entries, ['Hidden'], { includeSecret: false })).toBeNull();
     expect(resolveEntryForKeywords(entries, ['Rayse'], { includeSecret: false }).uid).toBe('n');
 });

@@ -4267,7 +4267,7 @@ function renderLivingLoreTags(tags, className = '') {
 // the grid rebuilding when the Scene changes.
 
 function renderLoreArchiveBody(entries, selection, hideSecret = false) {
-    const grid = buildKeywordGrid(entries);
+    const grid = buildKeywordGrid(entries, { hideSecret });
     const sel = Array.isArray(selection) ? selection : [];
     return `<div class="remodel-lore-grid">${renderLoreSkillGrid(grid, sel, hideSecret)}</div>${renderLoreDetailPanel(entries, sel, hideSecret)}`;
 }
@@ -4281,16 +4281,18 @@ function renderLoreSkillGrid(grid, selection, hideSecret = false) {
         const secretLocked = hideSecret && s.kind === 'secret';
         const isActive = s.keyword && !secretLocked && active.has(s.keyword.toLocaleLowerCase()) ? ' is-active' : '';
         const kindClass = s.kind && s.kind !== 'normal' ? ` is-${s.kind}` : '';
+        // Secondary keys are AND conditions — drawn hollow/dashed to set them apart.
+        const roleClass = s.role === 'secondary' ? ' is-secondary-key' : '';
         const tagged = (s.keyword && !secretLocked) ? ' has-tag' : '';
         const locked = secretLocked ? ' is-locked' : '';
         const points = `${s.cx},${s.cy - s.r} ${s.cx + s.r},${s.cy} ${s.cx},${s.cy + s.r} ${s.cx - s.r},${s.cy}`;
         const action = s.keyword && !secretLocked
-            ? ` data-remodel-lore-archive-action="toggle-slot" data-keyword="${escapeAttribute(s.keyword)}" role="button" tabindex="0" aria-label="Keyword ${escapeAttribute(s.keyword)}"`
+            ? ` data-remodel-lore-archive-action="toggle-slot" data-keyword="${escapeAttribute(s.keyword)}" role="button" tabindex="0" aria-label="${s.role === 'secondary' ? 'Secondary keyword' : 'Keyword'} ${escapeAttribute(s.keyword)}"`
             : ' aria-hidden="true"';
         const label = s.keyword && !secretLocked
             ? `<text class="remodel-lore-slot-label" x="${s.cx}" y="${s.cy}" text-anchor="middle" dominant-baseline="central">${escapeHtml(s.keyword)}</text>`
             : '';
-        return `<g class="remodel-lore-slot${tagged}${kindClass}${locked}${isActive}"${action}>
+        return `<g class="remodel-lore-slot${tagged}${kindClass}${roleClass}${locked}${isActive}"${action}>
             <polygon class="remodel-lore-slot-face" points="${points}"></polygon>
             ${label}
         </g>`;
@@ -4317,7 +4319,12 @@ function renderLoreDetailPanel(entries, selection, hideSecret = false) {
             <div class="remodel-lore-detail-card">${renderCardFlourishes()}<p class="remodel-lore-detail-hint">${escapeHtml(msg)}</p></div>
         </aside>`;
     }
-    const keys = entry.tags || [];
+    const primaryKeys = entry.tags || [];
+    const secondaryKeys = entry.secondaryTags || [];
+    const keysRow = `<div class="remodel-lore-detail-keys">`
+        + primaryKeys.map((t) => `<span>${escapeHtml(t)}</span>`).join('')
+        + secondaryKeys.map((t) => `<span class="is-secondary">${escapeHtml(t)}</span>`).join('')
+        + `</div>`;
     const content = entry.content && entry.content.trim()
         ? escapeHtml(entry.content)
         : '<em>This entry has no content yet.</em>';
@@ -4325,7 +4332,7 @@ function renderLoreDetailPanel(entries, selection, hideSecret = false) {
         <div class="remodel-lore-detail-card">
             ${renderCardFlourishes()}
             <h3 class="remodel-lore-detail-name">${escapeHtml(entry.title)}${entry.secret ? ' <span class="remodel-lore-secret-badge"><i class="fa-solid fa-eye-slash" aria-hidden="true"></i></span>' : ''}</h3>
-            <div class="remodel-lore-detail-keys">${keys.map((t) => `<span>${escapeHtml(t)}</span>`).join('')}</div>
+            ${keysRow}
             <div class="remodel-lore-detail-content"><p>${content}</p></div>
         </div>
     </aside>`;
