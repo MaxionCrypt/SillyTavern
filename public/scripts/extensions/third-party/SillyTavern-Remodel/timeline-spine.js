@@ -4542,11 +4542,11 @@ function renderTimelineFocus(timeline, store) {
             <div class="remodel-focus-backdrop" aria-hidden="true"></div>
             <header class="remodel-route-toolbar">
                 <div class="remodel-route-toolbar-leading">
-                    <button type="button" class="remodel-route-round-button" title="Back to Timelines" aria-label="Back to Timelines" data-remodel-timeline-action="close-timeline">
+                    <button type="button" class="remodel-route-round-button" title="${loomArchive.open ? 'Back to Timeline Content' : 'Back to Timelines'}" aria-label="${loomArchive.open ? 'Back to Timeline Content' : 'Back to Timelines'}" data-remodel-timeline-action="${loomArchive.open ? 'toggle-archive' : 'close-timeline'}" data-timeline-id="${escapeAttribute(timeline.id)}">
                         <i class="fa-solid fa-arrow-left" aria-hidden="true"></i>
                     </button>
                     <div class="remodel-route-breadcrumb">
-                        <span>Timeline Archive</span>
+                        <span>${loomArchive.open ? 'Timeline Content' : 'Timeline Archive'}</span>
                         <strong>Route ${toRoman(timelineOrder)}</strong>
                     </div>
                 </div>
