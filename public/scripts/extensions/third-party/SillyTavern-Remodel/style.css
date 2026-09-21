@@ -14602,11 +14602,12 @@ body.st-remodel-active .remodel-lore-detail {
     position: absolute;
     left: 66%;
     right: 2%;
-    top: 50%;
-    transform: translateY(-50%);
+    top: 0;
+    bottom: 0;                /* fill the section height so the card centres */
     z-index: 1;
     display: flex;
-    justify-content: center;  /* centre the card horizontally */
+    align-items: center;      /* centre the card vertically (symmetric top/bottom) */
+    justify-content: center;  /* and horizontally */
     color: rgba(242, 238, 226, .92);
 }
 
@@ -14619,11 +14620,14 @@ body.st-remodel-active .remodel-lore-archive.is-canvas .remodel-lore-detail {
 }
 
 body.st-remodel-active .remodel-lore-detail-card {
-    position: relative;
+    position: absolute;       /* centre exactly, ignoring the drawer's forced
+                                 flex-direction:column on the aside */
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     box-sizing: border-box;
     width: 360px;
     max-width: 100%;
-    margin-inline: auto;
     min-height: min(70vh, 466px);
     padding: 36px 30px;
     border: 1px solid rgba(215, 200, 0, .32);
