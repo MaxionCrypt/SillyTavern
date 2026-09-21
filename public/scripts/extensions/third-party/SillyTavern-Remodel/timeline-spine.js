@@ -141,10 +141,12 @@ import { resolveGenerationRoute } from './generation-route.js';
 import {
     filterLivingLoreEntries,
     groupLivingLoreEntries,
+    listSceneLivingLoreEntries,
     listTimelineLivingLoreEntries,
     updateSceneLivingLoreEntry,
 } from './living-lore-archive.js';
 import { buildLivingLoreGraph, layoutLivingLoreGraph } from './living-lore-graph.js';
+import { buildKeywordGrid, resolveEntryForKeywords } from './living-lore-grid.js';
 
 import { resolveChatLorebook } from './chat-lorebook.js';
 // world-info.js's METADATA_KEY. Named locally rather than imported so this
@@ -3238,6 +3240,7 @@ async function handleLoomArchiveAction(element) {
     }
     if (action === 'nav-scene') {
         loomArchive.navSceneId = element.dataset.sceneId || '';
+        loomArchive.slotSelection = [];
         queueRender();
         return;
     }
@@ -3245,14 +3248,15 @@ async function handleLoomArchiveAction(element) {
         const arc = getTimelineStore().arcs[element.dataset.arcId];
         const firstScene = (arc?.sceneIds || []).find((id) => getTimelineStore().scenes[id]);
         if (firstScene) loomArchive.navSceneId = firstScene;
+        loomArchive.slotSelection = [];
         queueRender();
         return;
     }
     if (action === 'toggle-slot') {
-        const idx = Number(element.dataset.slot);
+        const keyword = element.dataset.keyword || '';
         const sel = loomArchive.slotSelection;
-        const at = sel.indexOf(idx);
-        if (at >= 0) sel.splice(at, 1); else sel.push(idx);
+        const at = sel.indexOf(keyword);
+        if (at >= 0) sel.splice(at, 1); else sel.push(keyword);
         queueRender();
         return;
     }
@@ -3345,7 +3349,7 @@ function openSceneLivingLorePanel(scene = getActiveScene()) {
         closeSceneLivingLorePanel();
         return;
     }
-    sceneLorePanel = { sceneId: scene.id, sceneTitle: scene.title || 'This Scene', selection: [] };
+    sceneLorePanel = { sceneId: scene.id, sceneTitle: scene.title || 'This Scene', selection: [], entries: [], loading: true, refreshId: 0 };
     const win = document.createElement('div');
     win.id = 'remodel-scene-lore-window';
     win.className = 'remodel-scene-archive';
@@ -3366,15 +3370,36 @@ function openSceneLivingLorePanel(scene = getActiveScene()) {
         const slot = event.target.closest('[data-remodel-lore-archive-action="toggle-slot"]');
         if (slot && sceneLorePanel) {
             event.preventDefault();
-            const idx = Number(slot.dataset.slot);
-            const at = sceneLorePanel.selection.indexOf(idx);
-            if (at >= 0) sceneLorePanel.selection.splice(at, 1); else sceneLorePanel.selection.push(idx);
+            const keyword = slot.dataset.keyword || '';
+            const at = sceneLorePanel.selection.indexOf(keyword);
+            if (at >= 0) sceneLorePanel.selection.splice(at, 1); else sceneLorePanel.selection.push(keyword);
             renderSceneArchiveBody();
         }
     });
     document.body.appendChild(win);
     document.body.classList.add('remodel-scene-lore-open');
     requestAnimationFrame(() => win.classList.add('is-open'));
+    void loadSceneArchiveEntries();
+}
+
+async function loadSceneArchiveEntries() {
+    if (!sceneLorePanel) return;
+    const refreshId = (sceneLorePanel.refreshId || 0) + 1;
+    sceneLorePanel.refreshId = refreshId;
+    sceneLorePanel.loading = true;
+    try {
+        const entries = await listSceneLivingLoreEntries(sceneLorePanel.sceneId);
+        if (!sceneLorePanel || sceneLorePanel.refreshId !== refreshId) return;
+        sceneLorePanel.entries = entries;
+    } catch {
+        if (!sceneLorePanel || sceneLorePanel.refreshId !== refreshId) return;
+        sceneLorePanel.entries = [];
+    } finally {
+        if (sceneLorePanel && sceneLorePanel.refreshId === refreshId) {
+            sceneLorePanel.loading = false;
+            renderSceneArchiveBody();
+        }
+    }
 }
 
 function closeSceneLivingLorePanel() {
@@ -3396,8 +3421,7 @@ function renderSceneArchiveWindow() {
 }
 
 function renderSceneArchiveBodyMarkup() {
-    const sel = sceneLorePanel?.selection || [];
-    return `<div class="remodel-lore-grid">${renderLoreSkillGrid(sel)}</div>${renderLoreDetailPanel(sel)}`;
+    return renderLoreArchiveBody(sceneLorePanel?.entries || [], sceneLorePanel?.selection || []);
 }
 
 function renderSceneArchiveBody() {
@@ -4235,69 +4259,35 @@ function renderLivingLoreTags(tags, className = '') {
 
 // --- Skill-tree grid ---------------------------------------------------------
 //
-// A diagonal lattice of diamond slots (SVG), sitting in the left half of the
-// window beside the centre divider. Tags fill in reading order — the top-left
-// slot, down its column, then the next column. Tagged slots are clickable and
-// glow when active. Slots/tags are placeholder test data for now — the real
-// entries (and whatever links them) wire in later.
-const LORE_GRID = { rows: 5, cols: 5, r: 42, dx: 104, dy: 62, pad: 52 };
-const LORE_TEST_TAGS = ['Rayse', 'Abilities', 'Iron Gate', 'the gate', 'Wren', 'Ashfall'];
-// Two extra slots filling the left notch: the odd rows reach one column further
-// left than the regular grid. They stay empty — the tags fill the grid proper.
-const LORE_EXTRA_SLOTS = [{ row: 1, col: -1 }, { row: 3, col: -1 }];
+// A diagonal lattice of diamond slots (SVG) in the left pane. Slots hold the
+// Scene's Living Lore KEYWORDS (see living-lore-grid.js: deduped, alphabetical,
+// laid out in down-left diagonal order). Selecting a keyword set resolves to
+// its entry, shown on the right. Selection is stored by keyword, so it survives
+// the grid rebuilding when the Scene changes.
 
-function buildLoreGridSlots() {
-    const { rows, cols, r, dx, dy, pad } = LORE_GRID;
-    const offset = dx / 2;
-    const cellAt = (row, col) => ({ cx: pad + col * dx + (row % 2) * offset, cy: pad + row * dy });
-    const slots = [];
-    let i = 0;
-    for (let row = 0; row < rows; row += 1) {
-        for (let col = 0; col < cols; col += 1) {
-            const { cx, cy } = cellAt(row, col);
-            slots.push({ i, cx, cy, r, tag: '' });
-            i += 1;
-        }
-    }
-    // Fill order: leftmost column top-to-bottom, then the next column, etc.
-    slots.slice()
-        .sort((a, b) => a.cx - b.cx || a.cy - b.cy)
-        .forEach((slot, k) => { if (k < LORE_TEST_TAGS.length) slot.tag = LORE_TEST_TAGS[k]; });
-    for (const pos of LORE_EXTRA_SLOTS) {
-        const { cx, cy } = cellAt(pos.row, pos.col);
-        slots.push({ i, cx, cy, r, tag: '' });
-        i += 1;
-    }
-    // viewBox sized to the actual slot extents, so the extras never clip.
-    const m = 12;
-    const xs = slots.map((s) => s.cx);
-    const ys = slots.map((s) => s.cy);
-    const minX = Math.min(...xs) - r - m;
-    const minY = Math.min(...ys) - r - m;
-    return {
-        slots,
-        viewBox: { x: minX, y: minY, w: (Math.max(...xs) + r + m) - minX, h: (Math.max(...ys) + r + m) - minY },
-    };
+function renderLoreArchiveBody(entries, selection) {
+    const grid = buildKeywordGrid(entries);
+    const sel = Array.isArray(selection) ? selection : [];
+    return `<div class="remodel-lore-grid">${renderLoreSkillGrid(grid, sel)}</div>${renderLoreDetailPanel(entries, sel)}`;
 }
 
-function renderLoreSkillGrid(selection) {
-    const { slots, viewBox } = buildLoreGridSlots();
-    const sel = selection || loomArchive.slotSelection || [];
-
+function renderLoreSkillGrid(grid, selection) {
+    const { slots, viewBox } = grid;
+    const active = new Set((selection || []).map((k) => String(k).toLocaleLowerCase()));
     const diamonds = slots.map((s) => {
-        const state = `${s.tag ? ' has-tag' : ''}${sel.includes(s.i) ? ' is-active' : ''}`;
+        const isActive = s.keyword && active.has(s.keyword.toLocaleLowerCase()) ? ' is-active' : '';
+        const tagged = s.keyword ? ' has-tag' : '';
         const points = `${s.cx},${s.cy - s.r} ${s.cx + s.r},${s.cy} ${s.cx},${s.cy + s.r} ${s.cx - s.r},${s.cy}`;
-        const action = s.tag
-            ? ` data-remodel-lore-archive-action="toggle-slot" data-slot="${s.i}" role="button" tabindex="0" aria-label="Keyword ${escapeAttribute(s.tag)}"`
+        const action = s.keyword
+            ? ` data-remodel-lore-archive-action="toggle-slot" data-keyword="${escapeAttribute(s.keyword)}" role="button" tabindex="0" aria-label="Keyword ${escapeAttribute(s.keyword)}"`
             : ' aria-hidden="true"';
-        return `<g class="remodel-lore-slot${state}"${action}>
+        return `<g class="remodel-lore-slot${tagged}${isActive}"${action}>
             <polygon class="remodel-lore-slot-face" points="${points}"></polygon>
-            ${s.tag ? `<text class="remodel-lore-slot-label" x="${s.cx}" y="${s.cy}" text-anchor="middle" dominant-baseline="central">${escapeHtml(s.tag)}</text>` : ''}
+            ${s.keyword ? `<text class="remodel-lore-slot-label" x="${s.cx}" y="${s.cy}" text-anchor="middle" dominant-baseline="central">${escapeHtml(s.keyword)}</text>` : ''}
         </g>`;
     }).join('');
-
     // Clear lives on the tag side (beneath the grid), since it clears keywords.
-    const clear = sel.length
+    const clear = (selection && selection.length)
         ? '<span class="remodel-lore-grid-clear" role="button" tabindex="0" data-remodel-lore-archive-action="clear-slots">Clear</span>'
         : '';
     return `<svg class="remodel-lore-grid-svg" viewBox="${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Living Lore keyword grid">
@@ -4305,23 +4295,28 @@ function renderLoreSkillGrid(selection) {
     </svg>${clear}`;
 }
 
-// Right-side entry detail: the entry a selected keyword set resolves to. Name,
-// then its keywords in a bullet-separated row, then the content over a faded
-// dot-mesh. Placeholder data for now — real entries wire in later.
-function renderLoreDetailPanel(selection) {
-    const { slots } = buildLoreGridSlots();
-    const keys = (selection || loomArchive.slotSelection || [])
-        .map((idx) => slots.find((s) => s.i === idx)?.tag)
-        .filter(Boolean);
-    const inner = keys.length
-        ? `<h3 class="remodel-lore-detail-name">${escapeHtml(keys[0])}</h3>
-            <div class="remodel-lore-detail-keys">${keys.map((t) => `<span>${escapeHtml(t)}</span>`).join('')}</div>
-            <div class="remodel-lore-detail-content"><p>${escapeHtml(`This is placeholder Living Lore content for the entry called by ${keys.join(', ')}. The real entry text will surface here once keyword sets resolve to their archived entries. It can run several lines, and the dot-mesh behind it fades away toward the top and bottom.`)}</p></div>`
-        : '<p class="remodel-lore-detail-hint">Select a keyword set in the grid to reveal its entry.</p>';
-    return `<aside class="remodel-lore-detail${keys.length ? '' : ' is-empty'}">
+// Right-side entry detail: the entry a selected keyword set calls. Name, its
+// keywords in a bullet-separated row, then the content over a faded dot-mesh.
+function renderLoreDetailPanel(entries, selection) {
+    const entry = resolveEntryForKeywords(entries, selection);
+    if (!entry) {
+        const msg = (selection && selection.length)
+            ? 'No entry is called by exactly those keywords.'
+            : 'Select a keyword set in the grid to reveal its entry.';
+        return `<aside class="remodel-lore-detail is-empty">
+            <div class="remodel-lore-detail-card">${renderCardFlourishes()}<p class="remodel-lore-detail-hint">${escapeHtml(msg)}</p></div>
+        </aside>`;
+    }
+    const keys = entry.tags || [];
+    const content = entry.content && entry.content.trim()
+        ? escapeHtml(entry.content)
+        : '<em>This entry has no content yet.</em>';
+    return `<aside class="remodel-lore-detail">
         <div class="remodel-lore-detail-card">
             ${renderCardFlourishes()}
-            ${inner}
+            <h3 class="remodel-lore-detail-name">${escapeHtml(entry.title)}${entry.secret ? ' <span class="remodel-lore-secret-badge"><i class="fa-solid fa-eye-slash" aria-hidden="true"></i></span>' : ''}</h3>
+            <div class="remodel-lore-detail-keys">${keys.map((t) => `<span>${escapeHtml(t)}</span>`).join('')}</div>
+            <div class="remodel-lore-detail-content"><p>${content}</p></div>
         </div>
     </aside>`;
 }
@@ -4389,8 +4384,7 @@ function renderLivingLoreArchive(timeline) {
                 <div class="remodel-lore-nav-list">${listMarkup || '<p class="remodel-lore-nav-empty">No Arcs yet.</p>'}</div>
                 <span class="remodel-lore-nav-caret" role="button" tabindex="0" data-remodel-lore-archive-action="nav-down" aria-label="Scroll down"${canScrollDown ? '' : ' hidden'}><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></span>
             </nav>
-            <div class="remodel-lore-grid">${renderLoreSkillGrid()}</div>
-            ${renderLoreDetailPanel()}
+            ${renderLoreArchiveBody((loomArchive.entries || []).filter((entry) => (entry.sceneIds || []).includes(activeSceneId)), loomArchive.slotSelection)}
         </section>`;
 }
 
