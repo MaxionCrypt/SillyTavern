@@ -14594,6 +14594,28 @@ body.st-remodel-active .remodel-lore-slot-label {
 
 body.st-remodel-active .remodel-lore-slot.is-active .remodel-lore-slot-label { fill: #f6edb8; }
 
+/* Reserved-keyword slots read in their own hue: secret (violet), goal (green),
+   variable (cyan). These come after the amber rules so they win. */
+body.st-remodel-active .remodel-lore-slot.is-secret .remodel-lore-slot-face { stroke: rgba(178, 132, 226, .5); }
+body.st-remodel-active .remodel-lore-slot.is-secret.has-tag:hover .remodel-lore-slot-face { stroke: rgba(198, 160, 242, .82); }
+body.st-remodel-active .remodel-lore-slot.is-secret.is-active .remodel-lore-slot-face { stroke: rgba(202, 164, 246, .95); filter: drop-shadow(0 0 5px rgba(178, 132, 226, .85)); }
+body.st-remodel-active .remodel-lore-slot.is-secret.is-active .remodel-lore-slot-label { fill: #e8daff; }
+
+body.st-remodel-active .remodel-lore-slot.is-goal .remodel-lore-slot-face { stroke: rgba(120, 202, 142, .5); }
+body.st-remodel-active .remodel-lore-slot.is-goal.has-tag:hover .remodel-lore-slot-face { stroke: rgba(152, 226, 170, .82); }
+body.st-remodel-active .remodel-lore-slot.is-goal.is-active .remodel-lore-slot-face { stroke: rgba(160, 232, 178, .95); filter: drop-shadow(0 0 5px rgba(120, 202, 142, .85)); }
+body.st-remodel-active .remodel-lore-slot.is-goal.is-active .remodel-lore-slot-label { fill: #d8f6e0; }
+
+body.st-remodel-active .remodel-lore-slot.is-variable .remodel-lore-slot-face { stroke: rgba(108, 182, 224, .5); }
+body.st-remodel-active .remodel-lore-slot.is-variable.has-tag:hover .remodel-lore-slot-face { stroke: rgba(146, 208, 242, .82); }
+body.st-remodel-active .remodel-lore-slot.is-variable.is-active .remodel-lore-slot-face { stroke: rgba(154, 212, 246, .95); filter: drop-shadow(0 0 5px rgba(108, 182, 224, .85)); }
+body.st-remodel-active .remodel-lore-slot.is-variable.is-active .remodel-lore-slot-label { fill: #d8eeff; }
+
+/* A secret slot locked in the Scene view: a dim violet marker, not interactive
+   — it says "a secret entry is here" without revealing it. */
+body.st-remodel-active .remodel-lore-slot.is-locked { cursor: default; pointer-events: none; }
+body.st-remodel-active .remodel-lore-slot.is-locked .remodel-lore-slot-face { stroke: rgba(178, 132, 226, .4); fill: rgba(24, 18, 30, .45); }
+
 /* Right section: the entry a selected keyword set resolves to, shown on a whole
    tarot card. Everything centred; the dot-mesh fills the card (fading top and
    bottom) rather than just the content. No square outlines — the card frame is

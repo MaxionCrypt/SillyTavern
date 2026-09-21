@@ -3421,7 +3421,8 @@ function renderSceneArchiveWindow() {
 }
 
 function renderSceneArchiveBodyMarkup() {
-    return renderLoreArchiveBody(sceneLorePanel?.entries || [], sceneLorePanel?.selection || []);
+    // hideSecret: the Scene view hides secret entries (unclickable marker slots).
+    return renderLoreArchiveBody(sceneLorePanel?.entries || [], sceneLorePanel?.selection || [], true);
 }
 
 function renderSceneArchiveBody() {
@@ -4265,25 +4266,33 @@ function renderLivingLoreTags(tags, className = '') {
 // its entry, shown on the right. Selection is stored by keyword, so it survives
 // the grid rebuilding when the Scene changes.
 
-function renderLoreArchiveBody(entries, selection) {
+function renderLoreArchiveBody(entries, selection, hideSecret = false) {
     const grid = buildKeywordGrid(entries);
     const sel = Array.isArray(selection) ? selection : [];
-    return `<div class="remodel-lore-grid">${renderLoreSkillGrid(grid, sel)}</div>${renderLoreDetailPanel(entries, sel)}`;
+    return `<div class="remodel-lore-grid">${renderLoreSkillGrid(grid, sel, hideSecret)}</div>${renderLoreDetailPanel(entries, sel, hideSecret)}`;
 }
 
-function renderLoreSkillGrid(grid, selection) {
+function renderLoreSkillGrid(grid, selection, hideSecret = false) {
     const { slots, viewBox } = grid;
     const active = new Set((selection || []).map((k) => String(k).toLocaleLowerCase()));
     const diamonds = slots.map((s) => {
-        const isActive = s.keyword && active.has(s.keyword.toLocaleLowerCase()) ? ' is-active' : '';
-        const tagged = s.keyword ? ' has-tag' : '';
+        // A secret keyword is locked in the Scene view: present (so it signals a
+        // hidden entry) but unclickable and unlabelled.
+        const secretLocked = hideSecret && s.kind === 'secret';
+        const isActive = s.keyword && !secretLocked && active.has(s.keyword.toLocaleLowerCase()) ? ' is-active' : '';
+        const kindClass = s.kind && s.kind !== 'normal' ? ` is-${s.kind}` : '';
+        const tagged = (s.keyword && !secretLocked) ? ' has-tag' : '';
+        const locked = secretLocked ? ' is-locked' : '';
         const points = `${s.cx},${s.cy - s.r} ${s.cx + s.r},${s.cy} ${s.cx},${s.cy + s.r} ${s.cx - s.r},${s.cy}`;
-        const action = s.keyword
+        const action = s.keyword && !secretLocked
             ? ` data-remodel-lore-archive-action="toggle-slot" data-keyword="${escapeAttribute(s.keyword)}" role="button" tabindex="0" aria-label="Keyword ${escapeAttribute(s.keyword)}"`
             : ' aria-hidden="true"';
-        return `<g class="remodel-lore-slot${tagged}${isActive}"${action}>
+        const label = s.keyword && !secretLocked
+            ? `<text class="remodel-lore-slot-label" x="${s.cx}" y="${s.cy}" text-anchor="middle" dominant-baseline="central">${escapeHtml(s.keyword)}</text>`
+            : '';
+        return `<g class="remodel-lore-slot${tagged}${kindClass}${locked}${isActive}"${action}>
             <polygon class="remodel-lore-slot-face" points="${points}"></polygon>
-            ${s.keyword ? `<text class="remodel-lore-slot-label" x="${s.cx}" y="${s.cy}" text-anchor="middle" dominant-baseline="central">${escapeHtml(s.keyword)}</text>` : ''}
+            ${label}
         </g>`;
     }).join('');
     // Clear lives on the tag side (beneath the grid), since it clears keywords.
@@ -4297,8 +4306,9 @@ function renderLoreSkillGrid(grid, selection) {
 
 // Right-side entry detail: the entry a selected keyword set calls. Name, its
 // keywords in a bullet-separated row, then the content over a faded dot-mesh.
-function renderLoreDetailPanel(entries, selection) {
-    const entry = resolveEntryForKeywords(entries, selection);
+// In the Scene view (hideSecret) secret entries never resolve.
+function renderLoreDetailPanel(entries, selection, hideSecret = false) {
+    const entry = resolveEntryForKeywords(entries, selection, { includeSecret: !hideSecret });
     if (!entry) {
         const msg = (selection && selection.length)
             ? 'No entry is called by exactly those keywords.'

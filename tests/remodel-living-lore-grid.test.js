@@ -1,4 +1,4 @@
-import { collectKeywords, buildKeywordGrid, resolveEntryForKeywords } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-grid.js';
+import { collectKeywords, keywordKind, buildKeywordGrid, resolveEntryForKeywords } from '../public/scripts/extensions/third-party/SillyTavern-Remodel/living-lore-grid.js';
 
 test('keywords are deduped case-insensitively (first casing) and sorted A→Z', () => {
     const kws = collectKeywords([
@@ -62,4 +62,41 @@ test('an unmatched or empty selection resolves to null', () => {
     expect(resolveEntryForKeywords(ENTRIES, ['Nope'])).toBeNull();
     expect(resolveEntryForKeywords(ENTRIES, [])).toBeNull();
     expect(resolveEntryForKeywords(ENTRIES, ['Rayse', 'the gate'])).toBeNull(); // no entry has both
+});
+
+const KINDED = [
+    { tags: ['Rayse'], secret: false },
+    { tags: ['Hidden'], secret: true },          // only a secret entry uses "Hidden"
+    { tags: ['Rayse', 'goal'], secret: false },  // "goal" is a reserved marker
+    { tags: ['variable'], secret: false },
+    { tags: ['Shared'], secret: true },
+    { tags: ['Shared'], secret: false },          // "Shared" is used by a visible entry too
+];
+
+test('keyword kind flags reserved markers and secret-only keywords', () => {
+    expect(keywordKind('Rayse', KINDED)).toBe('normal');
+    expect(keywordKind('Hidden', KINDED)).toBe('secret');
+    expect(keywordKind('goal', KINDED)).toBe('goal');
+    expect(keywordKind('variable', KINDED)).toBe('variable');
+    expect(keywordKind('Shared', KINDED)).toBe('normal'); // shared with a non-secret entry
+});
+
+test('the grid tags each slot with its keyword kind', () => {
+    const byKw = Object.fromEntries(
+        buildKeywordGrid(KINDED).slots.filter((s) => s.keyword).map((s) => [s.keyword, s.kind]),
+    );
+    expect(byKw.Rayse).toBe('normal');
+    expect(byKw.Hidden).toBe('secret');
+    expect(byKw.goal).toBe('goal');
+    expect(byKw.variable).toBe('variable');
+});
+
+test('secret entries are excluded from resolution when includeSecret is false', () => {
+    const entries = [
+        { uid: 's', title: 'Secret', tags: ['Hidden'], secret: true },
+        { uid: 'n', title: 'Open', tags: ['Rayse'], secret: false },
+    ];
+    expect(resolveEntryForKeywords(entries, ['Hidden']).uid).toBe('s');                       // timeline sees it
+    expect(resolveEntryForKeywords(entries, ['Hidden'], { includeSecret: false })).toBeNull(); // scene hides it
+    expect(resolveEntryForKeywords(entries, ['Rayse'], { includeSecret: false }).uid).toBe('n');
 });
